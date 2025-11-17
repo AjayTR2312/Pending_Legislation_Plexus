@@ -1,0 +1,37 @@
+Raised Bill No. 6853
+
+General Assembly
+
+January Session, 2025
+
+LCO No. 4145
+
+Referred to Committee on PUBLIC SAFETY AND SECURITY
+
+Introduced by:
+
+(PS)
+
+AN ACT REQUIRING THE INCLUSION OF CERTAIN INFORMATION IN THE STANDARDIZED METHOD OF RECORDING TRAFFIC STOP INFORMATION.
+
+Be it enacted by the Senate and House of Representatives in General Assembly convened:
+
+Section 1. Subsection (b) of section 54-1m of the general statutes is repealed and the following is substituted in lieu thereof (Effective October 1, 2025):
+
+(b) [D>[Not later than July 1, 2013, the]<D] [A>The<A] Office of Policy and Management, in consultation with the Racial Profiling Prohibition Project Advisory Board established in section 54-1s, and the Criminal Justice Information System Governing Board shall, within available resources, develop and implement a standardized method:
+
+(1) To be used by police officers of municipal police departments, the Department of Emergency Services and Public Protection and any other department with authority to conduct a traffic stop to record traffic stop information unless the police officer is required to leave the location of the stop prior to completing such form in order to respond to an emergency or due to some other exigent circumstance within the scope of such police officer's duties. The standardized method and any form developed and implemented pursuant to such standardized method shall allow the following information to be recorded: (A) The date and time of the stop; (B) the specific geographic location of the stop; (C) the unique identifying number of the police officer making the stop, or the name and title of the person making the stop if such person does not have a unique identifying number; (D) the race, ethnicity, age and gender of the operator of the motor vehicle that is stopped, provided the identification of such characteristics shall be based on the observation and perception of the police officer responsible for reporting the stop; (E) the nature of the alleged traffic violation or other violation that caused the stop to be made and the statutory citation for such violation; (F) [A>whether the police officer making the stop was alerted to the alleged traffic violation or other violation that caused the stop to be made by automated means, including, but not limited to, radar, laser or automated number plate recognition system; (G)<A] the disposition of the stop including whether a warning, citation or summons was issued, whether a search was conducted, the authority for any search conducted, the result of any search conducted, the statute or regulation citation for any warning, citation or summons issued and whether a custodial arrest was made; and [D>[(G)]<D] [A>(H)<A] any other information deemed appropriate. The method shall also provide for (i) notice to be given to the person stopped that if such person believes that such person has been stopped, detained, interdicted or subjected to a search on the basis, in whole or in part, of such person's race, color, ethnicity, age, gender, sexual orientation, religion or membership in any other protected class, such person may file a complaint with the appropriate law enforcement agency unless the police officer was required to leave the location of the stop prior to providing such notice in order to respond to an emergency or due to some other exigent circumstance within the scope of such police officer's duties, and (ii) instructions to be given to the person stopped on how to file such complaint unless the police officer was required to leave the location of the stop prior to providing such instructions in order to respond to an emergency or due to some other exigent circumstance within the scope of such police officer's duties;
+
+(2) To be used to report complaints pursuant to this section by any person who believes such person has been subjected to a motor vehicle stop by a police officer on the basis, in whole or in part, of race, color, ethnicity, age, gender, sexual orientation or religion; and
+
+(3) To be used by each municipal police department, the Department of Emergency Services and Public Protection and any other department with authority to conduct a traffic stop to report data to the Office of Policy and Management pursuant to subsection (h) of this section.
+
+This act shall take effect as follows and shall amend the following sections:
+
+Section 1                 October 1, 2025                         54-1m(b)
+
+Statement of Purpose:
+
+To include in the standardized method of recording traffic stop information whether police officers making traffic stops were alerted to the alleged traffic violation or other violation by automated means.
+
+[D>[Proposed deletions are enclosed in brackets. Proposed additions are indicated by underline, except that when the entire text of a bill or resolution or a section of a bill or resolution is new, it is not underlined.]<D]

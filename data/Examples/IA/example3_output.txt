@@ -1,0 +1,149 @@
+House Study Bill 116 - Introduced
+
+HOUSE FILE _____
+
+BY (PROPOSED COMMITTEE ON JUDICIARY BILL BY CHAIRPERSON HOLT)
+
+A BILL FOR
+
+An Act creating a special motion for expedited relief in actions involving the exercise of the right of freedom of speech and of the press, the right to assemble and petition, and the right of association, and including applicability provisions.
+
+BE IT ENACTED BY THE GENERAL ASSEMBLY OF THE STATE OF IOWA:
+
+Section 1. [A>NEW SECTION<A]. 652.1 Title.
+
+This chapter may be cited as the "Uniform Public Expression Protection Act".
+
+Sec. 2. [A>NEW SECTION<A]. 652.2 Scope.
+
+1. As used in this section:
+
+a. "Goods or services" does not include the creation, dissemination, exhibition, or advertisement or similar promotion of a dramatic, literary, musical, political, journalistic, or artistic work.
+
+b. "Governmental unit" means a public corporation or government or governmental subdivision, agency, or instrumentality.
+
+2. Except as otherwise provided in subsection 3, this chapter applies to a cause of action asserted in a civil action against a person based on any of the following of the person:
+
+a. Communication in a legislative, executive, judicial, administrative, or other governmental proceeding.
+
+b. Communication on an issue under consideration or review in a legislative, executive, judicial, administrative, or other governmental proceeding.
+
+c. Exercise of the right of freedom of speech or of the press, the right to assemble or petition, or the right of association, guaranteed by the Constitution of the United States or the Constitution of the State of Iowa, on a matter of public concern.
+
+3. This chapter does not apply to any of the following causes of action asserted:
+
+a. Against a governmental unit or an employee or agent of a governmental unit acting or purporting to act in an official capacity.
+
+b. By a governmental unit or an employee or agent of a governmental unit acting in an official capacity to enforce a law to protect against an imminent threat to public health or safety.
+
+c. Against a person primarily engaged in the business of selling or leasing goods or services if the cause of action arises out of a communication related to the person's sale or lease of the goods or services.
+
+Sec. 3. [A>NEW SECTION<A]. 652.3 Special motion for expedited relief.
+
+Not later than sixty days after a party is served with a petition, crossclaim, counterclaim, third-party claim, or other pleading that asserts a cause of action to which this chapter applies, or at a later time on a showing of good cause, the party may file a special motion for expedited relief to dismiss the cause of action or part of the cause of action.
+
+Sec. 4. [A>NEW SECTION<A]. 652.4 Stay.
+
+1. Except as otherwise provided in subsections 4 through 7, on the filing of a motion under section 652.3, all of the following apply:
+
+a. All other proceedings between the moving party and responding party, including discovery and a pending hearing or motion, are stayed.
+
+b. On motion by the moving party, the court may stay a hearing or motion involving another party, or discovery by another party, if the hearing or ruling on the motion would adjudicate, or the discovery would relate to, an issue material to the motion under section 652.3.
+
+2. A stay under subsection 1 remains in effect until entry of an order ruling on the motion under section 652.3 and expiration of the time under section 652.9 for the moving party to appeal the order.
+
+3. Except as otherwise provided in subsections 5, 6, and 7, if a party appeals from an order ruling on a motion under section 652.3, all proceedings between all parties in the action are stayed. The stay remains in effect until the conclusion of the appeal.
+
+4. During a stay under subsection 1, the court may allow limited discovery if a party shows that specific information is necessary to establish whether a party has satisfied or failed to satisfy a burden under section 652.7, subsection 1, and the information is not reasonably available unless discovery is allowed.
+
+5. A motion under section 652.10 for costs, attorney fees, and expenses is not subject to a stay under this section.
+
+6. A stay under this section does not affect a party's ability to voluntarily dismiss a cause of action or part of a cause of action or move to sever a cause of action.
+
+7. During a stay under this section, the court for good cause may hear and rule on all of the following:
+
+a. A motion unrelated to the motion under section 652.3.
+
+b. A motion seeking a special or preliminary injunction to protect against an imminent threat to public health or safety.
+
+Sec. 5. [A>NEW SECTION<A]. 652.5 Hearing.
+
+1. The court shall hear a motion under section 652.3 not later than sixty days after filing of the motion, unless the court orders a later hearing for any of the following:
+
+a. To allow discovery under section 652.4, subsection 4.
+
+b. For other good cause.
+
+2. If the court orders a later hearing under subsection 1, paragraph "a", the court shall hear the motion under section 652.3 not later than sixty days after the court order allowing the discovery, unless the court orders a later hearing under subsection 1, paragraph "b".
+
+Sec. 6. [A>NEW SECTION<A]. 652.6 Proof.
+
+In ruling on a motion under section 652.3, the court shall consider the pleadings, the motion, any reply or response to the motion, and any evidence that could be considered in ruling on a motion for summary judgment under rule of civil procedure 1.981.
+
+Sec. 7. [A>NEW SECTION<A]. 652.7 Dismissal of cause of action in whole or part.
+
+1. In ruling on a motion under section 652.3, the court shall dismiss with prejudice a cause of action, or part of a cause of action, if all of the following are true:
+
+a. The moving party establishes under section 652.2, subsection 2, that this chapter applies.
+
+b. The responding party fails to establish under section 652.2, subsection 3, that this chapter does not apply.
+
+c. Any of the following are true:
+
+(1) The responding party fails to establish a prima facie case as to each essential element of the cause of action.
+
+(2) The moving party establishes that any of the following:
+
+(a) The responding party failed to state a cause of action upon which relief can be granted.
+
+(b) There is no genuine issue as to any material fact and the moving party is entitled to judgment as a matter of law on the action or part of an action.
+
+2. A voluntary dismissal without prejudice of a responding party's cause of action, or part of a cause of action, that is the subject of a motion under section 652.3 does not affect a moving party's right to obtain a ruling on the motion and seek costs, attorney fees, and expenses under section 652.10.
+
+3. A voluntary dismissal with prejudice of a responding party's cause of action, or part of a cause of action, that is the subject of a motion under section 652.3 establishes for the purpose of section 652.10 that the moving party prevailed on the motion.
+
+Sec. 8. [A>NEW SECTION<A]. 652.8 Ruling.
+
+The court shall rule on a motion under section 652.3 not later than sixty days after a hearing under section 652.5.
+
+Sec. 9. [A>NEW SECTION<A]. 652.9 Appeal.
+
+A moving party may appeal as a matter of right from an order denying, in whole or in part, a motion under section 652.3. The appeal must be filed not later than thirty days after entry of the order.
+
+Sec. 10. [A>NEW SECTION<A]. 652.10 Costs, attorney fees, and expenses.
+
+On a motion under section 652.3, the court shall award court costs, reasonable attorney fees, and reasonable litigation expenses related to the motion in the following circumstances:
+
+1. To the moving party if the moving party prevails on the motion.
+
+2. To the responding party if the responding party prevails on the motion and the court finds that the motion was frivolous or filed solely with intent to delay the proceeding.
+
+Sec. 11. [A>NEW SECTION<A]. 652.11 Construction.
+
+This chapter shall be broadly construed and applied to protect the exercise of the right of freedom of speech and of the press, the right to assemble and petition, and the right of association, guaranteed by the Constitution of the United States or the Constitution of the State of Iowa.
+
+Sec. 12. [A>NEW SECTION<A]. 652.12 Uniformity of application and construction.
+
+In applying and construing this chapter, consideration shall be given to the need to promote uniformity of the law with respect to its subject matter among states that enact it.
+
+Sec. 13. APPLICABILITY. This Act applies to a civil action filed or cause of action asserted in a civil action on or after the effective date of this Act.
+
+EXPLANATION
+
+The inclusion of this explanation does not constitute agreement with the explanation's substance by the members of the general assembly.
+
+This bill enacts the "Uniform Public Expression Protection Act", which creates a special motion for expedited relief in actions involving the exercise of the right of freedom of speech and of the press, the right to assemble and petition, and the right of association.
+
+The bill applies to a cause of action asserted in a civil action against a person based on the person's communication in a legislative, executive, judicial, administrative, or other governmental proceeding; communication on an issue under consideration or review in a legislative, executive, judicial, administrative, or other governmental proceeding; or exercise of the person's first amendment right on a matter of public concern.
+
+The bill does not apply to causes of action against a governmental unit or an employee or agent of a governmental unit acting or purporting to act in an official capacity; by a governmental unit or an employee or agent of a governmental unit acting in an official capacity to enforce or protect against an imminent threat to public health or safety; or against a person engaged in the business of selling or leasing goods or services if the cause of action arises out of a communication related to a person's sale or lease of the goods or services.
+
+The bill defines "goods or services" to not include the creation, dissemination, exhibition, or advertisement or similar promotion of a dramatic, literary, musical, political, journalistic, or artistic work, and defines "governmental unit" to mean a public corporation or government or governmental subdivision, agency, or instrumentality.
+
+The bill provides that no later than 60 days after being served with a cause of action to which the bill applies, or at a later time upon showing of good cause, a party may file a special motion for expedited relief to dismiss the cause of action or part of the cause of action. The filing of the special motion stays all other proceedings between the parties, and the court has discretion to stay a proceeding involving another party if the hearing or ruling on motion would adjudicate an issue material to the motion. A hearing shall be held no later than 60 days after filing the motion, unless the court orders a later hearing to allow discovery or for good cause. A stay remains in effect until an order ruling on the motion is entered and the 30-day appeal period following the order has concluded. During a stay, the court may allow limited discovery if a party shows the information is not reasonably available and that specific information is necessary to establish whether a party has satisfied the party's burden under the bill. The court may also, for good cause, hear and rule on motions unrelated to the special motion and a motion seeking an injunction. The bill provides that a motion for costs, attorney fees, and expenses is not subject to the special motion for expedited relief stay. The parties' ability to voluntarily dismiss or move to sever is not affected by the special motion for expedited relief stay.
+
+The bill provides that in ruling on a special motion for expedited relief, the court shall dismiss with prejudice a cause of action, or part of a cause of action, if the moving party establishes that the bill applies, the responding party fails to establish that the bill does not apply, and either the responding party fails to establish a prima facie case as to each essential element of the cause of action or the moving party establishes that the responding party failed to state a cause of action upon which relief can be granted or there is no genuine issue as to any material fact and the moving party is entitled to judgment as a matter of law on the cause of action or part of the cause of action.
+
+The bill provides that the court may award court costs, reasonable attorney fees, and reasonable litigation fees relating to the special motion to the prevailing party.
+
+The bill is a uniform Act drafted by the national conference of commissioners on uniform state laws. The bill applies to actions that are filed on or after the effective date of the bill.

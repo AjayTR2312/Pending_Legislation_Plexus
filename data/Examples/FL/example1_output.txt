@@ -1,0 +1,131 @@
+A bill to be entitled
+
+An act relating to mental health professionals; amending s. 491.003, F.S.; revising definitions; amending s. 491.0045, F.S.; reclassifying intern registrations as associate registrations for the professions of clinical social work, marriage and family therapy, and mental health counseling; amending s. 491.005, F.S.; deleting the requirement that a licensed mental health professional be present on the premises when registered associates, formerly classified as registered interns, are providing clinical services in a private practice setting; amending ss. 491.009, 491.012, 491.014, and 491.0149, F.S.; conforming provisions to changes made by the act; providing an effective date.
+
+Be It Enacted by the Legislature of the State of Florida:
+
+Section 1. Subsections (15), (16), and (17) of section 491.003, Florida Statutes, as amended by section 42 of chapter 2024-243, Laws of Florida, are amended to read:
+
+491.003 Definitions.--As used in this chapter:
+
+(15) "Registered [A>associate<A] clinical social worker [D>intern<D]" means a person registered under this chapter who is completing the postgraduate clinical social work experience requirement specified in s. 491.005(1)(d).
+
+(16) "Registered [A>associate<A] marriage and family therapist [D>intern<D]" means a person registered under this chapter who is completing the post-master's clinical experience requirement specified in s. 491.005(3)(d).
+
+(17) "Registered [A>associate<A] mental health counselor [D>intern<D]" means a person registered under this chapter who is completing the post-master's clinical experience requirement specified in s. 491.005(4)(d).
+
+Section 2. Section 491.0045, Florida Statutes, as amended by section 37 of chapter 2024-243, Laws of Florida, is amended to read:
+
+491.0045 [A>Associate<A] [D>Intern<D] registration; requirements.--
+
+(1) An individual who has not satisfied the postgraduate or post-master's level experience requirements, as specified in s. 491.005(1)(d), (3)(d), or (4)(d), must register as an [A>associate<A] [D>intern<D] in the profession for which he or she is seeking [A>full<A] licensure before commencing the post-master's experience requirement or an individual who intends to satisfy part of the required graduate-level practicum, internship, or field experience, outside the academic arena for any profession, and must register as an [A>associate<A] [D>intern<D] in the profession for which he or she is seeking [A>full<A] licensure before commencing the practicum, internship, or field experience.
+
+(2) The department shall register as [A>an associate<A] [D>a<D] clinical social worker [D>intern<D], [A>an associate<A] marriage and family therapist [D>intern<D], or [A>an associate<A] mental health counselor [D>intern<D] each applicant who the board certifies has met all of the following criteria:
+
+(a) Completed the application form and remitted a nonrefundable application fee not to exceed $200, as set by board rule.
+
+(b) Submitted to background screening in accordance with s. 456.0135.
+
+(c)1. Completed the education requirements as specified in s. 491.005(1)(d), (3)(d), or (4)(d) for the profession for which he or she is applying for licensure, if needed; and
+
+2. Submitted an acceptable supervision plan, as determined by the board, for meeting the practicum, internship, or field work required for licensure that was not satisfied in his or her graduate program.
+
+(d) Identified a qualified supervisor.
+
+(3) An individual registered under this section must remain under supervision while practicing under registered [A>associate<A] [D>intern<D] status.
+
+(4) An individual who fails to comply with this section may not be granted a [A>full<A] license under this chapter, and any time spent by the individual completing the experience requirement as specified in s. 491.005(1)(d), (3)(d), or (4)(d) before registering as an [A>associate<A] [D>intern<D] does not count toward completion of the requirement.
+
+(5) An [A>associate<A] [D>intern<D] registration is valid for 5 years.
+
+(6) Any registration issued after March 31, 2017, expires 60 months after the date it is issued. The board may make a one-time exception to the requirements of this subsection in emergency or hardship cases, as defined by board rule, if the candidate has passed the theory and practice examination described in s. 491.005(1)(e), (3)(e), and (4)(e).
+
+(7) An individual who has held a provisional license issued by the board may not apply for an [A>associate<A] [D>intern<D] registration in the same profession.
+
+Section 3. Paragraph (d) of subsection (1), paragraph (d) of subsection (3), and paragraphs (c) and (d) of subsection (4) of section 491.005, Florida Statutes, as amended by section 39 of chapter 2024-243, Laws of Florida, are amended to read:
+
+491.005 Licensure by examination.--
+
+(1) CLINICAL SOCIAL WORK.--Upon verification of documentation and payment of a fee not to exceed $200, as set by board rule, the department shall issue a license as a clinical social worker to an applicant whom the board certifies has met all of the following criteria:
+
+(d) Completed at least 2 years of clinical social work experience, which took place subsequent to completion of a graduate degree in social work at an institution meeting the accreditation requirements of this section, under the supervision of a licensed clinical social worker or the equivalent who is a qualified supervisor as determined by the board. An individual who intends to practice in Florida to satisfy clinical experience requirements must register pursuant to s. 491.0045 before commencing practice. If the applicant's graduate program was not a program [A>that<A] [D>which<D] emphasized direct clinical patient or client health care services as described in subparagraph (c)2., the supervised experience requirement must take place after the applicant has completed a minimum of 15 semester hours or 22 quarter hours of the coursework required. A doctoral internship may be applied toward the clinical social work experience requirement. [D>A licensed mental health professional must be on the premises when clinical services are provided by a registered intern in a private practice setting.<D]
+
+(3) MARRIAGE AND FAMILY THERAPY.--Upon verification of documentation and payment of a fee not to exceed $200, as set by board rule, the department shall issue a license as a marriage and family therapist to an applicant whom the board certifies has met all of the following criteria:
+
+(d) Completed at least 2 years of clinical experience during which 50 percent of the applicant's clients were receiving marriage and family therapy services, which must be at the post-master's level under the supervision of a licensed marriage and family therapist with at least 5 years of experience, or the equivalent, who is a qualified supervisor as determined by the board. An individual who intends to practice in Florida to satisfy the clinical experience requirements must register pursuant to s. 491.0045 before commencing practice. If a graduate has a master's degree with a major emphasis in marriage and family therapy or a closely related field which did not include all of the coursework required by paragraph (c), credit for the post-master's level clinical experience may not commence until the applicant has completed a minimum of 10 of the courses required by paragraph (c), as determined by the board, and at least 6 semester hours or 9 quarter hours of the course credits must have been completed in the area of marriage and family systems, theories, or techniques. Within the 2 years of required experience, the applicant [A>must<A] [D>shall<D] provide direct individual, group, or family therapy and counseling to cases including those involving unmarried dyads, married couples, separating and divorcing couples, and family groups that include children. A doctoral internship may be applied toward the clinical experience requirement. [D>A licensed mental health professional must be on the premises when clinical services are provided by a registered intern in a private practice setting.<D]
+
+For the purposes of dual licensure, the department shall license as a marriage and family therapist any person who meets the requirements of s. 491.0057. Fees for dual licensure may not exceed those stated in this subsection.
+
+(4) MENTAL HEALTH COUNSELING.--Upon verification of documentation and payment of a fee not to exceed $200, as set by board rule, the department shall issue a license as a mental health counselor to an applicant whom the board certifies has met all of the following criteria:
+
+(c)1. Attained a minimum of an earned master's degree from a mental health counseling program accredited by the Council for the Accreditation of Counseling and Related Educational Programs which consists of at least 60 semester hours or 80 quarter hours of clinical and didactic instruction, including a course in human sexuality and a course in substance abuse. If the master's degree is earned from a program related to the practice of mental health counseling which is not accredited by the Council for the Accreditation of Counseling and Related Educational Programs, [D>then<D] the coursework and practicum, internship, or fieldwork must consist of at least 60 semester hours or 80 quarter hours and meet all of the following requirements:
+
+a. Thirty-three semester hours or 44 quarter hours of graduate coursework, which must include a minimum of 3 semester hours or 4 quarter hours of graduate-level coursework in each of the following 11 content areas: counseling theories and practice; human growth and development; diagnosis and treatment of psychopathology; human sexuality; group theories and practice; individual evaluation and assessment; career and lifestyle assessment; research and program evaluation; social and cultural foundations; substance abuse; and legal, ethical, and professional standards issues in the practice of mental health counseling. Courses in research, thesis or dissertation work, practicums, internships, or fieldwork may not be applied toward this requirement.
+
+b. A minimum of 3 semester hours or 4 quarter hours of graduate-level coursework addressing diagnostic processes, including differential diagnosis and the use of the current diagnostic tools, such as the current edition of the American Psychiatric Association's Diagnostic and Statistical Manual of Mental Disorders. The graduate program must have emphasized the common core curricular experience.
+
+c. The equivalent, as determined by the board, of at least 700 hours of university-sponsored supervised clinical practicum, internship, or field experience that includes at least 280 hours of direct client services, as required in the accrediting standards of the Council for Accreditation of Counseling and Related Educational Programs for mental health counseling programs. This experience may not be used to satisfy the post-master's clinical experience requirement.
+
+2. Provided additional documentation if a course title that appears on the applicant's transcript does not clearly identify the content of the coursework. The documentation must include, but is not limited to, a syllabus or catalog description published for the course.
+
+Education and training in mental health counseling must have been received in an institution of higher education that, at the time the applicant graduated, was fully accredited by an institutional accrediting body recognized by the Council for Higher Education Accreditation or its successor organization or was a member in good standing with Universities Canada, or an institution of higher education located outside the United States and Canada which, at the time the applicant was enrolled and at the time the applicant graduated, maintained a standard of training substantially equivalent to the standards of training of those institutions in the United States which are accredited by an institutional accrediting body recognized by the Council for Higher Education Accreditation or its successor organization. Such foreign education and training must have been received in an institution or program of higher education officially recognized by the government of the country in which it is located as an institution or program to train students to practice as mental health counselors. The applicant has the burden of establishing that the requirements of this provision have been met, and the board shall require documentation, such as an evaluation by a foreign equivalency determination service, as evidence that the applicant's graduate degree program and education were equivalent to an accredited program in this country. Beginning July 1, 2025, an applicant must have a master's degree from a program that is accredited by the Council for Accreditation of Counseling and Related Educational Programs, the Masters in Psychology and Counseling Accreditation Council, or an equivalent accrediting body which consists of at least 60 semester hours or 80 quarter hours to apply for licensure under this paragraph.
+
+(d) Completed at least 2 years of clinical experience in mental health counseling, which must be at the post-master's level under the supervision of a licensed mental health counselor or the equivalent who is a qualified supervisor as determined by the board. An individual who intends to practice in Florida to satisfy the clinical experience requirements must register pursuant to s. 491.0045 before commencing practice. If a graduate has a master's degree with a major related to the practice of mental health counseling which did not include all the coursework required under sub-subparagraphs (c)1.a. and b., credit for the post-master's level clinical experience may not commence until the applicant has completed a minimum of seven of the courses required under sub-subparagraphs (c)1.a. and b., as determined by the board, one of which must be a course in psychopathology or abnormal psychology. A doctoral internship may be applied toward the clinical experience requirement. [D>A licensed mental health professional must be on the premises when clinical services are provided by a registered intern in a private practice setting.<D]
+
+Section 4. Paragraphs (f), (n), (o), (p), (r), (s), and (u) of subsection (1) of section 491.009, Florida Statutes, are amended to read:
+
+491.009 Discipline.--
+
+(1) The following acts constitute grounds for denial of a license or disciplinary action, as specified in s. 456.072(2) or s. 491.017:
+
+(f) Maintaining a professional association with any person who the applicant, licensee, registered [A>associate<A] [D>intern<D], or certificateholder knows, or has reason to believe, is in violation of this chapter or of a rule of the department or the board.
+
+(n) Failing to make available to a patient or client, upon written request, copies of tests, reports, or documents in the possession or under the control of the licensee, registered [A>associate<A] [D>intern<D], or certificateholder which have been prepared for and paid for by the patient or client.
+
+(o) Failing to respond within 30 days to a written communication from the department or the board concerning any investigation by the department or the board, or failing to make available any relevant records with respect to any investigation about the licensee's, registered [A>associate's<A] [D>intern's<D], or certificateholder's conduct or background.
+
+(p) Being unable to practice the profession for which he or she is licensed, registered, or certified under this chapter with reasonable skill or competence as a result of any mental or physical condition or by reason of illness; drunkenness; or excessive use of drugs, narcotics, chemicals, or any other substance. In enforcing this paragraph, upon a finding by the State Surgeon General, the State Surgeon General's designee, or the board that probable cause exists to believe that the licensee, registered [A>associate<A] [D>intern<D], or certificateholder is unable to practice the profession because of the reasons stated in this paragraph, the department shall have the authority to compel a licensee, registered [A>associate<A] [D>intern<D], or certificateholder to submit to a mental or physical examination by psychologists, physicians, or other licensees under this chapter, designated by the department or board. If the licensee, registered [A>associate<A] [D>intern<D], or certificateholder refuses to comply with such order, the department's order directing the examination may be enforced by filing a petition for enforcement in the circuit court in the circuit in which the licensee, registered [A>associate<A] [D>intern<D], or certificateholder resides or does business. The licensee, registered [A>associate<A] [D>intern<D], or certificateholder against whom the petition is filed may not be named or identified by initials in any public court records or documents, and the proceedings [A>must<A] [D>shall<D] be closed to the public. The department [A>is<A] [D>shall be<D] entitled to the summary procedure provided in s. 51.011. A licensee, registered [A>associate<A] [D>intern<D], or certificateholder affected under this paragraph [A>must,<A] [D>shall<D] at reasonable intervals[A>,<A] be afforded an opportunity to demonstrate that he or she can resume the competent practice for which he or she is licensed, registered, or certified with reasonable skill and safety to patients.
+
+(r) Failing to meet the minimum standards of performance in professional activities when measured against generally prevailing peer performance, including the undertaking of activities for which the licensee, registered [A>associate<A] [D>intern<D], or certificateholder is not qualified by training or experience.
+
+(s) Delegating professional responsibilities to a person who the licensee, registered [A>associate<A] [D>intern<D], or certificateholder knows or has reason to know is not qualified by training or experience to perform such responsibilities.
+
+(u) Failure of the licensee, registered [A>associate<A] [D>intern<D], or certificateholder to maintain in confidence a communication made by a patient or client in the context of such services, except as provided in s. 491.0147.
+
+Section 5. Paragraphs (i) through (l) of subsection (1) of section 491.012, Florida Statutes, are amended to read:
+
+491.012 Violations; penalty; injunction.--
+
+(1) It is unlawful and a violation of this chapter for any person to:
+
+(i) Practice clinical social work in this state for compensation, unless the person holds a valid, active license to practice clinical social work issued [A>under<A] [D>pursuant to<D] this chapter or is an [A>associate<A] [D>intern<D] registered pursuant to s. 491.0045.
+
+(j) Practice marriage and family therapy in this state for compensation, unless the person holds a valid, active license to practice marriage and family therapy issued [A>under<A] [D>pursuant to<D] this chapter or is an [A>associate<A] [D>intern<D] registered pursuant to s. 491.0045.
+
+(k) Practice mental health counseling in this state for compensation, unless the person holds a valid, active license to practice mental health counseling issued [A>under<A] [D>pursuant to<D] this chapter or is an [A>associate<A] [D>intern<D] registered pursuant to s. 491.0045.
+
+(l) Use the following titles or any combination thereof, unless he or she holds a valid registration as an [A>associate<A] [D>intern<D] issued [A>under<A] [D>pursuant to<D] this chapter:
+
+1. "Registered [A>associate<A] clinical social worker [D>intern<D]."
+
+2. "Registered [A>associate<A] marriage and family therapist [D>intern<D]."
+
+3. "Registered [A>associate<A] mental health counselor [D>intern<D]."
+
+Section 6. Paragraph (c) of subsection (4) of section 491.014, Florida Statutes, is amended to read:
+
+491.014 Exemptions.--
+
+(4) No person shall be required to be licensed, provisionally licensed, registered, or certified under this chapter who:
+
+(c) Is a student providing services regulated under this chapter who is pursuing a course of study which leads to a degree in a profession regulated by this chapter, is providing services in a training setting, provided such services and associated activities constitute part of a supervised course of study, and is designated by the title "student [A>associate<A] [D>intern<D]."
+
+Section 7. Subsection (2) of section 491.0149, Florida Statutes, is amended to read:
+
+491.0149 Display of license; use of professional title on promotional materials.--
+
+(2)(a) A person registered under this chapter as [A>an associate<A] [D>a<D] clinical social worker [D>intern<D], [A>an associate<A] marriage and family therapist [D>intern<D], or [A>an associate<A] mental health counselor [D>intern<D] shall conspicuously display the valid registration issued by the department or a true copy thereof at each location at which the registered [A>associate<A] [D>intern<D] is completing the experience requirements.
+
+(b) A registered [A>associate<A] clinical social worker [D>intern<D] shall include the words "registered [A>associate<A] clinical social worker [D>intern<D]," a registered [A>associate<A] marriage and family therapist [D>intern<D] shall include the words "registered [A>associate<A] marriage and family therapist [D>intern<D]," and a registered [A>associate<A] mental health counselor [D>intern<D] shall include the words "registered [A>associate<A] mental health counselor [D>intern<D]" on all promotional materials, including cards, brochures, stationery, advertisements, and signs, naming the registered [A>associate<A] [D>intern<D].
+
+Section 8. This act shall take effect July 1, 2025.

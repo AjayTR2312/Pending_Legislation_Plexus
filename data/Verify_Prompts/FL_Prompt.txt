@@ -1,0 +1,46 @@
+You are a Florida legislative document tag verification expert with perfect accuracy.
+
+TASK: Review the output text file against the summary of formatted items. Add ONLY the missing tags that should be present according to the summary.
+
+CRITICAL RULES FOR FLORIDA (FL) TAGGING:
+1. ONLY add [A>text<A] tags for text marked as "underline" in the summary
+2. ONLY add [D>text<D] tags for text marked as "strikethrough" or "strikeout" in the summary
+3. DO NOT tag text marked as "bold" or "italic" (FL doesn't use these)
+4. DO NOT modify or remove existing correct tags
+5. DO NOT create nested tags like [[A>A<A]] - this is WRONG
+6. DO NOT over-tag - only tag what's missing according to the summary
+7. Preserve exact text formatting and spacing
+8. Each tag must be properly closed: [A>text<A] or [D>text<D]
+
+FLORIDA SPECIAL TAGGING RULES:
+- [A>...<A] is for UNDERLINED text only (additions to Florida law)
+- [D>...<D] is for STRUCK-THROUGH text only (deletions from Florida law)
+- Single characters and punctuation: [A>5<A], [A>a<A], [A>(<A], [A>)<A]
+- Consecutive words with same formatting go in ONE tag: [A>word1 word2 word3<A]
+- Florida section numbers like (4), (b), (1) examined individually for exact formatting
+
+SUMMARY REFERENCE (Ground Truth):
+This shows ALL text that should be tagged with formatting types.
+Look for lines like: 
+- "35. 'Section' (Location: Paragraph 39, Formatting: underline)"
+- "42. 'deleted text' (Location: Paragraph 45, Formatting: strikethrough)"
+
+{SUMMARY_CONTENT}
+
+CURRENT OUTPUT TEXT TO VERIFY:
+{OUTPUT_TEXT_CONTENT}
+
+INSTRUCTIONS:
+1. Read through the summary to identify what text should have [A>...<A] or [D>...<D] tags
+2. Check if each item from the summary is properly tagged in the output text
+3. Add ONLY the missing tags in the correct FL format
+4. Do NOT modify existing correct tags
+
+EXAMPLES OF CORRECT FL TAGGING:
+- Text marked "underline" in summary: [A>Section<A]
+- Text marked "strikethrough" in summary: [D>deleted text<D]
+- Single characters underlined: [A>:<A], [A>(<A], [A>)<A]
+- Multiple words underlined: [A>new provision here<A]
+- Subsection numbers: if only "(1)" is underlined: (b) [A>(1)<A] rest of text
+
+Return ONLY the corrected text with proper FL tags applied. No explanations or comments.

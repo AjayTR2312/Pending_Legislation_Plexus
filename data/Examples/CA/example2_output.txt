@@ -1,0 +1,167 @@
+AMENDED IN SENATE MAY 23, 2025
+
+AMENDED IN SENATE APRIL 24, 2025
+
+AMENDED IN SENATE APRIL 10, 2025
+
+AMENDED IN SENATE APRIL 7, 2025
+
+SENATE BILL                                   No. 518
+
+Introduced by Senator Weber Pierson
+
+(Coauthors: Senators Richardson and Smallwood-Cuevas)
+
+(Coauthors: Assembly Members Bonta, Bryan, Elhawary, Gipson, Jackson, McKinnor, Ransom, Sharp-Collins, and Wilson)
+
+February 19, 2025
+
+An act to amend Section 15002.5 of, and to add Chapter 4 (commencing with Section 15210) to Part 6 of Division 3 of Title 2 of, the Government Code, relating to state government.
+
+LEGISLATIVE COUNSEL'S DIGEST
+
+SB 518, as amended, Weber Pierson. Descendants of enslaved persons: reparations.
+
+Former law, until July 1, 2023, established the Task Force to Study and Develop Reparation Proposals for African Americans, with a Special Consideration for African Americans Who are Descendants of Persons Enslaved in the United States (Task Force).
+
+Former law required the Task Force, among other things, to identify, compile, and synthesize the relevant corpus of evidentiary documentation of the institution of slavery that existed within the United States and the colonies, as specified, and to recommend the form of compensation that should be awarded, the instrumentalities through which it should be awarded, and who should be eligible for this compensation.
+
+This bill would establish the Bureau for Descendants of American Slavery within the Department of Justice, under the control of the director, who would be appointed by the Attorney General and confirmed by the Senate. The bill would require the bureau, as part of its duties, to determine how an individual's status as a descendant would be confirmed. The bill would also require proof of an individual's descendant status to be a qualifying criterion for benefits authorized by the state for descendants. To accomplish these goals, the bill would require the bureau to be comprised of a Genealogy Division, a Property Reclamation Division, an Education and Outreach Division, and a Legal Affairs Division. The bill[D> would, upon appropriation,<D] [A>would<A] impose specified duties on the Property Reclamation Division to accept, review, and investigate applications, to determine whether an applicant is a dispossessed owner, and, if so, to determine whether and what type of property or just compensation is warranted, as defined and specified. In this regard, the bill would require a local entity, upon a determination that issuing property or just compensation is warranted, to recommend publicly held properties suitable as compensation. By imposing new duties on local entities, this bill would impose a state-mandated local program.
+
+This bill would authorize the state or local entity that took the property to provide compensation in accordance with the division's determination.[D> The bill would make this authorization on state entities subject to appropriation.<D] If the state or local entity does not provide compensation, the bill would authorize a dispossessed owner to bring a claim for compensation and to assert any legal claim that would have been available to the property owner at the time of the taking.
+
+[A>This bill would make implementation of its provisions contingent upon appropriation by the Legislature, as specified.<A]
+
+This bill would include findings and declarations relating to a gift of public funds.
+
+The California Constitution requires the state to reimburse local agencies and school districts for certain costs mandated by the state. Statutory provisions establish procedures for making that reimbursement.
+
+This bill would provide that, if the Commission on State Mandates determines that the bill contains costs mandated by the state, reimbursement for those costs shall be made pursuant to the statutory provisions noted above.
+
+Vote: majority. Appropriation: no. Fiscal committee: yes. State-mandated local program: yes.
+
+The people of the State of California do enact as follows:
+
+SECTION 1. Section 15002.5 of the Government Code is amended to read:
+
+15002.5. Except as provided in Chapter 4 (commencing with Section 15210), the Attorney General may arrange and classify the work of the Department of Justice, and consolidate, abolish, or create divisions, bureaus, branches, sections, or units within the department. Any statutory or other reference to the Office of the Attorney General, the State Bureau of Criminal Identification and Investigation, the Division of Law Enforcement, or the Bureau of Gambling Control shall be construed to refer to the division, bureau, branch, section, or unit within the department which is performing the functions referred to; and no such function shall be abolished without express statutory authority.
+
+SEC. 2. Chapter 4 (commencing with Section 15210) is added to Part 6 of Division 3 of Title 2 of the Government Code, to read:
+
+CHAPTER 4. BUREAU FOR DESCENDANTS OF AMERICAN SLAVERY
+
+Article 1. General
+
+15210. (a) It is the intent of the Legislature in establishing the bureau to establish an initial framework and it is the intent of the Legislature that the scope and responsibilities of the bureau may expand as necessary to fulfill its mission and address additional harms as identified.
+
+(b) It is the intent of the Legislature that, as the bureau expands its scope in the future, it shall also advise on reparative remedies to address the lasting harms of disenfranchisement, segregation, discrimination, exclusion neglect, violence, and the persistent consequences of this legacy that impacts both descendants and nondescendants.
+
+[A>(c) Implementation of this chapter shall be contingent upon appropriation of sufficient funding by the Legislature in the annual Budget Act or other statute for that purpose.<A]
+
+15211. For purposes of this chapter:
+
+(a) "Bureau" means the Bureau for Descendants of American Slavery.
+
+(b) "Descendants" means descendants of an African American chattel enslaved person in the United States, or descendants of a free Black person living in the United States prior to the end of the 19th century.
+
+(c) "Director" means the Director of the Bureau for Descendants of American Slavery.
+
+(d) "Racially motivated eminent domain" means when the state, county, city, city and county, district, or other political subdivision of the state acquires private property for public use and does not distribute just compensation to the owner at the time of the acquisition, and the acquisition or the failure to provide just compensation was due, in whole or in part, to the owner's ethnicity or race.
+
+15212. (a) Notwithstanding Section 15002.5, the Bureau for Descendants of American Slavery is hereby established within the Department of Justice. The bureau shall be under the direct control of a director who shall be responsible to the Attorney General.
+
+(b) The director shall be appointed by the Attorney General and confirmed by the Senate, and shall perform all duties, exercise all powers, assume and discharge all responsibilities, and carry out and effect all purposes vested by law in the bureau.
+
+(c) The salary of the director shall be fixed pursuant to Section 12502.
+
+(d) The bureau shall establish a mission statement consistent with the recommendations from the former Task Force to Study and Develop Reparation Proposals for African Americans, with a Special Consideration for African Americans Who are Descendants of Persons Enslaved in the United States.
+
+15213. As part of its duties, the bureau shall determine how an individual's status as a descendant shall be confirmed. Proof of an individual's descendent status shall be a qualifying criterion for benefits authorized by the state for descendants. To accomplish these goals, the bureau shall include all of the following divisions:
+
+(a) A Genealogy Division to do all of the following:
+
+(1) Establish a process to certify descendants of American slaves.
+
+(2) Create a method for eligible individuals to submit claims and receive compensation or restitution for those particular harms California inflicted upon the claimant or their family.
+
+(3) Establish an equitable alternative qualifying criterion for benefits for descendants authorized by the state in cases where an individual's status as a descendant cannot be confirmed or proven.
+
+(b) A Property Reclamation Division to do all of the following:
+
+(1) Research and document California state properties acquired as a result of racially-motivated eminent domain, including properties that no longer exist due to state highway construction or other development.
+
+(2) Create a database of property ownership in the state identifying properties acquired through racially motivated eminent domain or other discriminatory government action.
+
+(3) Review and investigate public complaints from people who claim their property was taken without just compensation, pursuant to Article 2 (commencing with Section 15215).
+
+(4) Address cases where individuals experienced harm due to the policies and practices of state and local agencies.
+
+(c) An Education and Outreach Division to develop and implement a public education campaign regarding the cycle of gentrification, displacement, and exclusion; the connection between redlining and gentrification; and the history of discriminatory urban planning in California.
+
+(d) A Legal Affairs Division to do all of the following:
+
+(1) Provide legal advice, counsel, and services to the bureau and its officials.
+
+(2) Ensure that the bureau's programs are administered in accordance with applicable legislative authority.
+
+(3) Advise the head of the bureau on legislative, legal, and regulatory initiatives.
+
+(4) Serve as an external liaison on legal matters with other state agencies and other entities.
+
+(5) Conduct a review of past and current laws, as well as proposed legislation, to determine whether those measures have caused, are causing, or may continue to cause harm. The division shall provide recommendations to mitigate or eliminate any harm identified in its review.
+
+Article 2. Property Reclamation Division
+
+15215. (a) The Legislature finds and declares that it is in the public interest to compensate victims of racially motivated eminent domain, which deprived citizens of just compensation for their property due to racially discriminatory motives. The unjust taking of land without fair compensation destroyed communities, forced many from their historical neighborhoods, deprived those persons of the fair value of their property, and, in many cases, prevented the accumulation of generational wealth. Providing compensation to these victims of racial discrimination will restore the value of wrongfully taken property to dispossessed owners and hold government entities responsible for those wrongful discriminatory acts.
+
+(b) This article shall govern the procedure by which dispossessed owners and their descendants may seek a determination that they were the victims of racially motivated eminent domain and seek the return of the taken property, other property of equal value, or financial compensation.
+
+15216. For purposes of this article, the following definitions apply:
+
+(a) "Dispossessed owner" means a person who has had property taken from them as a result of racially motivated eminent domain or a direct descendant of the person whose property was taken.
+
+(b) "Publicly held property" means property that is owned by the state or by the local agency that took possession of the property that is the subject of an application submitted pursuant to this article.
+
+15217. [D>Upon appropriation by the Legislature, the <D][A>The<A] Property Reclamation Division within the Bureau for Descendants of American Slavery shall do all of the following:
+
+(a) Accept applications from persons who claim they are the dispossessed owner.
+
+(b) (1) Review and investigate applications submitted under subdivision (a).
+
+(2) As part of its review, the division may request submission of additional information supporting the application that is reasonably necessary to verify the application, determine whether the applicant is a dispossessed owner, including determining whether the taking was racially motivated. If the division makes a request for additional documentation, it shall communicate that request to the applicant with a notice of the additional information required. The division shall consider any additional information provided by the applicant within 30 days of receipt.
+
+(c) After reviewing all of the relevant materials, determine whether the applicant is a dispossessed owner.
+
+(d) If the division determines that an applicant has established that they are a dispossessed owner pursuant to subdivision (c), the division shall determine all of the following:
+
+(1) The present day fair market value of the property that was taken as a result of racially motivated eminent domain.
+
+(2) The specific state or local public entity that took the property, or its successor.
+
+(3) Whether issuing property or just compensation to that dispossessed owner would serve to redress past acts of racial discrimination, prevent future acts of racial discrimination, and benefit the whole of the community and its general welfare.
+
+(e) If the division determines that issuing property or just compensation to the dispossessed owner is warranted pursuant to paragraph (3) of subdivision (d), the division shall certify that the dispossessed owner is entitled to compensation, as follows:
+
+(1) If the taken property is still in the possession of the public entity that took the property, the division shall determine whether the dispossessed owner should be compensated through the return of the taken property or pursuant to paragraph (2) or (3). In making this determination, the division shall consider whether the property's current use or zoning make it impractical to return the property and whether the condition of the property or its surrounding environment would make the return of the property inequitable.
+
+(2) If the taken property is no longer in the possession of the public entity that took the property or the division determines that the dispossessed owner should not be compensated through the return of the taken property pursuant to paragraph (1), the division shall solicit from the state or local entity, as applicable, a list of recommendations of publicly held properties that are suitable as compensation and shall determine whether the dispossessed owner should be compensated through the grant of title to one of the recommended publicly held properties or pursuant to paragraph (3).
+
+(3) If the division determines that the dispossessed owner should not be compensated through either the return of the taken property or the grant of title to a publicly held property, the division shall certify that the dispossessed owner is entitled to financial compensation equal to the fair market value determined pursuant to paragraph (1) of subdivision (d) less any amount paid for the property at the time of the taking as adjusted for inflation.
+
+(f) If the division determines that an applicant is not a dispossessed owner or that issuing property or just compensation is not warranted, the division shall notify the applicant of its finding. The applicant may appeal the determination within 60 days of receiving the notice and provide additional information to support their claim. The division shall consider the appeal and any new information provided and issue a determination on the appeal within 120 days.
+
+15218. (a) A person who receives a certification from the division pursuant to Section 15217 may present the certification to the specific state or local public entity identified by the division and the state[D> public entity, upon appropriation, or the<D] [A>or<A] local public entity may provide to the person the property or monetary compensation identified in the certification.
+
+(b) (1) If the state or local entity that took property by racially motivated eminent domain does not provide compensation in accordance with the division's certification in subdivision (e) of Section 15217, the dispossessed owner may bring a claim for compensation under the Government Claims Act (Division 3.6 (commencing with Section 810) of Title 1).
+
+(2) The person bringing the claim may assert any legal basis for return of the property or compensation that would have been available to the property owner at the time of the taking. The determination of the division shall not be binding upon the court.
+
+(c) A claim brought pursuant to this section shall not be subject to the statute of limitations, whether the action is brought before or after the enactment of this article.
+
+15219. (a) This article does not disturb or invalidate the title of any property taken by racially motivated eminent domain except against the state or local jurisdiction as set forth in this article.
+
+(b) Every finding, decision, determination, or other official act of the bureau is subject to judicial review in accordance with existing law.
+
+SEC. 3. The Legislature finds and declares that the addition of Chapter 4 (commencing with Section 15210) to Part 6 of Division 3 of Title 2 of the Government Code by this act serves a public purpose and does not constitute a gift of public funds within the meaning of Section 6 of Article XVI of the California Constitution by redressing past acts of racial discrimination, preventing future acts of racial discrimination, and benefitting the whole of the community and its general welfare.
+
+SEC. 4. If the Commission on State Mandates determines that this act contains costs mandated by the state, reimbursement to local agencies and school districts for those costs shall be made pursuant to Part 7 (commencing with Section 17500) of Division 4 of Title 2 of the Government Code.

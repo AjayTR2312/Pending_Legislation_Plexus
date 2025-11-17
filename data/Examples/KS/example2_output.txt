@@ -1,0 +1,832 @@
+Session of 2025
+
+HOUSE BILL No. 2206
+
+By Committee on Elections
+
+Requested by Representative Waggoner
+
+2-3
+
+AN ACT concerning campaign finance; relating to the Kansas governmental ethics commission; renaming the commission as the Kansas public disclosure commission; defining certain terms; requiring the filing of statements of independent expenditures; prohibiting agreements requiring contributions in the name of another person; amending K.S.A. 25-4119a, 25-4119b, 25-4119e, 25-4119f, 25-4142, 25-4150, 25-4152, 25-4153b, 25-4154, 25-4157, 25-4158a, 25-4180, 25-4186, 46-246a, 46-253, 46-265, 46-280, 46-288, 46-295, 75-3717, 75-4302a and 75-4303a and K.S.A. 2024 Supp. 25-4143, 25-4145, 74-50,297, 75-3036 and 77-440 and repealing the existing sections.
+
+Be it enacted by the Legislature of the State of Kansas:
+
+Section 1. K.S.A. 25-4119a is hereby amended to read as follows:
+
+25-4119a. (a) There is hereby created the Kansas [A>public disclosure<A] commission[D> on governmental standards and conduct<D].
+
+(b) On [A>and after<A] July 1,[D> 1998<D] [A>2025<A], the Kansas[D> commission on governmental standards and conduct is hereby redesignated as the<D] governmental ethics commission [A>is hereby redesignated as the Kansas public disclosure commission<A].[D> On and after July 1, 1998,<D] Whenever the Kansas [A>governmental ethics<A] commission[D> on governmental standards and conduct<D], or words of like effect, is referred to or designated by a statute, contract or other document, such reference or designation shall be deemed to apply to the[D> governmental ethics<D] [A>Kansas public disclosure<A] commission. Nothing in this act shall be construed as abolishing and reestablishing the Kansas [A>governmental ethics<A] commission[D> on governmental standards and conduct<D].
+
+[A>(c)<A] The [A>Kansas public disclosure<A] commission shall consist of nine members of whom two shall be appointed by the governor, one by the president of the senate, one by the speaker of the house of representatives, one by the minority leader of the house of representatives, one by the minority leader of the senate, one by the chief justice of the supreme court, one by the attorney general and one by the secretary of state. Nothing in this act shall be construed as affecting the terms of members serving on July 1,[D> 1998<D] [A>2025<A]. Not more than five members of the commission shall be members of the same political party and the two members appointed by the governor shall not be members of the same political party.
+
+[D>(c)<D][A>(d)<A] The terms of all subsequently appointed members shall be two years commencing on February 1 of the appropriate years. Vacancies occurring on the commission shall be filled for the unexpired term by the same appointing officer as made the original appointment. Members shall serve until their successors are appointed and qualified. The governor shall designate one of the members appointed by the governor to be the chairperson of the commission. A majority vote of five members of the commission shall be required for any action of the commission. The commission may adopt rules to govern its proceedings and may provide for such officers other than the chairperson as it may determine. The commission shall meet at least once each quarter, and also shall meet on call of its chairperson or any four members of the commission. Members of the commission attending meetings of such commission, or attending a subcommittee meeting thereof authorized by such commission, shall be paid compensation, subsistence allowances, mileage and other expenses as provided in[D> subsections (a) to (d), inclusive, of<D] K.S.A. 75-3223[A>(a) through (d)<A], and amendments thereto.
+
+[A>(e)<A] The commission shall appoint an executive director who shall be in the unclassified service and receive compensation fixed by the commission, in accordance with appropriation acts of the legislature, subject to approval by the governor. The commission may employ such other staff and attorneys as it determines, within amounts appropriated to the commission, all of whom shall be in the unclassified service and shall receive compensation fixed by the commission and not subject to approval by the governor.
+
+[D>(d)<D][A>(f)<A] The commission may adopt rules and regulations for the administration of the campaign finance act. Subject to K.S.A. 25-4178, and amendments thereto, rules and regulations adopted by the commission created prior to[D> this act<D] [A>July 1, 2025,<A] shall continue in force and effect and shall be deemed to be the rules and regulations of the commission[D> created by this section of this enactment,<D] until revised, amended, repealed or nullified pursuant to law. All rules and regulations of the commission shall be subject to the provisions of article 4 of chapter 77 of Kansas Statutes Annotated. The commission shall continue to administer all of the acts administered by the commission to which it is successor.
+
+[D>(e)<D][A>(g)<A] The commission may provide copies of opinions, informational materials compiled and published by the commission and public records filed in the office of the commission to persons requesting the same and may adopt rules and regulations fixing reasonable fees therefor. All fees collected by the commission under the provisions of this subsection shall be remitted to the state treasurer in accordance with the provisions of K.S.A. 75-4215, and amendments thereto. Upon receipt of each such remittance, the state treasurer shall deposit the entire amount in the state treasury to the credit of the[D> governmental ethics<D] [A>Kansas public disclosure<A] commission fee fund.
+
+[D>(f)<D][A>(h)<A] The commission shall submit an annual report and recommendations in relation to all acts administered by the commission to the governor and to the legislative coordinating council on or before December 1 of each year. The legislative coordinating council shall transmit such report and recommendations to the legislature.
+
+[D>(g) Whenever the Kansas commission on governmental standards and conduct, or words of like effect, is referred to or designated by a statute, contract or other document, such reference or designation shall be deemed to apply to the governmental ethics commission.<D]
+
+Sec. 2. K.S.A. 25-4119b is hereby amended to read as follows:
+
+25-4119b. (a) All of the powers, duties and functions of the[D> existing<D] [A>Kansas<A] governmental ethics commission are hereby transferred to and conferred and imposed upon the Kansas public disclosure commission created by K.S.A. 25-4119a,[D> as amended<D] [A>and amendments thereto<A].
+
+(b) The Kansas public disclosure commission[D> created by K.S.A. 25-4119a, as amended,<D] shall be the successor in every way to the powers, duties and functions of the [A>Kansas<A] governmental ethics commission in which the same were vested prior to[D> the effective date of this act<D] [A>July 1, 2025<A].
+
+(c) [D>Whenever the governmental ethics commission, or words of like effect, is referred to or designated by a statute, contract or other document, such reference or designation shall be deemed to apply to the Kansas public disclosure commission created by K.S.A. 25-4119a, as amended.<D]
+
+[D>(d) <D]Subject to K.S.A. 25-4178, [A>and amendments thereto,<A] all opinions rendered pursuant to K.S.A. 25-4120 and 46-254[A>, and amendments thereto,<A] by the [A>Kansas<A] governmental ethics commission[D> before the effective date of this act<D] [A>prior to July 1, 2025,<A] shall continue to be in force and effect and shall be deemed to be opinions of the Kansas public disclosure commission[D> created by K.S.A. 25-4119a, as amended,<D] until revised, amended or nullified pursuant to law.
+
+[D>(e)<D][A>(d)<A] The Kansas public disclosure commission[D> created by K.S.A. 25-4119a, as amended,<D] shall be a continuation of the [A>Kansas<A] governmental ethics commission.
+
+Sec. 3. K.S.A. 25-4119e is hereby amended to read as follows:
+
+25-4119e. (a) There is hereby established in the state treasury the [D>governmental ethics<D] [A>Kansas public disclsoure<A] commission fee fund. All moneys credited to such fund shall be used for the operations of the commission in the performance of powers, duties and functions prescribed by law. All expenditures from such fund shall be made in accordance with the provisions of appropriation acts and upon warrants of the director of accounts and reports issued pursuant to vouchers approved by the chairperson of the commission or the chairperson's designee.
+
+(b) [D>The director of accounts and reports is hereby directed to transfer all moneys in the Kansas commission on governmental standards and conduct fee fund to the governmental ethics commission fee fund established pursuant to subsection (a). All liabilities of the Kansas commission on governmental standards and conduct fee fund existing prior to July 1, 1998, are hereby imposed on the governmental ethics commission fee fund established pursuant to subsection (a). The Kansas commission on governmental standards and conduct fee fund is hereby abolished<D][A>On July 1, 2025, the governmental ethics commission fee fund is hereby redesignated as the Kansas public disclosure commission fee fund of the Kansas public disclosure commission<A].
+
+Sec. 4. K.S.A. 25-4119f is hereby amended to read as follows:
+
+25-4119f. (a) In addition to any other fee required by law, every person becoming a candidate for the following offices shall pay a fee at the time of filing for such office in the amount prescribed by this section:
+
+(1) Governor and lieutenant governor.......................................................$650;
+(2) state offices elected by statewide election, other than the governor
+    and lieutenant governor................................................................$650;
+(3) state senator, state representative, state board of education, district
+    attorney, board of public utilities of the city of Kansas City and
+    elected county offices..................................................................$50;
+    and
+(4) members of boards of education of unified school districts having
+    35,000 or more pupils regularly enrolled in the preceding school
+    year, members of governing bodies of cities of the first class and
+    judges of the district court in judicial districts in which judges are
+    elected.................................................................................$50.
+
+(b) The secretary of state shall remit all fees received by that office to the state treasurer in accordance with the provisions of K.S.A. 75-4215, and amendments thereto. County election officers receiving fees in accordance with this section shall remit such fees to the county treasurer of the county who shall quarterly remit the same to the state treasurer. Upon receipt of each such remittance, the state treasurer shall deposit the entire amount in the state treasury to the credit of the[D> governmental ethics<D] [A>Kansas public disclsoure<A] commission fee fund.
+
+Sec. 5. K.S.A. 25-4142 is hereby amended to read as follows:
+
+25-4142. K.S.A. [D>25-4119e, 25-4119f, 25-4119g, 25-4142<D][A>25-4119a<A] through [D>25-4187 and K.S.A. 25-4153b<D] [A>25-4189<A], and amendments thereto, shall be known and may be cited as the campaign finance act.
+
+Sec. 6. K.S.A. 2024 Supp. 25-4143 is hereby amended to read as follows:
+
+25-4143. As used in the campaign finance act, unless the context otherwise requires:
+
+(a) "Agent" means an individual who is:
+
+(1) A candidate;
+
+(2) a chairperson of a candidate, political or party committee;
+
+(3) a treasurer; or
+
+(4) any director, officer, employee, paid consultant or other person who is authorized to act on behalf of persons listed in this subsection.
+
+(b) "Candidate" means an individual who:
+
+(1) Appoints a treasurer or a candidate committee;
+
+(2) makes a public announcement of intention to seek nomination or election to state or local office;
+
+(3) makes any expenditure or accepts any contribution for such person's nomination or election to any state or local office; or
+
+(4) files a declaration or petition to become a candidate for state or local office.
+
+(c) "Candidate committee" means a committee appointed by a candidate to receive contributions and make expenditures for the candidate.
+
+(d) "Clearly identified candidate" means a candidate who has been identified by the:
+
+(1) Use of the name of the candidate;
+
+(2) use of a photograph or drawing of the candidate; or
+
+(3) unambiguous reference to the candidate whether or not the name, photograph or drawing of such candidate is used.
+
+(e) "Commission" means the governmental ethics commission.
+
+(f) (1) "Contribution" means:
+
+(A) Any advance, conveyance, deposit, distribution, gift, loan or payment of money or any other thing of value given to a candidate, candidate committee, party committee or political committee for the express purpose of nominating, electing or defeating a clearly identified candidate for a state or local office;
+
+(B) any advance, conveyance, deposit, distribution, gift, loan or payment of money or any other thing of value made to expressly advocate the nomination, election or defeat of a clearly identified candidate for a state or local office;
+
+(C) a transfer of funds between any two or more candidate committees, party committees or political committees;
+
+(D) the payment, by any person other than a candidate, candidate committee, party committee or political committee, of compensation to an individual for the personal services rendered without charge to or for a candidate's campaign or to or for any such committee;
+
+(E) the purchase of tickets or admissions to, or advertisements in journals or programs for, testimonial events; or
+
+(F) a mailing of materials designed to expressly advocate the nomination, election or defeat of a clearly identified candidate, which is made and paid for by a party committee with the consent of such candidate.
+
+(2) "Contribution" does not include:
+
+(A) The value of volunteer services provided without compensation;
+
+(B) costs to a volunteer related to the rendering of volunteer services not exceeding a fair market value of $50 during an allocable election period as provided in K.S.A. 25-4149, and amendments thereto;
+
+(C) payment by a candidate or candidate's spouse for personal meals, lodging and travel by personal automobile of the candidate or candidate's spouse while campaigning; or
+
+(D) the value of goods donated to events such as testimonial events, bake sales, garage sales and auctions by any person not exceeding a fair market value of $50 per event.
+
+(g) [A>(1) "Cooperation or consent" means, with respect to expenditures:<A]
+
+[A>(A) An express advocacy expenditure that is created, produced or distributed at the request or recommendation of a candidate, candidate committee or party committee; or<A]
+
+[A>(B) an express advocacy expenditure that is created, produced or distributed at the recommendation of a person who is paying for such express advocacy and the candidate, candidate committee or party committee assents to such recommendation.<A]
+
+[A>(2) "Cooperation or consent" does not include:<A]
+
+[A>(A) A candidate's or a political party's response to an inquiry about such candidate's or political party's positions on legislative or policy issues;<A]
+
+[A>(B) an expenditure for which the information material to the creation, production, distribution or undertaking of the expenditure was obtained from a publicly available source;<A]
+
+[A>(C) an endorsement of a candidate;<A]
+
+[A>(D) soliciting contributions for a candidate or party committee;<A]
+
+[A>(E) an expenditure for the use of a commercial vendor or to a former employee of the candidate by the person making the expenditure if:<A]
+
+[A>(i) The commercial vendor or former employee has provided political services to such candidate during the 120 days immediately preceding such expenditure;<A]
+
+[A>(ii) a firewall is established and implemented by the person making the expenditure; and<A]
+
+[A>(iii) the firewall is designed and implemented to prohibit the flow of information between employees or consultants providing services for the person making the expenditure and those employees or consultants who are currently providing or previously provided services to such candidate; and<A]
+
+[A>(F) an expenditure for the use of a commercial vendor or to a former employee of the candidate by the person making the expenditure and the commercial vendor or former employee has not provided political services to such candidate during the 120 days immediately preceding such expenditure.<A]
+
+[A>(h)<A] "Election" means:
+
+(1) A primary or general election for state or local office; and
+
+(2) a convention or caucus of a political party held to nominate a candidate for state or local office.
+
+[D>(h)<D][A>(i)<A] (1) "Expenditure" means:
+
+(A) Any purchase, payment, distribution, loan, advance, deposit or gift of money or any other thing of value made by a candidate, candidate committee, party committee or political committee for the express purpose of nominating, electing or defeating a clearly identified candidate for a state or local office;
+
+(B) any purchase, payment, distribution, loan, advance, deposit or gift of money or any other thing of value made to expressly advocate the nomination, election or defeat of a clearly identified candidate for a state or local office;
+
+(C) any contract to make an expenditure;
+
+(D) a transfer of funds between any two or more candidate committees, party committees or political committees; or
+
+(E) payment of a candidate's filing fees.
+
+(2) "Expenditure" does not include:
+
+(A) The value of volunteer services provided without compensation;
+
+(B) costs to a volunteer incidental to the rendering of volunteer services not exceeding a fair market value of $50 during an allocable election period as provided in K.S.A. 25-4149, and amendments thereto;
+
+(C) payment by a candidate or candidate's spouse for personal meals, lodging and travel by personal automobile of the candidate or candidate's spouse while campaigning or payment of such costs by the treasurer of a candidate or candidate committee;
+
+(D) the value of goods donated to events such as testimonial events, bake sales, garage sales and auctions by any person not exceeding fair market value of $50 per event; or
+
+(E) any communication by an incumbent elected state or local officer with one or more individuals unless the primary purpose thereof is to expressly advocate the nomination, election or defeat of a clearly identified candidate.
+
+[D>(i)<D][A>(j)<A] "Expressly advocate the nomination, election or defeat of a clearly identified candidate" means any communication that uses phrases including, but not limited to:
+
+(1) "Vote for the secretary of state";
+
+(2) "re-elect your senator";
+
+(3) "support the democratic nominee";
+
+(4) "cast your ballot for the republican challenger for governor";
+
+(5) "Smith for senate";
+
+(6) "Bob Jones in '98";
+
+(7) "vote against Old Hickory";
+
+(8) "defeat" accompanied by a picture of one or more candidates; or
+
+(9) "Smith's the one."
+
+[D>(j)<D][A>(k)<A] "Party committee" means:
+
+(1) The state committee of a political party regulated by article 3 of chapter 25 of the Kansas Statutes Annotated, and amendments thereto;
+
+(2) the county central committee or the state committee of a political party regulated under article 38 of chapter 25 of the Kansas Statutes Annotated, and amendments thereto;
+
+(3) the bona fide national organization or committee of those political parties regulated by the Kansas Statutes Annotated;
+
+(4) the political committee established by the state committee of any such political party and designated as a recognized political committee for the senate;
+
+(5) the political committee established by the state committee of any such political party and designated as a recognized political committee for the house of representatives; or
+
+(6) the political committee per congressional district established by the state committee of a political party regulated under article 38 of chapter 25 of the Kansas Statutes Annotated, and amendments thereto, and designated as a congressional district party committee.
+
+[D>(k)<D][A>(l)<A] "Person" means any individual, committee, corporation, partnership, trust, organization or association.
+
+[D>(l)<D][A>(m)<A] (1) "Political committee" means any [A>entity, including any<A] combination of two or more individuals [A>who are not married to one another,<A] or any person other than an individual,[D> a<D] [A>the<A] major purpose of which is to[D> expressly advocate the nomination, election or defeat of a clearly identified candidate for state or local office or<D] make contributions [D>to<D] or expenditures[D> for the nomination, election or defeat of a clearly identified candidate for state or local office<D] [A>that in the aggregate exceed $5,000 during any one calendar year and that satisfies one of the following:<A]
+
+[A>(A) States in such entity's articles of incorporation, bylaws or in any resolution adopted by the board of directors for such entity that the major purpose of such entity is to elect state or local candidates through express advocacy and contributions to candidate campaigns and political parties; or<A]
+
+[A>(B) spends not less than 50% of such entity's total program spending on contributions or expenditures during any one calendar year<A].
+
+(2) "Political committee"[D> shall<D] [A>does<A] not include a candidate committee or a party committee.
+
+[A>(3) (A) As used in this subsection, "total program spending" means the aggregate expenditures on all program activities, including:<A]
+
+[A>(i) All disbursements for contributions and expenditures; and<A]
+
+[A>(ii) all expenditures for fundraising communications that expressly advocate the nomination, election or defeat of a candidate or candidates for state or local office.<A]
+
+[A>(B) "Total program spending" does not include:<A]
+
+[A>(i) Expenditures for volunteer time or expenses;<A]
+
+[A>(ii) administrative expenses; or<A]
+
+[A>(iii) any other fundraising expenses.<A]
+
+[A>(C) For purposes of determining total program spending on contributions and expenditures:<A]
+
+[A>(i) A grant made to a political committee or an organization organized under section 527 of the internal revenue code shall be included in such entity's total program spending as a contribution or expenditure, except that if such grant is expressly designated for use outside this state or for any federal election, then such grant shall be included in such entity's total program spending but shall not be considered a contribution or expenditure; and<A]
+
+[A>(ii) all other grants made by such entity shall be included in such entity's total program spending but shall not be considered a contribution or expenditure unless such entity expressly designates such grant, or any portion thereof, for making a contribution or expenditure in this state. If a grant is so designated then such grant shall be considered a contribution or expenditure. If a portion of any grant is so designated then only such portion shall be considered a contribution or expenditure.<A]
+
+[D>(m)<D][A>(n)<A] "Receipt" means a contribution or any other money or thing of value, but not including volunteer services provided without compensation, received by a treasurer in the treasurer's official capacity.
+
+[D>(n)<D][A>(o)<A] "State office" means any state office as defined in K.S.A. 25-2505, and amendments thereto.
+
+[D>(o)<D][A>(p)<A] "Testimonial event" means an event held for the benefit of an individual who is a candidate to raise contributions for such candidate's campaign. "Testimonial events" includes, but are not limited to, dinners, luncheons, rallies, barbecues and picnics.
+
+[D>(p)<D][A>(q)<A] "Treasurer" means a treasurer of a candidate or of a candidate committee, a party committee or a political committee appointed under the campaign finance act or a treasurer of a combination of individuals or a person other than an individual[D> which<D] [A>that<A] is subject to K.S.A. 25-4172(a)(2), and amendments thereto.
+
+[D>(q)<D][A>(r)<A] "Local office" means a member of the governing body of a city of the first class, any elected office of a unified school district having 35,000 or more pupils regularly enrolled in the preceding school year, a county or of the board of public utilities.
+
+Sec. 7. K.S.A. 2024 Supp. 25-4145 is hereby amended to read as follows:
+
+25-4145. (a) Each party committee and each political committee [D>which<D] [A>that<A] anticipates receiving contributions or making expenditures shall appoint a chairperson and a treasurer. The chairperson of each party committee and each political committee[D> which<D] [A>that<A] anticipates receiving contributions or making expenditures for a candidate for state office shall make a statement of organization and file it with the secretary of state not later than 10 days after establishment of such committee. The chairperson of each political committee[D> which<D] [A>that<A] anticipates receiving contributions or making expenditures for any candidate for local office, shall make a statement of organization and file it with the county election officer not later than 10 days after establishment of such committee.
+
+(b) Every statement of organization shall include:
+
+(1) The name and address of the committee. The name of the committee shall reflect the full name of the organization with which the committee is connected or affiliated or sufficiently describe such affiliation. If the political committee is not connected or affiliated with any one organization, the name shall reflect the trade, profession or primary interest of the committee as reflected by the statement of purpose of such organization;
+
+(2) the names, addresses and email addresses, which such email addresses shall be optional, of the chairperson and treasurer of the committee;
+
+(3) the names and addresses of affiliated or connected organizations; and
+
+(4) in the case of a political committee, the full name of the organization with which the committee is connected or affiliated or, name or description sufficiently describing the affiliation or, if the committee is not connected or affiliated with any one organization, the trade, profession or primary interest of the political committee as reflected by the statement of purpose of such organization.
+
+(c) Any change in information previously reported in a statement of organization shall be reported on a supplemental statement of organization and filed not later than 10 days following the change.
+
+(d) (1) Each political committee which anticipates receiving contributions shall register annually with the commission on or before July 1 of each year. Each political committee registration shall be in the form and contain such information as may be required by the commission.
+
+(2) Each registration by a political committee anticipating the receipt of more than $15,000 in any calendar year shall be accompanied by an annual registration fee of $750.
+
+(3) Each registration by a political committee anticipating the receipt of more than $7,500 but less than $15,001 in any calendar year shall be accompanied by an annual registration fee of $500.
+
+(4) Each registration by a political committee anticipating the receipt of more than $2,500 but less than $7,501 in any calendar year shall be accompanied by an annual registration fee of $250.
+
+(5) Each registration by a political committee anticipating the receipt of $2,500 or less in any calendar year shall be accompanied by an annual registration fee of $50.
+
+(6) Any political committee that is currently registered under subsection (d)(4) or (d)(5) and that receives contributions in excess of the registered amount for a calendar year, shall file, within three days of the date when contributions exceed such amount, an amended registration form that shall be accompanied by an additional fee for such year equal to the difference between the fee owed and the amount of the fee that accompanied the current registration.
+
+(e) All such fees received by or for the commission shall be remitted to the state treasurer in accordance with the provisions of K.S.A. 75-4215, and amendments thereto. Upon receipt of each such remittance, the state treasurer shall deposit the entire amount in the state treasury to the credit of the[D> governmental ethics<D] [A>Kansas public disclosure<A] commission fee fund.
+
+Sec. 8. K.S.A. 25-4150 is hereby amended to read as follows:
+
+25-4150. [A>(a)<A] Every person, other than a candidate or a candidate committee, party committee or political committee, who makes[D> contributions or<D] [A>independent<A] expenditures[D>, other than by contribution to a candidate or a candidate committee, party committee or political committee,<D] in an aggregate amount of[D> $100<D] [A>$1,000<A] or more within a calendar year shall [D>make statements containing the information required by K.S.A. 25-4148, and amendments thereto. Such statements shall be filed in the office or offices required so that each such statement is in such office or offices on the day specified in K.S.A. 25-4148, and amendments thereto. If such contributions are received or expenditures are made to expressly advocate the nomination, election or defeat of a clearly identified candidate for state office, other than that of an officer elected on a state-wide basis such statement shall be filed in both the office of the secretary of state and in the office of the county election officer of the county in which the candidate is a resident<D] [A>file a statement of independent expenditures with the commission that includes the following:<A]
+
+[A>(1) The name and address of each person who receives payment in an aggregate amount that is in excess of $500 for an independent expenditure or for the creation or distribution of an independent expenditure; and<A]
+
+[A>(2) the date, amount and purpose of each independent expenditure, including the name and the office sought of each candidate identified in an independent expenditure and if such independent expenditure was in support of or in opposition to such candidate.<A]
+
+[A>(b) (1) Each statement of independent expenditures shall be filed on or before the next succeeding date on which reports are due to be filed under K.S.A. 25-4148, and amendments thereto. If a statement of independent expenditures is required after such date, then such statement shall be filed on or before 11:59 p.m. on the second day immediately following the date of the last independent expenditure.<A]
+
+[A>(2) If a person makes independent expenditures in an aggregate amount of $1,000 or more in the same calendar year after filing a statement of independent expenditures, then a subsequent statement of independent expenditures shall be filed with the commission in accordance with this section<A].
+
+[A>(c)<A] If such[D> contributions are received or<D] expenditures are made to expressly advocate the nomination, election or defeat of a clearly identified candidate for[D> state-wide<D] [A>state<A] office[A>,<A] such statement shall be filed[D> only<D] in the office of the secretary of state. If such[D> contributions or<D] expenditures are made to expressly advocate the nomination, election or defeat of a clearly identified candidate for local office[A>,<A] such statement shall be filed in the office of the county election officer of the county in which the name of the candidate is on the ballot.[D> Reports made<D] [A>Statements filed<A] under this section need not be cumulative.
+
+Sec. 9. K.S.A. 25-4152 is hereby amended to read as follows:
+
+25-4152. (a) Except as provided in subsection (b), the commission shall send a notice by registered or certified mail to any person failing to file any report or statement required by K.S.A. 25-4144, 25-4145 or 25-4148, and amendments thereto, and to the candidate appointing any treasurer failing to file any such report, within the time period prescribed therefor. The notice shall state that the required report or statement has not been filed with either the office of secretary of state or county election officer or both. The person failing to file any report or statement, and the candidate appointing any such person, shall be responsible for the filing of such report or statement. The notice also shall state that such person shall have 15 days from the date such notice is deposited in the mail to comply with the registration and reporting requirements before a civil penalty shall be imposed for each day that the required documents remain unfiled. If such person fails to comply within the prescribed period, such person shall pay to the state a civil penalty of $10 per day for each day that such report or statement remains unfiled, except that no such civil penalty shall exceed $300. The commission may waive, for good cause, payment of any civil penalty imposed by this section.
+
+(b) (1) Subject to the notice provisions of subsection (a), reports that are due under the provisions of K.S.A. 25-4148(a)(1) and (2), and amendments thereto, for candidates that appear on the ballot for the then-current primary or general election ballot and are late more than 48 hours shall be subject to civil penalties as provided in subsection (b)(2).
+
+(2) The candidate shall be liable for a civil penalty of $100 for the first day the report is more than 48 hours late and $50 for each subsequent day the report is late, but in no case shall the civil penalty exceed $1,000. The commission may waive, for good cause, payment of any civil penalty imposed by this section.
+
+(c) (1) Subject to the notice provisions of subsection (a), reports that are due under the provisions of K.S.A. 25-4145 and 25-4148, and amendments thereto, for each political committee that anticipates receiving $2,501 or more in any calendar year and are late more than 48 hours shall be subject to civil penalties as provided in subsection (c)(2).
+
+(2) The political committee shall be liable for a civil penalty of $100 for the first day the report is more than 48 hours late and $50 for each subsequent day the report is late, but in no case shall the civil penalty exceed $1,000. The commission may waive, for good cause, payment of any civil penalty imposed by this section.
+
+(d) Civil penalties provided for by this section shall be remitted to the state treasurer in accordance with the provisions of K.S.A. 75-4215, and amendments thereto. Upon receipt of each such remittance, the state treasurer shall deposit the entire amount in the state treasury to the credit of the[D> governmental ethics<D] [A>Kansas public disclosure<A] commission fee fund.
+
+(e) If a person fails to pay a civil penalty provided for by this section, it shall be the duty of the commission to bring an action to recover such civil penalty in the district court of the county in which such person resides.
+
+Sec. 10. K.S.A. 25-4153b is hereby amended to read as follows:
+
+25-4153b. (a) No political committee[D>, a major purpose of which is to expressly advocate the nomination, election or defeat of a clearly identified candidate for the legislature or to make contributions or expenditures for the nomination, election or defeat of a clearly identified candidate for the legislature,<D] shall be established by a member of or a candidate for the legislature.
+
+(b) Any such political committee existing prior to the effective date of this act is hereby abolished.
+
+Sec. 11. K.S.A. 25-4154 is hereby amended to read as follows:
+
+25-4154. (a) No person shall make a contribution in the name of another person, and no person shall knowingly accept a contribution made by one person in the name of another.
+
+(b) No person shall give or accept any contribution in excess of[D> $10<D] [A>$50<A] unless the name and address of the contributor is made known to the individual receiving the contribution.
+
+(c) The aggregate of contributions for which the name and address of the contributor is not reported under K.S.A. 25-4148[A>, and amendments thereto,<A] shall not exceed 50% of the amount one individual[D> (<D][A>,<A] other than the candidate or spouse[D>)<D][A>,<A] may contribute to or for a candidate's campaign.
+
+(d) No person shall copy any name of a contributor from any report or statement filed under the campaign finance act and use such name for any commercial purpose, and no person shall use any name for a commercial purpose with knowledge that such name was obtained solely by copying information relating to contributions contained in any report or statement filed under the campaign finance act.
+
+[A>(e) Except for contributions made by a candidate to such candidate's candidate committee, when a person makes a contribution to a candidate, candidate committee, political committee or party committee, such person shall have no authority to control or otherwise direct the use of such contribution. No person shall make a contribution to a committee that is subject to any condition or any agreement or other understanding between such person and such committee that such contribution or any portion thereof is to be subsequently contributed by such committee to any other candidate committee, political committee or party committee. Any agreement or other understanding that receipt of a contribution is conditioned on such contribution or some portion thereof being subsequently contributed by the recipient committee to any other candidate committee, political committee or party committee is hereby declared null and void and shall have no effect. The invalidity of an agreement or other understanding under this subsection shall not constitute a violation of the campaign finance act.<A]
+
+[A>(f) (1) For purposes of this section, "contribution in the name of another" and "contribution made by one person in the name of another" means a contribution made to a person by or through the name of another person for the purpose of concealing the original source of any moneys reported on any report or statement that is required to be filed under the campaign finance act.<A]
+
+[A>(2) Such contributions shall not include any contributions, expenditures or transfers of moneys that are subject to the requirements of the campaign finance act and that are made by an individual or committee that is otherwise reporting such contribution, expenditure or transfer on a report or statement filed pursuant to the campaign finance act.<A]
+
+Sec. 12. K.S.A. 25-4157 is hereby amended to read as follows:
+
+25-4157. (a) Before any candidate committee, party committee or political committee may be dissolved or the position of a candidate's treasurer terminated, the treasurer of the candidate or such committee shall file a termination report[D> which<D] [A>that<A] shall include full information as to the disposition of residual funds. Any report required by K.S.A. 25-4148, and amendments thereto, may be a termination report. Reports of the dissolution of candidate committees of candidates for state office, the termination of the treasurer of a candidate for state office, the dissolution of a political committee[D> the major purpose of which is to support or oppose any candidate for state office<D] and the dissolution of party committees shall be filed in the office of the secretary of state. Reports of the dissolution of candidate committees of candidates for local office, the termination of the treasurer of a candidate for local office and the dissolution of a political committee[D> the major purpose of which is to support or oppose any candidate for local office<D] shall be filed in the office of the county election officer of the county.
+
+(b) If a candidate dies with an open candidate committee account [D>which<D] [A>that<A] contains campaign funds, the executor or administrator of the candidate's estate shall be responsible for terminating the candidate committee and disposing of the residual funds.
+
+Sec. 13. K.S.A. 25-4158a is hereby amended to read as follows:
+
+25-4158a. The[D> governmental ethics<D] [A>Kansas public disclosure<A] commission shall prescribe and provide forms for each report required to be made under the campaign finance act.[D> After January 10, 2008,<D] Any information required to be filed pursuant to[D> this section<D] [A>the campaign finance act<A] may be filed electronically with the secretary of state in a method authorized by the secretary of state. The provisions of this section shall be [A>a<A] part of and supplemental to the Kansas campaign finance act.
+
+Sec. 14. K.S.A. 25-4180 is hereby amended to read as follows:
+
+25-4180. (a) Every person who engages in any activity promoting or opposing the adoption or repeal of any provision of the Kansas constitution and who accepts moneys or property for the purpose of engaging in such activity shall make an annual report to the secretary of state of individual contributions or contributions in kind in an aggregate amount or value in excess of $50 received during the preceding calendar year for such purposes. The report shall show the name and address of each contributor for the activity and the amount or value of the individual contribution made, together with a total value of all contributions received, and also shall account for expenditures in an aggregate amount or value in excess of $50 from such contributions by showing the amount or value expended to each payee and the purpose of each such expenditure, together with a total value of all expenditures made. The annual report shall be filed on or before February 15 of each year for the preceding calendar year.
+
+[A>(b)<A] In addition to the annual report, a person engaging in an activity promoting the adoption or repeal of a provision of the Kansas constitution who accepts any contributed moneys for such activity shall make a preliminary report to the secretary of state 15 days prior to each election at which a proposed constitutional amendment is submitted. Such report shall show the name and address of each individual contributor, together with the amount contributed or contributed in kind in an aggregate amount or value in excess of $50, and the expenditures in an aggregate amount or value in excess of $50 from such contributions by showing the amount paid to each payee and the purpose of the expenditure. A supplemental report in the same format as the preliminary report shall be filed with the secretary of state within 15 days after any election on a constitutional proposition where contributed funds are received and expended in opposing or promoting such proposition.
+
+[A>(c)<A] Any person who engages in any activity promoting or opposing the adoption or repeal of any provision of the Kansas constitution shall be considered engaged in such activity upon the date the concurrent resolution passes the Kansas house of representatives and senate in its final form. Upon such date, if the person has funds in the constitutional amendment campaign treasury, such person shall be required to report such funds as provided by this section.
+
+[D>(b)<D][A>(d)<A] (1) The commission shall send a notice by registered or certified mail to any person failing to file any report required by subsection (a)[A>, (b) or (c)<A] within the time period prescribed therefor. The notice shall state that the required report has not been filed with the office of the secretary of state. The notice also shall state that such person shall have 15 days from the date such notice is deposited in the mail to comply with the reporting requirements before a civil penalty shall be imposed for each day that the required documents remain unfiled. If such person fails to comply within the prescribed period, such person shall pay to the state a civil penalty of $10 per day for each day that such report remains unfiled, except that no such civil penalty shall exceed $300. The commission may waive, for good cause, payment of any civil penalty imposed by this section.
+
+(2) Civil penalties provided for by this section shall be remitted to the state treasurer in accordance with the provisions of K.S.A. 75-4215, and amendments thereto. Upon receipt of each such remittance, the state treasurer shall deposit the entire amount in the state treasury to the credit of the[D> governmental ethics<D] [A>Kansas public disclosure<A] commission fee fund.
+
+(3) If a person fails to pay a civil penalty provided for by this section, it shall be the duty of the commission to bring an action to recover such civil penalty in the district court of the county in which such person resides.
+
+[D>(c)<D][A>(e)<A] The intentional failure to file any report required by subsection (a) is a class A misdemeanor.
+
+[D>(d)<D][A>(f)<A] This section shall be [A>a<A] part of and supplemental to the campaign finance act.
+
+Sec. 15. K.S.A. 25-4186 is hereby amended to read as follows:
+
+25-4186. (a) Not later than 10 days after receiving any contribution or making any expenditure for a gubernatorial inauguration, the governor-elect shall appoint an inaugural treasurer. The name and address of such treasurer shall be reported to the secretary of state by the governor-elect not later than 10 days after the appointment.
+
+(b) No person shall make any expenditure or make or receive any contribution or receipt, in kind or otherwise, for a gubernatorial inauguration except by or through the inaugural treasurer.
+
+(c) The inaugural treasurer shall keep detailed accounts of all contributions and other receipts received, in kind or otherwise, and all expenditures made for a gubernatorial inauguration. Accounts of the treasurer may be inspected under conditions determined by the commission and shall be preserved for a period to be designated by the commission. Every person who receives a contribution or other receipt, in kind or otherwise, for an inaugural treasurer more than five days before the ending date of any period for which a report is required under this section, on demand of the treasurer, or in any event on or before the ending date of the reporting period, shall remit the same and render to the treasurer an account thereof, including the name and address of the person, if known, making the contribution or other receipt and the date received. No contribution or other receipt received by the inaugural treasurer shall be commingled with personal funds of the governor-elect or inaugural treasurer.
+
+(d) The inaugural treasurer shall file with the secretary of state a report on March 10 and July 10 following the inauguration. The report filed on March 10 shall be for the period ending on February 28 and the report filed on July 10 shall be for the period beginning on March 1 and ending on June 30. Each report shall contain the information required to be stated in a report pursuant to K.S.A. 25-4148 and 25-4148a, and amendments thereto, and a declaration as to the correctness of the report in the form prescribed by K.S.A. 25-4151, and amendments thereto. The July 10 report shall be a termination report which shall include full information as to the disposition of residual funds. If a report is sent by certified mail on or before the day it is due, the mailing shall constitute receipt by the secretary of state.
+
+(e) The aggregate amount contributed, in kind or otherwise, by any person for a gubernatorial inauguration shall not exceed $2,000. No person shall make a contribution in the name of another person, and no person knowingly shall accept a contribution made by one person in the name of another. No person shall give or accept any contribution in excess of $10 unless the name and address of the contributor is made known to the individual receiving the contribution. The aggregate of contributions for which the name and address of the contributor is not known shall not exceed 50% of the amount one person may contribute.
+
+(f) No person shall copy any name of a contributor from any report filed under this section and use such name for any commercial purpose, and no person shall use any name for a commercial purpose with knowledge that such name was obtained solely by copying information relating to contributions contained in any report filed under this section.
+
+(g) In addition to other reports required by this section, the inaugural treasurer shall report the amount and nature of debts and obligations owed for the gubernatorial inauguration, at times prescribed by the commission, continuing until such debts and obligations are fully paid or discharged.
+
+(h) [A>(1)<A] No moneys received by any inaugural treasurer shall be used or be made available for the personal use of the governor-elect or governor and no such moneys shall be used by such governor-elect or governor except for legitimate gubernatorial inauguration expenses.
+
+[A>(2)<A] For the purpose of this subsection, expenditures for "personal use" shall include expenditures to defray normal living expenses and expenditures for personal benefit having no direct connection with or effect upon the inauguration.
+
+(i) (1) Before the filing of a termination report in accordance with this section, all residual funds not otherwise obligated for the payment of expenses incurred for the gubernatorial inauguration shall be remitted to the inaugural expense fund created by K.S.A. 25-4187, and amendments thereto, in an amount equal to the amount certified to the director of accounts and reports by the adjutant general as the amount expended by the adjutant general for expenses incurred in connection with the gubernatorial inauguration, or if the amount of residual funds is less than the amount certified, the entire amount of the deposit.
+
+(2) Any residual funds not otherwise obligated shall either be:
+
+(A) Donated to any charitable organization which qualifies as a 501(c)(3) not-for-profit corporation under the federal internal revenue code; or
+
+(B) shall be remitted to the state treasurer who shall deposit the entire amount in the state treasury and credit such money to the executive mansion gifts fund for the purpose of funding expenditures relating to the governor's residence, historic properties or both. Such expenditures shall be subject to approval of the governor's residence advisory commission.
+
+(j) (1) The commission shall send a notice by registered or certified mail to any inaugural treasurer who fails to file any report required by this section within the time period prescribed therefor. The notice shall state that the required report has not been filed with the office of the secretary of state. The notice also shall state that the treasurer shall have 15 days from the date such notice is deposited in the mail to comply with the reporting requirements before a civil penalty shall be imposed for each day that the required documents remain unfiled. If the treasurer fails to comply within the prescribed period, the treasurer shall pay to the state a civil penalty of $10 per day for each day that the report remains unfiled, except that no such civil penalty shall exceed $300. The commission may waive, for good cause, payment of any civil penalty imposed by this subsection.
+
+(2) Civil penalties provided for by this subsection shall be paid to the state treasurer, who shall deposit the entire amount in the state treasury and credit it to the[D> governmental ethics<D] [A>Kansas public disclosure<A] commission fee fund.
+
+(3) If a person fails to pay a civil penalty provided for by this section, it shall be the duty of the commission to bring an action to recover such civil penalty in the district court of Shawnee county.
+
+(k) Any violation of subsection (e), (f) or (h) or any intentional failure to file any report required by this section is a class A misdemeanor.
+
+(l) Nothing in this section shall be construed to apply to expenditures of state moneys related to any inaugural activity.
+
+(m) This section shall be [A>a<A] part of and supplemental to the campaign finance act.
+
+Sec. 16. K.S.A. 46-246a is hereby amended to read as follows:
+
+46-246a. (a) From and after the effective date of this act, no state officer or employee shall advocate or cause the employment, appointment, promotion, transfer or advancement to any office or position of the state, of a member of such officer's or employee's household or a family member.
+
+(b) No state officer or employee shall participate in an action relating to the employment or discipline of a member of the officer's or employee's household or a family member.
+
+(c) The provisions of this section shall not apply to appointments of members of the governor's staff, nor to any action involving the employment, appointment, promotion, transfer or advancement of any officer or employee occurring prior to the effective date of this act.
+
+(d) The provisions of this section shall be subject to interpretation and enforcement by the[D> governmental ethics<D] [A>Kansas public disclosure<A] commission in the manner provided by K.S.A. 46-253 through 46-263, and amendments thereto.
+
+Sec. 17. K.S.A. 46-253 is hereby amended to read as follows:
+
+46-253. "Commission" as used in K.S.A. 46-215[D> to 46-280, inclusive, 46-248a and K.S.A. 46-237a<D] [A>through 46-292<A], and amendments thereto, means the [D>governmental ethics<D] [A>Kansas public disclosure<A] commission. The commission may adopt rules and regulations for the administration of the provisions of K.S.A. 46-215[D> to 46-280, 46-248a and K.S.A. 46-237a<D] [A>through 46-292<A], and amendments thereto. Any rules and regulations adopted by the Kansas [A>governmental ethics<A] commission[D> on governmental standards and conduct<D] shall continue in force and effect and shall be deemed to be the rules and regulations of the [A>Kansas public disclosure<A] commission until revised, amended, repealed or nullified pursuant to law. All rules and regulations of the commission shall be subject to the provisions of article 4 of chapter 77 of Kansas Statutes Annotated[A>, and amendments thereto<A].
+
+Sec. 18. K.S.A. 46-265 is hereby amended to read as follows:
+
+46-265. (a) Every lobbyist shall register with the secretary of state by completing and signing a registration form prescribed and provided by the commission. The registration shall show the name and address of the lobbyist, the name and address of the person compensating the lobbyist for lobbying, the purpose of the employment, the name of each state agency or state office and any agency, division or unit thereof and each judicial department, institution, office, commission, board or bureau and any agency, division or unit thereof and whether the lobbyist will lobby the legislative branch and the method of determining and computing the compensation of the lobbyist. If the lobbyist is compensated or to be compensated for lobbying by more than one employer or is to be engaged in more than one employment, the relevant facts listed above shall be stated separately for each employer and each employment. Whenever any new lobbying employment or lobbying position is accepted by a lobbyist already registered as provided in this section, the lobbyist shall report the same on forms prescribed and provided by the commission before engaging in any lobbying activity related to the new employment or position, and the report shall be filed with the secretary of state. When a lobbyist is an employee of a lobbying group or firm which contracts to lobby and not an owner or partner of the lobbying group or firm, the lobbyist shall report each client of the group, firm or entity whose interest the lobbyist represents. Whenever the lobbying of a lobbyist concerns a legislative matter, the secretary of state promptly shall transmit copies of each registration and each report filed under this act to the secretary of the senate and the chief clerk of the house of representatives.
+
+(b) On or after October 1, in any year any person may register as a lobbyist under this section for the succeeding calendar year. The registration shall expire annually on December 31 of the year for which the lobbyist is registered. In any calendar year, before engaging in lobbying, persons to whom this section applies shall register or renew their registration as provided in this section. Except for employees of lobbying groups or firms, every person registering or renewing registration who anticipates spending $1,000 or less for lobbying in the registration year on behalf of any one employer shall pay to the secretary of state a fee of $50 for lobbying for each employer. Except for employees of lobbying groups or firms, every person registering or renewing registration who anticipates spending more than $1,000 for lobbying in the registration year on behalf of any one employer shall pay to the secretary of state a fee of $350 for lobbying for the employer. Any lobbyist who at the time of initial registration anticipated spending less than $1,000, on behalf of any one employer, but at a later date spends in excess of that amount, within three days of the date when expenditures exceed that amount, shall file an amended registration form which shall be accompanied by an additional fee of $300 for the year. Every person registering or renewing registration as a lobbyist who is an employee of a lobbying group or firm and not an owner or partner of the lobbying group or firm shall pay an annual fee of $450. The secretary of state shall remit all moneys received under this section to the state treasurer in accordance with the provisions of K.S.A. 75-4215, and amendments thereto. Upon receipt of each such remittance, the state treasurer shall deposit the entire amount in the state treasury to the credit of the[D> governmental ethics<D] [A>Kansas public disclosure<A] commission fee fund.
+
+(c) Any person who has registered as a lobbyist pursuant to this act may file, upon termination of the person's lobbying activities, a statement terminating the person's registration as a lobbyist. The statement shall be on a form prescribed by the commission and shall state the name and address of the lobbyist, the name and address of the person compensating the lobbyist for lobbying and the date of the termination of the lobbyist's lobbying activities.
+
+(d) No person who has failed or refused to pay any civil penalty imposed pursuant to K.S.A. 46-280, and amendments thereto, shall be authorized or permitted to register as a lobbyist in accordance with this section until the penalty has been paid in full.
+
+Sec. 19. K.S.A. 46-280 is hereby amended to read as follows:
+
+46-280. (a) Except as provided in subsection (b), the commission shall send a notice by registered or certified mail to any person failing to register or to file any report or statement as required by K.S.A. 46-247 or 46-265, and amendments thereto, within the time period prescribed therefor. The notice shall state that the required registration, report or statement had not been filed with the office of secretary of state. The notice also shall state that such person shall have five days from the date of receipt of such notice to comply with the registration and reporting requirements before a civil penalty shall be imposed for each day that the required documents remain unfiled. If such person fails to comply within such period, such person shall pay to the state a civil penalty of $10 per day for each day that such person remains unregistered or that such report or statement remains unfiled, except that no such civil penalty shall exceed $300. The commission may waive, for good cause, payment of any civil penalty imposed hereunder.
+
+(b) Subject to the notice provisions of subsection (a), reports required for lobbyists under K.S.A. 46-268, and amendments thereto, that are late more than 48 hours shall be subject to civil penalties as provided in subsection (b)(2).
+
+(2) The lobbyist shall be liable for a civil penalty of $100 for the first day the report is more than 48 hours late and $50 for each subsequent day the report is late, but in no case shall the civil penalty exceed $1,000. The commission may waive, for good cause, payment of any civil penalty imposed by this section.
+
+(c) Whenever the commission shall determine that any report filed by a lobbyist as required by K.S.A. 46-269, and amendments thereto, is incorrect, incomplete or fails to provide the information required by such section, the commission shall notify such lobbyist by registered or certified mail, specifying the deficiency. Such notice shall state that the lobbyist shall have 30 days from the date of the receipt of such notice to file an amended report correcting such deficiency before a civil penalty will be imposed and the registration of such lobbyist revoked and the badge be required to be returned to the office of the secretary of state. A copy of such notice shall be sent to the office of the secretary of state. If such lobbyist fails to file an amended report within the time specified, such lobbyist shall pay to the commission a civil penalty of $10 per day for each day that such person fails to file such report except that no such civil penalty shall exceed $300. On the 31st day following the receipt of such notice, the registration of any lobbyist failing to file such amended report shall be revoked.
+
+(d) Civil penalties provided for by this section shall be remitted to the state treasurer in accordance with the provisions of K.S.A. 75-4215, and amendments thereto. Upon receipt of each such remittance, the state treasurer shall deposit the entire amount in the state treasury to the credit of the[D> governmental ethics<D] [A>Kansas public disclosure<A] commission fee fund.
+
+(e) (1) Except as provided in paragraph (2), if a person fails to pay a civil penalty provided for by this section, it shall be the duty of the commission to bring an action to recover such civil penalty in the district court of the county in which such person resides.
+
+(2) If a person required to file under K.S.A. 46-247(f), and amendments thereto, fails to pay a civil penalty provided for by this section, it shall be the duty of the commission to bring an action to recover the civil penalty in the district court of Shawnee county, Kansas.
+
+Sec. 20. K.S.A. 46-288 is hereby amended to read as follows:
+
+46-288. The commission, in addition to any other penalty prescribed under K.S.A. 46-215 through 46-286, and amendments thereto, may assess a civil fine, after proper notice and an opportunity to be heard, against any person for a violation pursuant to K.S.A. 46-215 through 46-286, and amendments thereto, in an amount not to exceed $5,000 for the first violation, not to exceed $10,000 for the second violation and not to exceed $15,000 for the third violation and for each subsequent violation. All fines assessed and collected under this section shall be remitted to the state treasurer in accordance with the provisions of K.S.A. 75-4215, and amendments thereto. Upon receipt of each such remittance, the state treasurer shall deposit the entire amount in the state treasury to the credit of the [D>governmental ethics<D] [A>Kansas public disclosure<A] commission fee fund.
+
+Sec. 21. K.S.A. 46-295 is hereby amended to read as follows:
+
+46-295. (a) Every person who is registered as a lobbyist shall file with the secretary of state a detailed report listing the amount of public funds paid to hire or contract for the lobbying services on behalf of: (1) A governmental entity; or (2) any association of governmental entities that receive public funds. The report shall include a listing of the amount of public funds paid to hire or contract for the lobbying services of such lobbyist and which association of governmental entities that receive public funds hired such lobbyist on a form and in the manner prescribed and provided by the [D>governmental ethics<D] [A>Kansas public disclosure<A] commission. Each report required to be filed by this section is a public record and shall be open to public inspection upon request. A report shall be filed on or before January 10, 2017, and on or before January 10 of each subsequent year for the reporting period containing the preceding calendar year.
+
+(b) The reports filed with the secretary of state pursuant to subsection (a) shall be made available on a searchable public website by the secretary of state.
+
+(c) As used in this section:
+
+(1) "Governmental entity"[D> has the meaning<D] [A>means the same<A] as defined in K.S.A. 75-6102, and amendments thereto.
+
+(2) "Lobbying"[D> has the meaning<D] [A>means the same<A] as defined in K.S.A. 46-225, and amendments thereto.
+
+(3) "Public funds" means moneys appropriated by the state or any of its subdivisions.
+
+Sec. 22. K.S.A. 2024 Supp. 74-50,297 is hereby amended to read as follows:
+
+74-50,297. (a) The commission may accept, use and dispose of gifts and donations of money, property or personal services. The type and quantity of gifts shall be enumerated and submitted to the Kansas [D>governmental ethics<D] [A>public disclosure<A] commission each quarter and shall be made available to the public on the commission's website.
+
+(b) There is hereby established in the state treasury the Kansas commission for the United States semiquincentennial gifts and donations fund. Such fund shall be administered by the secretary of commerce. All expenditures from the Kansas commission for the United States semiquincentennial gifts and donations fund shall be for promoting the Kansas commission for the United States semiquincentennial. All expenditures from the Kansas commission for the United States semiquincentennial gifts and donations fund shall be made in accordance with appropriation acts upon warrants of the director of accounts and reports issued pursuant to vouchers approved by the secretary or the secretary's designee.
+
+(c) On December 31, 2027, the director of accounts and reports shall transfer all moneys in the Kansas commission for the United States semiquincentennial gifts and donations fund to the operating expenditures account of the state economic development initiatives fund of the department of commerce. On December 31, 2027, all liabilities of the Kansas commission for the United States semiquincentennial gifts and donations fund shall be transferred to and imposed upon the operating expenditures account of the state economic development initiatives fund of the department of commerce. On December 31, 2027, the Kansas commission for the United States semiquincentennial gifts and donations fund shall be abolished.
+
+Sec. 23. K.S.A. 2024 Supp. 75-3036 is hereby amended to read as follows:
+
+75-3036. (a) The state general fund is exclusively defined as the fund into which shall be placed all public moneys and revenue coming into the state treasury not specifically authorized by the constitution or by statute to be placed in a separate fund, and not given or paid over to the state treasurer in trust for a particular purpose, which unallocated public moneys and revenue shall constitute the general fund of the state. Moneys received or to be used under constitutional or statutory provisions or under the terms of a gift or payment for a particular and specific purpose are to be kept as separate funds and shall not be placed in the general fund or ever become a part of it.
+
+(b) The following funds shall be used for the purposes set forth in the statutes concerning such funds and for no other governmental purposes. It is the intent of the legislature that the following funds and the moneys deposited in such funds shall remain intact and inviolate for the purposes set forth in the statutes concerning such funds: Board of accountancy fee fund, K.S.A. 1-204 and 75-1119b, and amendments thereto, and special litigation reserve fund of the board of accountancy; bank commissioner fee fund, K.S.A. 9-1703, 16a-2-302 and 75-1308, and amendments thereto, bank investigation fund, K.S.A. 9-1111b, and amendments thereto, consumer education settlement fund and litigation expense fund of the state bank commissioner; securities act fee fund and investor education and protection fund, K.S.A. 17-12a601, and amendments thereto, of the office of the securities commissioner of Kansas; credit union fee fund, K.S.A. 17-2236, and amendments thereto, of the state department of credit unions; court reporters fee fund, K.S.A. 20-1a02, and amendments thereto, and bar admission fee fund, K.S.A. 20-1a03, and amendments thereto, of the judicial branch; fire marshal fee fund, K.S.A. 31-133a and 31-134, and amendments thereto, and boiler inspection fee fund, K.S.A. 44-926, and amendments thereto, of the state fire marshal; food service inspection reimbursement fund, K.S.A. 36-512, and amendments thereto, of the Kansas department of agriculture; wage claims assignment fee fund, K.S.A. 44-324, and amendments thereto, and workmen's compensation fee fund, K.S.A. 74-715, and amendments thereto, of the department of labor; veterinary examiners fee fund, K.S.A. 47-820, and amendments thereto, of the state board of veterinary examiners; mined-land reclamation fund, K.S.A. 49-420, and amendments thereto, of the department of health and environment; conservation fee fund and abandoned oil and gas well fund, K.S.A. 55-155, 55-176, 55-192, 55-609, 55-711 and 55-901, and amendments thereto, gas pipeline inspection fee fund, K.S.A. 66-1,155, and amendments thereto, and public service regulation fund, K.S.A. 66-1503, and amendments thereto, of the state corporation commission; land survey fee fund, K.S.A. 58-2011, and amendments thereto, of the state historical society; real estate recovery revolving fund, K.S.A. 58-3074, and amendments thereto, of the Kansas real estate commission; appraiser fee fund, K.S.A. 58-4107, and amendments thereto, and appraisal management companies fee fund of the real estate appraisal board; amygdalin (laetrile) enforcement fee fund, K.S.A. 65-6b10, and amendments thereto; mortuary arts fee fund, K.S.A. 65-1718, and amendments thereto, of the state board of mortuary arts; board of barbering fee fund, K.S.A. 65-1817a, and amendments thereto, of the Kansas board of barbering; cosmetology fee fund, K.S.A. 65-1951 and 74-2704, and amendments thereto, of the Kansas state board of cosmetology; healing arts fee fund, K.S.A. 65-2011, 65-2855, 65-2911, 65-5413, 65-5513, 65-6910, 65-7210 and 65-7309, and amendments thereto, and medical records maintenance trust fund, of the state board of healing arts; other state fees fund, K.S.A. 65-4024b, and amendments thereto, of the Kansas department for aging and disability services; board of nursing fee fund, K.S.A. 74-1108, and amendments thereto, of the board of nursing; dental board fee fund, K.S.A. 74-1405, and amendments thereto, and special litigation reserve fund, of the Kansas dental board; optometry fee fund, K.S.A. 74-1503, and amendments thereto, and optometry litigation fund, of the board of examiners in optometry; state board of pharmacy fee fund, K.S.A. 74-1609, and amendments thereto, and state board of pharmacy litigation fund, of the state board of pharmacy; abstracters' fee fund, K.S.A. 74-3903, and amendments thereto, of the abstracters' board of examiners; athletic fee fund, K.S.A. 74-50,188, and amendments thereto, of the department of commerce; hearing instrument board fee fund, K.S.A. 74-5805, and amendments thereto, and hearing instrument litigation fund of the Kansas board of examiners in fitting and dispensing of hearing instruments; commission on disability concerns fee fund, K.S.A. 74-6708, and amendments thereto, of the governor's department; technical professions fee fund, K.S.A. 74-7009, and amendments thereto, and special litigation reserve fund of the state board of technical professions; behavioral sciences regulatory board fee fund, K.S.A. 74-7506, and amendments thereto, of the behavioral sciences regulatory board; [D>governmental ethics<D] [A>Kansas public dislcosure<A] commission fee fund, K.S.A. 25-4119e, and amendments thereto, of the[D> governmental ethics<D] [A>Kansas public disclosure<A] commission; emergency medical services board operating fund, K.S.A. 75-1514, and amendments thereto, of the emergency medical services board; fire service training program fund, K.S.A. 75-1514, and amendments thereto, of the university of Kansas; uniform commercial code fee fund, K.S.A. 75-448, and amendments thereto, of the secretary of state; prairie spirit rails-to-trails fee fund of the Kansas department of wildlife, parks and tourism; water marketing fund, K.S.A. 82a-1315c, and amendments thereto, of the Kansas water office; insurance department service regulation fund, K.S.A. 40-112, and amendments thereto, of the insurance department; state fair special cash fund, K.S.A. 2-220, and amendments thereto, of the state fair board; scrap metal theft reduction fee fund, K.S.A. 2024 Supp. 50-6,109a, and amendments thereto; and any other fund in which fees are deposited for licensing, regulating or certifying a person, profession, commodity or product.
+
+(c) If moneys received pursuant to statutory provisions for a specific purpose by a fee agency are proposed to be transferred to the state general fund or a special revenue fund to be expended for general government services and purposes in the governor's budget report submitted pursuant to K.S.A. 75-3721, and amendments thereto, or any introduced house or senate bill, the person or business entity who paid such moneys within the preceding 24-month period shall be notified by the fee agency within 30 days of such submission or introduction:
+
+(1) By electronic means, if the fee agency has an electronic address on record for such person or business entity. If no such electronic address is available, the fee agency shall send written notice by first class mail; or
+
+(2) any agency that receives fees from a tax, fee, charge or levy paid to the commissioner of insurance shall post the notification required by this subsection on such agency's website.
+
+(d) Any such moneys that are wrongfully or by mistake placed in the general fund shall constitute a proper charge against such general fund. All legislative appropriations which do not designate a specific fund from which they are to be paid shall be considered to be proper charges against the general fund of the state. All revenues received by the state of Kansas or any department, board, commission, or institution of the state of Kansas, and required to be paid into the state treasury shall be placed in and become a part of the state general fund, except as otherwise provided by law.
+
+(e) The provisions of this section shall not apply to the 10% credited to the state general fund to reimburse the state general fund for accounting, auditing, budgeting, legal, payroll, personnel and purchasing services, and any and all other state governmental services, as provided in K.S.A. 75-3170a, and amendments thereto.
+
+(f) Beginning on January 8, 2018, the director of the budget shall prepare a report listing the unencumbered balance of each fund in subsection (b) on June 30 of the previous fiscal year and January 1 of the current fiscal year. Such report shall be delivered to the secretary of the senate and the chief clerk of the house of representatives on or before the first day of the regular legislative session each year.
+
+(g) As used in this section, "fee agency" shall include the state agencies specified in K.S.A. 75-3717(f), and amendments thereto, and any other state agency that collects fees for licensing, regulating or certifying a person, profession, commodity or product.
+
+Sec. 24. K.S.A. 75-3717 is hereby amended to read as follows:
+
+75-3717. (a) As provided in this section, each state agency, not later than October 1 of each year, shall file with the division of the budget its budget estimates for the next fiscal year, and all amendments and revisions thereof, except that, in lieu of such annual filing, each agency listed in subsection (f), not later than October 1, 2000, and every two years thereafter, shall file budget estimates for the next fiscal year and for the ensuing fiscal year thereafter. Each agency listed in subsection (f) may file adjustments to such agency's budget that was approved by the legislature during a prior fiscal year. All such budget estimates shall be in the form provided by the director of the budget. Each agency's budget estimates shall include:
+
+(1) A full explanation of the agency's request for any appropriations for the expansion of present services or the addition of new activities, including an estimate of the anticipated expenditures for the next fiscal year and for each of the three ensuing fiscal years which would be required to support each expansion of present services or addition of new services as requested by the state agency;
+
+(2) a listing of all programs of the agency that provide services for children and their families and the following information regarding each such program: Of the amount of the agency's request for appropriations to fund the program, that amount which will be spent on services for children or families with children and the number of children or families with children who are served by the program; and
+
+(3) a listing of the sources and amounts of all federal funds received or budgeted for by a state agency for the purpose of homeland security or for the purpose of sustaining, enhancing or improving the safety and security of the state, the amount of such funds budgeted for expenditure on administrative cost and the amount of such funds budgeted for expenditure on aid to each unit of local government.
+
+(b) At the same time as each state agency submits to the division of the budget a copy of its budget estimate, and all amendments and revisions thereof, each such state agency shall submit a copy of such estimate, and all amendments and revisions thereof, directly to the legislative research department for legislative use.
+
+(c) The director of the budget shall require the agencies to submit a sufficient number of copies of their budget estimates, and all amendments and revisions thereof, to the director's office to satisfy the requirements of such office and one additional copy for legislative use which shall be retained in the division of the budget until the budget of the governor is submitted to the legislature. On or before the day that such budget is submitted to the legislature such legislative use copy, posted to reflect the governor's budget recommendations, shall be submitted to the legislative research department for use by the ways and means committee of the senate and the committee on appropriations of the house of representatives. Following presentation of the governor's budget report to the legislature, the legislative research department may request and shall receive detailed information from the division of the budget on the governor's budget recommendations.
+
+(d) The director of the budget may prepare budget estimates for any state agency failing to file a request.
+
+(e) As used in this section, "services for children and their families" includes, but is not limited to, any of the following services, whether provided directly or made accessible through subsidies or other payments:
+
+(1) Financial support for children and families with children or enforcement of the obligation to support a child or a family with one or more children;
+
+(2) prenatal care, health care for children or immunizations for children;
+
+(3) mental health or retardation services for children;
+
+(4) nutrition for children or families with children or nutritional counseling or supplements for pregnant or nursing women;
+
+(5) child care, early childhood education or parenting education;
+
+(6) licensure or regulation of child care or early childhood education programs;
+
+(7) treatment, counseling or other services to preserve families;
+
+(8) care, treatment, placement or adoption of children without functioning families;
+
+(9) services to prevent child abuse and to treat and protect child abuse victims;
+
+(10) services for children who are pregnant, substance abusers or otherwise involved in high risk behavior;
+
+(11) services related to court proceedings involving children; and
+
+(12) youth employment services.
+
+(f) On a biennial basis, the following state agencies shall file budget estimates under the provisions of subsection (a): Abstracters' board of examiners, behavioral sciences regulatory board, board of accountancy, board of examiners in optometry, board of nursing, consumer credit commissioner, Kansas board of barbering, Kansas board of examiners in fitting and dispensing of hearing aids, Kansas dental board, Kansas real estate commission, Kansas state board of cosmetology, office of the securities commissioner of Kansas, real estate appraisal board, state bank commissioner, state board of healing arts, state board of mortuary arts, state board of pharmacy, state board of technical professions, state board of veterinary examiners,[D> governmental ethics<D] [A>Kansas public disclosure<A] commission, state department of credit unions, and Kansas home inspectors registration board.
+
+Sec. 25. K.S.A. 75-4302a is hereby amended to read as follows:
+
+75-4302a. (a) The statement of substantial interests shall include all substantial interests of the individual making the statement.
+
+(b) Statements of substantial interests shall be filed by the following individuals at the times specified:
+
+(1) By a candidate for local office who becomes a candidate on or before the filing deadline for the office, not later than 10 days after the filing deadline, unless before that time the candidacy is officially declined or rejected.
+
+(2) By a candidate for local office who becomes a candidate after the filing deadline for the office, within five days of becoming a candidate, unless within that period the candidacy is officially declined or rejected.
+
+(3) By an individual appointed on or before April 30 of any year to fill a vacancy in an elective office of a governmental subdivision, between April 15 and April 30, inclusive, of that year.
+
+(4) By an individual appointed after April 30 of any year to fill a vacancy in an elective office of a governmental subdivision, within 15 days after the appointment.
+
+(5) By any individual holding an elective office of a governmental subdivision, between April 15 and April 30, inclusive, of any year if, during the preceding calendar year, any change occurred in the individual's substantial interests.
+
+(c) The statement of substantial interests required to be filed pursuant to this section shall be filed in the office where declarations of candidacy for the local governmental office sought or held by the individual are required to be filed.
+
+(d) The[D> governmental ethics<D] [A>Kansas public disclsoure<A] commission shall adopt rules and regulations prescribing the form and the manner for filing the disclosures of substantial interests required by law. The commission shall provide samples of the form of the statement to each county election officer.
+
+(e) If an individual or an individual's spouse holds the position of officer, director, associate, partner or proprietor in an organization exempt from federal taxation of corporations under section 501(c)(3), (4), (6), (7), (8), (10) or (19) of chapter 26 of the United States code, the individual shall comply with all disclosure provisions of subsections (a), (b), (c) and (d) of this section notwithstanding the provisions of K.S.A. 75-4301, and amendments thereto, which provide that these individuals may not have a substantial interest in these corporations.
+
+Sec. 26. K.S.A. 75-4303a is hereby amended to read as follows:
+
+75-4303a. (a) The[D> governmental ethics<D] [A>Kansas public disclosure<A] commission shall render advisory opinions on the interpretation or application of K.S.A. 75-4301a, 75-4302a, 75-4303a, 75-4304, 75-4305 and 75-4306, and amendments thereto. The opinions shall be rendered after receipt of a written request therefor by a local governmental officer or employee or by any person who has filed as a candidate for local office. Any person who requests and receives an advisory opinion and who acts in accordance with its provisions shall be presumed to have complied with the provisions of the general conflict of interests law. A copy of any advisory opinion rendered by the commission shall be filed by the commission in the office of the secretary of state, and any opinion so filed shall be open to public inspection. All requests for advisory opinions shall be directed to the secretary of state who shall notify the commission thereof.
+
+(b) The[D> governmental ethics<D] [A>Kansas public disclosure<A] commission shall administer K.S.A. 75-4301a, 75-4302a, 75-4303a, 75-4304, 75-4305 and 75-4306, and amendments thereto, and may adopt rules and regulations therefor.
+
+Sec. 27. K.S.A. 2024 Supp. 77-440 is hereby amended to read as follows:
+
+77-440. (a) All rules and regulations adopted by state agencies under the provisions of K.S.A. 77-415 et seq., and amendments thereto, shall be reviewed every five years in accordance with this section.
+
+(b) (1) Each state agency that has adopted rules and regulations shall submit a report to the joint committee on administrative rules and regulations on or before July 15 of the year that corresponds to such state agency under paragraph (2). Such report shall contain a summary of such state agency's review and evaluation of rules and regulations adopted by such state agency, including a statement for each rule and regulation as to whether such rule and regulation is necessary for the implementation and administration of state law or may be revoked pursuant to K.S.A. 77-426(d), and amendments thereto.
+
+(2) Each state agency that has adopted rules and regulations shall submit a report as required under paragraph (1) in the years that correspond to such state agency as follows:
+
+(A) For 2023 and every fifth year thereafter, the following state agencies:
+
+(i) Department of administration;
+
+(ii) municipal accounting board;
+
+(iii) state treasurer;
+
+(iv) Kansas department of agriculture;
+
+(v) Kansas department of agriculture--division of water resources;
+
+(vi) state election board;
+
+(vii) secretary of state;
+
+(viii) livestock brand commissioner;
+
+(ix) Kansas department of agriculture--division of animal health;
+
+(x) Kansas bureau of investigation;
+
+(xi) Kansas department of agriculture--division of conservation;
+
+(xii) agricultural labor relations board;
+
+(xiii) alcoholic beverage control board of review;
+
+(xiv) Kansas department of revenue--division of alcoholic beverage control;
+
+(xv) athletic commission;
+
+(xvi) attorney general;
+
+(xvii) office of the state bank commissioner;
+
+(xviii) employee award board;
+
+(xix) [D>governmental ethics<D][A>Kansas public disclosure<A] commission;
+
+(xx) crime victims compensation board;
+
+(xxi) Kansas human rights commission;
+
+(xxii) state fire marshal; and
+
+(xxiii) Kansas department of wildlife and parks;
+
+(B) for 2024 and every fifth year thereafter, the following state agencies:
+
+(i) Kansas wheat commission;
+
+(ii) Kansas state grain inspection department;
+
+(iii) Kansas department for aging and disability services;
+
+(iv) Kansas energy office;
+
+(v) department of health and environment;
+
+(vi) Kansas department for children and families;
+
+(vii) park and resources authority;
+
+(viii) state salvage board;
+
+(ix) Kansas department of transportation;
+
+(x) Kansas highway patrol;
+
+(xi) savings and loan department;
+
+(xii) Kansas turnpike authority;
+
+(xiii) insurance department;
+
+(xiv) food service and lodging board;
+
+(xv) commission on alcoholism;
+
+(xvi) corrections ombudsman board;
+
+(xvii) department of corrections;
+
+(xviii) Kansas prisoner review board;
+
+(xix) executive council;
+
+(xx) mined-land conservation and reclamation (KDHE);
+
+(xxi) department of labor--employment security board of review;
+
+(xxii) department of labor;
+
+(xxiii) department of labor--division of employment; and
+
+(xxiv) department of labor--division of workers compensation;
+
+(C) for 2025 and every fifth year thereafter, the following state agencies:
+
+(i) State records board;
+
+(ii) state library;
+
+(iii) board for the registration and examination of landscape architects;
+
+(iv) adjutant general's department;
+
+(v) state board of nursing;
+
+(vi) Kansas board of barbering;
+
+(vii) state board of mortuary arts;
+
+(viii) board of engineering examiners;
+
+(ix) board of examiners in optometry;
+
+(x) state board of technical professions;
+
+(xi) Kansas board of examiners in fitting and dispensing of hearing instruments;
+
+(xii) state board of pharmacy;
+
+(xiii) Kansas state board of cosmetology;
+
+(xiv) state board of veterinary examiners;
+
+(xv) Kansas dental board;
+
+(xvi) board of examiners of psychologists;
+
+(xvii) registration and examining board for architects;
+
+(xviii) board of accountancy;
+
+(xix) state bank commissioner--consumer and mortgage lending division;
+
+(xx) board of basic science examiners;
+
+(xxi) Kansas public employees retirement system;
+
+(xxii) office of the securities commissioner; and
+
+(xxiii) Kansas corporation commission;
+
+(D) for 2026 and every fifth year thereafter, the following state agencies:
+
+(i) Public employee relations board;
+
+(ii) abstracters' board of examiners;
+
+(iii) Kansas real estate commission;
+
+(iv) education commission;
+
+(v) state board of regents;
+
+(vi) school budget review board;
+
+(vii) school retirement board;
+
+(viii) state department of education;
+
+(ix) Kansas department of revenue;
+
+(x) Kansas department of revenue--division of property valuation;
+
+(xi) state board of tax appeals;
+
+(xii) crop improvement association;
+
+(xiii) Kansas office of veterans services;
+
+(xiv) Kansas water office;
+
+(xv) Kansas department of agriculture--division of weights and measures;
+
+(xvi) state board of healing arts;
+
+(xvii) podiatry board;
+
+(xviii) behavioral sciences regulatory board;
+
+(xix) state bank commissioner and savings and loan commissioner--joint regulations;
+
+(xx) consumer credit commissioner, credit union administrator, savings and loan commissioner and bank commissioner--joint regulations;
+
+(xxi) state board of indigents' defense services;
+
+(xxii) Kansas commission on peace officers' standards and training; and
+
+(xxiii) law enforcement training center; and
+
+(E) for 2027 and every fifth year thereafter, the following state agencies:
+
+(i) Kansas state employees health care commission;
+
+(ii) emergency medical services board;
+
+(iii) department of commerce;
+
+(iv) Kansas lottery;
+
+(v) Kansas racing and gaming commission;
+
+(vi) Kansas department of wildlife and parks;
+
+(vii) Kansas state fair board;
+
+(viii) real estate appraisal board;
+
+(ix) state historical society;
+
+(x) health care data governing board;
+
+(xi) state department of credit unions;
+
+(xii) pooled money investment board;
+
+(xiii) department of corrections--division of juvenile services;
+
+(xiv) state child death review board;
+
+(xv) Kansas agricultural remediation board;
+
+(xvi) unmarked burial sites preservation board;
+
+(xvii) Kansas housing resources corporation;
+
+(xviii) department of commerce--Kansas athletic commission;
+
+(xix) department of health and environment--division of health care finance;
+
+(xx) home inspectors registration board;
+
+(xxi) committee on surety bonds and insurance;
+
+(xxii) 911 coordinating council; and
+
+(xxiii) office of administrative hearings.
+
+(c) For any state agency not listed in subsection (b)(2) that adopts rules and regulations that become effective on or after July 1, 2022, such state agency shall submit a report to the joint committee on administrative rules and regulations in accordance with subsection (b)(1) on or before July 15 of the fifth year after such rules and regulations become effective and every fifth year thereafter.
+
+(d) Notwithstanding any other provision of law, a rule and regulation may be adopted or maintained by a state agency only if such rule and regulation serves an identifiable public purpose to support state law and may not be broader than is necessary to meet such public purpose.
+
+(e) This section shall be a part of and supplemental to the rules and regulations filing act, K.S.A. 77-415 et seq., and amendments thereto.
+
+Sec. 28. K.S.A. 25-4119a, 25-4119b, 25-4119e, 25-4119f, 25-4142, 25-4150, 25-4152, 25-4153b, 25-4154, 25-4157, 25-4158a, 25-4180, 25-4186, 46-246a, 46-253, 46-265, 46-280, 46-288, 46-295, 75-3717, 75-4302a and 75-4303a and K.S.A. 2024 Supp. 25-4143, 25-4145, 74-50,297, 75-3036 and 77-440 are hereby repealed.
+
+Sec. 29. This act shall take effect and be in force from and after its publication in the statute book.

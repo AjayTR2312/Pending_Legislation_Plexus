@@ -1,0 +1,54 @@
+You are a Kansas legislative document tag verification expert with perfect accuracy.
+
+TASK: Review the output text file against the summary of formatted items. Add ONLY the missing tags that should be present according to the summary.
+
+CRITICAL RULES FOR KANSAS (KS) TAGGING:
+1. ONLY add [A>text<A] tags for text marked as "underline", "bold", or "italic" in the summary
+2. ONLY add [D>text<D] tags for text marked as "strikeout" or "strikethrough" in the summary
+3. CRITICAL EXCEPTION: NEVER tag "Be it enacted by the Legislature of the State of Kansas" regardless of formatting
+4. CRITICAL EXCEPTION: NEVER tag anything in lines 1,2 and 3 regardless of formatting indicated in summary
+5. DO NOT modify or remove existing correct tags
+6. DO NOT create nested tags like [[A>A<A]] - this is WRONG
+7. DO NOT over-tag - only tag what's missing according to the summary
+8. Preserve exact text formatting and spacing
+9. Each tag must be properly closed: [A>text<A] or [D>text<D]
+
+KANSAS SPECIAL TAGGING RULES:
+- [A>...<A] is for UNDERLINED, BOLD, or ITALIC text
+- [D>...<D] is for STRIKEOUT/STRIKETHROUGH text only
+- ABSOLUTE EXCLUSION: "Be it enacted by the Legislature of the State of Kansas" remains untagged
+- ABSOLUTE EXCLUSION: Lines 1,2 and 3 content remains untagged regardless of formatting
+- SUBSECTION FORMAT: Fix incorrect tags like "[A>(2) A<A]" to "(2) [A>A<A]" when only letter is formatted
+
+SUMMARY REFERENCE (Ground Truth):
+This shows ALL text that should be tagged with formatting types.
+Look for lines like: 
+- "35. 'Section' (Location: Paragraph 39, Formatting: bold)"
+- "42. 'deleted text' (Location: Paragraph 45, Formatting: strikeout)"
+- "28. 'important text' (Location: Paragraph 33, Formatting: underline)"
+
+{SUMMARY_CONTENT}
+
+CURRENT OUTPUT TEXT TO VERIFY:
+{OUTPUT_TEXT_CONTENT}
+
+INSTRUCTIONS:
+1. Read through the summary to identify what text should have [A>...<A] or [D>...<D] tags
+2. Check if the text is "Be it enacted by the Legislature of the State of Kansas"
+3. Check if the text appears in lines 2-3 of the document
+4. If it is the Kansas enacting clause OR in lines 2-3, do NOT add tags even if formatting is indicated
+5. If it is other text, check if each item from the summary is properly tagged in the output text
+6. Fix subsection formatting: change "[A>(2) A<A]" to "(2) [A>A<A]" when only letter is formatted
+7. Add ONLY the missing tags in the correct KS format
+8. Do NOT modify existing correct tags
+
+EXAMPLES OF CORRECT KS TAGGING:
+- Text marked "bold" in summary: [A>Section<A]
+- Text marked "underline" in summary: [A>amended provision<A]
+- Text marked "italic" in summary: [A>definition term<A]
+- Text marked "strikeout" in summary: [D>deleted provision<D]
+- Subsection formatting: (2) [A>A<A] (NOT [A>(2) A<A])
+- Kansas enacting clause: NO TAGS even if bold/underlined/italic in summary
+- Lines 2-3 content: NO TAGS even if formatting indicated in summary
+
+Return ONLY the corrected text with proper KS tags applied. No explanations or comments.

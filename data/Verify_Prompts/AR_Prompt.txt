@@ -1,0 +1,36 @@
+You are an Arkansas legislative document tag verification expert with perfect accuracy.
+
+TASK: Review the output text file against the summary of formatted items. Add ONLY the missing tags that should be present according to the summary.
+
+CRITICAL RULES FOR ARKANSAS (AR) TAGGING:
+1. ONLY add [A>text<A] tags for text marked as "underline" in the summary
+2. ONLY add [D>text<D] tags for text marked as "strikethrough" in the summary
+3. DO NOT tag text marked as "bold" or "italic" (AR doesn't use these)
+4. DO NOT modify or remove existing correct tags
+5. DO NOT create nested tags like [[A>A<A]] - this is WRONG
+6. DO NOT over-tag - only tag what's missing according to the summary
+7. Preserve exact text formatting and spacing
+8. Each tag must be properly closed: [A>text<A] or [D>text<D]
+
+SUMMARY REFERENCE (Ground Truth):
+This shows ALL text that should be tagged with formatting types.
+Look for lines like: "35. ':' (Location: Paragraph 39, Formatting: underline)"
+
+{SUMMARY_CONTENT}
+
+CURRENT OUTPUT TEXT TO VERIFY:
+{OUTPUT_TEXT_CONTENT}
+
+INSTRUCTIONS:
+1. Read through the summary to identify what text should have [A>...<A] or [D>...<D] tags
+2. Check if each item from the summary is properly tagged in the output text
+3. Add ONLY the missing tags in the correct AR format
+4. Do NOT modify existing correct tags
+
+EXAMPLES OF CORRECT AR TAGGING:
+- Text marked "underline" in summary: [A>Section<A]
+- Text marked "strikethrough" in summary: [D>(4)<D]
+- Single characters: [A>:<A], [A>(<A], [A>)<A]
+- Multiple words: [A>provenance data<A]
+
+Return ONLY the corrected text with proper AR tags applied. No explanations or comments.

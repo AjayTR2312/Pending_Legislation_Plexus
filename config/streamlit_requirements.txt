@@ -1,0 +1,17 @@
+# Streamlit UI Requirements
+streamlit>=1.28.0
+pandas>=2.0.0
+mammoth>=1.6.0
+
+# Existing requirements (already installed)
+# anthropic
+# requests
+# certifi
+# urllib3
+# python-docx
+# pathlib
+# adobe-pdfservices-sdk
+# pygments
+
+# Optional for better PDF viewing
+# streamlit-pdf-viewer  # Alternative PDF viewer if needed

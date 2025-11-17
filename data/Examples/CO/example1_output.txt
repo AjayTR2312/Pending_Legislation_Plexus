@@ -1,0 +1,244 @@
+An Act
+
+HOUSE BILL 25-1021
+
+BY REPRESENTATIVE(S) Lindstedt and Taggart, Bird, Boesenecker, Camacho, Carter, Clifford, Duran, Gonzalez R., Lieder, Lukens, Paschal, Ricks, Soper, Stewart K., Titone, McCluskie, English, Jackson;
+
+also SENATOR(S) Bridges and Baisley, Amabile, Catlin, Daugherty, Exum, Hinrichsen, Jodeh, Liston, Michaelson Jenet, Mullica, Roberts, Snyder, Weissman, Winter F.
+
+CONCERNING TAX INCENTIVES FOR BUSINESSES THAT TRANSITION TO EMPLOYEE-OWNED BUSINESSES IN WHOLE OR IN PART.
+
+Be it enacted by the General Assembly of the State of Colorado:
+
+SECTION 1. In Colorado Revised Statutes, 39-22-104, add (4)(dd) as follows:
+
+39-22-104. Income tax imposed on individuals, estates, and trusts - single rate - report - tax preference performance statement - legislative declaration - definitions - repeal. (4) There shall be subtracted from federal taxable income:
+
+[A>(dd) (I) FOR INCOME TAX YEARS COMMENCING ON OR AFTER JANUARY 1, 2027, BUT BEFORE JANUARY 1, 2038, AN AMOUNT EQUAL TO QUALIFYING CAPITAL GAINS THAT ARE SUBJECT TO TAX UNDER THIS ARTICLE 22 AND THAT ARE REALIZED BY AN OWNER DURING THE TAXABLE YEAR FOR THE QUALIFIED SALE OF A QUALIFIED BUSINESS.<A]
+
+[A>(II) AS USED IN THIS SUBSECTION (4)(dd), UNLESS THE CONTEXT OTHERWISE REQUIRES:<A]
+
+[A>(A) "OFFICE" MEANS THE COLORADO OFFICE OF ECONOMIC DEVELOPMENT CREATED IN SECTION 24-48.5-101.<A]
+
+[A>(B) "OWNER" HAS THE SAME MEANING AS SET FORTH IN SECTION 39-22-542 (2)(h).<A]
+
+[A>(C) "QUALIFIED BUSINESS" HAS THE SAME MEANING AS SET FORTH IN SECTION 39-22-542 (2)(i).<A]
+
+[A>(D) "QUALIFIED EMPLOYEE-OWNED BUSINESS" HAS THE SAME MEANING AS SET FORTH IN SECTION 39-22-542 (2)(j).<A]
+
+[A>(E) "QUALIFIED SALE" MEANS THE CONVERSION TO A QUALIFIED EMPLOYEE-OWNED BUSINESS; EXCEPT THAT THE CONVERSION MUST BE BY AN INCREMENT OF AT LEAST TWENTY PERCENT OF THE TOTAL OWNERSHIP OF THE ENTIRE QUALIFIED EMPLOYEE-OWNED BUSINESS.<A]
+
+[A>(F) "QUALIFYING CAPITAL GAINS" MEANS THE AMOUNT OF NET CAPITAL GAINS, AS DEFINED IN SECTION 1222 (11) OF THE INTERNAL REVENUE CODE, SUBJECT TO THE LIMITATION SET FORTH IN SUBSECTION (4)(dd)(V) OF THIS SECTION.<A]
+
+[A>(III) IN ACCORDANCE WITH SECTION 39-21-304 (1), WHICH REQUIRES EACH BILL THAT CREATES A NEW TAX EXPENDITURE TO INCLUDE A TAX PREFERENCE PERFORMANCE STATEMENT AS PART OF A STATUTORY LEGISLATIVE DECLARATION, THE GENERAL ASSEMBLY FINDS AND DECLARES THAT THE PURPOSE OF THE INCOME TAX SUBTRACTION PROVIDED IN THIS SUBSECTION (4)(dd) IS TO:<A]
+
+[A>(A) INDUCE CERTAIN DESIGNATED BEHAVIOR BY TAXPAYERS, SPECIFICALLY FOR BUSINESSES TO ESTABLISH EMPLOYEE STOCK OWNERSHIP PLANS OR EMPLOYEE OWNERSHIP TRUSTS OR TO CONVERT TO A WORKER-OWNED COOPERATIVE; AND<A]
+
+[A>(B) PROVIDE TAX RELIEF FOR CERTAIN BUSINESSES OR INDIVIDUALS, SPECIFICALLY TO BUSINESSES THAT ESTABLISH EMPLOYEE STOCK OWNERSHIP PLANS OR EMPLOYEE OWNERSHIP TRUSTS OR THAT CONVERT TO A WORKER-OWNED COOPERATIVE.<A]
+
+[A>(IV) THE GENERAL ASSEMBLY AND THE STATE AUDITOR SHALL MEASURE THE EFFECTIVENESS OF THE SUBTRACTION IN ACHIEVING THE PURPOSE SPECIFIED IN SUBSECTION (4)(dd)(III) OF THIS SECTION BASED ON THE NUMBER AND AGGREGATE AMOUNT OF SUBTRACTIONS CLAIMED IN A TAX YEAR.<A]
+
+[A>(V) (A) ON OR BEFORE JUNE 30, 2026, THE OFFICE SHALL ESTABLISH AND POST ON ITS WEBSITE THE TOTAL AMOUNT OF CAPITAL GAINS THAT MAY BE SUBTRACTED FROM AN OWNER'S FEDERAL TAXABLE INCOME PURSUANT TO THIS SUBSECTION (4)(dd), WHICH AMOUNT IS IN EFFECT FOR INCOME TAX YEARS COMMENCING ON OR AFTER JANUARY 1, 2027, BUT BEFORE JANUARY 1, 2038, OR UNTIL THE OFFICE ADJUSTS THE AMOUNT AS SET FORTH IN SUBSECTION (4)(dd)(V)(B) OF THIS SECTION.<A]
+
+[A>(B) AFTER JUNE 30, 2026, ON OR BEFORE JUNE 30, 2027, AND ON OR BEFORE JUNE 30 OF EACH YEAR THEREAFTER UNTIL JUNE 30, 2036, THE OFFICE MAY ADJUST THE TOTAL AMOUNT OF CAPITAL GAINS THAT MAY BE SUBTRACTED FROM AN OWNER'S FEDERAL TAXABLE INCOME THAT THE OFFICE HAS PREVIOUSLY ESTABLISHED IN ACCORDANCE WITH THIS SUBSECTION (4)(dd)(V). THE ADJUSTED AMOUNT MUST BE POSTED ON THE OFFICE'S WEBSITE AND IS IN EFFECT FOR INCOME TAX YEARS COMMENCING ON OR AFTER JANUARY 1 OF THE YEAR IMMEDIATELY FOLLOWING THE YEAR IN WHICH THE ADJUSTMENT IS MADE BUT BEFORE JANUARY 1, 2038, OR UNTIL THE OFFICE SUBSEQUENTLY ADJUSTS THE AMOUNT AS SET FORTH IN THIS SUBSECTION (4)(dd)(V)(B).<A]
+
+[A>(C) AN OWNER MAY NOT SUBTRACT MORE THAN THE AMOUNT OF CAPITAL GAINS ESTABLISHED BY THE OFFICE IN ACCORDANCE WITH SUBSECTION (4)(dd)(V)(A) OR (4)(dd)(V)(B) OF THIS SECTION IN THE INCOME TAX YEAR.<A]
+
+[A>(D) BEGINNING IN JANUARY 2027, AND IN JANUARY EVERY YEAR THEREAFTER FOLLOWING A YEAR IN WHICH THE OFFICE ADJUSTS THE AMOUNT OF CAPITAL GAINS THAT MAY BE SUBTRACTED FROM AN OWNER'S FEDERAL TAXABLE INCOME PURSUANT TO SUBSECTION (4)(dd)(V)(B) OF THIS SECTION, THE OFFICE SHALL INCLUDE, AS PART OF ITS PRESENTATION DURING ITS "SMART ACT" HEARING REQUIRED BY SECTION 2-7-203, INFORMATION CONCERNING THE AMOUNT OF CAPITAL GAINS THAT MAY BE SUBTRACTED FROM AN OWNER'S FEDERAL TAXABLE INCOME THAT THE OFFICE HAS ESTABLISHED PURSUANT TO SUBSECTION (4)(dd)(V)(A) OR (4)(dd)(V)(B) OF THIS SECTION AND THE METHOD THAT THE OFFICE USED TO ESTABLISH THE AMOUNT.<A]
+
+[A>(VI) THIS SUBSECTION (4)(dd) IS REPEALED, EFFECTIVE JULY 1, 2042.<A]
+
+SECTION 2. In Colorado Revised Statutes, 39-22-304, add (3)(s) and (3)(t) as follows:
+
+39-22-304. Net income of corporation - legislative declaration - definitions - repeal. (3) There shall be subtracted from federal taxable income:
+
+[A>(s) (I) FOR INCOME TAX YEARS COMMENCING ON OR AFTER JANUARY 1, 2027, BUT BEFORE JANUARY 1, 2038, AN AMOUNT EQUAL TO QUALIFYING CAPITAL GAINS THAT ARE SUBJECT TO TAX UNDER THIS ARTICLE 22 AND THAT ARE REALIZED BY AN OWNER DURING THE TAXABLE YEAR FOR THE QUALIFIED SALE OF A QUALIFIED BUSINESS.<A]
+
+[A>(II) AS USED IN THIS SUBSECTION (3)(s), UNLESS THE CONTEXT OTHERWISE REQUIRES:<A]
+
+[A>(A) "OFFICE" MEANS THE COLORADO OFFICE OF ECONOMIC DEVELOPMENT CREATED IN SECTION 24-48.5-101.<A]
+
+[A>(B) "OWNER" HAS THE SAME MEANING AS SET FORTH IN SECTION 39-22-542 (2)(h).<A]
+
+[A>(C) "QUALIFIED BUSINESS" HAS THE SAME MEANING AS SET FORTH IN SECTION 39-22-542 (2)(i).<A]
+
+[A>(D) "QUALIFIED EMPLOYEE-OWNED BUSINESS" HAS THE SAME MEANING AS SET FORTH IN SECTION 39-22-542 (2)(j).<A]
+
+[A>(E) "QUALIFIED SALE" MEANS THE CONVERSION TO A QUALIFIED EMPLOYEE-OWNED BUSINESS; EXCEPT THAT THE CONVERSION MUST BE BY AN INCREMENT OF AT LEAST TWENTY PERCENT OF THE TOTAL OWNERSHIP OF THE ENTIRE QUALIFIED EMPLOYEE-OWNED BUSINESS.<A]
+
+[A>(F) "QUALIFYING CAPITAL GAINS" MEANS THE AMOUNT OF NET CAPITAL GAINS, AS DEFINED IN SECTION 1222 (11) OF THE INTERNAL REVENUE CODE, SUBJECT TO THE LIMITATION SET FORTH IN SUBSECTION (3)(s)(V) OF THIS SECTION.<A]
+
+[A>(III) IN ACCORDANCE WITH SECTION 39-21-304 (1), WHICH REQUIRES EACH BILL THAT CREATES A NEW TAX EXPENDITURE TO INCLUDE A TAX PREFERENCE PERFORMANCE STATEMENT AS PART OF A STATUTORY LEGISLATIVE DECLARATION, THE GENERAL ASSEMBLY FINDS AND DECLARES THAT THE PURPOSE OF THE INCOME TAX SUBTRACTION PROVIDED IN THIS SUBSECTION (3)(s) IS TO:<A]
+
+[A>(A) INDUCE CERTAIN DESIGNATED BEHAVIOR BY TAXPAYERS, SPECIFICALLY FOR BUSINESSES TO ESTABLISH EMPLOYEE STOCK OWNERSHIP PLANS OR EMPLOYEE OWNERSHIP TRUSTS OR TO CONVERT TO A WORKER-OWNED COOPERATIVE; AND<A]
+
+[A>(B) PROVIDE TAX RELIEF FOR CERTAIN BUSINESSES OR INDIVIDUALS, SPECIFICALLY TO BUSINESSES THAT ESTABLISH EMPLOYEE STOCK OWNERSHIP PLANS OR EMPLOYEE OWNERSHIP TRUSTS OR THAT CONVERT TO A WORKER-OWNED COOPERATIVE.<A]
+
+[A>(IV) THE GENERAL ASSEMBLY AND THE STATE AUDITOR SHALL MEASURE THE EFFECTIVENESS OF THE SUBTRACTION IN ACHIEVING THE PURPOSE SPECIFIED IN SUBSECTION (3)(s)(III) OF THIS SECTION BASED ON THE NUMBER AND AGGREGATE AMOUNT OF SUBTRACTIONS CLAIMED IN A TAX YEAR.<A]
+
+[A>(V) (A) ON OR BEFORE JUNE 30, 2026, THE OFFICE SHALL ESTABLISH AND POST ON ITS WEBSITE THE TOTAL AMOUNT OF CAPITAL GAINS THAT MAY BE SUBTRACTED FROM AN OWNER'S FEDERAL TAXABLE INCOME PURSUANT TO THIS SUBSECTION (3)(s), WHICH AMOUNT IS IN EFFECT FOR INCOME TAX YEARS COMMENCING ON OR AFTER JANUARY 1, 2027, BUT BEFORE JANUARY 1, 2038, OR UNTIL THE OFFICE ADJUSTS THE AMOUNT AS SET FORTH IN SUBSECTION (3)(s)(V)(B) OF THIS SECTION.<A]
+
+[A>(B) AFTER JUNE 30, 2026, ON OR BEFORE JUNE 30, 2027, AND ON OR BEFORE JUNE 30 OF EACH YEAR THEREAFTER UNTIL JUNE 30, 2036, THE OFFICE MAY ADJUST THE TOTAL AMOUNT OF CAPITAL GAINS THAT MAY BE SUBTRACTED FROM AN OWNER'S FEDERAL TAXABLE INCOME THAT THE OFFICE HAS PREVIOUSLY ESTABLISHED IN ACCORDANCE WITH THIS SUBSECTION (3)(s)(V). THE ADJUSTED AMOUNT MUST BE POSTED ON THE OFFICE'S WEBSITE AND IS IN EFFECT FOR INCOME TAX YEARS COMMENCING ON OR AFTER JANUARY 1 OF THE YEAR IMMEDIATELY FOLLOWING THE YEAR IN WHICH THE ADJUSTMENT IS MADE BUT BEFORE JANUARY 1, 2038, OR UNTIL THE OFFICE SUBSEQUENTLY ADJUSTS THE AMOUNT AS SET FORTH IN THIS SUBSECTION (3)(s)(V)(B).<A]
+
+[A>(C) AN OWNER MAY NOT SUBTRACT MORE THAN THE AMOUNT OF CAPITAL GAINS ESTABLISHED BY THE OFFICE IN ACCORDANCE WITH SUBSECTION (3)(s)(V)(A) OR (3)(s)(V)(B) OF THIS SECTION IN THE INCOME TAX YEAR.<A]
+
+[A>(D) BEGINNING IN JANUARY 2027, AND IN JANUARY EVERY YEAR THEREAFTER FOLLOWING A YEAR IN WHICH THE OFFICE ADJUSTS THE AMOUNT OF CAPITAL GAINS THAT MAY BE SUBTRACTED FROM AN OWNER'S FEDERAL TAXABLE INCOME PURSUANT TO SUBSECTION (3)(s)(V)(B) OF THIS SECTION, THE OFFICE SHALL INCLUDE, AS PART OF ITS PRESENTATION DURING ITS "SMART ACT" HEARING REQUIRED BY SECTION 2-7-203, INFORMATION CONCERNING THE AMOUNT OF CAPITAL GAINS THAT MAY BE SUBTRACTED FROM AN OWNER'S FEDERAL TAXABLE INCOME THAT THE OFFICE HAS ESTABLISHED PURSUANT TO SUBSECTION (3)(s)(V)(A) OR (3)(s)(V)(B) OF THIS SECTION AND THE METHOD THAT THE OFFICE USED TO ESTABLISH THE AMOUNT.<A]
+
+[A>(VI) THIS SUBSECTION (3)(s) IS REPEALED, EFFECTIVE JULY 1, 2042.<A]
+
+[A>(t) (I) FOR INCOME TAX YEARS COMMENCING ON OR AFTER JANUARY 1, 2027, BUT BEFORE JANUARY 1, 2038, AN AMOUNT EQUAL TO A QUALIFIED TAXPAYER'S FEDERAL TAXABLE INCOME FOR THE TAX YEAR NOT TO EXCEED ONE MILLION DOLLARS.<A]
+
+[A>(II) AS USED IN THIS SUBSECTION (3)(t), UNLESS THE CONTEXT OTHERWISE REQUIRES:<A]
+
+[A>(A) "QUALIFIED TAXPAYER" MEANS A TAXPAYER THAT IS SUBJECT TO TAX UNDER THIS ARTICLE 22 AND THAT IS A WORKER-OWNED COOPERATIVE.<A]
+
+[A>(B) "WORKER-OWNED COOPERATIVE" HAS THE SAME MEANING AS SET FORTH IN SECTION 1042 (c)(2) OF THE INTERNAL REVENUE CODE.<A]
+
+[A>(III) IN ACCORDANCE WITH SECTION 39-21-304 (1), WHICH REQUIRES EACH BILL THAT CREATES A NEW TAX EXPENDITURE TO INCLUDE A TAX PREFERENCE PERFORMANCE STATEMENT AS PART OF A STATUTORY LEGISLATIVE DECLARATION, THE GENERAL ASSEMBLY FINDS AND DECLARES THAT THE PURPOSE OF THE INCOME TAX SUBTRACTION PROVIDED IN THIS SUBSECTION (3)(t) IS TO:<A]
+
+[A>(A) INDUCE CERTAIN DESIGNATED BEHAVIOR BY TAXPAYERS, SPECIFICALLY FOR BUSINESSES TO CONVERT TO A WORKER-OWNED COOPERATIVE; AND<A]
+
+[A>(B) PROVIDE TAX RELIEF FOR CERTAIN BUSINESSES, SPECIFICALLY TO PROVIDE ONGOING SUPPORT TO BUSINESSES THAT CONVERT TO A WORKER-OWNED COOPERATIVE.<A]
+
+[A>(IV) THE GENERAL ASSEMBLY AND THE STATE AUDITOR SHALL MEASURE THE EFFECTIVENESS OF THE SUBTRACTION IN ACHIEVING THE PURPOSE SPECIFIED IN SUBSECTION (3)(t)(III) OF THIS SECTION BASED ON THE NUMBER AND AGGREGATE AMOUNT OF SUBTRACTIONS CLAIMED IN A TAX YEAR AND THE NUMBER OF SUBTRACTIONS CLAIMED YEAR OVER YEAR.<A]
+
+[A>(V) THIS SUBSECTION (3)(t) IS REPEALED, EFFECTIVE JULY 1, 2042.<A]
+
+SECTION 3. In Colorado Revised Statutes, 39-22-542, amend (1)(a)(I), (1)(a)(III), (2)(a)(II), (2)(e), (2)(j)(II), (2)(j)(III), (3)(a) introductory portion, (3)(a.5)(I), (3)(c), (3)(d), (4), (5)(a)(V), (5)(a)(VI), (6)(a)(I), (8), (10), (11) introductory portion, and (14); repeal (2)(j)(I); and add (2)(c.5), (2)(j.5), (2)(k.5), (3)(a.3), (3)(a.5)(III), (3)(a.7), (3)(b)(III), and (5)(a)(VII) as follows:
+
+39-22-542. Employee-ownership tax credit - definitions - legislative declaration - repeal. (1) Legislative declaration. (a) The general assembly hereby finds and declares that:
+
+(I) The purpose of this section is to provide an incentive for [D>small<D] businesses to establish employee stock ownership plans or employee ownership trusts or to convert to a worker-owned cooperative[A>, AND TO PROVIDE AN INCENTIVE TO ENTITIES THAT SUPPORT BUSINESSES IN SUCH ESTABLISHMENT OR CONVERSION<A];
+
+(III) This section encourages [D>small<D] business owners to sell [D>through three different options,<D] their businesses to the very employees that contributed to their success; and
+
+(2) Definitions. As used in this section, unless the context otherwise requires:
+
+(a) (II) The office shall develop guidelines that clarify the types of employee ownership grants that qualify as an alternate equity structure. [A>THE OFFICE MAY DEVELOP GUIDELINES THAT ADJUST THE PERCENTAGES SET FORTH IN SUBSECTION (2)(a)(I) OF THIS SECTION; EXCEPT THAT THE PERCENTAGES SHALL NOT BE ADJUSTED TO AN AMOUNT LESS THAN TWENTY PERCENT.<A] The office may periodically update any guidelines issued pursuant to this subsection (2)(a)(II).
+
+[A>(c.5) "CORPORATE HEADQUARTERS" MEANS THE SOLE LOCATION WITHIN A REGIONAL OR NATIONAL AREA WHERE THE MAJORITY OF THE TAXPAYER'S OR QUALIFIED SUPPORT ENTITY'S STAFF MEMBERS OR EMPLOYEES ARE DOMICILED AND EMPLOYED AND WHERE THE MAJORITY OF THE TAXPAYER'S OR QUALIFIED SUPPORT ENTITY'S FINANCIAL, PERSONNEL, LEGAL, PLANNING, OR OTHER BUSINESS FUNCTIONS ARE CONDUCTED ON A REGIONAL OR NATIONAL BASIS.<A]
+
+(e) "Employee ownership trust" means an indirect form of employee ownership in which a trust holds [D>a controlling stake<D] [A>AT LEAST TWENTY PERCENT OF THE FULLY DILUTED SECURITIES<A] in a qualified business and benefits all employees on an equal basis.
+
+(j) "Qualified employee-owned business" means a taxpayer that is subject to tax under this article 22, including but not limited to a C corporation, S corporation, limited liability company, partnership, limited liability partnership, sole proprietorship, or other similar pass-through entity, that:
+
+(I) [D>Is owned in whole or in part by an employee ownership trust;<D]
+
+(II) Has its corporate headquarters located in this state; [D>For purposes of this subsection (2)(j), "corporate headquarters" means the sole location within a regional or national area where the taxpayer's staff members or employees are domiciled and employed, and where the majority of the taxpayer's financial, personnel, legal, planning, or other business functions are conducted on a regional or national basis.<D]
+
+[A>(III) (A) IS OWNED IN WHOLE OR IN PART BY AN EMPLOYEE OWNERSHIP TRUST;<A]
+
+(B) Has an employee stock ownership plan;
+
+(C) Is in whole or in part a worker-owned cooperative; or
+
+(D) Has an alternate equity structure; and
+
+[A>(j.5) "QUALIFIED SUPPORT ENTITY" MEANS AN ORGANIZATION EXEMPT FROM TAXATION UNDER SECTION 501 (c)(3) OF THE INTERNAL REVENUE CODE OR A TAXPAYER SUBJECT TO TAX UNDER THIS ARTICLE 22, INCLUDING A C CORPORATION, S CORPORATION, LIMITED LIABILITY COMPANY, PARTNERSHIP, LIMITED LIABILITY PARTNERSHIP, SOLE PROPRIETORSHIP, OR OTHER SIMILAR PASS-THROUGH ENTITY THAT:<A]
+
+[A>(I) HAS BEEN IN EXISTENCE FOR NOT LESS THAN TWELVE MONTHS PRIOR TO JANUARY 1 OF THE INCOME TAX YEAR FOR WHICH THE QUALIFIED SUPPORT ENTITY CLAIMS THE CREDIT;<A]
+
+[A>(II) EITHER HAS PROVIDED SERVICES THAT HAVE SUPPORTED AT LEAST ONE SUCCESSFUL CONVERSION TO OR EXPANSION OF A QUALIFIED EMPLOYEE-OWNED BUSINESS IN THE INCOME TAX YEAR OR HAS PROVIDED SERVICES THAT HAVE SUPPORTED AT LEAST THREE EITHER QUALIFIED BUSINESSES THAT HAVE THE INTENT OF CONVERTING TO QUALIFIED EMPLOYEE-OWNED BUSINESSES OR QUALIFIED EMPLOYEE-OWNED BUSINESSES THAT HAVE THE INTENT OF EXPANDING;<A]
+
+[A>(III) HAS ITS CORPORATE HEADQUARTERS LOCATED IN THIS STATE; AND<A]
+
+[A>(IV) IS APPROVED BY THE OFFICE FOR THE TAX INCENTIVES IN THIS SECTION.<A]
+
+[A>(k.5) (I) "SUPPORT COSTS" MEANS, SUBJECT TO GUIDELINES DEVELOPED BY THE OFFICE PURSUANT TO SUBSECTION (5)(a) OF THIS SECTION, COSTS THAT ARE OR ARE RELATED TO:<A]
+
+[A>(A) STAFF SALARIES AND BENEFITS FOR STAFF INVOLVED IN BUSINESS DEVELOPMENT, MARKETING, AND OUTREACH;<A]
+
+[A>(B) MARKETING AND OUTREACH FOR PRODUCING EDUCATIONAL MATERIALS OR HOSTING WORKSHOPS OR CONFERENCES ON CONVERTING A BUSINESS TO EMPLOYEE-OWNERSHIP AND SIMILAR COSTS; AND<A]
+
+[A>(C) A PROPORTIONAL AMOUNT OF BASIC ORGANIZATIONAL OVERHEAD COSTS INCLUDING GENERAL OR ADMINISTRATIVE COSTS, EXPENSES, RENT, AND FACILITIES COSTS.<A]
+
+[A>(II) "SUPPORT COSTS" DOES NOT INCLUDE ANY COSTS THAT ARE CONVERSION OR EXPANSION COSTS.<A]
+
+(3) (a) [A>EXCEPT AS OTHERWISE PROVIDED IN SUBSECTION (3)(a.3) OF THIS SECTION AND<A] subject to certification by the office pursuant to this section, for income tax years commencing on or after January 1, 2022, but [D>prior to January 1, 2027<D] [A>BEFORE JANUARY 1, 2032<A], a qualified business is allowed a credit with respect to the income taxes imposed pursuant to this article 22 as follows:
+
+[A>(a.3) FOR INCOME TAX YEARS COMMENCING ON OR AFTER JANUARY 1, 2026, BUT BEFORE JANUARY 1, 2032, THE ALLOWABLE PERCENTAGE OF CONVERSION COSTS INCURRED BY A QUALIFIED BUSINESS FOR THE APPLICABLE CONVERSION OF THE QUALIFIED BUSINESS SET FORTH IN SUBSECTIONS (3)(a)(I), (3)(a)(II), AND (3)(a)(III) OF THIS SECTION FOR PURPOSES OF CALCULATING THE CREDIT IS UP TO SEVENTY-FIVE PERCENT OF THE CONVERSION COSTS.<A]
+
+(a.5) (I) [A>EXCEPT AS OTHERWISE PROVIDED IN SUBSECTION (3)(a.5)(III) OF THIS SECTION<A] and subject to certification by the office pursuant to this section, for [D>the<D] income tax years commencing on or after January 1, 2024, but [D>prior to January 1, 2027<D] [A>BEFORE JANUARY 1, 2032<A], a qualified employee-owned business is allowed a credit with respect to the income taxes imposed pursuant to this article 22 of up to fifty percent of the expansion costs, not to exceed twenty-five thousand dollars, incurred to expand a qualified employee-owned business's employee ownership trust, employee stock ownership plan, worker-owned cooperative, or alternate equity structure.
+
+[A>(III) FOR INCOME TAX YEARS COMMENCING ON OR AFTER JANUARY 1, 2026, BUT BEFORE JANUARY 1, 2032, THE ALLOWABLE PERCENTAGE OF EXPANSION COSTS INCURRED BY A QUALIFIED EMPLOYEE-OWNED BUSINESS TO EXPAND A QUALIFIED EMPLOYEE-OWNED BUSINESS AS SET FORTH IN SUBSECTION (3)(a.5)(I) OF THIS SECTION FOR PURPOSES OF CALCULATING THE CREDIT IS UP TO SEVENTY-FIVE PERCENT OF THE EXPANSION COSTS.<A]
+
+[A>(a.7) SUBJECT TO CERTIFICATION BY THE OFFICE PURSUANT TO THIS SECTION, FOR INCOME TAX YEARS COMMENCING ON OR AFTER JANUARY 1, 2027, BUT PRIOR TO JANUARY 1, 2032, A QUALIFIED SUPPORT ENTITY IS ALLOWED A CREDIT WITH RESPECT TO THE INCOME TAXES IMPOSED PURSUANT TO THIS ARTICLE 22 OF UP TO SEVENTY-FIVE PERCENT OF THE SUPPORT COSTS, BUT NOT TO EXCEED ONE HUNDRED SIXTY-SEVEN THOUSAND DOLLARS, INCURRED IN PROVIDING SERVICES THAT SUPPORT THE CONVERSION OF QUALIFIED BUSINESSES TO QUALIFIED EMPLOYEE-OWNED BUSINESSES OR THE EXPANSION OF QUALIFIED EMPLOYEE-OWNED BUSINESSES.<A]
+
+[A>(b) (III) IN THE CASE OF A QUALIFIED SUPPORT ENTITY, THE CREDIT IS ALLOWED TO THE QUALIFIED SUPPORT ENTITY.<A]
+
+(c) The maximum amount of all tax credit certificates that the office may reserve under subsection (6)(a) of this section [D>in any tax year is ten million dollars.<D] [A>IS:<A]
+
+[A>(I) TEN MILLION DOLLARS FOR ANY INCOME TAX YEAR COMMENCING ON OR AFTER JANUARY 1, 2022, BUT BEFORE JANUARY 1, 2026; AND<A]
+
+[A>(II) TWO MILLION DOLLARS FOR ANY INCOME TAX YEAR COMMENCING ON OR AFTER JANUARY 1, 2026, BUT BEFORE JANUARY 1, 2032.<A]
+
+(d) [A>(I)<A] A qualified business or qualified employee-owned business may apply for and claim only one tax credit for the conversion or expansion costs incurred per tax year.
+
+[A>(II) A QUALIFIED SUPPORT ENTITY MAY APPLY FOR AND CLAIM ONLY ONE TAX CREDIT PER TAX YEAR.<A]
+
+(4) [A>(a)<A] A business [A>OR, WHERE APPLICABLE, A NONPROFIT ORGANIZATION<A] shall submit an application to the office for the issuance of a credit certificate for the credit allowed in this section by the deadlines established in the office's guidelines. [A>EXCEPT AS OTHERWISE PROVIDED IN SUBSECTION (4)(b) OF THIS SECTION,<A] the application must include information, as set forth in the office's guidelines, regarding the type of conversion or expansion the business intends to undertake, a list of the expected conversion or expansion costs, and an estimated amount, as calculated by the business, of the expected conversion or expansion costs.
+
+[A>(b) AN APPLICATION FOR A BUSINESS OR A NONPROFIT ORGANIZATION SUBMITTING THE APPLICATION TO BE APPROVED AS A QUALIFIED SUPPORT ENTITY MUST INCLUDE INFORMATION, AS SET FORTH IN THE OFFICE'S GUIDELINES, REGARDING THE SUPPORT SERVICES THE BUSINESS OR THE NONPROFIT ORGANIZATION PROVIDES TO QUALIFIED BUSINESSES OR QUALIFIED EMPLOYEE-OWNED BUSINESSES, WHETHER THE BUSINESS OR THE NONPROFIT ORGANIZATION SUPPORTED A SUCCESSFUL CONVERSION OF A QUALIFIED BUSINESS TO A QUALIFIED EMPLOYEE-OWNED BUSINESS OR EXPANSION OF A QUALIFIED EMPLOYEE-OWNED BUSINESS IN THE TAXABLE YEAR, IF THE BUSINESS OR THE NONPROFIT ORGANIZATION HAS NOT SUPPORTED A SUCCESSFUL CONVERSION OR EXPANSION, THE NUMBER OF QUALIFIED BUSINESSES OR QUALIFIED EMPLOYEE-OWNED BUSINESSES THE BUSINESS OR THE NONPROFIT ORGANIZATION IS SUPPORTING THAT INTEND TO CONVERT OR EXPAND, AS APPLICABLE, AND THE STATUS OF THE ANTICIPATED CONVERSIONS OR EXPANSIONS, AND INFORMATION REGARDING SUPPORT COSTS INCURRED IN THE INCOME TAX YEAR.<A]
+
+(5) (a) The office shall develop guidelines for the administration of this section, including, but not limited to:
+
+(V) Detailed guidelines regarding expansion costs; [D>and<D]
+
+(VI) Guidelines and standards for certifying a business as a qualified employee-owned business[A>; AND<A]
+
+[A>(VII) GUIDELINES AND STANDARDS FOR CERTIFYING A BUSINESS OR A NONPROFIT ORGANIZATION AS A QUALIFIED SUPPORT ENTITY<A].
+
+(6) (a) (I) After the office provides the written report required in subsection (5)(b) of this section, a reservation of tax credits is permitted for the tax credit allowed in this section. If the office determines that the application filed under subsection (4) of this section is complete, the office shall determine whether the business [A>OR, IF APPLICABLE, THE NONPROFIT ORGANIZATION<A] is a qualified business, [D>or<D] a qualified employee-owned business, [A>OR A QUALIFIED SUPPORT ENTITY,<A] review the list of the expected conversion or expansion costs, and review the estimated conversion, [D>or<D] expansion[A>, OR SUPPORT<A] costs as calculated by the business [A>OR, IF APPLICABLE, THE QUALIFIED SUPPORT ENTITY<A]. If the office approves the business [A>OR, IF APPLICABLE, THE NONPROFIT ORGANIZATION<A] as a qualified business, [D>or<D] a qualified employee-owned business, [A>OR A QUALIFIED SUPPORT ENTITY,<A] the list of expected conversion or expansion costs, and the estimated conversion, [D>or<D] expansion[A>, OR SUPPORT<A] costs, the office may reserve for the benefit of the qualified business, the qualified employee-owned business, [D>or<D] the owner of the business[A>, OR THE QUALIFIED SUPPORT ENTITY<A] an allocation of a tax credit subject to the limitation specified in [D>subsection (3)(b)<D] [A>SUBSECTION (3)(c)<A] of this section. The office shall notify the qualified business, [D>or<D] the qualified employee-owned business[A>, OR THE QUALIFIED SUPPORT ENTITY<A] in writing of the amount of the reservation. The reservation of a tax credit does not entitle the qualified business, the qualified employee-owned business, [D>or<D] the owner of the business[A>, OR THE QUALIFIED SUPPORT ENTITY<A] to an issuance of a tax credit certificate until the qualified business, [D>or<D] the qualified employee-owned business[A>, OR THE QUALIFIED SUPPORT ENTITY<A] complies with all of the other requirements specified in this section for the issuance of the tax credit certificate.
+
+(8) If the credit allowed under this section exceeds the income taxes due on the income of the qualified business, qualified employee-owned business, [D>or<D] owner of the business, [A>OR QUALIFIED SUPPORT ENTITY,<A] the amount of the credit not used to offset income taxes must be refunded to the qualified business, qualified employee-owned business, [D>or<D] owner of the business[A>, OR QUALIFIED SUPPORT ENTITY<A].
+
+(10) [A>(a)<A] To claim the income tax credit allowed in this section, the qualified business, qualified employee-owned business, [D>or<D] owner of the business[A>, OR QUALIFIED SUPPORT ENTITY<A] shall attach a copy of the credit certificate to its state income tax return. No tax credit is allowed under this section unless the qualified business, qualified employee-owned business, [D>or<D] owner of the business[A>, OR QUALIFIED SUPPORT ENTITY<A] provides the copy of the credit certificate with its filed state income tax return. The amount of the credit that the qualified business, [D>or<D] the qualified employee-owned business[A>, OR THE QUALIFIED SUPPORT ENTITY<A] may claim under this section is the amount stated on the tax credit certificate.
+
+[A>(b) A QUALIFIED SUPPORT ENTITY THAT IS AN ORGANIZATION EXEMPT FROM TAXATION UNDER SECTION 501 (c)(3) OF THE INTERNAL REVENUE CODE AND THAT CLAIMS THE CREDIT ALLOWED BY THIS SECTION SHALL FILE A RETURN PURSUANT TO SECTION 39-22-601 (7)(b) AND ATTACH A COPY OF THE CREDIT CERTIFICATE IN ACCORDANCE WITH SUBSECTION (10)(a) OF THIS SECTION.<A]
+
+(11) The office shall, in a sufficiently timely manner to allow the department to process returns claiming the income tax credit allowed in this section, provide the department with an electronic report of each qualified business, qualified employee-owned business, [D>and<D] owner of a business[A>, AND QUALIFIED SUPPORT ENTITY<A] that the office approved for the income tax credit allowed in this section for the preceding calendar year that includes the following information:
+
+(14) This section is repealed, effective [D>December 31, 2033<D] [A>DECEMBER 31, 2037<A].
+
+SECTION 4. In Colorado Revised Statutes, 39-22-542.5, amend (2)(a) introductory portion, (2)(d)(II), (2)(d)(III), and (2)(f); and repeal (2)(d)(I) as follows:
+
+39-22-542.5. Tax credit for new employee-owned businesses - employee ownership cash fund - tax preference performance statement - legislative declaration - definitions - repeal. (2) Definitions. As used in this section, unless the context otherwise requires:
+
+(a) "Alternate equity structure" means a mechanism under which an employer grants to employees a form of employee ownership, including but not limited to an employee stock purchase plan, LLC membership, phantom stock, profit interest, restricted stock, stock appreciation right, stock option, or synthetic equity. The office may develop guidelines that clarify the types of employee ownership grants that qualify as an alternate equity structure. [A>THE OFFICE MAY DEVELOP GUIDELINES THAT ADJUST THE PERCENTAGES SET FORTH IN THIS SUBSECTION (2)(a); EXCEPT THAT THE PERCENTAGES SHALL NOT BE ADJUSTED TO AN AMOUNT LESS THAN TWENTY PERCENT.<A] An alternate equity structure must at a minimum:
+
+(d) "Employee-owned business" means a taxpayer that is subject to tax under this article 22, including but not limited to a C corporation, S corporation, limited liability company, partnership, limited liability partnership, sole proprietorship, or other similar pass-through entity, that:
+
+(I) [D>Is owned in whole or in part by an employee ownership trust;<D]
+
+[A>(II) (A) IS OWNED IN WHOLE OR IN PART BY AN EMPLOYEE OWNERSHIP TRUST;<A]
+
+(B) Has an employee stock ownership plan;
+
+(C) Is beneficially owned in whole or in part by a worker-owned cooperative; or
+
+(D) Has an alternate equity structure; and
+
+(III) Has its corporate headquarters located in this state. For purposes of this subsection (2)(d), "corporate headquarters" means the sole location within a regional or national area where [A>THE MAJORITY OF<A] the taxpayer's staff members or employees are domiciled and employed, and where the majority of the taxpayer's financial, personnel, legal, planning, or other business functions are conducted on a regional or national basis.
+
+(f) "Employee ownership trust" means an indirect form of employee ownership in which a trust holds [D>a controlling stake<D] [A>AT LEAST TWENTY PERCENT OF THE FULLY DILUTED SECURITIES<A] in a business and benefits all employees on an equal basis and otherwise meets the definition of an alternate equity structure.
+
+SECTION 5. Act subject to petition - effective date. This act takes effect at 12:01 a.m. on the day following the expiration of the ninety-day period after final adjournment of the general assembly; except that, if a referendum petition is filed pursuant to section 1 (3) of article V of the state constitution against this act or an item, section, or part of this act within such period, then the act, item, section, or part will not take effect unless approved by the people at the general election to be held in November 2026 and, in such case, will take effect on the date of the official declaration of the vote thereon by the governor.
+
+____________________________                     ____________________________
+Julie McCluskie                                     James Rashad Coleman, Sr.
+SPEAKER OF THE HOUSE                                             PRESIDENT OF
+OF REPRESENTATIVES                                                 THE SENATE
+
+____________________________                     ____________________________
+Vanessa Reilly                                              Esther van Mourik
+CHIEF CLERK OF THE HOUSE                                         SECRETARY OF
+OF REPRESENTATIVES                                                 THE SENATE
+
+APPROVED________________________________________
+                     (Date and Time)
+
+_________________________________________
+
+Jared S. Polis
+
+GOVERNOR OF THE STATE OF COLORADO
