@@ -16,7 +16,7 @@ class SessionManager:
     def __init__(self, base_sessions_dir: str = None, session_timeout_hours: int = 24):
         if base_sessions_dir is None:
             # Use Temp/sessions as default
-            base_sessions_dir = "../Temp/sessions"
+            base_sessions_dir = "../tmp/sessions"
         
         # Log where sessions will be created for debugging
         logging.info(f"Session manager initialized with base directory: {os.path.abspath(base_sessions_dir)}")
