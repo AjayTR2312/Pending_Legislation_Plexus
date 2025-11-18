@@ -1,0 +1,58 @@
+2025-11-17 19:52:32,538 - INFO - ✅ Session-specific logging configured. Logs saved to: ../Temp/sessions\57e896ea-a184-42cc-976c-27169923ba83\logs\simple_app_2025-11-17_19-52-32.log
+2025-11-17 19:52:32,539 - INFO - 📁 Session ID: 57e896ea-a184-42cc-976c-27169923ba83
+2025-11-17 19:52:32,551 - INFO - Uploaded file: 2023_2024_5_3_7_000097_0_8_1_20240215_0.pdf to session 57e896ea-a184-42cc-976c-27169923ba83
+2025-11-17 19:52:32,619 - INFO - ✅ Session-specific logging configured. Logs saved to: ../Temp/sessions\57e896ea-a184-42cc-976c-27169923ba83\logs\simple_app_2025-11-17_19-52-32.log
+2025-11-17 19:52:32,623 - INFO - 📁 Session ID: 57e896ea-a184-42cc-976c-27169923ba83
+2025-11-17 19:52:32,635 - INFO - Uploaded file: 2023_2024_5_3_7_000097_0_8_1_20240215_0.pdf to session 57e896ea-a184-42cc-976c-27169923ba83
+2025-11-17 19:52:32,644 - INFO - Started processing for session: 57e896ea-a184-42cc-976c-27169923ba83
+2025-11-17 19:52:34,137 - INFO - Successfully obtained Anthropic API key
+2025-11-17 19:52:35,427 - INFO - Successfully loaded state-specific prompt for CA from ../data/Prompts\CA_Prompt.txt
+2025-11-17 19:52:35,430 - INFO - Successfully initialized Adobe PDF Services
+2025-11-17 19:52:35,430 - INFO - Started uploading asset
+2025-11-17 19:52:38,706 - INFO - Finished uploading asset
+2025-11-17 19:52:38,708 - INFO - Successfully validated PDF with Adobe PDF Services: ../data/Examples\CA\example1_input.pdf
+2025-11-17 19:52:38,710 - INFO - Loaded example pair: example1_input.pdf <-> example1_output.txt
+2025-11-17 19:52:38,711 - INFO - Successfully initialized Adobe PDF Services
+2025-11-17 19:52:38,712 - INFO - Started uploading asset
+2025-11-17 19:52:41,590 - INFO - Finished uploading asset
+2025-11-17 19:52:41,592 - INFO - Successfully validated PDF with Adobe PDF Services: ../data/Examples\CA\example2_input.pdf
+2025-11-17 19:52:41,593 - INFO - Loaded example pair: example2_input.pdf <-> example2_output.txt
+2025-11-17 19:52:41,594 - INFO - Successfully initialized Adobe PDF Services
+2025-11-17 19:52:41,595 - INFO - Started uploading asset
+2025-11-17 19:52:43,399 - INFO - Finished uploading asset
+2025-11-17 19:52:43,401 - INFO - Successfully validated PDF with Adobe PDF Services: ../data/Examples\CA\example3_input.pdf
+2025-11-17 19:52:43,404 - INFO - Loaded example pair: example3_input.pdf <-> example3_output.txt
+2025-11-17 19:52:43,405 - INFO - Successfully loaded 3 example pair(s)
+2025-11-17 19:52:43,405 - INFO - Processing PDF: ../Temp/sessions\57e896ea-a184-42cc-976c-27169923ba83\input\2023_2024_5_3_7_000097_0_8_1_20240215_0.pdf
+2025-11-17 19:52:43,407 - INFO - Successfully initialized Adobe PDF Services
+2025-11-17 19:52:43,408 - INFO - Started uploading asset
+2025-11-17 19:52:46,321 - INFO - Finished uploading asset
+2025-11-17 19:52:46,322 - INFO - Successfully validated PDF with Adobe PDF Services: ../Temp/sessions\57e896ea-a184-42cc-976c-27169923ba83\input\2023_2024_5_3_7_000097_0_8_1_20240215_0.pdf
+2025-11-17 19:52:46,323 - INFO - Using 3 example(s) for pure few-shot learning
+2025-11-17 19:52:46,323 - INFO - Claude will learn formatting patterns from examples
+2025-11-17 19:52:46,324 - INFO - Added example to conversation: example1_input.pdf
+2025-11-17 19:52:46,325 - INFO - Added example to conversation: example2_input.pdf
+2025-11-17 19:52:46,325 - INFO - Added example to conversation: example3_input.pdf
+2025-11-17 19:52:46,325 - INFO - Sending request to Claude Opus 4...
+2025-11-17 19:53:17,304 - INFO - HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2025-11-17 19:53:17,343 - INFO - Successfully processed PDF with Claude
+2025-11-17 19:53:17,345 - INFO - Saved output to: ../Temp/sessions\57e896ea-a184-42cc-976c-27169923ba83\output\CA\2023_2024_5_3_7_000097_0_8_1_20240215_0.txt
+2025-11-17 19:53:18,359 - INFO - Started uploading asset
+2025-11-17 19:53:20,525 - INFO - Finished uploading asset
+2025-11-17 19:53:20,527 - INFO - Started submitting EXPORT_PDF job
+2025-11-17 19:53:21,419 - INFO - Started getting job result
+2025-11-17 19:53:23,615 - INFO - Finished polling for status
+2025-11-17 19:53:23,616 - INFO - Finished getting job result
+2025-11-17 19:53:23,616 - INFO - Started getting content
+2025-11-17 19:53:24,760 - INFO - Finished getting content
+2025-11-17 19:53:25,422 - INFO - Reading summary file: ../Temp/sessions\57e896ea-a184-42cc-976c-27169923ba83\output/Verify/CA\2023_2024_5_3_7_000097_0_8_1_20240215_0_Summary.txt
+2025-11-17 19:53:25,424 - INFO - Extracted formatted items summary
+2025-11-17 19:53:25,424 - INFO - Reading text file: ../Temp/sessions\57e896ea-a184-42cc-976c-27169923ba83\output\CA\2023_2024_5_3_7_000097_0_8_1_20240215_0.txt
+2025-11-17 19:53:25,425 - INFO - Creating CA-specific verification prompt
+2025-11-17 19:53:25,427 - INFO - Calling Claude API for verification...
+2025-11-17 19:53:37,436 - INFO - HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+2025-11-17 19:53:37,469 - INFO - Successfully received corrected text from Claude
+2025-11-17 19:53:37,471 - INFO - Saved verified file to: ../Temp/sessions\57e896ea-a184-42cc-976c-27169923ba83\output\Verified\CA\2023_2024_5_3_7_000097_0_8_1_20240215_0_VERIFIED_20251117_195337.txt
+2025-11-17 19:53:37,473 - INFO - Verification report saved to: ../data/output\Reports\CA\2023_2024_5_3_7_000097_0_8_1_20240215_0_verification_report_20251117_195337.txt
+2025-11-17 19:53:37,577 - INFO - Completed processing for session: 57e896ea-a184-42cc-976c-27169923ba83
+2025-11-17 19:53:37,577 - INFO - 🎉 Processing completed successfully! Total time: 1m 4s
