@@ -14,6 +14,9 @@ from pathlib import Path
 # Disable SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+# Get the project root directory (parent of app directory)
+PROJECT_ROOT = Path(__file__).parent.parent.absolute()
+
 # Configuration (same as pdf_to_text_llm.py)
 WORKSPACE_ID = "AgentTraininJaH4"
 TOKEN_URL = "https://aiplatform.gcs.int.thomsonreuters.com/v1/anthropic/token"
@@ -41,7 +44,7 @@ def load_verification_prompt(state_code):
     """
     try:
         # Try state-specific prompt first from data/Verify_Prompts folder
-        prompt_file = os.path.join("../data/Verify_Prompts", f"{state_code}_Prompt.txt")
+        prompt_file = os.path.join(PROJECT_ROOT, "data", "Verify_Prompts", f"{state_code}_Prompt.txt")
         
         if os.path.exists(prompt_file):
             with open(prompt_file, "r", encoding='utf-8') as f:
@@ -53,14 +56,14 @@ def load_verification_prompt(state_code):
             print("📝 Using default FL prompt as fallback")
             
             # Fall back to FL prompt as default
-            fl_prompt_file = os.path.join("../data/Verify_Prompts", "FL_Prompt.txt")
+            fl_prompt_file = os.path.join(PROJECT_ROOT, "data", "Verify_Prompts", "FL_Prompt.txt")
             if os.path.exists(fl_prompt_file):
                 with open(fl_prompt_file, "r", encoding='utf-8') as f:
                     prompt_template = f.read().strip()
                     print(f"✅ Loaded fallback FL verification prompt")
                     return prompt_template
             else:
-                print(f"❌ No verification prompts found in ../data/Verify_Prompts/")
+                print(f"❌ No verification prompts found in {PROJECT_ROOT}/data/Verify_Prompts/")
                 return None
                 
     except Exception as e:

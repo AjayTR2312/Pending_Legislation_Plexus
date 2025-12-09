@@ -37,6 +37,9 @@ from adobe.pdfservices.operation.pdfjobs.result.export_pdf_result import ExportP
 # Disable SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+# Get the project root directory (parent of app directory)
+PROJECT_ROOT = Path(__file__).parent.parent.absolute()
+
 # Monkey patch requests to disable SSL verification
 original_request = requests.Session.request
 def patched_request(self, method, url, **kwargs):
@@ -96,7 +99,7 @@ class PDFToDocxAnalysisPipeline:
                 input_stream = file.read()
 
             # Initialize Adobe credentials from config folder
-            cred_file_path = os.path.join("../config", "pdfservices-api-credentials.json")
+            cred_file_path = os.path.join(PROJECT_ROOT, "config", "pdfservices-api-credentials.json")
             with open(cred_file_path, 'r') as cred_file:
                 cred_data = json.load(cred_file)
             

@@ -4,6 +4,7 @@ import shutil
 import threading
 import time
 import gc
+import atexit
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 import zipfile
@@ -15,8 +16,7 @@ class SessionManager:
     
     def __init__(self, base_sessions_dir: str = None, session_timeout_hours: int = 24):
         if base_sessions_dir is None:
-            # Use Temp/sessions as default
-            base_sessions_dir = "../tmp/sessions"
+            base_sessions_dir = self._get_sessions_directory()
         
         # Log where sessions will be created for debugging
         logging.info(f"Session manager initialized with base directory: {os.path.abspath(base_sessions_dir)}")
@@ -26,11 +26,80 @@ class SessionManager:
         self.sessions: Dict[str, dict] = {}
         self.lock = threading.Lock()
         
-        # Ensure base directory exists
-        os.makedirs(base_sessions_dir, exist_ok=True)
+        # Ensure base directory exists with proper error handling
+        try:
+            os.makedirs(base_sessions_dir, exist_ok=True)
+            logging.info(f"✓ Session directory created/verified: {base_sessions_dir}")
+            
+            # Test write permissions immediately
+            test_file = os.path.join(base_sessions_dir, ".write_test")
+            with open(test_file, 'w') as f:
+                f.write("test")
+            os.remove(test_file)
+            logging.info(f"✓ Write test successful in {base_sessions_dir}")
+            
+        except Exception as e:
+            logging.error(f"❌ Failed to create or write to session directory {base_sessions_dir}: {e}")
+            logging.error(f"Error type: {type(e).__name__}")
+            raise Exception(f"Session directory not writable: {base_sessions_dir}") from e
+        
+        # Register cleanup on exit
+        atexit.register(self._cleanup_all_sessions)
         
         # Start cleanup thread
         self._start_cleanup_thread()
+    
+    def _get_sessions_directory(self) -> str:
+        """Get sessions temp directory with fallback to writable directories"""
+        # Try environment variable first
+        env_temp_dir = os.getenv('SESSIONS_TEMP_DIR')
+        if env_temp_dir:
+            temp_dir = Path(env_temp_dir)
+            try:
+                if temp_dir.exists() or temp_dir.parent.exists():
+                    temp_dir.mkdir(parents=True, exist_ok=True)
+                    # Test write permission
+                    test_file = temp_dir / '.test_write'
+                    test_file.touch()
+                    test_file.unlink()
+                    return str(temp_dir)
+            except (PermissionError, OSError) as e:
+                logging.warning(f"Cannot write to {temp_dir}: {e}, using fallback")
+        
+        # Try /tmp/pending_legislation_sessions (standard writable location)
+        try:
+            temp_dir = Path('/tmp/pending_legislation_sessions')
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            temp_dir.chmod(0o777)
+            # Test write permission
+            test_file = temp_dir / '.test_write'
+            test_file.touch()
+            test_file.unlink()
+            return str(temp_dir)
+        except (PermissionError, OSError) as e:
+            logging.warning(f"Cannot write to /tmp/pending_legislation_sessions: {e}, trying /tmp directly")
+        
+        # Try /tmp directly
+        try:
+            temp_dir = Path('/tmp')
+            # Test write permission
+            test_file = temp_dir / '.test_sessions_write'
+            test_file.touch()
+            test_file.unlink()
+            return str(temp_dir)
+        except (PermissionError, OSError) as e:
+            logging.warning(f"Cannot write to /tmp: {e}, using current directory fallback")
+        
+        # Fallback to local tmp/sessions in current directory
+        try:
+            import tempfile
+            temp_dir = Path(tempfile.gettempdir()) / 'pending_legislation_sessions'
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            return str(temp_dir)
+        except (PermissionError, OSError) as e:
+            # Last resort - use current directory
+            logging.error(f"Cannot create temp directory: {e}, using current directory")
+            return os.path.join(os.getcwd(), 'tmp', 'sessions')
     
     def create_session(self) -> str:
         """Create a new session with unique ID and folder structure"""
@@ -44,7 +113,12 @@ class SessionManager:
             'logs': {}             # Session-specific logs
         }
         
-        self._create_folder_structure(session_dir, session_structure)
+        try:
+            self._create_folder_structure(session_dir, session_structure)
+            logging.info(f"Created session folder structure at: {session_dir}")
+        except Exception as e:
+            logging.error(f"Failed to create session folder structure: {e}")
+            raise Exception(f"Cannot create session directory at {session_dir}: {str(e)}")
         
         with self.lock:
             self.sessions[session_id] = {
@@ -106,10 +180,23 @@ class SessionManager:
         input_folder = folders['input_folder']
         
         try:
+            # Log upload attempt
+            logging.info(f"Attempting to upload {uploaded_file.name} ({uploaded_file.size} bytes) to {input_folder}")
+            
+            # Verify folder exists and is writable
+            if not os.path.exists(input_folder):
+                logging.error(f"Input folder does not exist: {input_folder}")
+                os.makedirs(input_folder, exist_ok=True)
+                logging.info(f"Created input folder: {input_folder}")
+            
             # Save uploaded file
             file_path = os.path.join(input_folder, uploaded_file.name)
+            logging.info(f"Writing file to: {file_path}")
+            
             with open(file_path, 'wb') as f:
                 f.write(uploaded_file.read())
+            
+            logging.info(f"File written successfully, size: {os.path.getsize(file_path)} bytes")
             
             # Update session info
             with self.lock:
@@ -128,6 +215,9 @@ class SessionManager:
             
         except Exception as e:
             logging.error(f"Error uploading file {uploaded_file.name} to session {session_id}: {e}")
+            logging.error(f"Error type: {type(e).__name__}")
+            import traceback
+            logging.error(f"Traceback: {traceback.format_exc()}")
             return None
     
     def start_processing(self, session_id: str) -> bool:
@@ -183,6 +273,10 @@ class SessionManager:
         os.makedirs(state_output_folder, exist_ok=True)
         
         return state_output_folder
+    
+    def delete_session(self, session_id: str) -> bool:
+        """Immediately delete a session (called when user clicks New Session)"""
+        return self.cleanup_session(session_id)
     
     def cleanup_session(self, session_id: str) -> bool:
         """Clean up session data with retry logic"""
@@ -318,6 +412,16 @@ class SessionManager:
         cleanup_thread = threading.Thread(target=cleanup_expired_sessions, daemon=True)
         cleanup_thread.start()
         logging.info("Session cleanup thread started")
+    
+    def _cleanup_all_sessions(self):
+        """Clean up all sessions on shutdown"""
+        logging.info("Cleaning up all sessions on shutdown...")
+        session_ids = list(self.sessions.keys())
+        for session_id in session_ids:
+            try:
+                self.cleanup_session(session_id)
+            except Exception as e:
+                logging.warning(f"Failed to cleanup session {session_id} during shutdown: {e}")
 
 
 # Global session manager instance

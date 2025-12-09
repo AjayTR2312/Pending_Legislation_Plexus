@@ -10,16 +10,12 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Build arguments for JFrog Artifactory
-ARG TR_JFROG_USERNAME
-ARG TR_JFROG_TOKEN
-
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
     git \
-    libgl1-mesa-glx \
+    libgl1 \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
@@ -27,24 +23,26 @@ RUN apt-get update && apt-get install -y \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements file
-COPY config/requirements.txt /app/config/requirements.txt
+# Copy requirements file from root
+COPY requirements.txt /app/requirements.txt
 
 # Upgrade pip
 RUN pip install --upgrade pip
 
 # Install Python dependencies
-RUN pip install --no-cache-dir -r config/requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY app/ /app/app/
 COPY data/ /app/data/
 COPY config/ /app/config/
-COPY tmp/ /app/tmp/
 COPY README.md /app/
 
-# Create necessary directories
-RUN mkdir -p /app/tmp/sessions
+# Copy Streamlit config to the working directory where it will be run
+COPY .streamlit/ /app/app/.streamlit/
+
+# Create .dockerenv file to indicate container environment
+RUN touch /.dockerenv
 
 # Expose Streamlit default port
 EXPOSE 8501
@@ -56,5 +54,10 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 # Set working directory to app folder
 WORKDIR /app/app
 
-# Run Streamlit application
-CMD ["streamlit", "run", "streamlit_app.py", "--server.port=8501", "--server.address=0.0.0.0", "--server.headless=true"]
+# Run Streamlit application with Kubernetes-specific overrides
+CMD ["streamlit", "run", "streamlit_app.py", \
+     "--server.port=8501", \
+     "--server.address=0.0.0.0", \
+     "--server.headless=true", \
+     "--server.enableWebsocketCompression=false", \
+     "--browser.serverAddress=localhost"]
