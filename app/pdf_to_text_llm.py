@@ -44,6 +44,9 @@ requests.Session.request = patched_request
 requests.packages.urllib3.disable_warnings()
 ssl._create_default_https_context = ssl._create_unverified_context
 
+# Get the project root directory (parent of app directory)
+PROJECT_ROOT = Path(__file__).parent.parent.absolute()
+
 # Configuration - Updated for enterprise session management
 WORKSPACE_ID = "AgentTraininJaH4"
 TOKEN_URL = "https://aiplatform.gcs.int.thomsonreuters.com/v1/anthropic/token"
@@ -101,7 +104,7 @@ def load_conversion_prompt(state_code=None):
     """Load the conversion prompt from external file, with state-specific support."""
     # Try state-specific prompt first from prompts folder
     if state_code:
-        state_prompt_file = os.path.join("../data/Prompts", f"{state_code}_Prompt.txt")
+        state_prompt_file = os.path.join(PROJECT_ROOT, "data", "Prompts", f"{state_code}_Prompt.txt")
         if os.path.exists(state_prompt_file):
             try:
                 with open(state_prompt_file, "r", encoding='utf-8') as f:
@@ -112,7 +115,7 @@ def load_conversion_prompt(state_code=None):
                 logging.error(f"Error loading state-specific prompt file {state_prompt_file}: {e}")
     
     # Fall back to default prompt
-    prompt_file = os.path.join("../data/Prompts", "PDF_to_Text_Prompt.txt")
+    prompt_file = os.path.join(PROJECT_ROOT, "data", "Prompts", "PDF_to_Text_Prompt.txt")
     try:
         with open(prompt_file, "r", encoding='utf-8') as f:
             prompt = f.read().strip()
@@ -145,7 +148,7 @@ def get_adobe_pdf_services():
     """Get Adobe PDF Services client with credentials."""
     try:
         # Load Adobe credentials from config folder
-        cred_file_path = os.path.join("../config", "pdfservices-api-credentials.json")
+        cred_file_path = os.path.join(PROJECT_ROOT, "config", "pdfservices-api-credentials.json")
         
         if not os.path.exists(cred_file_path):
             logging.info("Adobe PDF Services credentials not found - using fallback PDF processing")
@@ -220,10 +223,10 @@ def load_example_pairs(state_code=None):
     try:
         # Build examples folder path using state_code
         if state_code:
-            examples_folder = os.path.join("../data/Examples", state_code)
+            examples_folder = os.path.join(PROJECT_ROOT, "data", "Examples", state_code)
         else:
             # Fallback to a default if no state_code provided
-            examples_folder = "../data/Examples"
+            examples_folder = os.path.join(PROJECT_ROOT, "data", "Examples")
             
         if not os.path.exists(examples_folder):
             logging.warning(f"Examples folder not found: {examples_folder}")
@@ -810,7 +813,7 @@ def display_available_states():
     available_states = []
     for i, (code, info) in enumerate(AVAILABLE_STATES.items(), 1):
         # Check if examples exist for this state using state_code approach
-        examples_path = os.path.join("../data/Examples", code)
+        examples_path = os.path.join(PROJECT_ROOT, "data", "Examples", code)
         
         # Check examples
         has_examples = False
@@ -821,7 +824,7 @@ def display_available_states():
             has_examples = examples_count > 0
         
         # Check if state-specific prompt exists
-        prompt_path = os.path.join("../data/Prompts", f"{code}_Prompt.txt")
+        prompt_path = os.path.join(PROJECT_ROOT, "data", "Prompts", f"{code}_Prompt.txt")
         has_prompt = os.path.exists(prompt_path)
         
         # Build status string
@@ -888,8 +891,8 @@ def setup_state_configuration(state_code):
     os.makedirs(state_input_folder, exist_ok=True)
     os.makedirs(state_output_folder, exist_ok=True)
     
-    # Examples will be loaded using state_code: ../data/Examples/{state_code}
-    examples_folder = os.path.join("../data/Examples", state_code)
+    # Examples will be loaded using state_code
+    examples_folder = os.path.join(PROJECT_ROOT, "data", "Examples", state_code)
     
     logging.info(f"State-specific folders:")
     logging.info(f"  Input: {state_input_folder}")
@@ -927,7 +930,7 @@ def main():
         examples = load_example_pairs(selected_state)
         
         if examples:
-            examples_folder = os.path.join("../data/Examples", selected_state)
+            examples_folder = os.path.join(PROJECT_ROOT, "data", "Examples", selected_state)
             logging.info(f"Loaded {len(examples)} example pair(s) from {examples_folder}")
             for i, (_, _, filename) in enumerate(examples, 1):
                 logging.info(f"  Example {i}: {filename}")

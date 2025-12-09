@@ -24,43 +24,53 @@ from session_manager import get_session_manager
 # Configure Streamlit page
 st.set_page_config(
     page_title="Pending Legislation Processor",
-    page_icon="📄",
+    page_icon="🤖",
     layout="centered",
     initial_sidebar_state="collapsed"
 )
 
-# Initialize session state with SessionManager
-if 'session_id' not in st.session_state:
-    session_mgr = get_session_manager()
-    st.session_state.session_id = session_mgr.create_session()
-    st.session_state.session_manager = session_mgr
+# Initialize session state with SessionManager with error handling
+try:
+    if 'session_id' not in st.session_state:
+        session_mgr = get_session_manager()
+        st.session_state.session_id = session_mgr.create_session()
+        st.session_state.session_manager = session_mgr
 
-if 'selected_state' not in st.session_state:
-    st.session_state.selected_state = "FL"
-if 'uploaded_file' not in st.session_state:
-    st.session_state.uploaded_file = None
-if 'processing' not in st.session_state:
-    st.session_state.processing = False
-if 'current_step' not in st.session_state:
-    st.session_state.current_step = 0
-if 'step_status' not in st.session_state:
-    st.session_state.step_status = {}
-if 'processed_file_path' not in st.session_state:
-    st.session_state.processed_file_path = None
-if 'client' not in st.session_state:
-    st.session_state.client = None
-if 'temp_pdf_path' not in st.session_state:
-    st.session_state.temp_pdf_path = None
-if 'processing_time' not in st.session_state:
-    st.session_state.processing_time = None
+    if 'selected_state' not in st.session_state:
+        st.session_state.selected_state = "FL"
+    if 'uploaded_file' not in st.session_state:
+        st.session_state.uploaded_file = None
+    if 'processing' not in st.session_state:
+        st.session_state.processing = False
+    if 'current_step' not in st.session_state:
+        st.session_state.current_step = 0
+    if 'step_status' not in st.session_state:
+        st.session_state.step_status = {}
+    if 'processed_file_path' not in st.session_state:
+        st.session_state.processed_file_path = None
+    if 'client' not in st.session_state:
+        st.session_state.client = None
+    if 'temp_pdf_path' not in st.session_state:
+        st.session_state.temp_pdf_path = None
+    if 'processing_time' not in st.session_state:
+        st.session_state.processing_time = None
 
-# Get session folders
-session_mgr = st.session_state.session_manager
-session_folders = session_mgr.get_session_folders(st.session_state.session_id)
+    # Get session folders
+    session_mgr = st.session_state.session_manager
+    session_folders = session_mgr.get_session_folders(st.session_state.session_id)
 
-# Setup basic logging with session-specific folder
-LOG_FOLDER = session_folders['logs_folder']
-os.makedirs(LOG_FOLDER, exist_ok=True)
+    # Setup basic logging with session-specific folder
+    LOG_FOLDER = session_folders['logs_folder']
+    os.makedirs(LOG_FOLDER, exist_ok=True)
+    
+except Exception as e:
+    st.error(f"❌ **Session Initialization Failed**")
+    st.error(f"Error: {str(e)}")
+    st.code(f"Type: {type(e).__name__}\nDetails: {str(e)}")
+    import traceback
+    with st.expander("Full Error Trace"):
+        st.code(traceback.format_exc())
+    st.stop()
 
 def setup_simple_logging():
     """Setup simple logging for the app with session-specific folder"""
@@ -297,17 +307,33 @@ def show_simple_ui():
             st.metric("Processing", stats['processing_sessions'])
             
         if st.button("🆕 New Session", help="Start fresh session"):
+            # Get old session ID before creating new one
+            old_session_id = st.session_state.session_id
+            
+            # Delete old session
+            try:
+                st.session_state.session_manager.delete_session(old_session_id)
+                logging.info(f"Deleted old session: {old_session_id}")
+            except Exception as e:
+                logging.warning(f"Could not delete old session {old_session_id}: {e}")
+            
             # Create new session
             new_session_id = st.session_state.session_manager.create_session()
-            # Cleanup old session if needed
-            old_session_id = st.session_state.session_id
             st.session_state.session_id = new_session_id
-            # Reset all session state
+            
+            # Reset all session state variables
+            st.session_state.selected_state = "FL"
+            st.session_state.uploaded_file = None
             st.session_state.processing = False
             st.session_state.current_step = 0
             st.session_state.step_status = {}
             st.session_state.processed_file_path = None
+            st.session_state.client = None
             st.session_state.temp_pdf_path = None
+            st.session_state.processing_time = None
+            st.session_state.last_uploaded_file_id = None  # Reset upload tracking
+            
+            st.success(f"✅ New session created: {new_session_id[:8]}...")
             st.rerun()
     
     # State selection
@@ -326,28 +352,60 @@ def show_simple_ui():
     # File upload
     st.header("📁 Step 2: Upload PDF File")
     
+    # Display file size limit warning
+    st.info("📊 **Maximum file size: 500 MB**")
+    
     uploaded_file = st.file_uploader(
         "Choose a PDF file to process",
         type=['pdf'],
         accept_multiple_files=False,
-        key="pdf_uploader"
+        key="pdf_uploader",
+        help="Upload a PDF file (max 500 MB)"
     )
     
     if uploaded_file is not None:
-        # Upload file using session manager
-        session_mgr = st.session_state.session_manager
-        temp_path = session_mgr.upload_file(
-            st.session_state.session_id, 
-            uploaded_file, 
-            st.session_state.selected_state
-        )
+        # Check file size (500 MB limit)
+        MAX_FILE_SIZE = 500 * 1024 * 1024  # 500 MB in bytes
         
-        if temp_path:
-            st.session_state.temp_pdf_path = temp_path
-            st.success(f"✅ Uploaded: {uploaded_file.name} ({format_file_size(uploaded_file.size)})")
+        if uploaded_file.size > MAX_FILE_SIZE:
+            st.error(f"❌ **File too large!** ({format_file_size(uploaded_file.size)})")
+            st.error(f"Maximum allowed size is {format_file_size(MAX_FILE_SIZE)}")
+            st.stop()
+        
+        # Check if this is a new file (prevent re-uploading on every render)
+        current_file_id = f"{uploaded_file.name}_{uploaded_file.size}"
+        
+        if 'last_uploaded_file_id' not in st.session_state:
+            st.session_state.last_uploaded_file_id = None
+        
+        if st.session_state.last_uploaded_file_id != current_file_id:
+            try:
+                # Upload file using session manager
+                session_mgr = st.session_state.session_manager
+                
+                with st.spinner(f"Uploading {uploaded_file.name}..."):
+                    temp_path = session_mgr.upload_file(
+                        st.session_state.session_id, 
+                        uploaded_file, 
+                        st.session_state.selected_state
+                    )
+                
+                if temp_path:
+                    st.session_state.temp_pdf_path = temp_path
+                    st.session_state.last_uploaded_file_id = current_file_id
+                    st.success(f"✅ Uploaded: {uploaded_file.name} ({format_file_size(uploaded_file.size)})")
+                else:
+                    st.error("❌ Failed to upload file - check logs for details")
+            except Exception as e:
+                st.error(f"❌ **File Upload Failed**")
+                st.error(f"Error: {str(e)}")
+                import traceback
+                with st.expander("Error Details"):
+                    st.code(traceback.format_exc())
         else:
-            st.error("❌ Failed to upload file")
-            return
+            # File already uploaded
+            if st.session_state.temp_pdf_path:
+                st.success(f"✅ File ready: {uploaded_file.name} ({format_file_size(uploaded_file.size)})")
         
         # Processing section
         st.header("🔄 Step 3: Process File")

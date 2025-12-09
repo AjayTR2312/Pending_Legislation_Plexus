@@ -36,3 +36,7 @@ Thumbs.db
 # Environment variables
 .env
 .env.local
+
+# Build and deployment documentation (internal)
+BUGFIX_403_UPLOAD_ERROR.md
+BUILD_DEPLOYMENT_COMMANDS.md

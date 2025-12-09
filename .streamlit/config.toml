@@ -1,0 +1,27 @@
+[server]
+# Increase max upload size to 1000MB to ensure no size issues
+maxUploadSize = 1000
+
+# Increase max message size for large file transfers
+maxMessageSize = 1000
+
+# Disable CORS and XSRF for compatibility
+enableCORS = false
+enableXsrfProtection = false
+
+# WebSocket configuration for stable connections
+enableWebsocketCompression = false
+
+# File watcher
+fileWatcherType = "none"
+
+# Headless mode
+headless = true
+
+[browser]
+# Disable gather usage stats to prevent external connections
+gatherUsageStats = false
+serverAddress = "0.0.0.0"
+
+[theme]
+base = "light"
