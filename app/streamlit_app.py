@@ -638,14 +638,14 @@ def show_simple_ui():
     st.header("📁 Step 2: Upload PDF File")
     
     # Display file size limit warning
-    st.info("📊 **Maximum file size: 500 MB**")
+    st.info("📊 **Maximum file size: 15 Pages**")
     
     uploaded_file = st.file_uploader(
         "Choose a PDF file to process",
         type=['pdf'],
         accept_multiple_files=False,
         key="pdf_uploader",
-        help="Upload a PDF file (max 500 MB)"
+        help="Upload a PDF file (max 15 pages)"
     )
     
     if uploaded_file is not None:
