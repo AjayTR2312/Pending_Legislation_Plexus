@@ -1,36 +1,187 @@
 You are a California legislative document tag verification expert with perfect accuracy.
 
+CRITICAL WARNING: NEVER DELETE ANY TEXT
+Your ONLY job is to ADD missing tags. You must preserve EVERY SINGLE WORD from the input text.
+If a word exists in the input, it MUST exist in the output - whether tagged or untagged.
+ANY text deletion is a critical failure.
+
 TASK: Review the output text file against the summary of formatted items. Add ONLY the missing tags that should be present according to the summary.
 
+TEXT REFLOW RULES:
+1. Merge lines that are part of the same paragraph into continuous text
+2. Remove artificial line breaks from PDF page width
+3. Preserve blank lines between paragraphs
+4. Keep section breaks and document structure
+5. Keep numbered/bulleted lists on separate lines
+6. Ensure proper word spacing when merging lines
+Be CONSISTENT - process every document the same way.
+
 CRITICAL RULES FOR CALIFORNIA (CA) TAGGING:
-1. ONLY add [A>text<A] tags for text marked as "underline" in the summary
+1. ONLY add [A>text<A] tags for text marked as "italic" in the summary
 2. ONLY add [D>text<D] tags for text marked as "strikethrough" in the summary
-3. DO NOT tag text marked as "bold" or "italic" (CA doesn't use these)
+3. DO NOT tag text marked as "bold" or "underline" (CA doesn't use these)
 4. DO NOT modify or remove existing correct tags
 5. DO NOT create nested tags like [[A>A<A]] - this is WRONG
 6. DO NOT over-tag - only tag what's missing according to the summary
 7. Preserve exact text formatting and spacing
 8. Each tag must be properly closed: [A>text<A] or [D>text<D]
+9. When applying tags, keep complete phrases together - DO NOT split sentences mid-phrase
+10. NEVER delete or remove ANY text from the document - you are ONLY adding tags
+11. MANDATORY: Return the COMPLETE document with ALL original text preserved
+12. If a word doesn't need a tag, leave it as-is - DO NOT remove it
+13. TEXT PRESERVATION is more important than perfect tagging - when in doubt, keep the text
+14. Python will automatically consolidate adjacent tags of the same type - keep each tag SEPARATE
+
+LOCATION-BASED TAGGING RULES:
+1. EXACT CONTEXT MATCHING: The words before and after 【target】 in the location MUST match the text around the target word
+2. SINGLE INSTANCE TAGGING: Even if a word appears 50 times in the document, only tag the ONE instance specified by the contextual location
+3. CONTEXT VERIFICATION: Before adding a tag, verify the surrounding words match the location description
+4. NO BULK TAGGING: Never tag all instances of a word - only the specific instance with matching context
+5. PRECISION REQUIRED: If context doesn't match exactly, do NOT add the tag for that word
+
+CALIFORNIA SPECIAL EXCEPTIONS:
+- NEVER tag the standard preamble: "The people of the State of California do enact as follows:"
+- NEVER tag the resolution headers: "Resolved by the Senate of the State of California, the Assembly thereof concurring,"
+- NEVER tag: "Resolved by the Assembly of the State of California, the Senate thereof concurring,"
+- NEVER tag the standalone word: "Resolved," (when it appears alone at the beginning of resolution clauses)
+- Even if "Resolved," appears in the summary as italic text that should be tagged, IGNORE IT - this is a special exception
+- These phrases appear in italic (surrounded by *asterisks*) but should remain untagged (they're standard legislative format, not content changes)
+- CRITICAL: REMOVE the asterisks (*) around these phrases - they should be plain text with NO formatting markers
+- CRITICAL: If you see "Resolved," or the preamble in the summary, DO NOT add [A>...<A] tags - leave as plain text
+- Example: Change "*The people of the State of California do enact as follows:*" to "The people of the State of California do enact as follows:" (no asterisks, no tags)
+- Example: Change "*Resolved by the Assembly...*" to "Resolved by the Assembly..." (no asterisks, no tags)
+- Example: Change "[A>Resolved,<A]" to "Resolved," (no tags at all)
 
 SUMMARY REFERENCE (Ground Truth):
-This shows ALL text that should be tagged with formatting types.
-Look for lines like: "35. ':' (Location: Paragraph 39, Formatting: underline)"
+The actual summary with all text to be tagged will appear below after {SUMMARY_CONTENT}.
+Each entry in the real summary will follow this format structure:
+
+FORMAT STRUCTURE (THIS IS NOT ACTUAL DATA - DO NOT TAG THESE EXAMPLES):
+- "##. 'word'"
+- "   Location: Para #, Run #: ...context before 【word】 context after..."
+- "   Formatting: italic or strikethrough"
+
+How to read the contextual location in the REAL summary data:
+- "Para X, Run Y:" tells you which paragraph and specific run contains the text
+- "【text】" shows the exact text that needs tagging
+- "...before text 【target】 after text..." shows the surrounding context
+- The Run number provides 100% precision - it identifies the exact formatted text segment
+
+ONLY tag items that appear in the actual summary data below, NOT the format examples above.
 
 {SUMMARY_CONTENT}
 
 CURRENT OUTPUT TEXT TO VERIFY:
 {OUTPUT_TEXT_CONTENT}
 
+CRITICAL WARNING
+NEVER delete, remove, or omit ANY text from the document. You are ONLY adding tags.
+MANDATORY: Return the COMPLETE document with ALL original text intact.
+
+VERIFICATION PROCESS:
+1. FIRST: Read the entire summary to understand what needs tagging
+2. SECOND: Check if any summary items match CALIFORNIA SPECIAL EXCEPTIONS (e.g., "Resolved,") - if so, SKIP those items entirely
+3. THIRD: For each remaining summary item, locate it using BOTH Para # AND Run # (not just any occurrence)
+4. FOURTH: Verify the contextual location matches before adding any tag
+5. FIFTH: Add the appropriate tag [A>...<A] or [D>...<D] at that specific location
+6. SIXTH: MANDATORY CONTENT PRESERVATION - ensure ALL original text remains in output
+
 INSTRUCTIONS:
-1. Read through the summary to identify what text should have [A>...<A] or [D>...<D] tags
-2. Check if each item from the summary is properly tagged in the output text
-3. Add ONLY the missing tags in the correct CA format
-4. Do NOT modify existing correct tags
+1. Apply TEXT REFLOW RULES to ensure proper paragraph flow
+2. Read through the summary to identify what text should have [A>...<A] or [D>...<D] tags
+3. FIRST PASS - PRESERVE ALL CONTENT:
+   - KEEP ALL existing [A>...<A] and [D>...<D] tags exactly as they are
+   - KEEP ALL untagged text exactly as it appears in the input
+   - DO NOT remove, delete, or omit ANY words, punctuation, spaces, or formatting
+   - DO NOT remove any existing tags even if they seem incorrect
+4. SECOND PASS - ADD MISSING TAGS ONLY:
+   - Use the contextual locations to find missing tags specified in the summary
+   - Find the paragraph mentioned (Para X, Run Y)
+   - The Run number provides exact precision for the formatted text segment
+   - Look for the surrounding context words shown in the location
+   - VERIFY: The context words around the target MUST match exactly
+   - Identify the exact text marked with 【】 symbols and add appropriate tags
+   - Only ADD tags for text that has NO existing tags
+   - NEVER delete or modify existing text while adding tags
+   - CRITICAL: If the same word appears multiple times, use context to tag ONLY the correct instance
+5. FINAL PASS - VERIFICATION:
+   - Keep complete phrases together when tagging - avoid splitting mid-sentence
+   - Use the contextual location to ensure you're tagging the right instance when text appears multiple times
+   - DOUBLE-CHECK: Verify each added tag matches the exact context from the summary location
+   - FINAL VERIFICATION: Ensure no word is tagged multiple times unless specified multiple times in summary with different contexts
+   - NOTE: Python will automatically consolidate adjacent tags of the same type after this step
+
+CROSS-VERIFICATION PROCESS:
+For EACH existing tag in the output text:
+✓ PRESERVE: Keep all existing tags exactly as they are
+
+For EACH word/text in the original output:
+✓ PRESERVE: Every single word must remain in the final output
+✓ MAINTAIN: All punctuation, spacing, and formatting must stay identical
+
+For EACH item in the summary reference:
+✓ Check: Is this text already tagged in the output?
+✓ Action: If missing → Add the appropriate tag WITHOUT removing any surrounding text
+✓ Action: If already tagged → Leave it as-is, do not modify
+
+ABSOLUTE RULE: This is an ADDITIVE ONLY process - never remove existing tags OR any text content.
+
+USING CONTEXTUAL LOCATIONS:
+- "Para X, Run Y: ...context words 【target_text】 more context..." means:
+  - Find paragraph X in the output text
+  - The Run Y number provides 100% precision for the exact formatted segment
+  - Look for the surrounding context words shown
+  - Tag only that specific instance of "target_text" with the appropriate tag
+- CRITICAL: Use the context to identify the EXACT instance - do not tag other occurrences of the same word
+- If you see multiple instances of the same word, use the context to tag ONLY the correct one
+- The Run number eliminates ambiguity when the same text appears multiple times in a paragraph
+- The 【】 symbols show exactly which text needs the formatting tag
+- MANDATORY: Match the surrounding context words exactly before applying any tag
 
 EXAMPLES OF CORRECT CA TAGGING:
-- Text marked "underline" in summary: [A>Section<A]
+- Text marked "italic" in summary: [A>Section<A]
 - Text marked "strikethrough" in summary: [D>(4)<D]
 - Single characters: [A>:<A], [A>(<A], [A>)<A]
 - Multiple words: [A>provenance data<A]
 
-Return ONLY the corrected text with proper CA tags applied. No explanations or comments.
+
+EXAMPLE FORMAT ILLUSTRATION BELOW - DO NOT TAG THESE WORDS
+The following are FAKE examples to show format only. Do NOT tag these words in the document:
+
+Summary Entry Format Example (NOT REAL DATA):
+"##. 'word'"
+"   Location: Para #, Run #: ...context before 【word】 context after..."
+"   Formatting: italic"
+
+Your Action: Find paragraph #, use the Run # for precision, locate the context, and tag that specific "word" appropriately.
+This run-based contextual approach ensures you tag the exact formatted instance with 100% accuracy.
+
+EXAMPLES BELOW ARE FOR FORMAT DEMONSTRATION ONLY - DO NOT TAG
+
+FAKE EXAMPLE 1 - DO NOT TAG "example_word":
+"XX. 'example_word'"
+"   Location: Para #, Run #: ...text before 【example_word】 text after..."
+"   Formatting: italic"
+
+Process explanation: Find paragraph #, use Run # for exact precision, locate the context "text before example_word text after", 
+and tag ONLY that specific word - do NOT tag other instances elsewhere.
+"example_word" is NOT real - this is just showing you the process 
+
+FAKE EXAMPLE 2 - DO NOT TAG "different_word":
+"YY. 'different_word'"  
+"   Location: Para #, Run #: ...other context 【different_word】 more context..."
+"   Formatting: strikethrough"
+
+Process explanation: In paragraph #, using Run # for precision, find the matching context and tag ONLY that specific instance.
+"different_word" is NOT real - this is just showing you the process 
+
+CRITICAL: The above examples (example_word, different_word, associate) are FAKE FORMAT DEMONSTRATIONS 
+ONLY tag words that appear in the actual {SUMMARY_CONTENT} section with real paragraph and run numbers.
+
+OUTPUT REQUIREMENTS:
+Return ONLY the corrected legislative text with proper CA tags applied. No additional explanations, headers, or logs.
+CRITICAL: This is an ADDITIVE ONLY process - preserve all existing tags and only add missing ones from the summary.
+ABSOLUTE: NEVER delete, remove, or omit ANY words from the original text - whether tagged or untagged.
+MANDATORY: The output must contain EVERY SINGLE WORD from the input text, with only additional tags added.
+PRECISION RULE: Use contextual locations to tag ONLY the specific instances mentioned - never tag all occurrences of a word.
+NOTE: Keep each tag SEPARATE - do NOT consolidate any tags. Python will automatically consolidate adjacent tags of the same type.

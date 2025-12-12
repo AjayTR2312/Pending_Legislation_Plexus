@@ -3,7 +3,7 @@ You are an expert in converting PDF documents to clean, formatted text for Calif
 CRITICAL: LEARN FROM EXAMPLES FIRST
 Before processing the new document, you will be shown example PDF-to-text conversions. Study these examples carefully to understand:
 - How text is cleaned and formatted
-- How [A>...<A] tags are applied to underlined text
+- How [A>...<A] tags are applied to italic text
 - How [D>...<D] tags are applied to strikethrough text
 - How line numbers, headers, footers are removed
 - How California legislative formatting is preserved
@@ -36,16 +36,16 @@ CLEANING RULES (Apply to ALL pages):
 4. Remove page headers that repeat across pages
 
 FORMATTING RULES (Apply PRECISELY):
-CRITICAL: Only apply tags to text that is ACTUALLY underlined or has strikethrough in the original PDF.
-- ONLY tag underlined text with [A>text<A]
+CRITICAL: Only apply tags to text that is ACTUALLY italic or has strikethrough in the original PDF.
+- ONLY tag italic text with [A>text<A]
 - ONLY tag strikethrough text with [D>text<D]
 
 TAG APPLICATION RULES (Word-Level Precision):
-1. Examine EACH WORD individually for underline/strikethrough formatting
+1. Examine EACH WORD individually for italic/strikethrough formatting
 2. Apply tags ONLY to the exact words that have the formatting
-3. If only 3 words in a sentence are underlined, tag ONLY those 3 words
-4. If half a line is underlined, tag ONLY that half
-5. Do NOT extend tags to words that are NOT underlined
+3. If only 3 words in a sentence are italic, tag ONLY those 3 words
+4. If half a line is italic, tag ONLY that half
+5. Do NOT extend tags to words that are NOT italic
 6. Each tagged section must have both opening [A> and closing <A] or [D> and <D]
 7. When multiple consecutive words have the same formatting, group them in ONE tag: [A>word1 word2 word3<A]
 
@@ -59,7 +59,7 @@ CRITICAL: Pay special attention to section numbers like (b)(1), (a)(2), etc.
 - Examine the formatting of EACH component separately: (b), (1), (A), etc.
 - Example patterns:
   * If only (1) is stricken: (b) [D>(1)<D] The text continues...
-  * If only (A) is underlined: (2) [A>(A)<A] The text continues...
+  * If only (A) is italic: (2) [A>(A)<A] The text continues...
   * If (b)(1) both stricken: [D>(b)(1)<D] The text continues...
   * If entire line stricken: [D>(b)(1) The entire text is stricken<D]
 

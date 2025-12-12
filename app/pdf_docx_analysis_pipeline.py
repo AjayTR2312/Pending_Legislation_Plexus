@@ -142,11 +142,169 @@ class PDFToDocxAnalysisPipeline:
             print(f"❌ Error in PDF conversion: {e}")
             return False
 
+    def get_accurate_contextual_location(self, target_text, paragraph_obj, paragraph_index, target_run_index, context_words=20):
+        """
+        Get contextual location using run-based positioning for 100% accuracy.
+        Uses the specific run index within paragraph to pinpoint exact location.
+        """
+        try:
+            clean_target = target_text.strip()
+            
+            # Build the complete paragraph text by concatenating all runs
+            # and track the position of each run for precise location mapping
+            paragraph_text = ""
+            run_positions = []  # Track where each run starts in the full text
+            
+            for run_idx, run in enumerate(paragraph_obj.runs):
+                run_start_pos = len(paragraph_text)
+                run_text = run.text
+                run_positions.append({
+                    'run_idx': run_idx,
+                    'start_pos': run_start_pos,
+                    'end_pos': run_start_pos + len(run_text),
+                    'text': run_text
+                })
+                paragraph_text += run_text
+            
+            # Clean up paragraph text
+            clean_paragraph = ' '.join(paragraph_text.split())  # Normalize whitespace
+            
+            # Find the target run's position info
+            target_run_info = None
+            for run_info in run_positions:
+                if run_info['run_idx'] == target_run_index - 1:  # Convert to 0-based index
+                    target_run_info = run_info
+                    break
+            
+            if not target_run_info:
+                return f"Para {paragraph_index}, Run {target_run_index}: '{clean_target}'"
+            
+            # Get the exact position of the target text within the full paragraph
+            # by using the run's start position as a reference point
+            run_start_in_paragraph = target_run_info['start_pos']
+            
+            # Find where in the run the target text appears
+            run_text = target_run_info['text']
+            target_pos_in_run = run_text.find(clean_target)
+            
+            if target_pos_in_run == -1:
+                # Try case-insensitive search
+                target_pos_in_run = run_text.lower().find(clean_target.lower())
+            
+            if target_pos_in_run == -1:
+                # Fallback - target might span across runs or be partial
+                return f"Para {paragraph_index}, Run {target_run_index}: '{clean_target}'"
+            
+            # Calculate absolute position in the paragraph
+            absolute_target_pos = run_start_in_paragraph + target_pos_in_run
+            
+            # Create context around the target using the full paragraph text
+            # but knowing the EXACT position based on run analysis
+            
+            # Special handling for punctuation and short text that might be attached to words
+            if len(clean_target) <= 3 and not clean_target.isalnum():
+                # For punctuation marks, use character-based positioning instead of word boundaries
+                context_start_char = max(0, absolute_target_pos - 50)  # 50 chars before
+                context_end_char = min(len(clean_paragraph), absolute_target_pos + len(clean_target) + 50)  # 50 chars after
+                
+                before_context = clean_paragraph[context_start_char:absolute_target_pos]
+                after_context = clean_paragraph[absolute_target_pos + len(clean_target):context_end_char]
+                
+                # Trim contexts if they're too long but preserve meaningful content
+                if len(before_context) > 80:
+                    before_context = "..." + before_context[-77:]
+                
+                if len(after_context) > 80:
+                    after_context = after_context[:77] + "..."
+                
+                # Create the contextual location string with run-based precision
+                display_target = clean_target
+                
+                if before_context and after_context:
+                    context_str = f"{before_context}【{display_target}】{after_context}"
+                elif before_context:
+                    context_str = f"{before_context}【{display_target}】"
+                elif after_context:
+                    context_str = f"【{display_target}】{after_context}"
+                else:
+                    context_str = f"【{display_target}】"
+                
+                return f"Para {paragraph_index}, Run {target_run_index}: {context_str}"
+            
+            # For regular words, use word-based positioning
+            words = clean_paragraph.split()
+            
+            # Find word boundaries around our target position
+            word_positions = []
+            current_pos = 0
+            for word in words:
+                word_start = clean_paragraph.find(word, current_pos)
+                if word_start == -1:
+                    break
+                word_positions.append({
+                    'word': word,
+                    'start': word_start,
+                    'end': word_start + len(word)
+                })
+                current_pos = word_start + len(word)
+            
+            # Find which word contains our target start position
+            target_word_idx = -1
+            for i, word_info in enumerate(word_positions):
+                if word_info['start'] <= absolute_target_pos < word_info['end']:
+                    target_word_idx = i
+                    break
+                elif absolute_target_pos >= word_info['end'] and i < len(word_positions) - 1:
+                    if absolute_target_pos < word_positions[i + 1]['start']:
+                        target_word_idx = i
+                        break
+            
+            if target_word_idx == -1:
+                # Fallback to basic context
+                target_word_idx = len(words) // 2
+            
+            # Build context around the target word
+            context_start = max(0, target_word_idx - context_words)
+            context_end = min(len(words), target_word_idx + len(clean_target.split()) + context_words)
+            
+            before_words = words[context_start:target_word_idx]
+            after_words = words[target_word_idx + len(clean_target.split()):context_end]
+            
+            # Create context string
+            before_context = " ".join(before_words)
+            after_context = " ".join(after_words)
+            
+            # Trim contexts if they're too long but preserve meaningful content
+            if len(before_context) > 100:
+                before_context = "..." + before_context[-97:]
+            
+            if len(after_context) > 100:
+                after_context = after_context[:97] + "..."
+            
+            # Create the contextual location string with run-based precision
+            display_target = clean_target if len(clean_target) <= 50 else clean_target[:50] + "..."
+            
+            if before_context and after_context:
+                context_str = f"{before_context}【{display_target}】{after_context}"
+            elif before_context:
+                context_str = f"{before_context}【{display_target}】"
+            elif after_context:
+                context_str = f"【{display_target}】{after_context}"
+            else:
+                context_str = f"【{display_target}】"
+            
+            # Return with precise run-based location for 100% accuracy
+            return f"Para {paragraph_index}, Run {target_run_index}: {context_str}"
+                
+        except Exception as e:
+            print(f"⚠️ Error getting contextual location: {e}")
+            return f"Para {paragraph_index}, Run {target_run_index}: '{target_text[:30]}...'" if len(target_text) > 30 else f"Para {paragraph_index}, Run {target_run_index}: '{target_text}'"
+
     def step2_analyze_docx_formatting(self):
         """
-        Step 2: Analyze DOCX for formatting (strikethrough, bold, italic, underline).
+        Step 2: Analyze DOCX for formatting (strikethrough, bold, italic, underline) with contextual location.
         """
-        print(f"\n📋 STEP 2: Analyzing DOCX formatting...")
+        print(f"\n📋 STEP 2: Analyzing DOCX formatting with contextual location...")
         
         if not self.docx_path or not os.path.exists(self.docx_path):
             print("❌ DOCX file not found. Step 1 must be completed first.")
@@ -157,9 +315,76 @@ class PDFToDocxAnalysisPipeline:
             doc = Document(self.docx_path)
             formatted_items = []
             
-            print(f"📖 Analyzing: {self.docx_path}")
+            # First, extract all text from the document for context searching
+            full_document_text = ""
+            for paragraph in doc.paragraphs:
+                full_document_text += paragraph.text + " "
             
-            # Iterate through paragraphs
+            # Also extract text from tables
+            for table in doc.tables:
+                for row in table.rows:
+                    for cell in row.cells:
+                        for paragraph in cell.paragraphs:
+                            full_document_text += paragraph.text + " "
+            
+            print(f"📖 Analyzing: {self.docx_path}")
+            print(f"📄 Document contains {len(full_document_text.split())} words")
+            
+            # First, process hyperlinks with strikethrough (they need special handling)
+            for para_idx, paragraph in enumerate(doc.paragraphs, 1):
+                # Check for hyperlinks with strikethrough using XML
+                hyperlinks = paragraph._element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}hyperlink')
+                
+                for hyperlink in hyperlinks:
+                    hyperlink_runs = hyperlink.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}r')
+                    
+                    for run_elem in hyperlink_runs:
+                        # Get text
+                        text_elems = run_elem.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t')
+                        text = ''.join([t.text for t in text_elems if t.text])
+                        
+                        if not text.strip():
+                            continue
+                        
+                        # Check for strikethrough
+                        rpr = run_elem.find('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}rPr')
+                        has_strike = False
+                        
+                        if rpr is not None:
+                            strike_elem = rpr.find('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}strike')
+                            dstrike_elem = rpr.find('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}dstrike')
+                            
+                            if strike_elem is not None or dstrike_elem is not None:
+                                has_strike = True
+                                strike_type = 'double' if dstrike_elem is not None else 'single'
+                                
+                                # This is a hyperlink with strikethrough - add it!
+                                formatting_types = [f"strikethrough ({strike_type})"]
+                                
+                                # Get run index - need to count which run this is in the paragraph
+                                all_runs = paragraph._element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}r')
+                                run_idx = all_runs.index(run_elem) if run_elem in all_runs else 0
+                                
+                                # Get contextual location
+                                contextual_location = self.get_accurate_contextual_location(
+                                    text, paragraph, para_idx, run_idx + 1
+                                )
+                                
+                                formatted_item = {
+                                    'text': text,
+                                    'contextual_location': contextual_location,
+                                    'paragraph': para_idx,
+                                    'run': run_idx + 1,
+                                    'formatting_types': formatting_types,
+                                    'is_bold': False,
+                                    'is_italic': False,
+                                    'is_underline': False,
+                                    'is_strikethrough': True,
+                                    'is_hyperlink': True
+                                }
+                                formatted_items.append(formatted_item)
+            
+            # Then process regular formatted text (non-hyperlink formatting)
             for para_idx, paragraph in enumerate(doc.paragraphs, 1):
                 if paragraph.text.strip():  # Skip empty paragraphs
                     # Check each run in the paragraph
@@ -168,8 +393,24 @@ class PDFToDocxAnalysisPipeline:
                             # Check for different formatting types
                             formatting_types = []
                             
+                            # Check if this run is part of a hyperlink (skip if yes, already processed)
+                            is_hyperlink = False
+                            
+                            # Check by walking up the XML tree
+                            parent = run.element.getparent()
+                            while parent is not None:
+                                if 'hyperlink' in parent.tag.lower():
+                                    is_hyperlink = True
+                                    break
+                                parent = parent.getparent()
+                            
+                            # Skip if it's a hyperlink (already processed above)
+                            if is_hyperlink:
+                                continue
+                            
                             # Check strikethrough
-                            if run.font.strike or run.font.double_strike:
+                            has_strikethrough = run.font.strike or run.font.double_strike
+                            if has_strikethrough:
                                 strike_type = 'double' if run.font.double_strike else 'single'
                                 formatting_types.append(f"strikethrough ({strike_type})")
                             
@@ -187,32 +428,100 @@ class PDFToDocxAnalysisPipeline:
                             
                             # If any formatting is found, add to results
                             if formatting_types:
+                                # Get accurate contextual location using run-based positioning for 100% accuracy
+                                contextual_location = self.get_accurate_contextual_location(
+                                    run.text, paragraph, para_idx, run_idx + 1
+                                )
+                                
                                 formatted_item = {
                                     'text': run.text,
+                                    'contextual_location': contextual_location,
                                     'paragraph': para_idx,
                                     'run': run_idx + 1,
                                     'formatting_types': formatting_types,
                                     'is_bold': bool(run.font.bold),
                                     'is_italic': bool(run.font.italic),
                                     'is_underline': bool(run.font.underline),
-                                    'paragraph_text': paragraph.text[:100] + "..." if len(paragraph.text) > 100 else paragraph.text
+                                    'is_strikethrough': bool(run.font.strike or run.font.double_strike)
                                 }
                                 formatted_items.append(formatted_item)
             
-            # Check tables for formatted text
+            # Check tables for formatted text (including hyperlinks with strikethrough)
             table_count = 0
             for table in doc.tables:
                 table_count += 1
                 for row_idx, row in enumerate(table.rows):
                     for cell_idx, cell in enumerate(row.cells):
+                        # First, process hyperlinks with strikethrough in table cells
+                        for para_idx, paragraph in enumerate(cell.paragraphs):
+                            hyperlinks = paragraph._element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}hyperlink')
+                            
+                            for hyperlink in hyperlinks:
+                                hyperlink_runs = hyperlink.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}r')
+                                
+                                for run_elem in hyperlink_runs:
+                                    text_elems = run_elem.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t')
+                                    text = ''.join([t.text for t in text_elems if t.text])
+                                    
+                                    if not text.strip():
+                                        continue
+                                    
+                                    rpr = run_elem.find('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}rPr')
+                                    if rpr is not None:
+                                        strike_elem = rpr.find('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}strike')
+                                        dstrike_elem = rpr.find('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}dstrike')
+                                        
+                                        if strike_elem is not None or dstrike_elem is not None:
+                                            strike_type = 'double' if dstrike_elem is not None else 'single'
+                                            formatting_types = [f"strikethrough ({strike_type})"]
+                                            
+                                            all_runs = paragraph._element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}r')
+                                            run_idx = all_runs.index(run_elem) if run_elem in all_runs else 0
+                                            
+                                            base_location = self.get_accurate_contextual_location(
+                                                text, paragraph, para_idx + 1, run_idx + 1
+                                            )
+                                            
+                                            table_context = f"Table {table_count}, Row {row_idx + 1}, Cell {cell_idx + 1}"
+                                            enhanced_location = f"{table_context}: {base_location}"
+                                            
+                                            formatted_item = {
+                                                'text': text,
+                                                'contextual_location': enhanced_location,
+                                                'table_location': f'Table {table_count}, Row {row_idx + 1}, Cell {cell_idx + 1}',
+                                                'paragraph': para_idx + 1,
+                                                'run': run_idx + 1,
+                                                'formatting_types': formatting_types,
+                                                'is_bold': False,
+                                                'is_italic': False,
+                                                'is_underline': False,
+                                                'is_strikethrough': True,
+                                                'is_hyperlink': True
+                                            }
+                                            formatted_items.append(formatted_item)
+                        
+                        # Then process regular formatted text in table cells
                         for para_idx, paragraph in enumerate(cell.paragraphs):
                             for run_idx, run in enumerate(paragraph.runs):
                                 if run.text.strip():
+                                    # Check if this run is part of a hyperlink (skip if yes)
+                                    is_hyperlink = False
+                                    parent = run.element.getparent()
+                                    while parent is not None:
+                                        if 'hyperlink' in parent.tag.lower():
+                                            is_hyperlink = True
+                                            break
+                                        parent = parent.getparent()
+                                    
+                                    if is_hyperlink:
+                                        continue
+                                    
                                     # Check for different formatting types in tables
                                     formatting_types = []
                                     
                                     # Check strikethrough
-                                    if run.font.strike or run.font.double_strike:
+                                    has_strikethrough = run.font.strike or run.font.double_strike
+                                    if has_strikethrough:
                                         strike_type = 'double' if run.font.double_strike else 'single'
                                         formatting_types.append(f"strikethrough ({strike_type})")
                                     
@@ -230,16 +539,26 @@ class PDFToDocxAnalysisPipeline:
                                     
                                     # If any formatting is found, add to results
                                     if formatting_types:
+                                        # Get accurate contextual location for table text using run-based positioning
+                                        base_location = self.get_accurate_contextual_location(
+                                            run.text, paragraph, para_idx + 1, run_idx + 1
+                                        )
+                                        
+                                        # Enhance with table info
+                                        table_context = f"Table {table_count}, Row {row_idx + 1}, Cell {cell_idx + 1}"
+                                        enhanced_location = f"{table_context}: {base_location}"
+                                        
                                         formatted_item = {
                                             'text': run.text,
-                                            'location': f'Table {table_count}, Row {row_idx + 1}, Cell {cell_idx + 1}',
+                                            'contextual_location': enhanced_location,
+                                            'table_location': f'Table {table_count}, Row {row_idx + 1}, Cell {cell_idx + 1}',
                                             'paragraph': para_idx + 1,
                                             'run': run_idx + 1,
                                             'formatting_types': formatting_types,
                                             'is_bold': bool(run.font.bold),
                                             'is_italic': bool(run.font.italic),
                                             'is_underline': bool(run.font.underline),
-                                            'paragraph_text': paragraph.text[:100] + "..." if len(paragraph.text) > 100 else paragraph.text
+                                            'is_strikethrough': bool(run.font.strike or run.font.double_strike)
                                         }
                                         formatted_items.append(formatted_item)
             
@@ -278,12 +597,14 @@ class PDFToDocxAnalysisPipeline:
                 f.write("-" * 20 + "\n")
                 f.write(f"Total formatted text items found: {len(formatted_items)}\n\n")
                 
-                # Add All formatted text section
-                f.write("All formatted text:\n")
+                # Add All formatted text section with contextual locations
+                f.write("All formatted text with contextual locations:\n")
                 for i, item in enumerate(formatted_items, 1):
-                    location = item.get('location', f"Paragraph {item['paragraph']}")
+                    contextual_location = item.get('contextual_location', 'Location unknown')
                     formatting = ', '.join(item['formatting_types'])
-                    f.write(f"{i}. '{item['text']}' (Location: {location}, Formatting: {formatting})\n")
+                    f.write(f"{i}. '{item['text']}' \n")
+                    f.write(f"   Location: {contextual_location}\n")
+                    f.write(f"   Formatting: {formatting}\n\n")
                 f.write("\n")
                 
                 # Count by type
@@ -340,8 +661,8 @@ class PDFToDocxAnalysisPipeline:
                 para.add_run(f"{i}. ").bold = True
                 para.add_run(f"'{item['text']}' ")
                 para.add_run(f"({', '.join(item['formatting_types'])}) ")
-                location = item.get('location', f"Paragraph {item['paragraph']}")
-                para.add_run(f"- {location}")
+                contextual_location = item.get('contextual_location', 'Location unknown')
+                para.add_run(f"- {contextual_location}")
             
             # Save tagged document
             new_doc.save(tagged_docx_path)
@@ -357,6 +678,28 @@ class PDFToDocxAnalysisPipeline:
         """
         Execute the complete pipeline from PDF to final analysis.
         """
+        # Skip the entire pipeline for DC and IN states
+        if self.state_code in ["DC", "IN"]:
+            skip_reason = "don't contain formatting to analyze" if self.state_code == "DC" else "analysis not required"
+            print(f"⏭️  SKIPPING DOCX ANALYSIS PIPELINE FOR {self.state_code}")
+            print("=" * 60)
+            print(f"🔍 {self.state_code} documents {skip_reason}")
+            print("📝 No DOCX conversion or summary generation needed")
+            print("=" * 60)
+            
+            # Return a mock successful result for DC/IN
+            skip_reason_detail = "does not require formatting analysis" if self.state_code == "DC" else "DOCX analysis not required"
+            results = {
+                'success': True,
+                'input_pdf': self.input_pdf_path,
+                'docx_path': None,
+                'summary_path': None,
+                'formatted_items_count': 0,
+                'errors': [],
+                'skipped_reason': f'{self.state_code} state {skip_reason_detail}'
+            }
+            return results
+        
         print("🔄 STARTING COMPLETE PDF-TO-DOCX ANALYSIS PIPELINE")
         print("=" * 60)
         
@@ -384,15 +727,21 @@ class PDFToDocxAnalysisPipeline:
         
         results['formatted_items_count'] = len(formatted_items)
         
-        # Step 3: Generate summary
-        summary_path = self.step3_generate_summary(formatted_items)
-        if summary_path:
-            results['summary_path'] = summary_path
+        # Step 3: Generate summary (only if there are formatted items)
+        if len(formatted_items) > 0:
+            summary_path = self.step3_generate_summary(formatted_items)
+            if summary_path:
+                results['summary_path'] = summary_path
+            else:
+                results['errors'].append("Summary generation failed")
         else:
-            results['errors'].append("Summary generation failed")
+            # No formatted items - this is OK, not an error
+            print("ℹ️ No formatted items found - no summary needed")
+            results['summary_path'] = None
         
-        # Mark as successful if we got through the core steps
-        if results['docx_path'] and results['summary_path']:
+        # Mark as successful if we got through DOCX conversion
+        # Summary is optional (only needed if there are formatted items)
+        if results['docx_path']:
             results['success'] = True
         
         return results

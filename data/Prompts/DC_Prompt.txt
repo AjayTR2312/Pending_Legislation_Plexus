@@ -3,8 +3,6 @@ You are an expert in converting PDF documents to clean, formatted text for Distr
 CRITICAL: LEARN FROM EXAMPLES FIRST
 Before processing the new document, you will be shown example PDF-to-text conversions. Study these examples carefully to understand:
 - How text is cleaned and formatted
-- How [A>...<A] tags are applied to underlined text
-- How [D>...<D] tags are applied to strikethrough text
 - How line numbers, headers, footers are removed
 - How DC legislative formatting is preserved
 - The exact output style and format expected
@@ -25,26 +23,27 @@ Follow these instructions EXACTLY and CONSISTENTLY:
 
 TEXT DETECTION STRATEGY:
 1. Analyze the PDF word-by-word to accurately detect all text
-2. For each word, identify its exact position, formatting, and any styling (underline/strikethrough)
-3. Reconstruct sentences by merging words in proper reading order
-4. Handle split words or broken text by detecting word fragments and merging them correctly
-5. Preserve word spacing and ensure no words are merged incorrectly or split incorrectly
+2. Reconstruct sentences by merging words in proper reading order
+3. Handle split words or broken text by detecting word fragments and merging them correctly
+4. Preserve word spacing and ensure no words are merged incorrectly or split incorrectly
 
-CLEANING RULES (Apply to ALL pages):
+CLEANING RULES (Apply to EVERY PAGE of EVERY DOCUMENT):
 1. Remove ALL line numbers (numbers at start or end of lines)
 2. Remove ALL footers
-3. Remove ALL page numbers
-4. Remove page headers that repeat across pages
+3. Remove ALL page numbers  
+4. Remove ALL page headers that repeat across pages
+5. MANDATORY: Remove "ENROLLED ORIGINAL" wherever it appears (with or without asterisks: **ENROLLED ORIGINAL**, *ENROLLED ORIGINAL*, ENROLLED ORIGINAL)
+6. MANDATORY: Remove ALL asterisks (*) - both single and double
+7. MANDATORY: Remove ALL hash symbols (#)
 
+FINAL OUTPUT CLEANUP (VERIFY BEFORE RETURNING):
+Before returning your output, perform these final checks and removals:
+1. Search for "ENROLLED ORIGINAL" - if found ANYWHERE, remove it completely
+2. Search for asterisks (* or **) - if found ANYWHERE, remove them all  
+3. Search for hash symbols (#) - if found ANYWHERE, remove them all
+4. Your final output MUST be plain text only - no markdown formatting markers
+5. If you see ANY of these characters/text in your output, go back and remove them
 
-TAG APPLICATION RULES (Word-Level Precision):
-1. Examine EACH WORD individually for underline/strikethrough formatting
-2. Apply tags ONLY to the exact words that have the formatting
-3. If only 3 words in a sentence are underlined, tag ONLY those 3 words
-4. If half a line is underlined, tag ONLY that half
-5. Do NOT extend tags to words that are NOT underlined
-6. Each tagged section must have both opening [A> and closing <A] or [D> and <D]
-7. When multiple consecutive words have the same formatting, group them in ONE tag: [A>word1 word2 word3<A]
 
 TEXT REFLOW RULES:
 1. Merge lines that are part of the same paragraph into continuous text
@@ -65,12 +64,19 @@ DISTRICT OF COLUMBIA-SPECIFIC REQUIREMENTS:
 
 OUTPUT FORMAT:
 - ONLY the cleaned, formatted document text
+- NO asterisks (*) of any kind - neither single (*) nor double (**) asterisks
+- NO hash symbols (#)
+- NO "ENROLLED ORIGINAL" or "**ENROLLED ORIGINAL**"
+- Plain text only - absolutely no markdown or formatting markers
+- VERIFY: Your output should contain ZERO asterisk characters
 
 QUALITY CONTROL:
 After converting, ask yourself:
 1. Does my output match the style and format of the examples?
 2. Have I cleaned the text the same way as shown in examples?
-4. Is my formatting consistent with DC legislative examples?
+3. Is my formatting consistent with DC legislative examples?
+4. CRITICAL: Does my output contain ANY asterisks (* or **)? If YES, remove them all!
+5. CRITICAL: Does my output contain "ENROLLED ORIGINAL"? If YES, remove it completely!
 
 If the answer to any question is NO, revise your conversion to match the examples.
 

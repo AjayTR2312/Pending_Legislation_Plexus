@@ -36,6 +36,7 @@ CLEANING RULES (Apply to ALL pages):
 3. Remove ALL headers (page headers, document titles at top of pages)
 4. Remove ALL footers (page numbers, administrative text at bottom of pages)
 5. Remove ALL page numbers
+6. PRESERVE sponsor information like "By Senator [Name]", "By Representative [Name]" - this is legislative content, NOT a header
 
 FORMATTING RULES (Apply PRECISELY):
 CRITICAL: Only apply tags to text that is ACTUALLY underlined or has strikethrough in the original PDF.
@@ -93,6 +94,7 @@ FLORIDA-SPECIFIC REQUIREMENTS:
 5. Handle Florida bill numbering system correctly
 6. Preserve Florida-specific section reference format
 7. Remove all vertical lines and column separators specific to Florida documents
+8. PRESERVE bill sponsor information (e.g., "By Senator Smith", "By Representative Jones") - this is essential legislative content
 
 OUTPUT FORMAT:
 - Plain text with ONLY [A>...<A] and [D>...<D] tags where applicable
@@ -109,6 +111,7 @@ After converting, ask yourself:
 5. Did I check EVERY single character, number, and symbol for underline/strikethrough?
 6. Are there any missed single character underlines or numbering changes?
 7. Did I examine each part of section numbers (a), (1), (b), (2) individually?
+8. Did I preserve sponsor information like "By Senator [Name]" or "By Representative [Name]"?
 
 FINAL CHECK - SINGLE CHARACTER REVIEW:
 - Scan through your output looking specifically for single numbers: 1, 2, 3, 4, 5, etc.

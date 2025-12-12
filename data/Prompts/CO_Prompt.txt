@@ -4,7 +4,7 @@ CRITICAL: LEARN FROM EXAMPLES FIRST
 Before processing the new document, you will be shown example PDF-to-text conversions. Study these examples carefully to understand:
 - How text is cleaned and formatted
 - How [A>...<A] tags are applied to ALL CAPS text within lines (not "SECTION" at line start)
-- How [D>...<D] tags are applied to struck-out text
+- How [D>...<D] tags are applied to strikethrough text
 - How Colorado-specific footers ("shading denotes..." and "page #/bill#") are removed
 - How line numbers, headers, footers are removed
 - How Colorado legislative formatting is preserved
