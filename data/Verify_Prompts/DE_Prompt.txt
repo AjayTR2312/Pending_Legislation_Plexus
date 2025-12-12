@@ -1,6 +1,20 @@
 You are a Delaware legislative document tag verification expert with perfect accuracy.
 
+CRITICAL WARNING: NEVER DELETE ANY TEXT
+Your ONLY job is to ADD missing tags. You must preserve EVERY SINGLE WORD from the input text.
+If a word exists in the input, it MUST exist in the output - whether tagged or untagged.
+ANY text deletion is a critical failure.
+
 TASK: Review the output text file against the summary of formatted items. Add ONLY the missing tags that should be present according to the summary.
+
+TEXT REFLOW RULES:
+1. Merge lines that are part of the same paragraph into continuous text
+2. Remove artificial line breaks from PDF page width
+3. Preserve blank lines between paragraphs
+4. Keep section breaks and document structure
+5. Keep numbered/bulleted lists on separate lines
+6. Ensure proper word spacing when merging lines
+Be CONSISTENT - process every document the same way.
 
 CRITICAL RULES FOR DELAWARE (DE) TAGGING:
 1. ONLY add [A>text<A] tags for text marked as "underline" in the summary
@@ -11,25 +25,110 @@ CRITICAL RULES FOR DELAWARE (DE) TAGGING:
 6. DO NOT over-tag - only tag what's missing according to the summary
 7. Preserve exact text formatting and spacing
 8. Each tag must be properly closed: [A>text<A] or [D>text<D]
+9. When applying tags, keep complete phrases together - DO NOT split sentences mid-phrase
+10. NEVER delete or remove ANY text from the document - you are ONLY adding tags
+11. MANDATORY: Return the COMPLETE document with ALL original text preserved
+14. If a word doesn't need a tag, leave it as-is - DO NOT remove it
+15. TEXT PRESERVATION is more important than perfect tagging - when in doubt, keep the text
 
-DELAWARE SPECIAL NOTES:
-- Delaware uses "insertions shown by underline" = [A>text<A]
-- Delaware uses "deletions shown by strike through" = [D>text<D]
+LOCATION-BASED TAGGING RULES:
+1. EXACT CONTEXT MATCHING: The words before and after 【target】 in the location MUST match the text around the target word
+2. SINGLE INSTANCE TAGGING: Even if a word appears 50 times in the document, only tag the ONE instance specified by the contextual location
+3. CONTEXT VERIFICATION: Before adding a tag, verify the surrounding words match the location description
+4. NO BULK TAGGING: Never tag all instances of a word - only the specific instance with matching context
+5. PRECISION REQUIRED: If context doesn't match exactly, do NOT add the tag for that word
+
+DELAWARE SPECIAL EXCEPTIONS:
+- NEVER tag the standard section header: "SYNOPSIS" 
+- This word appears in underline but should remain untagged (it's a standard legislative format, not a content change)
+- Only tag underlined text that represents actual legislative changes or additions
 
 SUMMARY REFERENCE (Ground Truth):
-This shows ALL text that should be tagged with formatting types.
-Look for lines like: "35. ':' (Location: Paragraph 39, Formatting: underline)"
+The actual summary with all text to be tagged will appear below after {SUMMARY_CONTENT}.
+Each entry in the real summary will follow this format structure:
+
+FORMAT STRUCTURE (THIS IS NOT ACTUAL DATA - DO NOT TAG THESE EXAMPLES):
+- "##. 'word'"
+- "   Location: Para #, Run #: ...context before 【word】 context after..."
+- "   Formatting: underline or strikethrough"
+
+How to read the contextual location in the REAL summary data:
+- "Para X, Run Y:" tells you which paragraph and specific run contains the text
+- "【text】" shows the exact text that needs tagging
+- "...before text 【target】 after text..." shows the surrounding context
+- The Run number provides 100% precision - it identifies the exact formatted text segment
+
+ONLY tag items that appear in the actual summary data below, NOT the format examples above.
 
 {SUMMARY_CONTENT}
 
 CURRENT OUTPUT TEXT TO VERIFY:
 {OUTPUT_TEXT_CONTENT}
 
+CRITICAL WARNING
+NEVER delete, remove, or omit ANY text from the document. You are ONLY adding tags.
+MANDATORY: Return the COMPLETE document with ALL original text intact.
+
+VERIFICATION PROCESS:
+1. FIRST: Read the entire summary to understand what needs tagging
+2. SECOND: For each summary item, locate it using BOTH Para # AND Run # (not just any occurrence)
+3. THIRD: Verify the contextual location matches before adding any tag
+4. FOURTH: Add the appropriate tag [A>...<A] or [D>...<D] at that specific location
+5. FIFTH: MANDATORY CONTENT PRESERVATION - ensure ALL original text remains in output
+
 INSTRUCTIONS:
-1. Read through the summary to identify what text should have [A>...<A] or [D>...<D] tags
-2. Check if each item from the summary is properly tagged in the output text
-3. Add ONLY the missing tags in the correct DE format
-4. Do NOT modify existing correct tags
+1. Apply TEXT REFLOW RULES to ensure proper paragraph flow
+2. Read through the summary to identify what text should have [A>...<A] or [D>...<D] tags
+3. FIRST PASS - PRESERVE ALL CONTENT:
+   - KEEP ALL existing [A>...<A] and [D>...<D] tags exactly as they are
+   - KEEP ALL untagged text exactly as it appears in the input
+   - DO NOT remove, delete, or omit ANY words, punctuation, spaces, or formatting
+   - DO NOT remove any existing tags even if they seem incorrect
+4. SECOND PASS - ADD MISSING TAGS ONLY:
+   - Use the contextual locations to find missing tags specified in the summary
+   - Find the paragraph mentioned (Para X, Run Y)
+   - The Run number provides exact precision for the formatted text segment
+   - Look for the surrounding context words shown in the location
+   - VERIFY: The context words around the target MUST match exactly
+   - Identify the exact text marked with 【】 symbols and add appropriate tags, do not tag "SYNOPSIS"
+   - Only ADD tags for text that has NO existing tags
+   - NEVER delete or modify existing text while adding tags
+   - CRITICAL: If the same word appears multiple times, use context to tag ONLY the correct instance
+   - � IMPORTANT: KEEP EACH TAG SEPARATE during this tagging phase - consolidation happens later in Stage 2
+5. VERIFICATION:
+   - Keep complete phrases together when tagging - avoid splitting mid-sentence
+   - Use the contextual location to ensure you're tagging the right instance when text appears multiple times
+   - DOUBLE-CHECK: Verify each added tag matches the exact context from the summary location
+   - FINAL VERIFICATION: Ensure no word is tagged multiple times unless specified multiple times in summary with different contexts
+
+CROSS-VERIFICATION PROCESS:
+For EACH existing tag in the output text:
+- PRESERVE: Keep all existing tags exactly as they are
+- CONSOLIDATE: Only merge adjacent tags of same type if they are DIRECTLY next to each other with NO untagged text between them
+- NEVER consolidate: [A>word1<A] untagged [A>word2<A] - this MUST stay separate
+
+For EACH word/text in the original output:
+- PRESERVE: Every single word must remain in the final output
+- MAINTAIN: All punctuation, spacing, and formatting must stay identical
+
+For EACH item in the summary reference:
+- Check: Is this text already tagged in the output?
+- Action: If missing → Add the appropriate tag WITHOUT removing any surrounding text
+- Action: If already tagged → Leave it as-is, do not modify
+
+ABSOLUTE RULE: This is an ADDITIVE ONLY process - never remove existing tags OR any text content.
+
+USING CONTEXTUAL LOCATIONS:
+- "Para X, Run Y: ...context words 【target_text】 more context..." means:
+  - Find paragraph X in the output text
+  - The Run Y number provides 100% precision for the exact formatted segment
+  - Look for the surrounding context words shown
+  - Tag only that specific instance of "target_text" with the appropriate tag
+- CRITICAL: Use the context to identify the EXACT instance - do not tag other occurrences of the same word
+- If you see multiple instances of the same word, use the context to tag ONLY the correct one
+- The Run number eliminates ambiguity when the same text appears multiple times in a paragraph
+- The 【】 symbols show exactly which text needs the formatting tag
+- MANDATORY: Match the surrounding context words exactly before applying any tag
 
 EXAMPLES OF CORRECT DE TAGGING:
 - Text marked "underline" in summary: [A>Section<A]
@@ -37,4 +136,64 @@ EXAMPLES OF CORRECT DE TAGGING:
 - Single characters: [A>:<A], [A>(<A], [A>)<A]
 - Multiple words: [A>provenance data<A]
 
-Return ONLY the corrected text with proper DE tags applied. No explanations or comments.
+EXAMPLES OF WHAT NOT TO TAG:
+- Standard section header: "SYNOPSIS" (leave untagged even if underlined)
+- Only tag underlined text that appears in the summary reference as requiring tags
+
+
+FAKE EXAMPLES BELOW - FOR FORMAT ILLUSTRATION ONLY - DO NOT TAG THESE
+
+CONTEXTUAL LOCATION EXAMPLES (for illustration only - DO NOT tag these examples):
+
+FAKE EXAMPLE 1 - DO NOT TAG "example_word"
+If you see a summary entry like:
+"XX. 'example_word'"
+"   Location: Para 5, Run 2: ...text before 【example_word】 text after..."
+"   Formatting: underline"
+
+Your process should be: Find paragraph 5, run 2, verify the context "text before example_word text after", 
+and tag that specific "example_word" as [A>example_word<A]
+
+If "example_word" appears elsewhere (Para 3, Para 10, etc.), DO NOT tag those - only tag Para 5, Run 2
+"example_word" is NOT real data - this is showing you the PROCESS only
+
+FAKE EXAMPLE 2 - DO NOT TAG "different_word"
+If you see another entry like:
+"YY. 'different_word'"  
+"   Location: Para 8, Run 5: ...other context 【different_word】 more context..."
+"   Formatting: strikethrough"
+
+Your process should be: In paragraph 8, run 5, find "other context different_word more context" and tag 
+that specific "different_word" as [D>different_word<D]
+
+"different_word" is NOT real data - this is showing you the PROCESS only
+
+FAKE EXAMPLE 3 - DO NOT TAG "multi word phrase"
+If you see:
+"ZZ. 'multi word phrase'"
+"   Location: Para 12, Run 3: ...context 【multi word phrase】 more context..."
+"   Formatting: underline"
+
+Your process should be: In paragraph 12, run 3, find "context multi word phrase more context" and tag 
+that specific phrase as [A>multi word phrase<A]
+
+This is a PATTERN example showing how multi-word phrases work - DO NOT tag the literal text "multi word phrase"
+
+IMPORTANT: The above are FORMAT EXAMPLES only. Only tag text that appears in the actual {SUMMARY_CONTENT} section with their specific Para/Run locations.
+
+OUTPUT REQUIREMENTS:
+
+YOUR TASK - ADD ALL TAGS:
+1. Go through the summary and add tags for each item
+2. Keep each tag SEPARATE - do NOT consolidate any tags
+3. Each formatted item gets its own individual tag [A>word1<A] [A>word2<A]
+4. Verify every word from input is preserved
+5. DO NOT merge any tags - consolidation is handled by Python after your output
+
+🤖 NOTE: Tag consolidation (merging adjacent tags) is automatically handled by Python code after you return the tagged text. Your job is ONLY to add the individual tags correctly.
+
+FINAL OUTPUT:
+Return ONLY the tagged text with individual tags added
+NO explanations, comments, or meta-text
+EVERY word from original input must be in final output
+Python will automatically consolidate adjacent tags like [A>word1<A] [A>word2<A] → [A>word1 word2<A]

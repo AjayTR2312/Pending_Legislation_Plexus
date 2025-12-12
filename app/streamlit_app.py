@@ -14,12 +14,13 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 # Import our processing functions
 from pdf_to_text_llm import (
     get_anthropic_client, load_conversion_prompt, load_example_pairs,
-    process_pdf_with_claude, save_to_text_file, 
+    process_pdf_with_claude, save_to_text_file, remove_unwanted_tags, 
     AVAILABLE_STATES, read_file_content, verify_text_with_llm,
     save_verified_file, create_verification_report
 )
 from pdf_docx_analysis_pipeline import PDFToDocxAnalysisPipeline
 from session_manager import get_session_manager
+from pdf_type_detector import detect_pdf_type
 
 # Configure Streamlit page
 st.set_page_config(
@@ -71,6 +72,76 @@ except Exception as e:
     with st.expander("Full Error Trace"):
         st.code(traceback.format_exc())
     st.stop()
+
+def validate_pdf_not_scanned(pdf_path, filename):
+    """
+    Check if PDF is scanned and reject if so.
+    Also check if PDF has more than 10 pages (would require chunking).
+    Returns: (is_valid, error_message)
+    """
+    try:
+        result = detect_pdf_type(pdf_path)
+        
+        if result:
+            total_pages = result.get('total_pages', 0)
+            
+            # Check 1: Page count validation
+            if total_pages > 15:
+                error_msg = f"**{filename}** — Document exceeds technical capacity({total_pages} pages). Processing time would be excessive and exceeds system capacity limits."
+                return False, error_msg.strip()
+            
+            # Check 2: Scanned PDF validation
+            if result['type'] == 'scanned':
+                error_msg = f"**{filename}** —  Scanned document detected. This file format cannot be processed due to technical limitations in text extraction."
+                return False, error_msg.strip()
+            
+            # Check 3: Hybrid PDF warning
+            elif result['type'] == 'hybrid':
+                warning_msg = f"**{filename}** — Contains mix of digital and scanned pages ({total_pages} pages). Some content may not be fully extracted."
+                return True, warning_msg.strip()
+        
+        # Digital or empty PDFs are OK
+        return True, None
+        
+    except Exception as e:
+        # If detection fails, allow processing but log the error
+        logging.warning(f"PDF type detection failed for {filename}: {str(e)}")
+        return True, None
+
+def validate_pdf_not_scanned(pdf_path, filename):
+    """
+    Check if PDF is scanned and reject if so.
+    Also check if PDF has more than 10 pages (would require chunking).
+    Returns: (is_valid, error_message)
+    """
+    try:
+        result = detect_pdf_type(pdf_path)
+        
+        if result:
+            total_pages = result.get('total_pages', 0)
+            
+            # Check 1: Page count validation
+            if total_pages > 15:
+                error_msg = f"**{filename}** — Document exceeds technical capacity({total_pages} pages). Processing time would be excessive and exceeds system capacity limits."
+                return False, error_msg.strip()
+            
+            # Check 2: Scanned PDF validation
+            if result['type'] == 'scanned':
+                error_msg = f"**{filename}** —  Scanned document detected. This file format cannot be processed due to technical limitations in text extraction."
+                return False, error_msg.strip()
+            
+            # Check 3: Hybrid PDF warning
+            elif result['type'] == 'hybrid':
+                warning_msg = f"**{filename}** — Contains mix of digital and scanned pages ({total_pages} pages). Some content may not be fully extracted."
+                return True, warning_msg.strip()
+        
+        # Digital or empty PDFs are OK
+        return True, None
+        
+    except Exception as e:
+        # If detection fails, allow processing but log the error
+        logging.warning(f"PDF type detection failed for {filename}: {str(e)}")
+        return True, None
 
 def setup_simple_logging():
     """Setup simple logging for the app with session-specific folder"""
@@ -127,6 +198,140 @@ def highlight_legislative_tags(content):
     
     return f'<div style="font-family:Consolas,monospace; white-space:pre-wrap; line-height:1.6; background:#f8f9fa; padding:16px; border-radius:8px; border-left:4px solid #2196f3; max-height:400px; overflow-y:auto;">{content}</div>'
 
+# Batch processing functions
+def add_files_to_batch(uploaded_files, state_code, session_id):
+    """Add uploaded files to batch processing queue"""
+    session_mgr = st.session_state.session_manager
+    added_count = 0
+    skipped_files = []
+    hybrid_warnings = []
+    
+    for uploaded_file in uploaded_files:
+        # Upload file using session manager
+        temp_path = session_mgr.upload_file(session_id, uploaded_file, state_code)
+        
+        if temp_path:
+            # Validate PDF (page count and scanned check)
+            is_valid, message = validate_pdf_not_scanned(temp_path, uploaded_file.name)
+            
+            if not is_valid:
+                # Invalid PDF (scanned or too many pages) - skip and clean up
+                skipped_files.append((uploaded_file.name, message))
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+                continue
+            elif message:
+                # Hybrid PDF - add to queue but track warning
+                hybrid_warnings.append((uploaded_file.name, message))
+            
+            # Add to batch queue
+            batch_item = {
+                'original_name': uploaded_file.name,
+                'temp_path': temp_path,
+                'state_code': state_code,
+                'status': 'pending',
+                'result_path': None,
+                'error': None,
+                'processing_time': None,
+                'uploaded_at': datetime.now()
+            }
+            st.session_state.batch_queue.append(batch_item)
+            added_count += 1
+    
+    # Show summary messages
+    if skipped_files:
+        st.error(f"**{len(skipped_files)} file(s) skipped** — Files are either too large or incompatible format (scanned documents).")
+        
+        # Show detailed error for each skipped file
+        with st.expander("📋 View Details", expanded=False):
+            for name, error_msg in skipped_files:
+                st.markdown(f"• {error_msg}")
+    
+    if hybrid_warnings:
+        st.warning(f"**{len(hybrid_warnings)} file(s) contain mixed content** — Processing will continue with reduced accuracy on scanned pages.")
+    
+    return added_count
+
+def process_batch_sequentially():
+    """Process all files in batch queue sequentially"""
+    if not st.session_state.batch_queue:
+        return
+    
+    st.session_state.batch_processing = True
+    st.session_state.batch_results = []
+    
+    total_files = len(st.session_state.batch_queue)
+    
+    for index, batch_item in enumerate(st.session_state.batch_queue):
+        if st.session_state.batch_paused:
+            break
+            
+        st.session_state.batch_current_file = batch_item['original_name']
+        st.session_state.batch_progress = index / total_files
+        
+        # Update status
+        batch_item['status'] = 'processing'
+        
+        try:
+            # Process the file
+            start_time = time.time()
+            
+            result = process_single_pdf_simple(
+                batch_item['temp_path'],
+                batch_item['state_code'],
+                st.session_state.session_id
+            )
+            
+            end_time = time.time()
+            processing_time = end_time - start_time
+            minutes = int(processing_time // 60)
+            seconds = int(processing_time % 60)
+            time_str = f"{minutes}m {seconds}s" if minutes > 0 else f"{seconds}s"
+            
+            if result:
+                batch_item['status'] = 'completed'
+                batch_item['result_path'] = result
+                batch_item['processing_time'] = time_str
+            else:
+                batch_item['status'] = 'failed'
+                batch_item['error'] = 'Processing failed'
+                
+        except Exception as e:
+            batch_item['status'] = 'failed'
+            batch_item['error'] = str(e)
+            logging.error(f"Batch processing error for {batch_item['original_name']}: {e}")
+        
+        # Add to results
+        st.session_state.batch_results.append(batch_item.copy())
+        
+        # Reset individual processing state
+        st.session_state.processing = False
+        st.session_state.current_step = 0
+        st.session_state.step_status = {}
+    
+    # Final progress update
+    st.session_state.batch_progress = 1.0
+    st.session_state.batch_processing = False
+    st.session_state.batch_current_file = None
+
+def reset_batch_processing():
+    """Reset all batch processing state"""
+    # Clean up temp files
+    for batch_item in st.session_state.batch_queue:
+        if batch_item['temp_path'] and os.path.exists(batch_item['temp_path']):
+            try:
+                os.remove(batch_item['temp_path'])
+            except:
+                pass
+    
+    st.session_state.batch_queue = []
+    st.session_state.batch_processing = False
+    st.session_state.batch_current_file = None
+    st.session_state.batch_results = []
+    st.session_state.batch_progress = 0
+    st.session_state.batch_paused = False
+    st.session_state.uploaded_files = []
+
 # Simple processing functions
 def process_single_pdf_simple(pdf_path, state_code, session_id, progress_placeholder=None, status_placeholder=None):
     """Process a single PDF through all 5 steps with session management and UI updates"""
@@ -167,6 +372,84 @@ def process_single_pdf_simple(pdf_path, state_code, session_id, progress_placeho
         session_folders = session_mgr.get_session_folders(session_id)
         output_folder = session_mgr.get_output_file_path(session_id, state_code, Path(pdf_path).stem)
         
+        # Check if document needs PDF-level chunking
+        from llm_tag_verifier import should_chunk_for_verification
+        should_chunk, page_count, reason = should_chunk_for_verification(pdf_path)
+        
+        if should_chunk:
+            # Large document - use PDF-level chunking (skip normal steps 1-4)
+            print(f"\n🔄 Large document detected ({page_count} pages)")
+            print(f"📦 Using PDF-level chunking workflow...")
+            
+            # Mark all steps as in progress
+            for step in range(5):
+                st.session_state.step_status[step] = "🔄"
+            update_progress()
+            
+            # Call chunked verification directly
+            from llm_tag_verifier import verify_with_pdf_chunking
+            corrected_text = verify_with_pdf_chunking(
+                pdf_path, 
+                state_code, 
+                st.session_state.client, 
+                session_folders['session_dir']
+            )
+            
+            if not corrected_text:
+                for step in range(5):
+                    st.session_state.step_status[step] = "❌"
+                return None
+            
+            # Mark all steps as complete
+            for step in range(5):
+                st.session_state.step_status[step] = "✅"
+            update_progress()
+            
+            # Save the final verified text
+            output_filename = Path(pdf_path).stem + ".txt"
+            text_output_path = os.path.join(output_folder, output_filename)
+            
+            # Determine verified output path
+            verified_folder = os.path.join(session_folders['output_folder'], 'Verified', state_code)
+            os.makedirs(verified_folder, exist_ok=True)
+            verified_file_path = os.path.join(verified_folder, output_filename)
+            
+            with open(verified_file_path, 'w', encoding='utf-8') as f:
+                f.write(corrected_text)
+            
+            print(f"✅ Chunked processing complete!")
+            print(f"📄 Verified file saved to: {verified_file_path}")
+            
+            # Create verification report for chunked processing
+            # Note: We don't have original_text and docx_results here, but we have corrected_text
+            # For now, skip report creation for chunked docs or create simplified version
+            
+            # Mark processing complete in session manager
+            session_mgr.complete_processing(session_id, verified_file_path)
+            
+            # Calculate total processing time
+            end_time = time.time()
+            total_time = end_time - start_time
+            minutes = int(total_time // 60)
+            seconds = int(total_time % 60)
+            
+            # Store processing time in session state for display
+            st.session_state.processing_time = f"{minutes}m {seconds}s" if minutes > 0 else f"{seconds}s"
+            
+            # Log completion message
+            completion_msg = f"🎉 Chunked processing completed successfully! Total time: {st.session_state.processing_time}"
+            print("\n" + "="*60)
+            print(completion_msg)
+            print("="*60)
+            logging.info(completion_msg)
+            
+            # Return file path (consistent with normal workflow)
+            return verified_file_path
+        
+        # Small document - use normal workflow
+        print(f"\n📄 Standard document ({page_count} pages)")
+        print(f"📋 Using normal processing workflow...")
+        
         # Step 1: PDF to Text
         st.session_state.current_step = 0
         st.session_state.step_status[0] = "🔄"
@@ -189,7 +472,7 @@ def process_single_pdf_simple(pdf_path, state_code, session_id, progress_placeho
         output_filename = Path(pdf_path).stem + ".txt"
         text_output_path = os.path.join(output_folder, output_filename)
         
-        if not save_to_text_file(formatted_text, text_output_path):
+        if not save_to_text_file(formatted_text, text_output_path, state_code=state_code):
             st.session_state.step_status[0] = "❌"
             return None
             
@@ -229,7 +512,9 @@ def process_single_pdf_simple(pdf_path, state_code, session_id, progress_placeho
         
         corrected_text = verify_text_with_llm(
             text_output_path, docx_results['summary_path'], 
-            state_code, st.session_state.client
+            state_code, st.session_state.client,
+            pdf_path=None,  # Don't pass PDF path - already decided not to chunk
+            session_dir=None  # Don't pass session dir
         )
         
         if not corrected_text:
@@ -391,6 +676,21 @@ def show_simple_ui():
                     )
                 
                 if temp_path:
+                    # Validate PDF is not scanned
+                    is_valid, message = validate_pdf_not_scanned(temp_path, uploaded_file.name)
+                    
+                    if not is_valid:
+                        # Scanned PDF detected - reject and clean up
+                        st.error(message)
+                        # Remove the uploaded file
+                        if os.path.exists(temp_path):
+                            os.remove(temp_path)
+                        st.session_state.temp_pdf_path = None
+                        st.stop()
+                    elif message:
+                        # Hybrid PDF warning
+                        st.warning(message)
+                    
                     st.session_state.temp_pdf_path = temp_path
                     st.session_state.last_uploaded_file_id = current_file_id
                     st.success(f"✅ Uploaded: {uploaded_file.name} ({format_file_size(uploaded_file.size)})")
@@ -575,6 +875,285 @@ def show_results_section():
             )
         except Exception as e:
             st.error(f"Download error: {e}")
+
+def show_single_file_processing():
+    """Show single file processing interface"""
+    st.header("🔄 Step 3: Process File")
+    
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        if not st.session_state.processing:
+            if st.button("🚀 Start Processing", type="primary", use_container_width=True):
+                st.session_state.processing = True
+                st.session_state.current_step = 0
+                st.session_state.processing_time = None  # Reset processing time
+                st.rerun()
+        else:
+            if st.button("⏹️ Stop Processing", type="secondary", use_container_width=True):
+                st.session_state.processing = False
+                st.session_state.current_step = 0
+                st.rerun()
+    
+    with col2:
+        if st.button("🗑️ Clear & Reset", use_container_width=True):
+            # Reset everything
+            st.session_state.processing = False
+            st.session_state.current_step = 0
+            st.session_state.step_status = {}
+            st.session_state.processed_file_path = None
+            st.session_state.processing_time = None  # Reset processing time
+            if st.session_state.temp_pdf_path and os.path.exists(st.session_state.temp_pdf_path):
+                os.remove(st.session_state.temp_pdf_path)
+            st.session_state.temp_pdf_path = None
+            st.rerun()
+    
+    # Processing progress
+    if st.session_state.processing:
+        # Create a placeholder for dynamic updates
+        progress_placeholder = st.empty()
+        status_placeholder = st.empty()
+        
+        with progress_placeholder.container():
+            show_processing_steps()
+        
+        # Auto-process with real-time updates
+        result = process_single_pdf_simple(
+            st.session_state.temp_pdf_path, 
+            st.session_state.selected_state,
+            st.session_state.session_id,
+            progress_placeholder,  # Pass placeholder for updates
+            status_placeholder
+        )
+        
+        if result:
+            st.session_state.processed_file_path = result
+            st.session_state.processing = False
+            success_msg = "🎉 Processing completed successfully!"
+            if st.session_state.processing_time:
+                success_msg += f" ⏱️ Total time: {st.session_state.processing_time}"
+            st.success(success_msg)
+        else:
+            st.session_state.processing = False
+            st.error("❌ Processing failed!")
+        
+        st.rerun()
+    
+    # Results section
+    if st.session_state.processed_file_path and os.path.exists(st.session_state.processed_file_path):
+        show_results_section()
+
+def show_batch_processing_interface():
+    """Show batch processing interface with queue management"""
+    if not st.session_state.batch_queue:
+        st.info("📦 No files in batch queue. Upload files above to get started.")
+        return
+    
+    st.header("📦 Step 3: Batch Processing")
+    
+    # Queue overview
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Files in Queue", len(st.session_state.batch_queue))
+    with col2:
+        pending_count = len([f for f in st.session_state.batch_queue if f['status'] == 'pending'])
+        st.metric("Pending", pending_count)
+    with col3:
+        if st.session_state.batch_results:
+            completed_count = len([f for f in st.session_state.batch_results if f['status'] == 'completed'])
+            st.metric("Completed", completed_count)
+    
+    # Control buttons
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        if not st.session_state.batch_processing:
+            if st.button("🚀 Start Batch Processing", type="primary", use_container_width=True):
+                st.session_state.batch_processing = True
+                st.session_state.batch_paused = False
+                st.rerun()
+        else:
+            if not st.session_state.batch_paused:
+                if st.button("⏸️ Pause Processing", type="secondary", use_container_width=True):
+                    st.session_state.batch_paused = True
+                    st.rerun()
+            else:
+                if st.button("▶️ Resume Processing", type="primary", use_container_width=True):
+                    st.session_state.batch_paused = False
+                    st.rerun()
+    
+    with col2:
+        if st.session_state.batch_processing:
+            if st.button("⏹️ Stop Processing", type="secondary", use_container_width=True):
+                st.session_state.batch_processing = False
+                st.session_state.batch_paused = False
+                st.rerun()
+    
+    with col3:
+        if st.button("🗑️ Clear Queue", use_container_width=True):
+            if not st.session_state.batch_processing:
+                reset_batch_processing()
+                st.rerun()
+            else:
+                st.error("❌ Stop processing before clearing queue")
+    
+    with col4:
+        if st.session_state.batch_results:
+            if st.button("📥 Download All Results", use_container_width=True):
+                show_batch_download_options()
+    
+    # Processing status
+    if st.session_state.batch_processing:
+        if st.session_state.batch_current_file:
+            st.info(f"🔄 Currently processing: {st.session_state.batch_current_file}")
+        
+        # Progress bar
+        if st.session_state.batch_progress > 0:
+            progress_text = f"Progress: {int(st.session_state.batch_progress * 100)}%"
+            st.progress(st.session_state.batch_progress, text=progress_text)
+        
+        # Auto-process batch
+        process_batch_sequentially()
+        st.rerun()
+    
+    # Show queue details
+    show_batch_queue_details()
+    
+    # Show results if any
+    if st.session_state.batch_results:
+        show_batch_results()
+
+def show_batch_queue_details():
+    """Show detailed batch queue with individual file status"""
+    with st.expander(f"📋 Queue Details ({len(st.session_state.batch_queue)} files)", expanded=True):
+        for i, batch_item in enumerate(st.session_state.batch_queue):
+            col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
+            
+            with col1:
+                st.text(f"{i+1:2d}. {batch_item['original_name']}")
+            
+            with col2:
+                status_icons = {
+                    'pending': '⏳ Pending',
+                    'processing': '🔄 Processing',
+                    'completed': '✅ Completed', 
+                    'failed': '❌ Failed'
+                }
+                st.text(status_icons.get(batch_item['status'], batch_item['status']))
+            
+            with col3:
+                if batch_item['processing_time']:
+                    st.text(f"⏱️ {batch_item['processing_time']}")
+                elif batch_item['status'] == 'failed' and batch_item['error']:
+                    st.text(f"💥 Error")
+            
+            with col4:
+                if batch_item['status'] == 'pending' and not st.session_state.batch_processing:
+                    if st.button(f"🗑️", key=f"remove_{i}", help="Remove from queue"):
+                        if batch_item['temp_path'] and os.path.exists(batch_item['temp_path']):
+                            os.remove(batch_item['temp_path'])
+                        st.session_state.batch_queue.pop(i)
+                        st.rerun()
+
+def show_batch_results():
+    """Show batch processing results summary"""
+    st.header("📊 Batch Processing Results")
+    
+    completed_files = [f for f in st.session_state.batch_results if f['status'] == 'completed']
+    failed_files = [f for f in st.session_state.batch_results if f['status'] == 'failed']
+    
+    # Summary metrics
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Total Processed", len(st.session_state.batch_results))
+    with col2:
+        st.metric("Successful", len(completed_files), delta=len(completed_files))
+    with col3:
+        st.metric("Failed", len(failed_files), delta=-len(failed_files) if failed_files else 0)
+    with col4:
+        if completed_files:
+            avg_time = sum(float(f['processing_time'].replace('m', '*60+').replace('s', '')) for f in completed_files if f.get('processing_time')) / len(completed_files)
+            avg_minutes = int(avg_time // 60)
+            avg_seconds = int(avg_time % 60)
+            avg_time_str = f"{avg_minutes}m {avg_seconds}s" if avg_minutes > 0 else f"{avg_seconds}s"
+            st.metric("Avg Time", avg_time_str)
+    
+    # Results table
+    with st.expander("📋 Detailed Results", expanded=True):
+        for i, result in enumerate(st.session_state.batch_results):
+            col1, col2, col3, col4 = st.columns([3, 1, 2, 1])
+            
+            with col1:
+                st.text(f"{i+1:2d}. {result['original_name']}")
+            
+            with col2:
+                if result['status'] == 'completed':
+                    st.text("✅ Success")
+                else:
+                    st.text("❌ Failed")
+            
+            with col3:
+                if result['processing_time']:
+                    st.text(f"⏱️ {result['processing_time']}")
+                elif result['error']:
+                    st.text(f"💥 {result['error'][:30]}...")
+            
+            with col4:
+                if result['status'] == 'completed' and result['result_path']:
+                    if os.path.exists(result['result_path']):
+                        with open(result['result_path'], 'rb') as f:
+                            file_data = f.read()
+                        
+                        download_name = Path(result['original_name']).stem + "_processed.txt"
+                        st.download_button(
+                            label="📥",
+                            data=file_data,
+                            file_name=download_name,
+                            mime="text/plain",
+                            key=f"download_{i}",
+                            help="Download processed file"
+                        )
+
+def show_batch_download_options():
+    """Show options to download all batch results"""
+    completed_files = [f for f in st.session_state.batch_results if f['status'] == 'completed' and f.get('result_path')]
+    
+    if not completed_files:
+        st.warning("⚠️ No completed files to download")
+        return
+    
+    st.subheader("📥 Batch Download Options")
+    
+    # Option 1: Download all as ZIP
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("📦 Download All as ZIP", use_container_width=True):
+            import zipfile
+            import io
+            
+            zip_buffer = io.BytesIO()
+            
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                for result in completed_files:
+                    if os.path.exists(result['result_path']):
+                        file_name = Path(result['original_name']).stem + "_processed.txt"
+                        zip_file.write(result['result_path'], file_name)
+            
+            zip_buffer.seek(0)
+            
+            st.download_button(
+                label=f"📦 Download ZIP ({len(completed_files)} files)",
+                data=zip_buffer.getvalue(),
+                file_name=f"batch_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+                mime="application/zip",
+                use_container_width=True
+            )
+    
+    with col2:
+        st.metric("Files Ready", len(completed_files))
+        total_size = sum(os.path.getsize(f['result_path']) for f in completed_files if os.path.exists(f['result_path']))
+        st.metric("Total Size", format_file_size(total_size))
 
 # Main app
 def main():

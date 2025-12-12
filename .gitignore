@@ -15,9 +15,13 @@ dist/
 build/
 
 # Ignore all folders except app and data
-/aws/
-/tmp/
-
+tmp/
+comparison_results/
+data/Output_Text/
+data/output/
+batch_file_comparison.py
+quick_test.py
+setup_testing.py
 
 # IDE
 .vscode/

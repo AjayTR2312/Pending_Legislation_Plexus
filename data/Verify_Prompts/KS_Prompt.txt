@@ -2,45 +2,90 @@ You are a Kansas legislative document tag verification expert with perfect accur
 
 TASK: Review the output text file against the summary of formatted items. Add ONLY the missing tags that should be present according to the summary.
 
+CRITICAL RULES:
+1. DO NOT rearrange, reorder, or reflow any text
+2. DO NOT merge separate lines or paragraphs
+3. Preserve the EXACT text structure, order, and formatting as provided
+4. ONLY add missing tags according to the summary
+5. Keep all line breaks, spacing, and document structure exactly as is
+
 CRITICAL RULES FOR KANSAS (KS) TAGGING:
 1. ONLY add [A>text<A] tags for text marked as "underline", "bold", or "italic" in the summary
-2. ONLY add [D>text<D] tags for text marked as "strikeout" or "strikethrough" in the summary
-3. CRITICAL EXCEPTION: NEVER tag "Be it enacted by the Legislature of the State of Kansas" regardless of formatting
-4. CRITICAL EXCEPTION: NEVER tag anything in lines 1,2 and 3 regardless of formatting indicated in summary
-5. DO NOT modify or remove existing correct tags
+2. ONLY add [D>text<D] tags for text marked as "strikethrough" in the summary
+3. ABSOLUTE EXCLUSION #1: NEVER tag "Be it enacted by the Legislature of the State of Kansas" - even if it appears in the summary with formatting
+4. ABSOLUTE EXCLUSION #2: NEVER tag the FIRST 3 NON-EMPTY LINES of the document - even if they appear in the summary with formatting
+5. This means: If text appears in lines 1, 2, or 3, SKIP IT completely - do not add any tags regardless of what the summary says
+6. DO NOT modify or remove existing correct tags
 6. DO NOT create nested tags like [[A>A<A]] - this is WRONG
 7. DO NOT over-tag - only tag what's missing according to the summary
 8. Preserve exact text formatting and spacing
 9. Each tag must be properly closed: [A>text<A] or [D>text<D]
+10. When applying tags, keep complete phrases together - DO NOT split sentences mid-phrase
+11. NEVER delete any words from the original text - tags are ADDITIVE ONLY
+12. If text doesn't match the summary exactly, ADD the tag anyway - DO NOT remove words
+13. Every word in the input MUST appear in the output - NO EXCEPTIONS
+14. Your job is to ADD tags, not to DELETE or MODIFY text content
+
+LOCATION-BASED PRECISION TAGGING RULES:
+1. Each summary entry has "Para X, Run Y" showing EXACT location of formatted text
+2. Use the contextual location to find the SPECIFIC occurrence to tag
+3. If "Section" appears 50 times, only tag the one at the specified Para/Run location
+4. Context shows surrounding words - match these to find the right occurrence
+5. DO NOT tag every instance of a word - ONLY tag instances listed in the summary with their locations
 
 KANSAS SPECIAL TAGGING RULES:
 - [A>...<A] is for UNDERLINED, BOLD, or ITALIC text
-- [D>...<D] is for STRIKEOUT/STRIKETHROUGH text only
-- ABSOLUTE EXCLUSION: "Be it enacted by the Legislature of the State of Kansas" remains untagged
-- ABSOLUTE EXCLUSION: Lines 1,2 and 3 content remains untagged regardless of formatting
+- [D>...<D] is for STRIKETHROUGH text only
+- ABSOLUTE EXCLUSION #1: "Be it enacted by the Legislature of the State of Kansas" remains untagged - ALWAYS
+- ABSOLUTE EXCLUSION #2: The FIRST 3 NON-EMPTY LINES remain untagged - ALWAYS (even if summary says to tag them)
+- Example excluded lines: "Session of ...", "HOUSE BILL No. ...", "By Committee on..." etc.
 - SUBSECTION FORMAT: Fix incorrect tags like "[A>(2) A<A]" to "(2) [A>A<A]" when only letter is formatted
 
 SUMMARY REFERENCE (Ground Truth):
-This shows ALL text that should be tagged with formatting types.
-Look for lines like: 
-- "35. 'Section' (Location: Paragraph 39, Formatting: bold)"
-- "42. 'deleted text' (Location: Paragraph 45, Formatting: strikeout)"
-- "28. 'important text' (Location: Paragraph 33, Formatting: underline)"
+This shows ALL text that should be tagged with formatting types using RUN-BASED PRECISE LOCATIONS.
+
+FAKE EXAMPLES BELOW - FOR FORMAT ILLUSTRATION ONLY - DO NOT TAG THESE:
+Look for entries like: 
+- "35. 'Section'"
+- "   Location: Para 39, Run 5: ...context before 【Section】 context after..."
+- "   Formatting: bold"
+
+The contextual location shows you EXACTLY where to find the text in the document:
+- "Para X, Run Y" tells you the EXACT paragraph AND run containing the formatted text
+- "【text】" shows the exact text that needs tagging
+- "...before text 【target】 after text..." shows the surrounding context for verification
+END OF FAKE EXAMPLES
+
+Use this contextual information to locate and tag the exact text in the output document.
 
 {SUMMARY_CONTENT}
 
 CURRENT OUTPUT TEXT TO VERIFY:
 {OUTPUT_TEXT_CONTENT}
 
-INSTRUCTIONS:
-1. Read through the summary to identify what text should have [A>...<A] or [D>...<D] tags
-2. Check if the text is "Be it enacted by the Legislature of the State of Kansas"
-3. Check if the text appears in lines 2-3 of the document
-4. If it is the Kansas enacting clause OR in lines 2-3, do NOT add tags even if formatting is indicated
-5. If it is other text, check if each item from the summary is properly tagged in the output text
-6. Fix subsection formatting: change "[A>(2) A<A]" to "(2) [A>A<A]" when only letter is formatted
-7. Add ONLY the missing tags in the correct KS format
-8. Do NOT modify existing correct tags
+VERIFICATION PROCESS:
+1. FIRST: Identify the first 3 NON-EMPTY lines of the document - mark these as EXCLUDED from all tagging
+2. Read through the summary to identify what text should have [A>...<A] or [D>...<D] tags
+3. For EACH summary item, use the "Para X, Run Y" location to find the EXACT occurrence
+4. BEFORE TAGGING: Check if the text is in the first 3 non-empty lines - if YES, SKIP IT (do not tag)
+5. BEFORE TAGGING: Check if the text is "Be it enacted by the Legislature of the State of Kansas" - if YES, SKIP IT (do not tag)
+6. Use the contextual location to verify you're tagging the correct instance:
+   - Find the paragraph and run mentioned (Para X, Run Y)
+   - Look for the surrounding context words shown in the location
+   - Identify the exact text marked with 【】 symbols
+6. Verify EVERY word from input appears in output - NO DELETIONS ALLOWED
+7. Fix subsection formatting: change "[A>(2) A<A]" to "(2) [A>A<A]" when only letter is formatted
+8. Add ONLY the missing tags for instances specified in the summary
+
+USING RUN-BASED CONTEXTUAL LOCATIONS:
+- "Para X, Run Y: ...context words 【target_text】 more context..." means:
+  - Find paragraph X, run Y in the output text (this is the EXACT location)
+  - Verify using the surrounding context words shown
+  - Tag only that specific instance of "target_text" with the appropriate tag
+- The "Para X, Run Y" format provides EXACT positioning - use it for 100% accuracy
+- If you see multiple instances of the same word, the Para/Run location tells you which one
+- The 【】 symbols show exactly which text needs the formatting tag at that location
+- DO NOT tag other occurrences of the same word at different Para/Run locations
 
 EXAMPLES OF CORRECT KS TAGGING:
 - Text marked "bold" in summary: [A>Section<A]
@@ -49,6 +94,52 @@ EXAMPLES OF CORRECT KS TAGGING:
 - Text marked "strikeout" in summary: [D>deleted provision<D]
 - Subsection formatting: (2) [A>A<A] (NOT [A>(2) A<A])
 - Kansas enacting clause: NO TAGS even if bold/underlined/italic in summary
-- Lines 2-3 content: NO TAGS even if formatting indicated in summary
+- Lines 1, 2, 3 content: NO TAGS even if formatting indicated in summary
 
-Return ONLY the corrected text with proper KS tags applied. No explanations or comments.
+CROSS-VERIFICATION CHECKLIST (before returning output):
+- Did I preserve EVERY word from the input text?
+- Did I only add tags, without deleting any text?
+- Did I identify the first 3 NON-EMPTY lines and exclude them from tagging?
+- Did I use "Para X, Run Y" locations to tag the correct occurrences?
+- Did I avoid tagging "Be it enacted by the Legislature of the State of Kansas"?
+- Did I avoid tagging ANYTHING in the first 3 non-empty lines (even if summary says to)?
+- Did I avoid tagging every instance of common words?
+- Did I check for untagged text before consolidating tags?
+- Did I keep text that doesn't match the summary exactly?
+- Are all my tags properly closed [A>...<A] or [D>...<D]?
+
+FAKE EXAMPLES BELOW - FOR FORMAT ILLUSTRATION ONLY - DO NOT TAG THESE
+
+CONTEXTUAL LOCATION EXAMPLES (for illustration only - DO NOT tag these examples):
+
+If you see a summary entry like:
+"XX. 'example_word'"
+"   Location: Para 5, Run 2: ...text before 【example_word】 text after..."
+"   Formatting: bold"
+
+Your process should be: Find paragraph 5, run 2, verify the context "text before example_word text after", 
+and tag that specific "example_word" as [A>example_word<A]
+
+If "example_word" appears elsewhere (Para 3, Para 10, etc.), DO NOT tag those - only tag Para 5, Run 2
+
+If you see another entry like:
+"YY. 'different_word'"  
+"   Location: Para 8, Run 5: ...other context 【different_word】 more context..."
+"   Formatting: strikeout"
+
+Your process should be: In paragraph 8, run 5, find "other context different_word more context" and tag 
+that specific "different_word" as [D>different_word<D]
+
+This is a PATTERN example showing how to use locations - DO NOT tag the literal text "different_word"
+
+IMPORTANT: The above are FORMAT EXAMPLES only. Only tag text that appears in the actual {SUMMARY_CONTENT} section with their specific Para/Run locations.
+
+OUTPUT REQUIREMENTS:
+1. Return ONLY the corrected text with proper KS tags applied
+2. NO explanations, comments, or meta-text
+3. EVERY word from input must appear in output - verify before submitting
+4. Tags are ADDITIVE - you're adding markup to existing text, not rewriting it
+5. If uncertain about a location, use the "Para X, Run Y" reference to find the exact spot
+6. ABSOLUTE: NEVER tag "Be it enacted by the Legislature of the State of Kansas"
+7. ABSOLUTE: NEVER tag content in the FIRST 3 NON-EMPTY LINES (Session of X, HOUSE BILL No. X, By Committee...)
+8. Even if the summary explicitly lists these in the formatting, IGNORE them and do not add tags
