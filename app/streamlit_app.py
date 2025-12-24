@@ -55,6 +55,26 @@ try:
         st.session_state.temp_pdf_path = None
     if 'processing_time' not in st.session_state:
         st.session_state.processing_time = None
+    
+    # Batch processing state
+    if 'batch_mode' not in st.session_state:
+        st.session_state.batch_mode = False
+    if 'batch_queue' not in st.session_state:
+        st.session_state.batch_queue = []
+    if 'batch_processing' not in st.session_state:
+        st.session_state.batch_processing = False
+    if 'batch_current_file' not in st.session_state:
+        st.session_state.batch_current_file = None
+    if 'batch_results' not in st.session_state:
+        st.session_state.batch_results = []
+    if 'batch_progress' not in st.session_state:
+        st.session_state.batch_progress = 0
+    if 'batch_paused' not in st.session_state:
+        st.session_state.batch_paused = False
+    if 'uploaded_files' not in st.session_state:
+        st.session_state.uploaded_files = []
+    if 'last_uploaded_file_id' not in st.session_state:
+        st.session_state.last_uploaded_file_id = None
 
     # Get session folders
     session_mgr = st.session_state.session_manager
@@ -84,6 +104,14 @@ def validate_pdf_not_scanned(pdf_path, filename):
         
         if result:
             total_pages = result.get('total_pages', 0)
+            pdf_type = result.get('type', 'unknown')
+            high_dpi_images = result.get('high_dpi_images', 0)
+            total_images = result.get('total_images', 0)
+            text_ratio = result.get('text_ratio', 0)
+            image_ratio = result.get('image_ratio', 0)
+            
+            # Log detailed detection results
+            logging.info(f"PDF Detection: type={pdf_type}, pages={total_pages}, high_dpi_imgs={high_dpi_images}/{total_images}, text={text_ratio}%, image={image_ratio}%")
             
             # Check 1: Page count validation
             if total_pages > 15:
@@ -92,48 +120,13 @@ def validate_pdf_not_scanned(pdf_path, filename):
             
             # Check 2: Scanned PDF validation
             if result['type'] == 'scanned':
-                error_msg = f"**{filename}** —  Scanned document detected. This file format cannot be processed due to technical limitations in text extraction."
+                error_msg = f"**{filename}** — Scanned document detected. This file format cannot be processed due to technical limitations in text extraction."
                 return False, error_msg.strip()
             
-            # Check 3: Hybrid PDF warning
+            # Check 3: Hybrid PDF rejection (contains signatures or mixed content)
             elif result['type'] == 'hybrid':
-                warning_msg = f"**{filename}** — Contains mix of digital and scanned pages ({total_pages} pages). Some content may not be fully extracted."
-                return True, warning_msg.strip()
-        
-        # Digital or empty PDFs are OK
-        return True, None
-        
-    except Exception as e:
-        # If detection fails, allow processing but log the error
-        logging.warning(f"PDF type detection failed for {filename}: {str(e)}")
-        return True, None
-
-def validate_pdf_not_scanned(pdf_path, filename):
-    """
-    Check if PDF is scanned and reject if so.
-    Also check if PDF has more than 10 pages (would require chunking).
-    Returns: (is_valid, error_message)
-    """
-    try:
-        result = detect_pdf_type(pdf_path)
-        
-        if result:
-            total_pages = result.get('total_pages', 0)
-            
-            # Check 1: Page count validation
-            if total_pages > 15:
-                error_msg = f"**{filename}** — Document exceeds technical capacity({total_pages} pages). Processing time would be excessive and exceeds system capacity limits."
+                error_msg = f"**{filename}** — Hybrid document detected (contains signatures or scanned content). This file format cannot be processed due to technical limitations."
                 return False, error_msg.strip()
-            
-            # Check 2: Scanned PDF validation
-            if result['type'] == 'scanned':
-                error_msg = f"**{filename}** —  Scanned document detected. This file format cannot be processed due to technical limitations in text extraction."
-                return False, error_msg.strip()
-            
-            # Check 3: Hybrid PDF warning
-            elif result['type'] == 'hybrid':
-                warning_msg = f"**{filename}** — Contains mix of digital and scanned pages ({total_pages} pages). Some content may not be fully extracted."
-                return True, warning_msg.strip()
         
         # Digital or empty PDFs are OK
         return True, None
@@ -503,42 +496,65 @@ def process_single_pdf_simple(pdf_path, state_code, session_id, progress_placeho
         time.sleep(0.1)  # Brief pause for UI update
         update_progress()  # Update UI
         
-        # Step 5: LLM Verification
+        # Step 5: LLM Verification (only if there are formatted items)
         st.session_state.current_step = 4
         st.session_state.step_status[4] = "🔄"
         session_mgr.update_processing_step(session_id, 4)
         update_progress()  # Update UI
         time.sleep(0.5)  # Brief pause for UI update
         
-        corrected_text = verify_text_with_llm(
-            text_output_path, docx_results['summary_path'], 
-            state_code, st.session_state.client,
-            pdf_path=None,  # Don't pass PDF path - already decided not to chunk
-            session_dir=None  # Don't pass session dir
-        )
-        
-        if not corrected_text:
-            st.session_state.step_status[4] = "❌"
-            return None
+        # Check if summary file exists (only if there were formatted items)
+        if docx_results.get('summary_path'):
+            corrected_text = verify_text_with_llm(
+                text_output_path, docx_results['summary_path'], 
+                state_code, st.session_state.client,
+                pdf_path=None,  # Don't pass PDF path - already decided not to chunk
+                session_dir=None  # Don't pass session dir
+            )
             
-        # Save verified file in session-specific Verified folder
-        verified_file_path = save_verified_file(
-            corrected_text, 
-            text_output_path, 
-            state_code, 
-            session_folders['output_folder']  # Pass session output folder
-        )
-        
-        if not verified_file_path:
-            st.session_state.step_status[4] = "❌"
-            return None
+            if not corrected_text:
+                st.session_state.step_status[4] = "❌"
+                return None
+                
+            # Save verified file in session-specific Verified folder
+            verified_file_path = save_verified_file(
+                corrected_text, 
+                text_output_path, 
+                state_code, 
+                session_folders['output_folder']  # Pass session output folder
+            )
             
-        # Create verification report
-        original_text = read_file_content(text_output_path)
-        create_verification_report(
-            docx_results['summary_path'], text_output_path, verified_file_path,
-            state_code, original_text, corrected_text
-        )
+            if not verified_file_path:
+                st.session_state.step_status[4] = "❌"
+                return None
+                
+            # Create verification report
+            original_text = read_file_content(text_output_path)
+            create_verification_report(
+                docx_results['summary_path'], text_output_path, verified_file_path,
+                state_code, original_text, corrected_text
+            )
+        else:
+            # No formatted items found - copy original text to Verified folder
+            st.info("ℹ️ No formatted items found - copying to Verified folder without verification")
+            original_text = read_file_content(text_output_path)
+            
+            if not original_text:
+                st.session_state.step_status[4] = "❌"
+                st.error("Failed to read converted text file")
+                return None
+                
+            verified_file_path = save_verified_file(
+                original_text, 
+                text_output_path, 
+                state_code, 
+                session_folders['output_folder']  # Pass session output folder
+            )
+            
+            if not verified_file_path:
+                st.session_state.step_status[4] = "❌"
+                st.error("Failed to save verified file")
+                return None
         
         st.session_state.step_status[4] = "✅"
         st.session_state.current_step = 5  # Complete
@@ -618,12 +634,30 @@ def show_simple_ui():
             st.session_state.processing_time = None
             st.session_state.last_uploaded_file_id = None  # Reset upload tracking
             
+            # Reset batch processing state
+            st.session_state.batch_mode = False
+            st.session_state.batch_queue = []
+            st.session_state.batch_processing = False
+            st.session_state.batch_current_file = None
+            st.session_state.batch_results = []
+            st.session_state.batch_progress = 0
+            st.session_state.batch_paused = False
+            st.session_state.uploaded_files = []
+            
             st.success(f"✅ New session created: {new_session_id[:8]}...")
             st.rerun()
     
-    # State selection
-    st.header("🏛️ Step 1: Select State")
+    # Processing mode toggle
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.header("🏛️ Step 1: Select State & Mode")
+    with col2:
+        batch_mode = st.toggle("📦 Batch Mode", value=st.session_state.batch_mode, help="Process multiple files at once")
+        if batch_mode != st.session_state.batch_mode:
+            st.session_state.batch_mode = batch_mode
+            st.rerun()
     
+    # State selection
     state_options = [f"{code} - {info['name']}" for code, info in AVAILABLE_STATES.items()]
     selected_state_option = st.selectbox(
         "Choose the state for processing:",
@@ -635,143 +669,172 @@ def show_simple_ui():
     st.session_state.selected_state = selected_state_option.split(" - ")[0]
     
     # File upload
-    st.header("📁 Step 2: Upload PDF File")
+    st.header("📁 Step 2: Upload PDF File(s)")
     
     # Display file size limit warning
-    st.info("📊 **Maximum file size: 15 Pages**")
+    if st.session_state.batch_mode:
+        st.info("📊 **Batch Mode**: Upload multiple files (max 15 pages each)")
+    else:
+        st.info("📊 **Single File Mode**: Upload one file (max 15 pages)")
     
+    # File uploader - multiple files in batch mode
     uploaded_file = st.file_uploader(
-        "Choose a PDF file to process",
+        "Choose PDF file(s) to process",
         type=['pdf'],
-        accept_multiple_files=False,
+        accept_multiple_files=st.session_state.batch_mode,
         key="pdf_uploader",
-        help="Upload a PDF file (max 15 pages)"
+        help="Upload PDF file(s) (max 15 pages each)"
     )
     
     if uploaded_file is not None:
-        # Check file size (500 MB limit)
-        MAX_FILE_SIZE = 500 * 1024 * 1024  # 500 MB in bytes
-        
-        if uploaded_file.size > MAX_FILE_SIZE:
-            st.error(f"❌ **File too large!** ({format_file_size(uploaded_file.size)})")
-            st.error(f"Maximum allowed size is {format_file_size(MAX_FILE_SIZE)}")
-            st.stop()
-        
-        # Check if this is a new file (prevent re-uploading on every render)
-        current_file_id = f"{uploaded_file.name}_{uploaded_file.size}"
-        
-        if 'last_uploaded_file_id' not in st.session_state:
-            st.session_state.last_uploaded_file_id = None
-        
-        if st.session_state.last_uploaded_file_id != current_file_id:
-            try:
-                # Upload file using session manager
-                session_mgr = st.session_state.session_manager
+        # Batch mode - handle multiple files
+        if st.session_state.batch_mode:
+            if isinstance(uploaded_file, list) and len(uploaded_file) > 0:
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    st.success(f"✅ {len(uploaded_file)} file(s) selected")
+                with col2:
+                    if st.button("➕ Add to Queue", type="primary", use_container_width=True):
+                        with st.spinner("Adding files to batch queue..."):
+                            added = add_files_to_batch(
+                                uploaded_file, 
+                                st.session_state.selected_state,
+                                st.session_state.session_id
+                            )
+                        if added > 0:
+                            st.success(f"✅ Added {added} file(s) to batch queue")
+                        st.rerun()
                 
-                with st.spinner(f"Uploading {uploaded_file.name}..."):
-                    temp_path = session_mgr.upload_file(
-                        st.session_state.session_id, 
-                        uploaded_file, 
-                        st.session_state.selected_state
-                    )
-                
-                if temp_path:
-                    # Validate PDF is not scanned
-                    is_valid, message = validate_pdf_not_scanned(temp_path, uploaded_file.name)
-                    
-                    if not is_valid:
-                        # Scanned PDF detected - reject and clean up
-                        st.error(message)
-                        # Remove the uploaded file
-                        if os.path.exists(temp_path):
-                            os.remove(temp_path)
-                        st.session_state.temp_pdf_path = None
-                        st.stop()
-                    elif message:
-                        # Hybrid PDF warning
-                        st.warning(message)
-                    
-                    st.session_state.temp_pdf_path = temp_path
-                    st.session_state.last_uploaded_file_id = current_file_id
-                    st.success(f"✅ Uploaded: {uploaded_file.name} ({format_file_size(uploaded_file.size)})")
-                else:
-                    st.error("❌ Failed to upload file - check logs for details")
-            except Exception as e:
-                st.error(f"❌ **File Upload Failed**")
-                st.error(f"Error: {str(e)}")
-                import traceback
-                with st.expander("Error Details"):
-                    st.code(traceback.format_exc())
-        else:
-            # File already uploaded
-            if st.session_state.temp_pdf_path:
-                st.success(f"✅ File ready: {uploaded_file.name} ({format_file_size(uploaded_file.size)})")
-        
-        # Processing section
-        st.header("🔄 Step 3: Process File")
-        
-        col1, col2 = st.columns([1, 1])
-        
-        with col1:
-            if not st.session_state.processing:
-                if st.button("🚀 Start Processing", type="primary", use_container_width=True):
-                    st.session_state.processing = True
-                    st.session_state.current_step = 0
-                    st.session_state.processing_time = None  # Reset processing time
-                    st.rerun()
+                # Show batch processing interface
+                show_batch_processing_interface()
             else:
-                if st.button("⏹️ Stop Processing", type="secondary", use_container_width=True):
+                st.info("👆 Please select files to add to batch queue")
+        
+        # Single file mode - handle one file
+        else:
+            # Check file size (500 MB limit)
+            MAX_FILE_SIZE = 500 * 1024 * 1024  # 500 MB in bytes
+            
+            if uploaded_file.size > MAX_FILE_SIZE:
+                st.error(f"❌ **File too large!** ({format_file_size(uploaded_file.size)})")
+                st.error(f"Maximum allowed size is {format_file_size(MAX_FILE_SIZE)}")
+                st.stop()
+            
+            # Check if this is a new file (prevent re-uploading on every render)
+            current_file_id = f"{uploaded_file.name}_{uploaded_file.size}"
+            
+            if 'last_uploaded_file_id' not in st.session_state:
+                st.session_state.last_uploaded_file_id = None
+            
+            if st.session_state.last_uploaded_file_id != current_file_id:
+                try:
+                    # Upload file using session manager
+                    session_mgr = st.session_state.session_manager
+                    
+                    with st.spinner(f"Uploading {uploaded_file.name}..."):
+                        temp_path = session_mgr.upload_file(
+                            st.session_state.session_id, 
+                            uploaded_file, 
+                            st.session_state.selected_state
+                        )
+                    
+                    if temp_path:
+                        # Validate PDF is not scanned
+                        is_valid, message = validate_pdf_not_scanned(temp_path, uploaded_file.name)
+                        
+                        if not is_valid:
+                            # Scanned PDF detected - reject and clean up
+                            st.error(message)
+                            # Remove the uploaded file
+                            if os.path.exists(temp_path):
+                                os.remove(temp_path)
+                            st.session_state.temp_pdf_path = None
+                            st.stop()
+                        elif message:
+                            # Hybrid PDF warning
+                            st.warning(message)
+                        
+                        st.session_state.temp_pdf_path = temp_path
+                        st.session_state.last_uploaded_file_id = current_file_id
+                        st.success(f"✅ Uploaded: {uploaded_file.name} ({format_file_size(uploaded_file.size)})")
+                    else:
+                        st.error("❌ Failed to upload file - check logs for details")
+                except Exception as e:
+                    st.error(f"❌ **File Upload Failed**")
+                    st.error(f"Error: {str(e)}")
+                    import traceback
+                    with st.expander("Error Details"):
+                        st.code(traceback.format_exc())
+            else:
+                # File already uploaded
+                if st.session_state.temp_pdf_path:
+                    st.success(f"✅ File ready: {uploaded_file.name} ({format_file_size(uploaded_file.size)})")
+            
+            # Processing section for single file
+            st.header("🔄 Step 3: Process File")
+            
+            col1, col2 = st.columns([1, 1])
+            
+            with col1:
+                if not st.session_state.processing:
+                    if st.button("🚀 Start Processing", type="primary", use_container_width=True):
+                        st.session_state.processing = True
+                        st.session_state.current_step = 0
+                        st.session_state.processing_time = None  # Reset processing time
+                        st.rerun()
+                else:
+                    if st.button("⏹️ Stop Processing", type="secondary", use_container_width=True):
+                        st.session_state.processing = False
+                        st.session_state.current_step = 0
+                        st.rerun()
+            
+            with col2:
+                if st.button("🗑️ Clear & Reset", use_container_width=True):
+                    # Reset everything
                     st.session_state.processing = False
                     st.session_state.current_step = 0
+                    st.session_state.step_status = {}
+                    st.session_state.processed_file_path = None
+                    st.session_state.processing_time = None  # Reset processing time
+                    if st.session_state.temp_pdf_path and os.path.exists(st.session_state.temp_pdf_path):
+                        os.remove(st.session_state.temp_pdf_path)
+                    st.session_state.temp_pdf_path = None
                     st.rerun()
-        
-        with col2:
-            if st.button("🗑️ Clear & Reset", use_container_width=True):
-                # Reset everything
-                st.session_state.processing = False
-                st.session_state.current_step = 0
-                st.session_state.step_status = {}
-                st.session_state.processed_file_path = None
-                st.session_state.processing_time = None  # Reset processing time
-                if st.session_state.temp_pdf_path and os.path.exists(st.session_state.temp_pdf_path):
-                    os.remove(st.session_state.temp_pdf_path)
-                st.session_state.temp_pdf_path = None
+            
+            # Processing progress
+            if st.session_state.processing:
+                # Create a placeholder for dynamic updates
+                progress_placeholder = st.empty()
+                status_placeholder = st.empty()
+                
+                with progress_placeholder.container():
+                    show_processing_steps()
+                
+                # Auto-process with real-time updates
+                result = process_single_pdf_simple(
+                    st.session_state.temp_pdf_path, 
+                    st.session_state.selected_state,
+                    st.session_state.session_id,
+                    progress_placeholder,  # Pass placeholder for updates
+                    status_placeholder
+                )
+                
+                if result:
+                    st.session_state.processed_file_path = result
+                    st.session_state.processing = False
+                    success_msg = "🎉 Processing completed successfully!"
+                    if st.session_state.processing_time:
+                        success_msg += f" ⏱️ Total time: {st.session_state.processing_time}"
+                    st.success(success_msg)
+                else:
+                    st.session_state.processing = False
+                    st.error("❌ Processing failed!")
+                
                 st.rerun()
-        
-        # Processing progress
-        if st.session_state.processing:
-            # Create a placeholder for dynamic updates
-            progress_placeholder = st.empty()
-            status_placeholder = st.empty()
             
-            with progress_placeholder.container():
-                show_processing_steps()
-            
-            # Auto-process with real-time updates
-            result = process_single_pdf_simple(
-                st.session_state.temp_pdf_path, 
-                st.session_state.selected_state,
-                st.session_state.session_id,
-                progress_placeholder,  # Pass placeholder for updates
-                status_placeholder
-            )
-            
-            if result:
-                st.session_state.processed_file_path = result
-                st.session_state.processing = False
-                success_msg = "🎉 Processing completed successfully!"
-                if st.session_state.processing_time:
-                    success_msg += f" ⏱️ Total time: {st.session_state.processing_time}"
-                st.success(success_msg)
-            else:
-                st.session_state.processing = False
-                st.error("❌ Processing failed!")
-            
-            st.rerun()
-        
-        # Results section
-        if st.session_state.processed_file_path and os.path.exists(st.session_state.processed_file_path):
-            show_results_section()
+            # Results section
+            if st.session_state.processed_file_path and os.path.exists(st.session_state.processed_file_path):
+                show_results_section()
     else:
         st.info("👆 Please upload a PDF file to begin processing")
 

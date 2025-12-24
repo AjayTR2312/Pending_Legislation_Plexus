@@ -25,12 +25,36 @@ TOKEN_URL = "https://aiplatform.gcs.int.thomsonreuters.com/v1/anthropic/token"
 
 # State-specific formatting type filters
 STATE_FORMATTING_FILTERS = {
-    'FL': ['underline', 'strikethrough'],  # Florida only cares about underline and strikethrough
+    'AR': ['underline', 'strikethrough'],  # Arkansas
+    'CA': ['underline', 'strikethrough'],  # California
+    'CO': ['underline'],  # Colorado
     'CT': ['strikethrough'],  # Connecticut only cares about deletions (handled separately)
-    'CA': ['underline', 'strikethrough'],  # California similar to Florida
-    'CO': ['underline'],  # Colorado example
-    # Add more states as needed
-    'DEFAULT': ['underline', 'strikethrough', 'bold', 'italic']  # Default filter
+    'DC': ['underline', 'strikethrough'],  # District of Columbia
+    'DE': ['underline', 'strikethrough'],  # Delaware
+    'FL': ['underline', 'strikethrough'],  # Florida
+    'GA': ['underline', 'strikethrough'],  # Georgia
+    'HI': ['underline', 'strikethrough'],  # Hawaii
+    'IA': ['underline', 'strikethrough'],  # Iowa
+    'ID': ['underline', 'strikethrough'],  # Idaho
+    'IL': ['underline', 'strikethrough'],  # Illinois
+    'IN': ['underline', 'strikethrough'],  # Indiana
+    'KS': ['underline', 'strikethrough'],  # Kansas
+    'ME': ['underline', 'strikethrough'],  # Maine
+    'MN': ['underline', 'strikethrough'],  # Minnesota
+    'NC': ['underline', 'strikethrough'],  # North Carolina
+    'ND': ['underline', 'strikethrough'],  # North Dakota
+    'NE': ['underline', 'strikethrough'],  # Nebraska
+    'NY': ['underline', 'strikethrough'],  # New York
+    'OH': ['underline', 'strikethrough'],  # Ohio
+    'OK': ['underline', 'strikethrough'],  # Oklahoma
+    'SD': ['underline', 'strikethrough'],  # South Dakota
+    'TN': ['underline', 'strikethrough'],  # Tennessee
+    'TX': ['underline', 'strikethrough'],  # Texas
+    'VT': ['underline', 'strikethrough'],  # Vermont
+    'WI': ['underline', 'strikethrough'],  # Wisconsin
+    'WY': ['underline', 'strikethrough'],  # Wyoming
+    # Default filter
+    'DEFAULT': ['underline', 'strikethrough', 'bold', 'italic']
 }
 
 def strip_conversational_headers(text):
@@ -785,7 +809,7 @@ def process_verification_chunk(chunk_info, state_code, client, session_dir):
         # Post-process: Remove unwanted tags (same as normal workflow)
         print(f"🔧 Post-processing: Removing unwanted tags...")
         from pdf_to_text_llm import remove_unwanted_tags
-        chunk_text = remove_unwanted_tags(chunk_text)
+        chunk_text = remove_unwanted_tags(chunk_text, state_code)
         
         chunk_text_path = os.path.join(chunk_dir, f'chunk_{chunk_num}_text.txt')
         with open(chunk_text_path, 'w', encoding='utf-8') as f:

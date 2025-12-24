@@ -79,6 +79,7 @@ def detect_pdf_type(pdf_path, min_text_threshold=50):
             image_count = 0
             large_images = 0  # Images that might be scanned pages
             small_images = 0  # Images that might be signatures/logos
+            high_dpi_images = 0  # Images with DPI > 150 (likely scanned)
             
             if '/Resources' in page and '/XObject' in page['/Resources']:
                 try:
@@ -91,10 +92,40 @@ def detect_pdf_type(pdf_path, min_text_threshold=50):
                                 has_embedded_images = True
                                 image_count += 1
                                 
-                                # Try to get image dimensions to classify type
+                                # Try to get image dimensions and DPI to classify type
                                 try:
                                     width = obj.get('/Width', 0)
                                     height = obj.get('/Height', 0)
+                                    
+                                    # Calculate DPI if possible
+                                    # DPI = pixels / inches
+                                    # PDF uses points (1/72 inch), so we need page dimensions
+                                    dpi = None
+                                    try:
+                                        # Get page dimensions in points
+                                        page_box = page.mediabox
+                                        page_width_pts = float(page_box.width)
+                                        page_height_pts = float(page_box.height)
+                                        
+                                        # Convert to inches (1 point = 1/72 inch)
+                                        page_width_inches = page_width_pts / 72.0
+                                        page_height_inches = page_height_pts / 72.0
+                                        
+                                        # Calculate DPI (assuming image covers most of page)
+                                        if page_width_inches > 0 and page_height_inches > 0:
+                                            dpi_x = width / page_width_inches
+                                            dpi_y = height / page_height_inches
+                                            dpi = (dpi_x + dpi_y) / 2  # Average DPI
+                                            
+                                            # Log DPI for analysis
+                                            logging.debug(f"  Image {image_count}: {width}x{height}px, DPI={dpi:.1f}")
+                                            
+                                            # High DPI (>150) suggests scanned document
+                                            if dpi > 150:
+                                                high_dpi_images += 1
+                                                logging.info(f"  HIGH DPI IMAGE detected: {width}x{height}px, DPI={dpi:.1f}")
+                                    except:
+                                        pass
                                     
                                     # Large images (likely scanned pages): > 500px in both dimensions
                                     if width > 500 and height > 500:
@@ -142,8 +173,13 @@ def detect_pdf_type(pdf_path, min_text_threshold=50):
             # Determine page type
             has_text = char_count >= min_text_threshold
             
+            # Enhanced classification using DPI information
+            # If page has high DPI images (>150 DPI), it's likely a scanned page
+            if high_dpi_images > 0:
+                image_pages += 1
+                page_type = "image"
             # If page has large images, it's likely a scanned page
-            if large_images > 0:
+            elif large_images > 0:
                 image_pages += 1
                 page_type = "image"
             elif has_text:
@@ -166,19 +202,36 @@ def detect_pdf_type(pdf_path, min_text_threshold=50):
                 'image_count': image_count,
                 'large_images': large_images,
                 'small_images': small_images,
+                'high_dpi_images': high_dpi_images,
                 'has_text': has_text
             })
             
-            logging.debug(f"Page {page_num}: {page_type} ({char_count} chars, "
-                         f"images: {image_count} [{large_images}L/{small_images}S])")
+            logging.info(f"Page {page_num}: type={page_type}, chars={char_count}, "
+                         f"images={image_count} [L:{large_images}/S:{small_images}/HD:{high_dpi_images}], "
+                         f"has_text={has_text}")
         
         # Calculate statistics
         avg_chars = total_chars / total_pages if total_pages > 0 else 0
         text_ratio = text_pages / total_pages if total_pages > 0 else 0
         image_ratio = image_pages / total_pages if total_pages > 0 else 0
         
+        # Count total small images (likely signatures/stamps)
+        total_small_images = sum(details['small_images'] for details in page_details)
+        
         # Determine overall PDF type
-        if text_ratio >= 0.8:
+        # Check for hybrid document: has text but also has multiple signature images
+        if text_ratio >= 0.8 and total_small_images >= 3:
+            # Document has text but contains multiple small images (likely signatures)
+            # Classify as hybrid to reject processing
+            pdf_type = "hybrid"
+            logging.info(f"Hybrid detection: text_ratio={text_ratio:.1%}, small_images={total_small_images}")
+        # Check if document has images but very little text (likely scanned with poor OCR or no OCR)
+        elif total_small_images >= 1 and avg_chars < 100:
+            # Has at least 1 image but very little extractable text
+            # Likely a scanned document where text extraction will fail
+            pdf_type = "scanned"
+            logging.info(f"Scanned detection: small_images={total_small_images}, avg_chars={avg_chars:.1f}")
+        elif text_ratio >= 0.8:
             # 80%+ pages have text - it's a digital PDF
             pdf_type = "digital"
         elif image_ratio >= 0.8:
@@ -201,6 +254,8 @@ def detect_pdf_type(pdf_path, min_text_threshold=50):
             'image_pages': image_pages,
             'pages_with_images': pages_with_images,
             'total_images': total_images,
+            'small_images': total_small_images,
+            'high_dpi_images': sum(details['high_dpi_images'] for details in page_details),
             'average_chars_per_page': round(avg_chars, 2),
             'text_ratio': round(text_ratio * 100, 1),
             'image_ratio': round(image_ratio * 100, 1),

@@ -1,0 +1,75 @@
+H.B. NO. 1212
+
+HOUSE OF REPRESENTATIVES
+
+THIRTY-THIRD LEGISLATURE, 2025
+
+STATE OF HAWAII
+
+A BILL FOR AN ACT
+
+RELATING TO PORNOGRAPHIC WEBSITES.
+
+BE IT ENACTED BY THE LEGISLATURE OF THE STATE OF HAWAII:
+
+SECTION 1. The Hawaii Revised Statutes is amended by adding a new chapter to be appropriately designated and to read as follows:
+
+"CHAPTER
+
+INTERNET PROTECTIONS FOR MINORS
+
+"§ ___-1 Definitions. As used in this chapter:
+
+"Commercial entity" means a corporation, limited liability company, partnership, limited liability company, partnership, limited partnership, sole proprietorship, or other legally recognized business entity.
+
+"Digital identification" means information stored on a digital network that may be accessed by a commercial entity and that serves as proof of the identity of an individual.
+
+"Material" means any printed matter, visual representation, sound recording, or video recording.
+
+"Pornographic" has the same meaning as defined in section 712-1210.
+
+"Publish" means to communicate or make information available to another person or entity on a publicly available internet website.
+
+§ ___-2 Pornographic websites; age verification required. (a) Any commercial entity that knowingly publishes pornographic material on an internet website that is accessible to users in the State shall use a reasonable age verification method to ensure that each person who accesses the pornographic material is over the age of eighteen.
+
+(b) The age verification method used shall require each person accessing the pornographic material to:
+
+(1) Provide digital identification; or
+
+(2) Comply with commercially available age verification software that verifies age by using:
+
+(a) A form of government-issued identification; or
+
+(b) Public or private transactional data.
+
+(c) No commercial entity that verifies a person's age pursuant to this section, or third party that verifies a person's age on behalf of a commercial entity, shall retain any of the person's identifying information.
+
+§ ___-3 Exemptions. (a) This chapter shall not be construed to affect the rights of the news media or to apply to any news or public interest website.
+
+(b) No internet service provider or its affiliates or subsidiaries, search engine, or cloud service provider shall be held to have violated this section solely for providing access or connection to or from an internet website or content on the Internet, or on a facility system or network not under that entity's control, if that entity is not responsible for the production of pornographic materials accessible therein.
+
+§ ___-4 Penalties. Civil penalties for a violation of this section shall include:
+
+(1) $10,000 per day that the entity operates an internet website in violation of the age verification required by section ___-2;
+
+(2) $10,000 per instance for retaining identification in violation of section ___-2(c); and
+
+(3) Up to $250,000 if, because of the entity's violation of the age verification requirement in section ___-2, one or more persons under the age of eighteen accessed pornographic material."
+
+SECTION 2. This Act does not affect rights and duties that matured, penalties that were incurred, and proceedings that were begun before its effective date.
+
+SECTION 3. This Act shall take effect upon its approval.
+
+INTRODUCED BY: _____________________
+
+JAN 22 2025
+
+Report Title:
+
+Internet; Pornographic Materials; Minors; Age Verification
+
+Description:
+
+Requires any commercial entity that knowingly publishes pornographic material on an internet website that is accessible to persons in the State to use an age verification system to ensure that the pornographic material is not accessed by a minor.
+
+The summary description of legislation appearing on this page is for informational purposes only and is not legislation or evidence of legislative intent.

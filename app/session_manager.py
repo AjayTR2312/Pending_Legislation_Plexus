@@ -51,6 +51,9 @@ class SessionManager:
     
     def _get_sessions_directory(self) -> str:
         """Get sessions temp directory with fallback to writable directories"""
+        import tempfile
+        import platform
+        
         # Try environment variable first
         env_temp_dir = os.getenv('SESSIONS_TEMP_DIR')
         if env_temp_dir:
@@ -66,40 +69,64 @@ class SessionManager:
             except (PermissionError, OSError) as e:
                 logging.warning(f"Cannot write to {temp_dir}: {e}, using fallback")
         
-        # Try /tmp/pending_legislation_sessions (standard writable location)
+        # Primary: Use project directory tmp/sessions
         try:
-            temp_dir = Path('/tmp/pending_legislation_sessions')
+            # Get the project root (parent of 'app' directory)
+            current_file = Path(__file__).resolve()
+            project_root = current_file.parent.parent  # Go up from app/ to project root
+            temp_dir = project_root / 'tmp' / 'sessions'
             temp_dir.mkdir(parents=True, exist_ok=True)
-            temp_dir.chmod(0o777)
+            
             # Test write permission
             test_file = temp_dir / '.test_write'
             test_file.touch()
             test_file.unlink()
+            
+            logging.info(f"Using project directory: {temp_dir}")
             return str(temp_dir)
         except (PermissionError, OSError) as e:
-            logging.warning(f"Cannot write to /tmp/pending_legislation_sessions: {e}, trying /tmp directly")
+            logging.warning(f"Cannot write to project tmp directory: {e}, using fallback")
         
-        # Try /tmp directly
+        # Fallback 1: Use system temp directory (works on Windows, Linux, Mac)
         try:
-            temp_dir = Path('/tmp')
+            system_temp = Path(tempfile.gettempdir())
+            temp_dir = system_temp / 'pending_legislation_sessions'
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            
             # Test write permission
-            test_file = temp_dir / '.test_sessions_write'
+            test_file = temp_dir / '.test_write'
             test_file.touch()
             test_file.unlink()
+            
+            logging.info(f"Using system temp directory: {temp_dir}")
             return str(temp_dir)
         except (PermissionError, OSError) as e:
-            logging.warning(f"Cannot write to /tmp: {e}, using current directory fallback")
+            logging.warning(f"Cannot write to system temp {temp_dir}: {e}")
         
-        # Fallback to local tmp/sessions in current directory
+        # Fallback 2: Try /tmp/pending_legislation_sessions (Unix/Linux/Mac systems)
+        if platform.system() != 'Windows':
+            try:
+                temp_dir = Path('/tmp/pending_legislation_sessions')
+                temp_dir.mkdir(parents=True, exist_ok=True)
+                temp_dir.chmod(0o777)
+                # Test write permission
+                test_file = temp_dir / '.test_write'
+                test_file.touch()
+                test_file.unlink()
+                return str(temp_dir)
+            except (PermissionError, OSError) as e:
+                logging.warning(f"Cannot write to /tmp/pending_legislation_sessions: {e}")
+        
+        # Last resort - use absolute path in current working directory
         try:
-            import tempfile
-            temp_dir = Path(tempfile.gettempdir()) / 'pending_legislation_sessions'
+            temp_dir = Path(os.getcwd()) / 'tmp' / 'sessions'
             temp_dir.mkdir(parents=True, exist_ok=True)
+            logging.warning(f"Using fallback directory in current path: {temp_dir}")
             return str(temp_dir)
         except (PermissionError, OSError) as e:
-            # Last resort - use current directory
+            # Absolute last resort - use current directory
             logging.error(f"Cannot create temp directory: {e}, using current directory")
-            return os.path.join(os.getcwd(), 'tmp', 'sessions')
+            return os.path.abspath(os.path.join(os.getcwd(), 'tmp', 'sessions'))
     
     def create_session(self) -> str:
         """Create a new session with unique ID and folder structure"""

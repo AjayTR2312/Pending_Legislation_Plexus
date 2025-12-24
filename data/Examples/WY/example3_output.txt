@@ -1,0 +1,51 @@
+HOUSE BILL NO. HB0256
+
+Select Committee on Blockchain and Emerging Technologies-1.
+
+Sponsored by: Representative(s) Singh, Andrew and Yin and Senator(s) Nethercott and Rothfuss
+
+A BILL
+
+for
+
+AN ACT relating to the legislature; amending the name and duties of the select committee on blockchain, financial technology and digital innovation technology; amending the sponsorship authority of the select committee; making conforming amendments; and providing for an effective date.
+
+Be It Enacted by the Legislature of the State of Wyoming:
+
+Section 1. W.S. 28-11-701(a)(intro), (b)(i), (ii), (c)(intro), (i) and by creating a new subsection (d) and W.S. 40-31-105(e) are amended to read:
+
+ARTICLE 7
+
+SELECT COMMITTEE ON BLOCKCHAIN AND EMERGING TECHNOLOGIES
+
+28-11-701. Appointment of members; powers and duties; executive branch liaisons.
+
+(a) Not later than March 15 following each general election, a select committee on blockchain[D>, financial technology and digital innovation technology<D] [A>and emerging technologies<A] shall be appointed subject to the following:
+
+(b) The select committee shall:
+
+(i) Develop knowledge and expertise among its members regarding issues pertaining to blockchain[D>, financial technology and digital innovation technology<D] [A>and emerging technologies<A];
+
+(ii) [A>Subject to subsection (e) of this section, d<A]evelop and introduce legislation as necessary to promote [D>blockchain, financial technology and digital innovation in Wyoming unless the legislation relates to Title 13 of the Wyoming statues, in which case the legislation shall be recommended to the joint minerals, business and economic development interim committee for consideration <D][A>Wyoming's continued leadership in the digital economy by:<A]
+
+[A>(A) Reducing impediments to economic opportunities for technology and technology companies within the state;<A]
+
+[A>(B) Developing policies that encourage technology companies to locate and remain in the state;<A]
+
+[A>(C) Promoting further development of digital commercial activity in the state<A].
+
+(c) Not later than March 15 following each general election, the governor shall appoint three (3) persons to serve as liaisons to the select committee on blockchain[D>, financial technology and digital innovation technology<D] [A>and emerging technologies<A]. The governor may, in a manner consistent with W.S. 9-1-202, remove any liaison to the select committee. The liaisons shall:
+
+(i) Aid, assist and advise the select committee on issues pertaining to blockchain[D>, financial technology and digital innovation technology<D] [A>and emerging technologies<A];
+
+[A>(d) Any legislation that relates to title 13 of the Wyoming statutes shall not be introduced by the select committee without the consent of the chairmen of the joint minerals, business and economic development interim committee. If consent for introduction by the select committee is not obtained, the legislation may be recommended to the joint minerals, business and economic development committee for consideration.<A]
+
+40-31-105. Powers of the commission.
+
+(e) Before publicly issuing any fully reserved Wyoming stable tokens, the director shall provide a comprehensive report to the select committee on blockchain[D>, financial technology and digital innovation technology<D] [A>and emerging technologies<A] and the joint minerals, business and economic development interim committee on all actions taken under this act.
+
+Section 2. For all purposes the select committee on blockchain and emerging technologies, as renamed in this act, is a continuation of the select committee on blockchain, financial technology and digital innovation technology.
+
+Section 3. This act is effective immediately upon completion of all acts necessary for a bill to become law as provided by Article 4, Section 8 of the Wyoming Constitution.
+
+(END)

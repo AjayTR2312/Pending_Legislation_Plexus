@@ -1,0 +1,63 @@
+H.96
+
+Introduced by Representatives Cordes of Bristol, Arsenault of Williston, Berbeco of Winooski, Black of Essex, Chapin of East Montpelier, Cina of Burlington, Goldman of Rockingham, Harrison of Chittenden, Logan of Burlington, Marcotte of Coventry, McFaun of Barre Town, Olson of Starksboro, Page of Newport City, and Priestley of Bradford
+
+Referred to Committee on
+
+Date:
+
+Subject: Health; health care facilities; Green Mountain Care Board; certificates of need
+
+Statement of purpose of bill as introduced: This bill proposes to increase the monetary thresholds that trigger a certificate of need requirement and to exempt health care services and health care facility projects that are the result of a contract awarded by the State of Vermont.
+
+An act relating to increasing the monetary thresholds for certificates of need
+
+It is hereby enacted by the General Assembly of the State of Vermont:
+
+Sec. 1. 18 V.S.A. § 9434 is amended to read:
+
+§ 9434. CERTIFICATE OF NEED; GENERAL RULES
+
+(a) A health care facility other than a hospital shall not develop or have developed on its behalf a new health care project without issuance of a certificate of need by the Board. For purposes of this subsection, a "new health care project" includes the following:
+
+(1) The construction, development, purchase, renovation, or other establishment of a health care facility, or any capital expenditure by or on behalf of a health care facility, for which the capital cost exceeds [D>$1,500,000.00<D] [A>$10,000,000.00<A].
+
+(2) A change from one licensing period to the next in the number of licensed beds of a health care facility through addition or conversion, or through relocation from one physical facility or site to another.
+
+(3) The offering of any home health service, or the transfer or conveyance of more than a 50 percent ownership interest in a health care facility other than a hospital or nursing home.
+
+(4) The purchase, lease, or other comparable arrangement of a single piece of diagnostic and therapeutic equipment for which the cost, or in the case of a donation the value, is in excess of [D>$1,000,000.00<D] [A>$10,000,000.00<A]. For purposes of this subdivision, the purchase or lease of one or more articles of diagnostic or therapeutic equipment that are necessarily interdependent in the performance of their ordinary functions or that would constitute any health care facility included under subdivision 9432(8)(B) of this title, as determined by the Board, shall be considered together in calculating the amount of an expenditure. The Board's determination of functional interdependence of items of equipment under this subdivision shall have the effect of a final decision and is subject to appeal under section 9381 of this title.
+
+(5) The offering of a health care service or technology having an annual operating expense that exceeds [D>$500,000.00<D] [A>$10,000,000.00<A] for either of the next two budgeted fiscal years, if the service or technology was not offered or employed, either on a fixed or a mobile basis, by the health care facility within the previous three fiscal years.
+
+(6) The construction, development, purchase, lease, or other establishment [A>or expansion<A] of an ambulatory surgical center [A>for which the cost exceeds $10,000,000.00<A].
+
+(b) A hospital shall not develop or have developed on its behalf a new health care project without issuance of a certificate of need by the Board. For purposes of this subsection, a "new health care project" includes the following:
+
+(1) The construction, development, purchase, renovation, or other establishment of a health care facility, or any capital expenditure by or on behalf of a hospital, for which the capital cost exceeds [D>$3,000,000.00<D] [A>$10,000,000.00<A].
+
+(2) The purchase, lease, or other comparable arrangement of a single piece of diagnostic and therapeutic equipment for which the cost, or in the case of a donation the value, is in excess of [D>$1,500,000.00<D] [A>$10,000,000.00<A]. For purposes of this subdivision, the purchase or lease of one or more articles of diagnostic or therapeutic equipment that are necessarily interdependent in the performance of their ordinary functions or that would constitute any health care facility included under subdivision 9432(8)(B) of this title, as determined by the Board, shall be considered together in calculating the amount of an expenditure. The Board's determination of functional interdependence of items of equipment under this subdivision shall have the effect of a final decision and is subject to appeal under section 9381 of this title.
+
+(3) The offering of a health care service or technology having an annual operating expense that exceeds [D>$1,000,000.00<D] [A>$10,000,000.00<A] for either of the next two budgeted fiscal years, if the service or technology was not offered or employed, either on a fixed or a mobile basis, by the hospital within the previous three fiscal years.
+
+(4) A change from one licensing period to the next in the number of licensed beds of a health care facility through addition or conversion, or through relocation from one physical facility or site to another.
+
+(5) The offering of any home health service.
+
+(c) In the case of a project that requires a certificate of need under this section, expenditures for which are anticipated to be in excess of [D>$30,000,000.00<D] [A>$50,000,000.00<A], the applicant first shall secure a conceptual development phase certificate of need, in accordance with the standards and procedures established in this subchapter, that permits the applicant to make expenditures for architectural services, engineering design services, or any other planning services, as defined by the Board, needed in connection with the project. Upon completion of the conceptual development phase of the project, and before offering or further developing the project, the applicant shall secure a final certificate of need in accordance with the standards and procedures established in this subchapter. Applicants shall not be subject to sanctions for failure to comply with the provisions of this subsection if such failure is solely the result of good faith reliance on verified project cost estimates issued by qualified persons, which cost estimates would have led a reasonable person to conclude the project was not anticipated to be in excess of [D>$30,000,000.00<D] [A>$50,000,000.00<A] and therefore not subject to this subsection. The provisions of this subsection notwithstanding, expenditures may be made in preparation for obtaining a conceptual development phase certificate of need, which expenditures shall not exceed [D>$1,500,000.00 for non-hospitals or $3,000,000.00 for hospitals<D] [A>$10,000,000.00<A].
+
+(d) If the Board determines that a person required to obtain a certificate of need under this subchapter has separated a single project into components in order to avoid cost thresholds or other requirements under this subchapter, the person shall be required to submit an application for a certificate of need for the entire project, and the Board may proceed under section 9445 of this title. The Board's determination under this subsection shall have the effect of a final decision and is subject to appeal under section 9381 of this title.
+
+(e) The Board may periodically adjust the monetary jurisdictional thresholds contained in this section. In doing so, the Board shall reflect the same categories of health care facilities, services, and programs recognized in this section. Any adjustment by the Board shall not exceed an amount calculated using the cumulative Consumer Price Index rate of inflation.
+
+Sec. 2. 18 V.S.A. § 9435 is amended to read:
+
+§ 9435. EXCLUSIONS
+
+* * *
+
+[A>(i) Excluded from this subchapter are the offering of a health care service, or the construction, development, purchase, renovation, or other establishment of a health care facility, as the result of a contract awarded by the State of Vermont.<A]
+
+Sec. 3. EFFECTIVE DATE
+
+[A>This act shall take effect on July 1, 2025.<A]

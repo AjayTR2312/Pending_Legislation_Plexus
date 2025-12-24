@@ -1,0 +1,159 @@
+S.B. NO. 1542
+
+THE SENATE
+
+THIRTY-THIRD LEGISLATURE, 2025
+
+STATE OF HAWAII
+
+JAN 23 2025
+
+A BILL FOR AN ACT
+
+RELATING TO AGE VERIFICATION FOR APP DEVELOPERS AND APP STORES ACT.
+
+BE IT ENACTED BY THE LEGISLATURE OF THE STATE OF HAWAII:
+
+SECTION 1. The legislature finds that the rapid growth in the use of mobile phones, tablets, and digital apps has led to an increasing concern about the exposure of minors to age-inappropriate or harmful content, including apps, video games, social media, and other online services. While several mobile platforms and app stores have age restrictions in place, there is no comprehensive requirement for robust age verification systems to ensure that minors cannot access content or services not suitable for their age group.
+
+Accordingly, the purpose of this Act is to establish age verification requirements for app developers and companies operating app stores in the State to prevent minors from accessing age-restricted content and services, ensuring better protection for young people from potential harm.
+
+SECTION 2. The Hawaii Revised Statutes is amended by adding a new chapter to be appropriately designated and to read as follows:
+
+"CHAPTER
+
+AGE VERIFICATION FOR APP DEVELOPERS AND APP STORES ACT
+
+§ ___-1 Short title. This chapter shall be known and may be cited as the "Hawaii Age Verification for App Developers and App Stores Act".
+
+§ ___-2 Definitions. As used in this chapter:
+
+"Adult" means an individual who is at least seventeen years of age.
+
+"Age category" means the category of an individual based on the individual's age. The age categories are designated as follows:
+
+(1) Adult category for individuals who are at least eighteen years of age;
+
+(2) Teenager category for individuals who are at least sixteen years of age but under the age of eighteen;
+
+(3) Child category for individuals who are at least thirteen years of age but under the age of sixteen; and
+
+(4) Young child category for individuals who are under the age of thirteen.
+
+"Age rating" means a public display that indicates the appropriateness of an app for different age categories.
+
+"App" means a software application or electronic service that may be run or directed by a user on a computer, mobile device, or any other general purpose computing device.
+
+"App store" means a publicly available website, software application, or other electronic service that distributes apps from third-party developers to users of a computer, mobile device, or any other general purpose computing device.
+
+"Covered app store provider" means any person that owns or controls an app store that is available for users in the State.
+
+"Department" means the department of commerce and consumer affairs.
+
+"Developer" means any person that owns or controls an app on the app store of a covered app provider.
+
+"Know" means to have actual knowledge or knowledge fairly inferred based on objective circumstances.
+
+"Minor" means an individual who is under sixteen years of age.
+
+"Mobile device" means a smartphone or tablet computer that is capable of running a mobile operating system.
+
+"Mobile operating system" means a set of software that manages mobile device hardware resources and provides common services for mobile device programs.
+
+"Parent" means, with respect to a particular minor, an adult with the legal right to make decisions on behalf of that minor, including:
+
+(1) A natural parent;
+
+(2) An adoptive parent;
+
+(3) A legal guardian; and
+
+(4) An individual with legal custody over the minor.
+
+"Signal" means age-bracketed data sent by a real-time secure application programming interface or operating system that is likely to be accessed by minors.
+
+"User" means an individual who uses an app store or purchases and uses an app from an app store.
+
+"Verifiable parental consent" means authorization that is provided by a parent whom a covered app store provider has verified is an adult, in response to:
+
+(1) A disclosure from a covered app store provider identifying what the parent is specifically consenting to, including the age rating for the app or in-app purchase at issue; and
+
+(2) The parent being given a clear choice to consent to or decline to consent to the request from the covered app provider.
+
+§ ___-3 Covered app store provider requirements; age verification; parental consent; age rating display; parental controls. (a) Each covered app store provider shall:
+
+(1) Determine the age category for each individual in the State that uses the provider's app store and verify the individual's age using commercially reasonable methods;
+
+(2) Provide a mechanism for a parent to:
+
+(A) Block a minor from downloading any app unsuitable for the age category of the minor; or
+
+(B) Consent to the download of any app; and
+
+(3) Obtain verifiable parental consent before allowing a minor in the State to:
+
+(A) Use its app store; or
+
+(B) Download and purchase any app from its app store, including making in-app purchases;
+
+provided that consent shall be obtained on a download-by-download or a purchase-by-purchase basis by default, provided further that the verifiable parental consent for the purchase of an app shall be valid for no longer than seven days.
+
+(b) Any covered app store provider that owns or controls a mobile device's mobile operating system shall, to the extent practicable, provide to parents a clear and easy mechanism to set:
+
+(1) Filters that prevent a minor from accessing any adult website on the web browser of the mobile device; and
+
+(2) Usage limits, including daily limits and limitations during school and evening hours.
+
+(c) To the extent a covered app store provider displays age ratings or descriptions of content, the covered app store provider shall display the age rating and description of content for each app available in the provider's app store in a clear and prominent manner, including information regarding the minimum age category suitable for usage of an app.
+
+(d) A covered app store provider shall provide developers the ability to determine, in real time, the age category of any user and, with respect to any user that is a minor, whether the covered app store provider has obtained verifiable parental consent pursuant to this section.
+
+(e) Nothing in this section shall be construed to:
+
+(1) Prevent a covered app store provider from taking reasonable measures to block, detect, or prevent the distribution of unlawful, obscene, or other harmful material to minors; block or filter spam; prevent criminal activity; or protect the security of an app store or app;
+
+(2) Require a covered app store provider to disclose any information about a user to a developer other than the user's age category and, with respect to any user that is a minor, whether the covered app store provider has obtained verifiable parental consent pursuant to this section;
+
+(3) Allow a covered app store provider to use any measures required by this section in a way that is arbitrary, capricious, anti-competitive, or unlawful; or
+
+(4) Affect or restrict the expression of political, religious, or other viewpoints.
+
+§ ___-4 Developer obligations; age rating; content description; verification of age category and parental consent; time restrictions. (a) Any developer that offers users with a description of content or age rating of the developer's app shall clearly provide to users and each app store available in the State the:
+
+(1) Description of the app's content; and
+
+(2) Identification of the age category eligible to use the app, consistent with the rating system developed in accordance with the rules adopted by the department.
+
+(b) Each developer shall:
+
+(1) To the extent technically feasible, use the application programming interface of a covered app store provider to verify:
+
+(A) The age category of its users; and
+
+(B) In the case of a minor, whether verifiable parental consent has been obtained before allowing the use of the developer's app or in-app purchases;
+
+(2) Provide readily available features for a parent to implement time restrictions for the developer's app, including the ability to view metrics reflecting the amount of time that a minor is using the app and set daily time limits on a minor's use of the app; and
+
+(3) Use a covered app store provider's signal to determine the age category of a user.
+
+§ ___-5 Violations. Any violation of this chapter shall constitute an unfair or deceptive act or practice under section 480-2. All remedies, penalties, and authority granted to the attorney general by chapter 480 shall be available to the attorney general in the enforcement of this chapter."
+
+SECTION 3. No later than July 1, 2026, the department of commerce and consumer affairs shall adopt rules in accordance with chapter 91 to implement this Act.
+
+SECTION 4. If any provision of this Act, or the application thereof to any person or circumstance, is held invalid, the invalidity does not affect other provisions or applications of the Act that can be given effect without the invalid provision or application, and to this end the provisions of this Act are severable.
+
+SECTION 5. This Act does not affect rights and duties that matured, penalties that were incurred, and proceedings that were begun before its effective date.
+
+SECTION 6. This Act shall take effect upon its approval; provided that section 2 shall take effect on July 1, 2027.
+
+INTRODUCED BY: _____________________
+
+Report Title:
+
+DCCA; Age Verification for App Developers and App Stores Act; Mobile Devices; Age Ratings; Age Categories; Minors; Parental Consent; Filters; Usage Limits; Penalty; Rules
+
+Description:
+
+Beginning 7/1/2027, requires app store providers to determine the age category for each of their users in the State and verify their age; provide a mechanism for parents to block minors from downloading unsuitable apps; and obtain parental consent before allowing a minor to use their app store or download and purchase apps. Requires certain app store providers to provide parents with a mechanism to set filters and usage limits for minors. Requires certain app store providers to display age ratings and content description for each app available in their app store. Establishes age verification and parental consent requirements for certain app developers. Establishes violations as unfair or deceptive act or practice. Requires the Department of Commerce and Consumer Affairs to adopt rules no later than 7/1/2026.
+
+The summary description of legislation appearing on this page is for informational purposes only and is not legislation or evidence of legislative intent.

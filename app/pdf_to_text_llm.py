@@ -68,13 +68,27 @@ AVAILABLE_STATES = {
     "DC": {"name": "District of Columbia"},
     "DE": {"name": "Delaware"},
     "FL": {"name": "Florida"},
+    "GA": {"name": "Georgia"},
+    "HI": {"name": "Hawaii"},
     "IA": {"name": "Iowa"},
+    "ID": {"name": "Idaho"},
     "IL": {"name": "Illinois"},
     "IN": {"name": "Indiana"},
     "KS": {"name": "Kansas"},
+    "ME": {"name": "Maine"},
+    "MN": {"name": "Minnesota"},
+    "NC": {"name": "North Carolina"},
+    "ND": {"name": "North Dakota"},
+    "NE": {"name": "Nebraska"},
     "NY": {"name": "New York"},
     "OH": {"name": "Ohio"},
-    "TX": {"name": "Texas"}
+    "OK": {"name": "Oklahoma"},
+    "SD": {"name": "South Dakota"},
+    "TN": {"name": "Tennessee"},
+    "TX": {"name": "Texas"},
+    "VT": {"name": "Vermont"},
+    "WI": {"name": "Wisconsin"},
+    "WY": {"name": "Wyoming"}
 }
 
 # Chunking Configuration
@@ -144,13 +158,17 @@ def strip_conversational_headers(text):
     
     return text
 
-def remove_unwanted_tags(text):
+def remove_unwanted_tags(text, state_code=None):
     """
-    Remove all [A>...<A] and [D>...<D] tags from text, keeping only the content inside.
+    Remove [A>...<A] and [D>...<D] tags from text, keeping only the content inside.
     This is a post-processing step after PDF-to-text conversion to clean any unwanted tags.
+    
+    For Colorado (CO): Only removes [D>...<D] tags (strikethrough), keeps [A>...<A] tags (underline)
+    For other states: Removes both [A>...<A] and [D>...<D] tags
     
     Args:
         text (str): Input text with potential tags
+        state_code (str): State code (e.g., 'CO', 'CA', etc.)
         
     Returns:
         str: Clean text with tags removed
@@ -164,17 +182,24 @@ def remove_unwanted_tags(text):
     total_tags = a_tags + d_tags
     
     if total_tags > 0:
-        logging.info(f"[POST-PROCESSING] Found {total_tags} unwanted tags to remove ([A>: {a_tags}, [D>: {d_tags})")
+        logging.info(f"[POST-PROCESSING] Found {total_tags} tags ([A>: {a_tags}, [D>: {d_tags})")
         
-        # Remove [A>content<A] tags - keep the content (DOTALL flag allows matching across newlines)
-        text = re.sub(r'\[A>(.*?)<A\]', r'\1', text, flags=re.DOTALL)
-        
-        # Remove [D>content<D] tags - keep the content (DOTALL flag allows matching across newlines)
-        text = re.sub(r'\[D>(.*?)<D\]', r'\1', text, flags=re.DOTALL)
-        
-        logging.info(f"[POST-PROCESSING] Successfully removed {total_tags} unwanted tags from text")
+        # Colorado (CO): Only remove [D>...<D] tags, keep [A>...<A] tags
+        if state_code == "CO":
+            # Remove [D>content<D] tags - keep the content
+            text = re.sub(r'\[D>(.*?)<D\]', r'\1', text, flags=re.DOTALL)
+            logging.info(f"[POST-PROCESSING] Colorado: Removed {d_tags} [D>...<D] tags, kept {a_tags} [A>...<A] tags")
+        else:
+            # All other states: Remove both [A>...<A] and [D>...<D] tags
+            # Remove [A>content<A] tags - keep the content
+            text = re.sub(r'\[A>(.*?)<A\]', r'\1', text, flags=re.DOTALL)
+            
+            # Remove [D>content<D] tags - keep the content
+            text = re.sub(r'\[D>(.*?)<D\]', r'\1', text, flags=re.DOTALL)
+            
+            logging.info(f"[POST-PROCESSING] Removed all {total_tags} tags ([A>: {a_tags}, [D>: {d_tags})")
     else:
-        logging.info("[POST-PROCESSING] No unwanted tags found - text is clean")
+        logging.info("[POST-PROCESSING] No tags found - text is clean")
     
     return text
 
@@ -1096,12 +1121,17 @@ def save_to_text_file(content, output_path, enable_tag_cleaning=True, state_code
     try:
         # CRITICAL: PDF→Text tags should be REMOVED (cleaned) for verification step
         # The verification step will add tags properly based on DOCX analysis
-        # Only skip tag cleaning for states that explicitly don't use verification (IN, CO)
+        # Only skip tag cleaning for states that explicitly don't use verification (IN)
+        # CO uses selective tag cleaning (removes [D>...<D], keeps [A>...<A])
         
-        if state_code in ["IN", "CO"]:
-            # IN and CO don't use verification - keep text as-is
+        if state_code == "IN":
+            # IN doesn't use verification - keep text as-is
             enable_tag_cleaning = False
-            logging.info(f"[POST-PROCESSING] {state_code} doesn't use verification - keeping text as-is")
+            logging.info(f"[POST-PROCESSING] IN doesn't use verification - keeping text as-is")
+        elif state_code == "CO":
+            # CO uses selective tag cleaning - remove [D>...<D], keep [A>...<A]
+            enable_tag_cleaning = True
+            logging.info(f"[POST-PROCESSING] CO: Removing [D>...<D] tags, keeping [A>...<A] tags")
         else:
             # All other states: remove tags from PDF→Text so verification can add them properly
             enable_tag_cleaning = True
@@ -1114,7 +1144,7 @@ def save_to_text_file(content, output_path, enable_tag_cleaning=True, state_code
         # STEP 2: Remove unwanted tags if enabled
         if enable_tag_cleaning:
             print("🔧 Post-processing: Removing unwanted tags...")
-            cleaned_content = remove_unwanted_tags(cleaned_content)
+            cleaned_content = remove_unwanted_tags(cleaned_content, state_code)
         else:
             logging.info("[POST-PROCESSING] Tag cleaning disabled")
         
@@ -1451,44 +1481,65 @@ def process_state_pdfs(client, examples, state_code, input_folder, output_folder
                     logging.warning(f"Skipping Verified copy for {pdf_file} - text conversion failed")
                 
                 logging.info(f"[PROCESSED] {state_code} verification skipped, file copied to Verified: {pdf_file}")
-            elif text_success and docx_success and summary_file_path:
-                print("🤖 Running LLM Tag Verification...")
-                try:
-                    # Verify text using LLM
-                    corrected_text = verify_text_with_llm(output_path, summary_file_path, state_code, client)
-                    
-                    if corrected_text:
-                        # Save verified file
-                        verified_file_path = save_verified_file(corrected_text, output_path, state_code)
+            elif text_success and docx_success:
+                # Check if summary file exists (only if there were formatted items)
+                if summary_file_path:
+                    print("🤖 Running LLM Tag Verification...")
+                    try:
+                        # Verify text using LLM
+                        corrected_text = verify_text_with_llm(output_path, summary_file_path, state_code, client)
                         
-                        if verified_file_path:
-                            # Create verification report
-                            original_text = read_file_content(output_path)
-                            report_file_path = create_verification_report(
-                                summary_file_path, output_path, verified_file_path, 
-                                state_code, original_text, corrected_text
-                            )
+                        if corrected_text:
+                            # Save verified file
+                            verified_file_path = save_verified_file(corrected_text, output_path, state_code)
                             
-                            verification_success_count += 1
-                            print(f"  ✓ Verification successful")
-                            print(f"    - Verified file: {verified_file_path}")
-                            if report_file_path:
-                                print(f"    - Report: {report_file_path}")
-                            
-                            logging.info(f"[SUCCESS] Verification completed for: {pdf_file}")
+                            if verified_file_path:
+                                # Create verification report
+                                original_text = read_file_content(output_path)
+                                report_file_path = create_verification_report(
+                                    summary_file_path, output_path, verified_file_path, 
+                                    state_code, original_text, corrected_text
+                                )
+                                
+                                verification_success_count += 1
+                                print(f"  ✓ Verification successful")
+                                print(f"    - Verified file: {verified_file_path}")
+                                if report_file_path:
+                                    print(f"    - Report: {report_file_path}")
+                                
+                                logging.info(f"[SUCCESS] Verification completed for: {pdf_file}")
+                            else:
+                                verification_failed_files.append(pdf_file)
+                                print(f"  ✗ Failed to save verified file")
+                                logging.error(f"[FAILED] Could not save verified file for: {pdf_file}")
                         else:
                             verification_failed_files.append(pdf_file)
-                            print(f"  ✗ Failed to save verified file")
-                            logging.error(f"[FAILED] Could not save verified file for: {pdf_file}")
+                            print(f"  ✗ LLM verification failed")
+                            logging.error(f"[FAILED] LLM verification failed for: {pdf_file}")
+                            
+                    except Exception as verify_error:
+                        verification_failed_files.append(pdf_file)
+                        print(f"  ✗ Verification error: {verify_error}")
+                        logging.error(f"[ERROR] Verification exception for {pdf_file}: {verify_error}")
+                else:
+                    # No formatted items found - copy original text to Verified folder
+                    print("ℹ️ No formatted items found - copying to Verified folder without verification")
+                    text_content = read_file_content(output_path)
+                    if text_content:
+                        verified_file_path = save_verified_file(text_content, output_path, state_code)
+                        if verified_file_path:
+                            verification_success_count += 1
+                            print(f"  ✓ Copied to Verified folder")
+                            print(f"    - Verified file: {verified_file_path}")
+                            logging.info(f"[PROCESSED] {state_code} file with no formatting copied to Verified: {pdf_file}")
+                        else:
+                            verification_failed_files.append(pdf_file)
+                            print(f"  ✗ Failed to copy to Verified folder")
+                            logging.error(f"[FAILED] Could not copy {state_code} file to Verified folder: {pdf_file}")
                     else:
                         verification_failed_files.append(pdf_file)
-                        print(f"  ✗ LLM verification failed")
-                        logging.error(f"[FAILED] LLM verification failed for: {pdf_file}")
-                        
-                except Exception as verify_error:
-                    verification_failed_files.append(pdf_file)
-                    print(f"  ✗ Verification error: {verify_error}")
-                    logging.error(f"[ERROR] Verification exception for {pdf_file}: {verify_error}")
+                        print(f"  ✗ Could not read converted text file")
+                        logging.error(f"[FAILED] Could not read converted text for {state_code} file: {pdf_file}")
             else:
                 verification_failed_files.append(pdf_file)
                 print(f"  ⚠️ Skipping verification (previous steps failed)")

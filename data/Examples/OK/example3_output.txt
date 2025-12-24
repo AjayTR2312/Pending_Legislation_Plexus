@@ -1,0 +1,75 @@
+STATE OF OKLAHOMA
+
+1st Session of the 60th Legislature (2025)
+
+HOUSE BILL 1575
+
+By: Lawson
+
+[A>AS INTRODUCED<A]
+
+An Act relating to social services; enacting the Streamlined Services Act; declaring purpose to establish streamlined eligibility and enrollment system; providing list of services system shall promote efficiency, accessibility, and coordination of; directing the Department of Human Services to coordinate with certain agencies and community partners; directing Department to conduct feasibility study; providing definitions; directing Department to develop, implement, and administer an integrated access system; directing Department to issue certain request for proposals; directing Department to launch system within certain timeframe; directing Department to provide progress updates; providing for codification; providing an effective date; and declaring an emergency.
+
+BE IT ENACTED BY THE PEOPLE OF THE STATE OF OKLAHOMA:
+
+SECTION 1. NEW LAW A new section of law to be codified in the Oklahoma Statutes as Section 3500.1 of Title 56, unless there is created a duplication in numbering, reads as follows:
+
+This act shall be known and may be cited as the "Streamlined Services Act".
+
+SECTION 2. NEW LAW A new section of law to be codified in the Oklahoma Statutes as Section 3500.2 of Title 56, unless there is created a duplication in numbering, reads as follows:
+
+A. The purpose of the Streamlined Services Act is to establish a unified and streamlined eligibility and enrollment system within the Oklahoma Department of Human Services to improve access to and management of services for Oklahomans.
+
+B. The system shall promote efficiency, accessibility, and coordination of services across programs, including but not limited to:
+
+1. Supplemental Nutrition Assistance Program (SNAP);
+
+2. Temporary Assistance for Needy Families (TANF);
+
+3. Child Care Subsidies;
+
+4. Low Income Home Energy Assistance Program (LIHEAP);
+
+5. Medicaid; and
+
+6. Women, Infants, and Children (WIC).
+
+C. The Department shall coordinate with the Oklahoma Health Care Authority, the State Department of Health, and any other state agency or community partner that administers a program specified in subsection B of this section to implement the provisions of this act.
+
+D. The Department shall conduct a feasibility study to identify opportunities to integrate additional programs into the system over time.
+
+SECTION 3. NEW LAW A new section of law to be codified in the Oklahoma Statutes as Section 3500.3 of Title 56, unless there is created a duplication in numbering, reads as follows:
+
+As used in the Streamlined Services Act:
+
+1. "Applicant" means any individual or household seeking benefits or services through the programs specified in Section 2 of this act; and
+
+2. "Integrated access system" means a single, technology-driven platform that enables residents to apply for, manage, and renew benefits across multiple human services programs.
+
+SECTION 4. NEW LAW A new section of law to be codified in the Oklahoma Statutes as Section 3500.4 of Title 56, unless there is created a duplication in numbering, reads as follows:
+
+The Department of Human Services shall develop, implement, and administer an integrated access system that:
+
+1. Provides a single point of access for applicants to apply for and manage benefits across eligible programs;
+
+2. Utilizes a secure, user-friendly, web-based platform accessible via computers, mobile devices, and kiosks;
+
+3. Includes functionality for real-time status updates, document uploads, and communication between applicants and administrative staff;
+
+4. Ensures accessibility for individuals with disabilities and individuals with limited English proficiency; and
+
+5. Integrates data-sharing capabilities to streamline eligibility determinations while maintaining compliance with state and federal privacy laws.
+
+SECTION 5. NEW LAW A new section of law to be codified in the Oklahoma Statutes as Section 3500.5 of Title 56, unless there is created a duplication in numbering, reads as follows:
+
+A. The Department of Human Services shall:
+
+1. Issue a request for proposals (RFP) for the development and implementation of the integrated access system within six (6) months of the effective date of this act; and
+
+2. Launch the system for public use within one (1) year of the effective date of this act.
+
+B. The Department shall establish interim benchmarks and provide progress updates to the Governor and the Legislature every six (6) months until the system is fully operational.
+
+SECTION 6. This act shall become effective July 1, 2025.
+
+SECTION 7. It being immediately necessary for the preservation of the public peace, health or safety, an emergency is hereby declared to exist, by reason whereof this act shall take effect and be in full force from and after its passage and approval.

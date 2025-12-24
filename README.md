@@ -4,7 +4,7 @@
 This is a comprehensive PDF-to-Text conversion application with multi-state support, featuring Claude Opus 4 LLM integration, DOCX analysis, and automated tag verification.
 
 ## Features
-- **Multi-State Support**: 14 states with state-specific processing rules
+- **Multi-State Support**: 28 states with state-specific processing rules
 - **LLM Integration**: Claude Opus 4 for intelligent PDF conversion
 - **DOCX Analysis**: Adobe PDF Services for format analysis
 - **Tag Verification**: Automated verification with state-specific prompts
@@ -42,11 +42,14 @@ Temp/
     └── README.md               # This file
 ```
 
-## Supported States
+## Supported States (28 Total)
 - AR (Arkansas), CA (California), CO (Colorado), CT (Connecticut)
-- DC (District of Columbia), DE (Delaware), FL (Florida), IA (Iowa)
-- IL (Illinois), IN (Indiana), KS (Kansas), NY (New York)
-- OH (Ohio), TX (Texas)
+- DC (District of Columbia), DE (Delaware), FL (Florida), GA (Georgia)
+- HI (Hawaii), IA (Iowa), ID (Idaho), IL (Illinois)
+- IN (Indiana), KS (Kansas), ME (Maine), MN (Minnesota)
+- NC (North Carolina), ND (North Dakota), NE (Nebraska), NY (New York)
+- OH (Ohio), OK (Oklahoma), SD (South Dakota), TN (Tennessee)
+- TX (Texas), VT (Vermont), WI (Wisconsin), WY (Wyoming)
 
 ## Quick Start
 
