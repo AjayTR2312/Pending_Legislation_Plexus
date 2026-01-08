@@ -21,6 +21,8 @@ CRITICAL RULES FOR FLORIDA (FL) TAGGING:
 9. When applying tags, keep complete phrases together - DO NOT split sentences mid-phrase
 10. PRESERVE ALL TEXT CONTENT: NEVER delete, remove, or omit ANY words from the original text
 11. NO TEXT DELETION: If a word exists in the input, it MUST exist in the output - whether tagged or untagged
+12. RESPECT FORMATTING GAPS: If the summary shows a GAP in formatting (unformatted text between formatted sections), you MUST create SEPARATE tags - DO NOT merge them into one tag
+13. EACH RUN IS DISTINCT: Each "Run #" in the summary represents a SEPARATE formatted segment - if there are multiple Runs with gaps between them, create SEPARATE tags for each Run
 
 
 FLORIDA SPECIAL TAGGING RULES:
@@ -30,6 +32,11 @@ FLORIDA SPECIAL TAGGING RULES:
 - Consecutive words with same formatting go in ONE tag: [A>word1 word2 word3<A]
 - Florida section numbers like (4), (b), (1) examined individually for exact formatting
 - Apply tags to complete phrases: [A>Florida Statutes are amended.<A] NOT [A>Florida Statutes are<A] [A>amended.<A]
+- CRITICAL: If summary shows SEPARATE Runs with GAPS between them, create SEPARATE tags - DO NOT combine them
+- EXAMPLE OF GAPS: If Run 1-12 is underlined, then Run 13-20 is NOT underlined, then Run 21-30 is underlined again:
+  * CORRECT: "[A>text from runs 1-12<A] unformatted text from runs 13-20 [A>text from runs 21-30<A]"
+  * WRONG: "[A>text from runs 1-12 unformatted text from runs 13-20 text from runs 21-30<A]"
+- Each distinct formatted segment (identified by Run numbers) gets its own separate tag
 
 SUMMARY REFERENCE (Ground Truth):
 The actual summary with all text to be tagged will appear below after {SUMMARY_CONTENT}.
@@ -77,6 +84,30 @@ USING CONTEXTUAL LOCATIONS:
 - The Run number eliminates ambiguity when the same text appears multiple times in a paragraph
 - The 【】 symbols show exactly which text needs the formatting tag
 - MANDATORY: Match the surrounding context words exactly before applying any tag
+
+CRITICAL: DETECTING AND PRESERVING FORMATTING GAPS
+When you see in the summary that Para or Run numbers have GAPS (e.g., Para X ends, then Para Y starts where Y > X+1, or Run numbers jump), this indicates UNFORMATTED TEXT exists between the formatted sections. You MUST create SEPARATE tags:
+
+GENERALIZED EXAMPLE - Detecting Gaps (THESE ARE NOT REAL WORDS FROM THE DOCUMENT):
+If summary shows:
+  Items 1-5: "first formatted section" (Para N, Runs 1-10) - underline
+  Items 6-10: "second formatted section" (Para N+3, Runs 5-15) - underline
+
+Notice: Para N ends, then Para N+3 starts. The gap (Para N+1 and N+2) contains unformatted text.
+
+CORRECT APPROACH: Create TWO separate tags with the unformatted text between them:
+"[A>first formatted section<A] unformatted text in between [A>second formatted section<A]"
+
+WRONG APPROACH: DO NOT merge into one continuous tag:
+"[A>first formatted section unformatted text in between second formatted section<A]"
+
+HOW TO DETECT GAPS:
+1. Look at Para numbers: If they're not consecutive (Para 10 → Para 15), there's a gap
+2. Look at Run sequence: If formatted items skip paragraphs, there's unformatted content between
+3. Check the location context: The words between the two formatted sections are NOT in the summary
+4. Create SEPARATE tags for EACH contiguous formatted section
+
+The gap detection is YOUR RESPONSIBILITY - analyze Para and Run numbers to identify where formatting stops and starts!
 
 LOCATION-BASED TAGGING RULES:
 1. EXACT CONTEXT MATCHING: The words before and after 【target】 in the location MUST match the text around the target word

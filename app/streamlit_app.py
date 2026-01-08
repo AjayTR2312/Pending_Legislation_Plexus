@@ -113,18 +113,11 @@ def validate_pdf_not_scanned(pdf_path, filename):
             # Log detailed detection results
             logging.info(f"PDF Detection: type={pdf_type}, pages={total_pages}, high_dpi_imgs={high_dpi_images}/{total_images}, text={text_ratio}%, image={image_ratio}%")
             
-            # Check 1: Page count validation
-            if total_pages > 15:
-                error_msg = f"**{filename}** — Document exceeds technical capacity({total_pages} pages). Processing time would be excessive and exceeds system capacity limits."
-                return False, error_msg.strip()
-            
-            # Check 2: Scanned PDF validation
+            # Check 1: Scanned PDF validation
             if result['type'] == 'scanned':
                 error_msg = f"**{filename}** — Scanned document detected. This file format cannot be processed due to technical limitations in text extraction."
                 return False, error_msg.strip()
             
-            # Check 3: Hybrid PDF rejection (contains signatures or mixed content)
-            elif result['type'] == 'hybrid':
                 error_msg = f"**{filename}** — Hybrid document detected (contains signatures or scanned content). This file format cannot be processed due to technical limitations."
                 return False, error_msg.strip()
         
@@ -379,9 +372,9 @@ def process_single_pdf_simple(pdf_path, state_code, session_id, progress_placeho
                 st.session_state.step_status[step] = "🔄"
             update_progress()
             
-            # Call chunked verification directly
-            from llm_tag_verifier import verify_with_pdf_chunking
-            corrected_text = verify_with_pdf_chunking(
+            # Call overlapping chunk verification for 100% accuracy
+            from llm_tag_verifier import verify_with_overlapping_chunks
+            corrected_text = verify_with_overlapping_chunks(
                 pdf_path, 
                 state_code, 
                 st.session_state.client, 

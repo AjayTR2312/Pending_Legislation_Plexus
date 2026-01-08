@@ -8,6 +8,7 @@ import sys
 import logging
 import urllib3
 import re
+import io
 from datetime import datetime
 from pathlib import Path
 import base64
@@ -31,8 +32,7 @@ from llm_tag_verifier import (
     extract_formatted_items_summary,
     call_claude_api,
     verify_fl_tags_with_llm,
-    should_chunk_for_verification,
-    verify_with_pdf_chunking
+    should_chunk_for_verification
 )
 
 # Disable SSL warnings for Adobe API
@@ -98,7 +98,7 @@ CHUNK_CONFIG = {
     'max_output_tokens_per_chunk': 16384,  # Claude output limit per chunk
     
     # Page thresholds  
-    'max_pages_no_chunk': 15,              # Don't chunk if ≤15 pages
+    'max_pages_no_chunk': 5,               # Don't chunk if ≤5 pages
     'pages_per_chunk': 5,                  # 5 pages per chunk
     
     # Token estimation
@@ -861,6 +861,485 @@ def process_pdf_chunk(client, chunk_pdf_data, chunk_info, examples, conversion_p
     
     return None
 
+def create_overlapping_chunks(page_count, chunk_size=5, overlap=1):
+    """
+    Create overlapping page chunks for better context preservation.
+    
+    Args:
+        page_count (int): Total number of pages in the document
+        chunk_size (int): Number of pages per chunk
+        overlap (int): Number of pages to overlap between chunks
+        
+    Returns:
+        list: List of chunk dictionaries with start/end pages
+        
+    Example with chunk_size=5, overlap=1:
+        Chunk 1: Pages 1-6 (pages 0-5 in 0-indexed)
+        Chunk 2: Pages 6-11 (pages 5-10 in 0-indexed) - page 6 overlaps
+        Chunk 3: Pages 11-15 (pages 10-14 in 0-indexed) - page 11 overlaps
+    """
+    chunks = []
+    start = 0
+    chunk_num = 1
+    
+    while start < page_count:
+        # Calculate end page (inclusive overlap)
+        end = min(start + chunk_size + overlap, page_count)
+        
+        chunk = {
+            'chunk_num': chunk_num,
+            'start_page': start,  # 0-indexed
+            'end_page': end,      # 0-indexed (exclusive)
+            'page_range': f"{start + 1}-{end}",  # 1-indexed for display
+            'pages': list(range(start, end))
+        }
+        chunks.append(chunk)
+        
+        # Next chunk starts at current end minus overlap
+        start = end - overlap
+        chunk_num += 1
+        
+        # Avoid tiny last chunk - merge with previous if too small
+        remaining = page_count - start
+        if remaining > 0 and remaining < chunk_size / 2 and len(chunks) > 0:
+            # Extend the last chunk to include remaining pages
+            chunks[-1]['end_page'] = page_count
+            chunks[-1]['page_range'] = f"{chunks[-1]['start_page'] + 1}-{page_count}"
+            chunks[-1]['pages'] = list(range(chunks[-1]['start_page'], page_count))
+            break
+    
+    # Update total_chunks for all chunks
+    total_chunks = len(chunks)
+    for chunk in chunks:
+        chunk['total_chunks'] = total_chunks
+    
+    return chunks
+
+def extract_pdf_pages_with_markers(pdf_path, page_numbers):
+    """
+    Extract specific pages from PDF and add text markers to track page boundaries.
+    
+    Args:
+        pdf_path (str): Path to the PDF file
+        page_numbers (list): List of 0-indexed page numbers to extract
+        
+    Returns:
+        str: Base64-encoded PDF containing only the specified pages
+    """
+    try:
+        reader = PdfReader(pdf_path)
+        writer = PdfWriter()
+        
+        for page_num in page_numbers:
+            if page_num < len(reader.pages):
+                page = reader.pages[page_num]
+                writer.add_page(page)
+        
+        # Convert to base64
+        output = io.BytesIO()
+        writer.write(output)
+        output.seek(0)
+        pdf_bytes = output.read()
+        
+        return base64.b64encode(pdf_bytes).decode('utf-8')
+        
+    except Exception as e:
+        logging.error(f"Error extracting pages: {e}")
+        return None
+
+def build_chunk_aware_prompt(conversion_prompt, chunk_info, page_numbers):
+    """
+    Enhance conversion prompt with chunk awareness and page marker instructions.
+    
+    Args:
+        conversion_prompt (str): Original conversion prompt
+        chunk_info (dict): Chunk metadata (chunk_num, total_chunks, page_range, etc.)
+        page_numbers (list): List of page numbers in this chunk (1-indexed for display)
+        
+    Returns:
+        str: Enhanced prompt with chunk context and page marker instructions
+    """
+    page_list = ", ".join([str(p + 1) for p in page_numbers])  # Convert to 1-indexed
+    
+    chunk_context = f"""
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📊 CHUNKING CONTEXT - PLEASE READ CAREFULLY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+You are processing CHUNK {chunk_info['chunk_num']} of {chunk_info['total_chunks']} from a legislative document.
+
+📄 Pages in this chunk: {page_list}
+📝 Page range: {chunk_info['page_range']}
+
+⚠️ CRITICAL REQUIREMENTS FOR PAGE MARKERS:
+
+1. **Add page boundary markers** - Before processing each page, you MUST add:
+   <<<PAGE_X_START>>>
+   [... page content here ...]
+   <<<PAGE_X_END>>>
+   
+   Where X is the actual page number (1-indexed).
+
+2. **Example format:**
+   <<<PAGE_1_START>>>
+   [A>Section 1<A] Introduction text with underline...
+   More content from page 1...
+   <<<PAGE_1_END>>>
+   <<<PAGE_2_START>>>
+   Continued text from page 2...
+   [D>Deleted text<D] with strikethrough...
+   <<<PAGE_2_END>>>
+
+3. **Overlap handling:**
+   - Some pages may appear in multiple chunks for context
+   - Process EVERY page completely, even if it might be in another chunk
+   - The merging process will handle duplicates using your page markers
+
+4. **NO DUPLICATION ALLOWED:**
+   - ⚠️ CRITICAL: Do NOT repeat or duplicate any section/paragraph/subsection
+   - Each piece of content should appear EXACTLY ONCE in your output
+   - If you see similar content, it's likely a page boundary - process it ONCE
+   - Check your output carefully before completing
+
+5. **Formatting consistency:**
+   - If formatting (like [A>underline<A]) spans across pages, maintain it
+   - Process each page with full attention to detail
+   - Don't abbreviate or truncate content
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STANDARD CONVERSION INSTRUCTIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+{conversion_prompt}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔁 REMINDER: Include <<<PAGE_X_START>>> and <<<PAGE_X_END>>> markers for EVERY page!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"""
+    return chunk_context
+
+
+def detect_and_remove_duplicates(text, min_length=100):
+    """
+    Detect and remove duplicate paragraphs/sections in converted text.
+    This is a safety net to catch LLM-generated duplicates during streaming.
+    
+    Handles:
+    - Exact duplicates (same hash)
+    - Partial duplicates (one paragraph is a prefix/truncation of another)
+    - Header/section duplicates
+    
+    Args:
+        text (str): Text with potential duplicates
+        min_length (int): Minimum paragraph length to check for duplicates
+        
+    Returns:
+        tuple: (cleaned_text, duplicates_found_count)
+    """
+    import re
+    import hashlib
+    
+    # Split into paragraphs (preserving page markers)
+    lines = text.split('\n')
+    
+    seen_paragraphs = []  # Store actual paragraph text for similarity comparison
+    cleaned_lines = []
+    duplicates_removed = 0
+    current_paragraph = []
+    
+    def is_duplicate_or_partial(para_text, seen_paragraphs, threshold=0.8):
+        """
+        Check if paragraph is a duplicate or partial duplicate of any seen paragraph.
+        
+        Args:
+            para_text: Current paragraph text
+            seen_paragraphs: List of previously seen paragraph texts
+            threshold: Similarity threshold (0.8 = 80% similar)
+            
+        Returns:
+            True if duplicate/partial, False otherwise
+        """
+        para_stripped = para_text.strip()
+        
+        for seen_para in seen_paragraphs:
+            seen_stripped = seen_para.strip()
+            
+            # Exact match
+            if para_stripped == seen_stripped:
+                return True
+            
+            # Check if current para is a truncated version of seen para
+            # (duplicate but incomplete - common in streaming)
+            if seen_stripped.startswith(para_stripped) and len(para_stripped) > min_length:
+                # Current is a prefix of seen (truncated duplicate)
+                return True
+            
+            if para_stripped.startswith(seen_stripped) and len(seen_stripped) > min_length:
+                # Seen is a prefix of current (current is longer version)
+                # Remove the shorter one from seen_paragraphs and keep current
+                return True
+            
+            # Check for high similarity (handles minor differences)
+            if len(para_stripped) > min_length and len(seen_stripped) > min_length:
+                # Use Jaccard similarity on words
+                words_current = set(para_stripped.lower().split())
+                words_seen = set(seen_stripped.lower().split())
+                
+                if len(words_current) > 20 and len(words_seen) > 20:  # Only for substantial paragraphs
+                    intersection = len(words_current & words_seen)
+                    union = len(words_current | words_seen)
+                    similarity = intersection / union if union > 0 else 0
+                    
+                    if similarity >= threshold:
+                        return True
+        
+        return False
+    
+    for line in lines:
+        # Check if it's a page marker
+        is_marker = bool(re.match(r'<<<PAGE_\d+_(START|END)>>>', line.strip()))
+        
+        if is_marker:
+            # Process accumulated paragraph before marker
+            if current_paragraph:
+                para_text = '\n'.join(current_paragraph)
+                
+                if len(para_text.strip()) >= min_length:
+                    if is_duplicate_or_partial(para_text, seen_paragraphs):
+                        duplicates_removed += 1
+                        logging.warning(f"🔍 Duplicate detected and removed: {para_text.strip()[:80]}...")
+                    else:
+                        seen_paragraphs.append(para_text)
+                        cleaned_lines.extend(current_paragraph)
+                else:
+                    # Short paragraphs always added (likely headers/titles)
+                    cleaned_lines.extend(current_paragraph)
+                
+                current_paragraph = []
+            
+            # Add marker
+            cleaned_lines.append(line)
+            
+        elif line.strip() == '':
+            # Empty line - end of paragraph
+            if current_paragraph:
+                para_text = '\n'.join(current_paragraph)
+                
+                if len(para_text.strip()) >= min_length:
+                    if is_duplicate_or_partial(para_text, seen_paragraphs):
+                        duplicates_removed += 1
+                        logging.warning(f"🔍 Duplicate detected and removed: {para_text.strip()[:80]}...")
+                    else:
+                        seen_paragraphs.append(para_text)
+                        cleaned_lines.extend(current_paragraph)
+                        cleaned_lines.append(line)  # Keep empty line
+                else:
+                    cleaned_lines.extend(current_paragraph)
+                    cleaned_lines.append(line)
+                
+                current_paragraph = []
+            else:
+                cleaned_lines.append(line)
+        else:
+            # Regular content line
+            current_paragraph.append(line)
+    
+    # Process final paragraph
+    if current_paragraph:
+        para_text = '\n'.join(current_paragraph)
+        
+        if len(para_text.strip()) >= min_length:
+            if not is_duplicate_or_partial(para_text, seen_paragraphs):
+                seen_paragraphs.append(para_text)
+                cleaned_lines.extend(current_paragraph)
+            else:
+                duplicates_removed += 1
+                logging.warning(f"🔍 Duplicate detected and removed: {para_text.strip()[:80]}...")
+        else:
+            cleaned_lines.extend(current_paragraph)
+    
+    cleaned_text = '\n'.join(cleaned_lines)
+    
+    if duplicates_removed > 0:
+        logging.warning(f"⚠️ Removed {duplicates_removed} duplicate paragraph(s) from chunk")
+    else:
+        logging.info("✅ No duplicates detected in chunk")
+    
+    return cleaned_text, duplicates_removed
+
+
+def merge_chunks_with_markers(chunk_results, overlap=1):
+    """
+    Merge overlapping chunks by removing duplicate pages using markers.
+    
+    Args:
+        chunk_results (list): List of chunk result dictionaries with 'text' field
+        overlap (int): Number of overlapping pages between chunks
+        
+    Returns:
+        str: Merged text with duplicates removed and markers cleaned
+    """
+    import re
+    
+    if not chunk_results:
+        return ""
+    
+    merged_text = []
+    
+    for i, chunk_result in enumerate(chunk_results):
+        chunk_text = chunk_result['text']
+        
+        if i == 0:
+            # First chunk - keep everything
+            merged_text.append(chunk_text)
+            logging.info(f"  Chunk 1: Keeping all pages")
+        else:
+            # Remove first 'overlap' pages from this chunk
+            # They were already included in the previous chunk
+            
+            lines = chunk_text.split('\n')
+            pages_to_skip = overlap
+            pages_skipped = 0
+            output_lines = []
+            skip_mode = False
+            
+            for line in lines:
+                # Check for page start marker
+                start_match = re.search(r'<<<PAGE_(\d+)_START>>>', line)
+                if start_match:
+                    current_page_num = int(start_match.group(1))
+                    pages_skipped += 1
+                    
+                    if pages_skipped <= pages_to_skip:
+                        skip_mode = True  # Start skipping this page
+                        logging.debug(f"    Chunk {i+1}: Skipping duplicate page {current_page_num}")
+                    else:
+                        skip_mode = False  # Done skipping, process remaining pages
+                        logging.debug(f"    Chunk {i+1}: Keeping page {current_page_num}")
+                
+                # Add line if not in skip mode
+                if not skip_mode:
+                    output_lines.append(line)
+            
+            merged_text.append('\n'.join(output_lines))
+            logging.info(f"  Chunk {i+1}: Skipped {pages_to_skip} overlapping page(s), kept remaining content")
+    
+    # Join all chunks
+    final = '\n'.join(merged_text)
+    
+    # Remove all page markers from final output
+    markers_removed = len(re.findall(r'<<<PAGE_\d+_(START|END)>>>', final))
+    final = re.sub(r'<<<PAGE_\d+_START>>>\n?', '', final)
+    final = re.sub(r'<<<PAGE_\d+_END>>>\n?', '', final)
+    
+    # Clean up any extra blank lines
+    final = re.sub(r'\n{3,}', '\n\n', final)
+    
+    logging.info(f"✓ Merged {len(chunk_results)} chunks, removed {markers_removed} page markers")
+    
+    return final
+
+def process_pdf_chunk_with_markers(client, chunk_pdf_data, chunk_info, examples, chunk_prompt):
+    """
+    Process a single PDF chunk with page markers and chunk-aware prompting.
+    
+    Args:
+        client: Anthropic client
+        chunk_pdf_data (str): Base64-encoded PDF chunk
+        chunk_info (dict): Chunk metadata (chunk_num, total_chunks, page_range, etc.)
+        examples (list): Few-shot examples
+        chunk_prompt (str): Chunk-aware conversion prompt
+        
+    Returns:
+        str: Formatted text with page markers, or None if error
+    """
+    import time
+    
+    chunk_num = chunk_info['chunk_num']
+    total_chunks = chunk_info['total_chunks']
+    max_retries = 3
+    
+    for attempt in range(1, max_retries + 1):
+        try:
+            logging.info(f"🔄 Processing chunk {chunk_num}/{total_chunks} (pages {chunk_info['page_range']}) - Attempt {attempt}/{max_retries}")
+            
+            # Build messages
+            if examples:
+                messages = build_fewshot_messages(examples, chunk_pdf_data)
+                # Replace the last text content with chunk-aware prompt
+                for content in messages[-1]['content']:
+                    if content.get('type') == 'text':
+                        content['text'] = chunk_prompt
+            else:
+                messages = [{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "application/pdf",
+                                "data": chunk_pdf_data,
+                            },
+                        },
+                        {
+                            "type": "text",
+                            "text": chunk_prompt
+                        }
+                    ],
+                }]
+            
+            # Process chunk with Claude
+            formatted_text = ""
+            with client.messages.stream(
+                model="claude-opus-4-20250514",
+                max_tokens=CHUNK_CONFIG['max_output_tokens_per_chunk'],
+                temperature=0.1,
+                messages=messages
+            ) as stream:
+                for text in stream.text_stream:
+                    formatted_text += text
+            
+            logging.info(f"✅ Chunk {chunk_num}/{total_chunks} complete ({len(formatted_text)} characters)")
+            
+            # Layer 2: Deduplication safety net
+            cleaned_text, duplicates_removed = detect_and_remove_duplicates(formatted_text)
+            
+            if duplicates_removed > 0:
+                logging.warning(f"🧹 Cleaned chunk {chunk_num}/{total_chunks}: removed {duplicates_removed} duplicate(s)")
+                return cleaned_text
+            
+            return formatted_text
+            
+        except Exception as e:
+            error_msg = str(e)
+            logging.error(f"❌ Error processing chunk {chunk_num}/{total_chunks} (attempt {attempt}/{max_retries}): {error_msg}")
+            
+            # Check if it's a retryable error
+            retryable_errors = [
+                "peer closed connection",
+                "incomplete chunked read",
+                "timeout",
+                "connection reset",
+                "connection refused",
+                "rate_limit"
+            ]
+            
+            is_retryable = any(err in error_msg.lower() for err in retryable_errors)
+            
+            if attempt < max_retries and is_retryable:
+                wait_time = attempt * 2  # Exponential backoff: 2s, 4s, 6s
+                logging.warning(f"⏳ Retryable error detected. Waiting {wait_time}s before retry...")
+                time.sleep(wait_time)
+            else:
+                if not is_retryable:
+                    logging.error(f"❌ Non-retryable error encountered")
+                else:
+                    logging.error(f"❌ Max retries ({max_retries}) reached")
+                return None
+    
+    return None
+
 def process_pdf_with_chunking(client, pdf_path, examples, conversion_prompt):
     """
     Process a large PDF in page-based chunks and combine the results.
@@ -923,23 +1402,24 @@ def process_pdf_with_chunking(client, pdf_path, examples, conversion_prompt):
             return formatted_text
         
         # Chunking required
-        logging.info(f"🔄 Processing {page_count}-page document in {chunk_count} chunks...")
+        logging.info(f"🔄 Processing {page_count}-page document with OVERLAPPING chunks...")
         
-        # Create chunks
+        # Create overlapping chunks (overlap=1 means 1 page overlap)
         pages_per_chunk = CHUNK_CONFIG['pages_per_chunk']
-        chunks = create_page_chunks(page_count, pages_per_chunk)
+        overlap = 1  # One page overlap between chunks
+        chunks = create_overlapping_chunks(page_count, pages_per_chunk, overlap)
         
-        # Process each chunk
+        logging.info(f"📊 Created {len(chunks)} overlapping chunks:")
+        for chunk in chunks:
+            logging.info(f"   Chunk {chunk['chunk_num']}: Pages {chunk['page_range']} (overlap={overlap if chunk['chunk_num'] > 1 else 0})")
+        
+        # Process each chunk with page markers
         chunk_results = []
         chunk_extraction_failed = False
         
         for chunk_info in chunks:
-            # Extract page range as separate PDF
-            chunk_pdf_data = extract_pdf_page_range(
-                pdf_path, 
-                chunk_info['start_page'], 
-                chunk_info['end_page']
-            )
+            # Extract pages with markers
+            chunk_pdf_data = extract_pdf_pages_with_markers(pdf_path, chunk_info['pages'])
             
             if not chunk_pdf_data:
                 error_msg = f"Failed to extract pages {chunk_info['page_range']}"
@@ -953,8 +1433,17 @@ def process_pdf_with_chunking(client, pdf_path, examples, conversion_prompt):
                     logging.warning("⚠ Continuing with remaining chunks...")
                     continue
             
+            # Build chunk-aware prompt with page marker instructions
+            chunk_prompt = build_chunk_aware_prompt(conversion_prompt, chunk_info, chunk_info['pages'])
+            
             # Process the chunk
-            chunk_text = process_pdf_chunk(client, chunk_pdf_data, chunk_info, examples, conversion_prompt)
+            chunk_text = process_pdf_chunk_with_markers(
+                client, 
+                chunk_pdf_data, 
+                chunk_info, 
+                examples, 
+                chunk_prompt
+            )
             
             if chunk_text is None:
                 error_msg = f"Failed to process chunk {chunk_info['chunk_num']}/{chunk_info['total_chunks']}"
@@ -1026,11 +1515,12 @@ def process_pdf_with_chunking(client, pdf_path, examples, conversion_prompt):
                 logging.error("❌ No chunks were successfully processed")
                 return None
         
-        # Combine all chunks (Option B: just concatenate without page markers)
-        combined_text = '\n'.join([result['text'] for result in chunk_results])
+        # Merge chunks using page markers (remove duplicate overlapping pages)
+        logging.info(f"🔗 Merging {len(chunk_results)} overlapping chunks...")
+        combined_text = merge_chunks_with_markers(chunk_results, overlap=overlap)
         
-        logging.info(f"✓ Successfully processed all {len(chunk_results)} chunks")
-        logging.info(f"✓ Combined output: {len(combined_text)} characters")
+        logging.info(f"✅ Successfully processed and merged all {len(chunk_results)} chunks")
+        logging.info(f"✅ Final output: {len(combined_text)} characters")
         
         return combined_text
         
@@ -1099,6 +1589,14 @@ def process_pdf_with_claude(client, pdf_path, examples, conversion_prompt):
                 formatted_text += text
         
         logging.info(f"Successfully processed PDF with Claude (received {len(formatted_text)} characters)")
+        
+        # Apply deduplication safety net
+        cleaned_text, duplicates_removed = detect_and_remove_duplicates(formatted_text)
+        
+        if duplicates_removed > 0:
+            logging.warning(f"🧹 Removed {duplicates_removed} duplicate paragraph(s) from output")
+            return cleaned_text
+        
         return formatted_text
         
     except Exception as e:
@@ -1186,16 +1684,6 @@ def verify_text_with_llm(text_file_path, summary_file_path, state_code, client, 
         str: Corrected text or original text for DC
     """
     try:
-        # Check if we should use PDF-level chunking
-        if pdf_path and session_dir:
-            should_chunk, page_count, reason = should_chunk_for_verification(pdf_path)
-            
-            if should_chunk:
-                logging.info(f"📦 Routing to PDF-level chunking: {reason}")
-                return verify_with_pdf_chunking(pdf_path, state_code, client, session_dir)
-            else:
-                logging.info(f"📄 Using standard verification: {reason}")
-        
         # Continue with standard verification (existing code)
         print("🤖 Running LLM-based tag verification...")
         
