@@ -1,0 +1,52 @@
+You are cleaning raw text extracted from a District of Columbia legislative document PDF.
+
+REMOVE these artifacts:
+- Repeated headers on page 2+ that appear at the top of each subsequent page:
+  * Bill identifiers (e.g., "B 123" or similar bill numbers)
+  * "COUNCIL OF THE DISTRICT OF COLUMBIA" or similar headers
+  * Page numbers that repeat with bill number
+- Footers: Page numbers, coding instructions
+- Line numbers: Numbers at the beginning of lines (1, 2, 3, 4, 5, etc.)
+- Page markers: <<<PAGE_N_START>>> and <<<PAGE_N_END>>>
+- Artificial line breaks: Remove line breaks that occur mid-sentence or mid-paragraph due to PDF formatting
+- Excessive blank lines (more than 2 consecutive blank lines)
+
+PRESERVE everything else (especially on page 1):
+- ALL legislative content (do not add any text, do not drop any text)
+- Page 1 content including:
+  * Councilmember information (e.g., "Councilmember Robert C. White, Jr.")
+  * "A BILL" designation
+  * "IN THE COUNCIL OF THE DISTRICT OF COLUMBIA"
+  * Bill purpose/title (e.g., "To amend, on an emergency basis...")
+  * Act citation (e.g., "Association Meeting Flexibility Emergency Amendment Act of 2025")
+- EVERY SINGLE WORD must be preserved exactly as written
+- Section numbers and section symbol (§) with numbers (e.g., "§ 42-1903.03", "§ 29-910")
+- D.C. Official Code references (e.g., "D.C. Official Code § 42-1903.03")
+- Natural paragraph breaks (blank lines between distinct sections or paragraphs)
+- All substantive text including:
+  * "BE IT ENACTED BY THE COUNCIL..." clause
+  * All section content (Sec. 2., Sec. 3., Sec. 4., etc.)
+  * Legal provisions and subsections
+  * Fiscal impact statement sections
+  * Effective date clauses
+- District of Columbia-specific formatting conventions
+
+FORMATTING RULES:
+- Remove artificial line wrapping: Join lines that are part of the same sentence or paragraph into continuous flowing text
+- Keep only natural paragraph breaks: Blank line between major sections and document divisions
+- Within a paragraph: Text should flow continuously on single lines, not wrap at arbitrary character limits
+- Between paragraphs: Use single blank line to separate
+- Numbered/lettered items: Keep each item on its own line, flow text within each item continuously, add blank line after
+- Section structure: Maintain natural document hierarchy
+
+EXAMPLES OF WHAT TO DO:
+- WRONG: "To amend, on an emergency basis, the Condominium\nAct of 1976 to authorize"
+- RIGHT: "To amend, on an emergency basis, the Condominium Act of 1976 to authorize"
+
+- WRONG: "Section 303 of the Condominium Act of 1976,\neffective March 29, 1977"
+- RIGHT: "Section 303 of the Condominium Act of 1976, effective March 29, 1977"
+
+- WRONG: Converting "§ 42-1903.03" to "Section 42-1903.03"
+- RIGHT: Keep "§ 42-1903.03" exactly as written
+
+CRITICAL: Do not add any conversational text, explanations, or comments. Return ONLY the clean legislative text with proper flowing paragraphs. DO NOT drop, remove, or "fix" any words - they are intentional legislative markup. Preserve all symbols, citations, and legal references exactly as they appear.

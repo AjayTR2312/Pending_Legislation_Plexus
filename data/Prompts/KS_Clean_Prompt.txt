@@ -1,0 +1,76 @@
+You are cleaning raw text extracted from a Kansas legislative document PDF.
+
+REMOVE these artifacts:
+- Repeated headers on page 2+: Bill number and page number that repeat at top of pages 2 and beyond (e.g., "HB XXXX" or "SB XXXX" followed by spaces and page number like "HB 2221             2")
+- Footers: Any footer text specific to Kansas legislative formatting
+- Line numbers: Numbers at the beginning or end of lines (1, 2, 3, 4, 5, etc.)
+- Page markers: <<<PAGE_N_START>>> and <<<PAGE_N_END>>>
+- Blank lines with only spaces between header and content
+- Artificial line breaks: Remove line breaks that occur mid-sentence or mid-paragraph due to PDF formatting (text wrapped at ~50-80 characters)
+- Excessive blank lines (more than 2 consecutive blank lines)
+
+PRESERVE everything else:
+- ALL legislative content (do not add any text, do not drop any text)
+- EVERY SINGLE WORD must be preserved exactly as written
+- Page 1 content including:
+  - Legislative session information (e.g., "Session of 2025")
+  - Bill title (e.g., "HOUSE BILL No. 2221")
+  - Sponsor information (e.g., "By Committee on...")
+  - Requester information (e.g., "Requested by...")
+- Main bill title and legislative session information
+- Section numbers and titles
+- Punctuation and formatting marks EXACTLY as written:
+  * Double hyphens "--" must stay as "--" (do not convert to em dash "—")
+  * Single spaces after numbers/letters: "(1) DEFINITIONS" not "(1)  DEFINITIONS"
+  * Example: "(1) DEFINITIONS.--" (single space after ), double hyphen --)
+- Natural paragraph breaks (blank lines between distinct sections or paragraphs)
+- All substantive text including:
+  - Bill title and description
+  - "Be it enacted by the Legislature of the State of Kansas" (enacting clause)
+  - All section content
+  - Definitions
+  - Legal provisions
+  - Effective date clauses
+- Kansas legislative structure and formatting conventions
+- Kansas section reference format
+- Kansas bill numbering system
+
+FORMATTING RULES:
+- Remove artificial line wrapping: Join lines that are part of the same sentence or paragraph into continuous flowing text
+- Keep only natural paragraph breaks: Blank line between distinct sections
+- Within a paragraph: Text should flow continuously on single lines, not wrap at arbitrary character limits
+- Between paragraphs: Use single blank line to separate
+- Numbered/lettered items spacing (VERY IMPORTANT):
+  * Section headers: Add BLANK LINE after the header
+  * Each numbered item (1., 2., 3.): Put on its own line, then add BLANK LINE after it
+  * Each lettered item ((a), (b), (c)): Put on its own line, then add BLANK LINE after it
+  * Sub-numbered items under letters: Put on its own line, then add BLANK LINE after it
+  * Example format:
+    ```
+    (2) SECTION HEADER.--
+    
+    (a) Text of paragraph a...
+    
+    1. Text of item 1...
+    
+    2. Text of item 2...
+    
+    (b) Text of paragraph b...
+    ```
+- Section structure: Maintain Kansas legislative document hierarchy and spacing
+- Preserve Kansas-specific formatting conventions for House Bills (HB) and Senate Bills (SB)
+
+EXAMPLES OF WHAT TO DO:
+- WRONG: "An act relating to taxation; amending section 79-\n3606, K.S.A.; revising the definition"
+- RIGHT: "An act relating to taxation; amending section 79-3606, K.S.A.; revising the definition"
+
+- WRONG: "otherwise, the secretary who has authority\nunder the terms"
+- RIGHT: "otherwise, the secretary who has authority under the terms"
+
+- WRONG: "(1)  DEFINITIONS.—" (double space, em dash)
+- RIGHT: "(1) DEFINITIONS.--" (single space, double hyphen)
+
+- WRONG: "(2)  DISTRIBUTION..." (double space)
+- RIGHT: "(2) DISTRIBUTION..." (single space)
+
+CRITICAL: Do not add any conversational text, explanations, or comments. Return ONLY the clean legislative text with proper flowing paragraphs. DO NOT change punctuation (-- stays as --, not —). Maintain Kansas legislative formatting standards.

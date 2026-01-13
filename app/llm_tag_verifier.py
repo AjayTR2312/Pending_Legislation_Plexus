@@ -22,40 +22,6 @@ PROJECT_ROOT = Path(__file__).parent.parent.absolute()
 WORKSPACE_ID = "AgentTraininJaH4"
 TOKEN_URL = "https://aiplatform.gcs.int.thomsonreuters.com/v1/anthropic/token"
 
-# State-specific formatting type filters
-STATE_FORMATTING_FILTERS = {
-    'AR': ['underline', 'strikethrough'],  # Arkansas
-    'CA': ['underline', 'strikethrough'],  # California
-    'CO': ['underline'],  # Colorado
-    'CT': ['strikethrough'],  # Connecticut only cares about deletions (handled separately)
-    'DC': ['underline', 'strikethrough'],  # District of Columbia
-    'DE': ['underline', 'strikethrough'],  # Delaware
-    'FL': ['underline', 'strikethrough'],  # Florida
-    'GA': ['underline', 'strikethrough'],  # Georgia
-    'HI': ['underline', 'strikethrough'],  # Hawaii
-    'IA': ['underline', 'strikethrough'],  # Iowa
-    'ID': ['underline', 'strikethrough'],  # Idaho
-    'IL': ['underline', 'strikethrough'],  # Illinois
-    'IN': ['underline', 'strikethrough'],  # Indiana
-    'KS': ['underline', 'strikethrough'],  # Kansas
-    'ME': ['underline', 'strikethrough'],  # Maine
-    'MN': ['underline', 'strikethrough'],  # Minnesota
-    'NC': ['underline', 'strikethrough'],  # North Carolina
-    'ND': ['underline', 'strikethrough'],  # North Dakota
-    'NE': ['underline', 'strikethrough'],  # Nebraska
-    'NY': ['underline', 'strikethrough'],  # New York
-    'OH': ['underline', 'strikethrough'],  # Ohio
-    'OK': ['underline', 'strikethrough'],  # Oklahoma
-    'SD': ['underline', 'strikethrough'],  # South Dakota
-    'TN': ['underline', 'strikethrough'],  # Tennessee
-    'TX': ['underline', 'strikethrough'],  # Texas
-    'VT': ['underline', 'strikethrough'],  # Vermont
-    'WI': ['underline', 'strikethrough'],  # Wisconsin
-    'WY': ['underline', 'strikethrough'],  # Wyoming
-    # Default filter
-    'DEFAULT': ['underline', 'strikethrough', 'bold', 'italic']
-}
-
 def strip_conversational_headers(text):
     """
     Remove conversational preambles that LLMs sometimes add despite instructions.
@@ -99,84 +65,6 @@ def strip_conversational_headers(text):
     text = text.strip()
     
     return text
-
-def filter_summary_by_formatting_types(summary_content, state_code):
-    """
-    Filter summary items to only include formatting types relevant to the state.
-    This dramatically reduces summary size and keeps prompts under token limits.
-    
-    Args:
-        summary_content (str): Full summary content
-        state_code (str): State code (e.g., 'FL', 'CT')
-        
-    Returns:
-        str: Filtered summary content with only relevant formatting types
-    """
-    # Get allowed formatting types for this state
-    allowed_types = STATE_FORMATTING_FILTERS.get(state_code, STATE_FORMATTING_FILTERS['DEFAULT'])
-    
-    print(f"🔍 Filtering summary for {state_code} - keeping only: {', '.join(allowed_types)}")
-    
-    lines = summary_content.split('\n')
-    filtered_lines = []
-    current_item = []
-    keep_current = False
-    items_kept = 0
-    items_filtered = 0
-    
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        
-        # Check if this is a numbered item line (start of new item)
-        if line.strip() and line[0:3].replace('.', '').replace(' ', '').isdigit():
-            # Save previous item if we were keeping it
-            if current_item and keep_current:
-                filtered_lines.extend(current_item)
-                filtered_lines.append('')  # Add blank line between items
-                items_kept += 1
-            elif current_item:
-                items_filtered += 1
-            
-            # Start new item
-            current_item = [line]
-            keep_current = False
-            
-            # Check if next lines contain formatting type
-            if i + 2 < len(lines):
-                formatting_line = lines[i + 2].strip()
-                if 'Formatting:' in formatting_line:
-                    # Extract formatting type
-                    formatting_type = formatting_line.replace('Formatting:', '').strip().lower()
-                    
-                    # Check if this formatting type should be kept
-                    keep_current = any(allowed_type in formatting_type for allowed_type in allowed_types)
-            
-            i += 1
-        elif current_item:
-            # Add line to current item
-            current_item.append(line)
-            i += 1
-        else:
-            # Header lines before items start
-            filtered_lines.append(line)
-            i += 1
-    
-    # Don't forget the last item
-    if current_item and keep_current:
-        filtered_lines.extend(current_item)
-        items_kept += 1
-    elif current_item:
-        items_filtered += 1
-    
-    filtered_summary = '\n'.join(filtered_lines)
-    
-    print(f"✅ Summary filtered: kept {items_kept} items, removed {items_filtered} items")
-    print(f"   Original size: {len(summary_content):,} characters")
-    print(f"   Filtered size: {len(filtered_summary):,} characters")
-    print(f"   Reduction: {((1 - len(filtered_summary)/len(summary_content)) * 100):.1f}%")
-    
-    return filtered_summary
 
 def read_file_content(file_path, encoding='utf-8'):
     """
@@ -526,6 +414,12 @@ def verify_chunk_with_llm(chunk_text, mini_summary, state_code, client, max_retr
     """
     import time
     
+    # CT-specific: Wrap bracketed text with [D>...<D] tags BEFORE LLM verification
+    if state_code == "CT":
+        print(f"      🔧 Applying CT-specific bracket wrapping (pre-verification)...")
+        chunk_text = wrap_ct_bracketed_text(chunk_text)
+        print(f"      ✅ CT bracket wrapping complete")
+    
     for attempt in range(1, max_retries + 1):
         try:
             if attempt > 1:
@@ -584,6 +478,11 @@ def should_chunk_for_verification(pdf_path):
     """
     Decide if PDF should be chunked for verification based on page count.
     
+    Chunking is only used for documents > 7 pages because:
+    - Chunk size is 6 pages with 1-page overlap
+    - Documents ≤ 7 pages fit in a single chunk
+    - Chunking overhead not justified for small documents
+    
     Args:
         pdf_path (str): Path to the PDF file
         
@@ -597,10 +496,10 @@ def should_chunk_for_verification(pdf_path):
     if page_count is None:
         return False, 0, "Could not determine page count"
     
-    if page_count > 5:
-        return True, page_count, f"Document has {page_count} pages (>5 threshold)"
+    if page_count > 7:
+        return True, page_count, f"Document has {page_count} pages (>7 threshold)"
     else:
-        return False, page_count, f"Document has {page_count} pages (≤5 threshold)"
+        return False, page_count, f"Document has {page_count} pages (≤7 threshold, no chunking needed)"
 
 
 def verify_fl_tags_with_llm(summary_file_path, output_text_file_path, state_code="FL", client=None, skip_filtering=False):
@@ -887,100 +786,30 @@ def create_verification_report(summary_file, original_file, corrected_file, repo
 
 def clean_final_verified_text(text):
     """
-    Clean the final verified text by:
-    1. Removing duplicate paragraphs/content
-    2. Fixing unwanted line breaks within paragraphs
-    3. Preserving intentional paragraph breaks
+    Clean the final verified text by removing duplicate paragraphs/content.
+    Line breaks and whitespace are preserved as-is.
     
     Args:
         text (str): Raw verified text
         
     Returns:
-        str: Cleaned text
+        str: Cleaned text with duplicates removed
     """
     if not text:
         return text
     
-    print("\n🧹 Cleaning final verified text...")
+    print("\n🧹 Cleaning final verified text (duplicate removal only)...")
     
-    # Step 1: Split into paragraphs (double newline = paragraph break)
+    # Split into paragraphs (double newline = paragraph break)
     paragraphs = text.split('\n\n')
     print(f"   Found {len(paragraphs)} paragraphs")
     
-    # Step 2: Fix line breaks within each paragraph
-    # Join lines within paragraphs, but preserve formatting tags and list items
-    cleaned_paragraphs = []
-    for para in paragraphs:
-        if not para.strip():
-            continue
-        
-        # Split into lines
-        lines = [line.strip() for line in para.split('\n') if line.strip()]
-        
-        # Group lines together, separating only on distinct list items
-        merged_lines = []
-        i = 0
-        
-        while i < len(lines):
-            line = lines[i]
-            
-            # Check if this is a list item or section header that should stay separate
-            is_list_item = (
-                # Numbered items: "1. ", "2. ", etc.
-                re.match(r'^\d+\.\s', line) or
-                # Lettered items: "(a) ", "(b) ", etc.
-                re.match(r'^\([a-z]\)\s', line) or
-                # Roman numeral items: "(i) ", "(ii) ", etc.
-                re.match(r'^\([ivxlcdm]+\)\s', line, re.IGNORECASE) or
-                # Section headers with numbers
-                re.match(r'^Section\s+\d+', line, re.IGNORECASE) or
-                # All caps headers (at least 3 words, all caps)
-                (len(line.split()) >= 3 and line.isupper())
-            )
-            
-            if is_list_item:
-                # This is a distinct item - keep it separate
-                merged_lines.append(line)
-                i += 1
-            else:
-                # This is regular text - merge with ALL following lines until we hit a list item
-                current_text = line
-                i += 1
-                
-                while i < len(lines):
-                    next_line = lines[i]
-                    
-                    # Check if next line starts a new list item
-                    next_is_list = (
-                        re.match(r'^\d+\.\s', next_line) or
-                        re.match(r'^\([a-z]\)\s', next_line) or
-                        re.match(r'^\([ivxlcdm]+\)\s', next_line, re.IGNORECASE) or
-                        re.match(r'^Section\s+\d+', next_line, re.IGNORECASE) or
-                        (len(next_line.split()) >= 3 and next_line.isupper())
-                    )
-                    
-                    if next_is_list:
-                        # Stop merging - next line is a new item
-                        break
-                    
-                    # Merge this line into current text
-                    if not current_text.endswith((' ', '-')):
-                        current_text += ' '
-                    current_text += next_line
-                    i += 1
-                
-                merged_lines.append(current_text)
-        
-        # Rejoin with newlines between different items
-        cleaned_para = '\n'.join(merged_lines)
-        cleaned_paragraphs.append(cleaned_para)
-    
-    # Step 3: Remove duplicate paragraphs using Jaccard similarity
+    # Remove duplicate paragraphs using Jaccard similarity
     print(f"   Checking for duplicate paragraphs...")
     unique_paragraphs = []
     duplicates_found = 0
     
-    for i, para in enumerate(cleaned_paragraphs):
+    for i, para in enumerate(paragraphs):
         # Remove tags for comparison
         para_clean = re.sub(r'\[([AD])>([^\]]*?)<\1\]', r'\2', para)
         
@@ -1040,17 +869,12 @@ def clean_final_verified_text(text):
     else:
         print(f"   ✅ No duplicates found")
     
-    # Step 4: Rejoin paragraphs with double newlines
+    # Rejoin paragraphs with double newlines (preserve original formatting)
     final_text = '\n\n'.join(unique_paragraphs)
     
-    # Step 5: Clean up any excessive whitespace
-    final_text = re.sub(r'\n{3,}', '\n\n', final_text)  # Max 2 newlines
-    final_text = re.sub(r' +', ' ', final_text)  # Multiple spaces to single
-    final_text = final_text.strip()
-    
-    print(f"   📊 Original: {len(cleaned_paragraphs)} paragraphs, {len(text)} chars")
+    print(f"   📊 Original: {len(paragraphs)} paragraphs, {len(text)} chars")
     print(f"   📊 Cleaned: {len(unique_paragraphs)} paragraphs, {len(final_text)} chars")
-    print(f"✅ Text cleaning complete\n")
+    print(f"✅ Text cleaning complete (duplicates removed, formatting preserved)\n")
     
     return final_text
 
@@ -1422,6 +1246,334 @@ def verify_with_overlapping_chunks(pdf_path, state_code, client, session_dir):
     print(f"   Overlap: {overlap} page(s)")
     print(f"   Processing time: {total_processing_time:.1f}s (all chunks parallel)")
     print(f"   Merge time: {merge_time:.1f}s")
+    print(f"   Total time: {total_time:.1f}s")
+    print(f"   Output size: {len(final_text)} characters")
+    print(f"{'='*70}\n")
+    
+    return final_text
+
+
+def verify_with_pdfplumber_chunks(pdf_path, state_code, client, session_dir):
+    """
+    PDFPlumber-based overlapping chunk workflow for large documents.
+    
+    Workflow:
+    1. For each chunk: PDFPlumber extract → LLM clean (with page markers)
+    2. For each chunk: PDF→DOCX→Summary, then LLM verify
+    3. Merge verified chunks using page markers to remove overlaps
+    
+    Args:
+        pdf_path (str): Path to the original PDF
+        state_code (str): State code (FL, CT, etc.)
+        client: Anthropic API client
+        session_dir (str): Session directory for output files
+        
+    Returns:
+        str: Final merged verified text
+    """
+    import os
+    import shutil
+    import uuid
+    import time
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from pdf_to_text_llm import (
+        get_pdf_page_count, 
+        create_overlapping_chunks, 
+        extract_pdf_pages_to_file,
+        merge_chunks_with_markers
+    )
+    from pdf_plumber_extractor import extract_pdf_with_pdfplumber
+    from text_to_clean_prompt import load_cleaning_prompt, clean_pdfplumber_text
+    from pdf_docx_analysis_pipeline import PDFToDocxAnalysisPipeline
+    
+    print("\n" + "="*70)
+    print("🔄 PDFPLUMBER SEQUENTIAL CHUNK WORKFLOW (7+ PAGE DOCUMENTS)")
+    print("="*70)
+    
+    # Get page count
+    page_count = get_pdf_page_count(pdf_path)
+    if page_count is None:
+        logging.error("Failed to get PDF page count")
+        return None
+    
+    print(f"📄 Document: {page_count} pages")
+    
+    # Create chunks directory
+    chunks_base = os.path.join(session_dir, f"chunks_pdfplumber_{uuid.uuid4().hex[:8]}")
+    os.makedirs(chunks_base, exist_ok=True)
+    print(f"📁 Chunks directory: {chunks_base}")
+    
+    # ============================================================
+    # Phase 1: Create sequential chunks (no overlap)
+    # ============================================================
+    print(f"\n📦 Phase 1: Creating sequential chunks...")
+    
+    pages_per_chunk = 5
+    
+    # Create sequential chunks
+    chunks = []
+    chunk_num = 1
+    start_page = 0
+    
+    while start_page < page_count:
+        end_page = min(start_page + pages_per_chunk, page_count)
+        
+        # If this would be the last chunk and it has <= 2 pages, merge with previous
+        if end_page < page_count and (page_count - end_page) <= 2:
+            # Extend current chunk to include remaining pages
+            end_page = page_count
+        
+        chunk_pages = list(range(start_page, end_page))
+        chunks.append({
+            'chunk_num': chunk_num,
+            'pages': chunk_pages,
+            'page_range': f"{start_page + 1}-{end_page}"
+        })
+        
+        start_page = end_page
+        chunk_num += 1
+    
+    print(f"📊 Created {len(chunks)} sequential chunks (no overlap):")
+    for chunk in chunks:
+        print(f"   Chunk {chunk['chunk_num']}: Pages {chunk['page_range']}")
+    
+    # Load cleaning prompt once
+    cleaning_prompt = load_cleaning_prompt(state_code)
+    if not cleaning_prompt:
+        logging.error(f"Failed to load cleaning prompt for {state_code}")
+        return None
+    
+    # ============================================================
+    # Phase 2: Process ALL chunks in PARALLEL
+    # ============================================================
+    print(f"\n🔄 Phase 2: Processing {len(chunks)} chunks in PARALLEL...")
+    print(f"   Each chunk: [PDFPlumber extract → LLM clean] + [PDF→DOCX] in parallel → Verify")
+    
+    start_time = time.time()
+    verified_chunks = []
+    
+    def process_single_pdfplumber_chunk(chunk_info, cleaning_prompt):
+        """Process a single chunk using PDFPlumber workflow"""
+        chunk_num = chunk_info['chunk_num']
+        
+        try:
+            # Create temporary directory for this chunk
+            chunk_temp_dir = os.path.join(chunks_base, f"chunk_{chunk_num}_temp")
+            os.makedirs(chunk_temp_dir, exist_ok=True)
+            
+            # Extract chunk pages to temporary PDF file
+            chunk_pdf_path = os.path.join(chunk_temp_dir, f"chunk_{chunk_num}.pdf")
+            start_page = chunk_info['pages'][0] + 1  # Convert to 1-indexed
+            end_page = chunk_info['pages'][-1] + 1
+            
+            success = extract_pdf_pages_to_file(pdf_path, start_page, end_page, chunk_pdf_path)
+            if not success:
+                logging.error(f"Chunk {chunk_num}: Failed to create chunk PDF")
+                return None
+            
+            # ============================================================
+            # PARALLEL STEP: PDFPlumber→Clean + PDF→DOCX
+            # ============================================================
+            
+            def extract_and_clean():
+                """PDFPlumber extract + LLM clean"""
+                # Extract raw text with pdfplumber
+                raw_output = os.path.join(chunk_temp_dir, f"chunk_{chunk_num}_raw.txt")
+                
+                try:
+                    extract_pdf_with_pdfplumber(chunk_pdf_path, raw_output, validate_sections=True)
+                    
+                    if not os.path.exists(raw_output):
+                        logging.error(f"Chunk {chunk_num}: PDFPlumber extraction failed")
+                        return None
+                    
+                    # Read raw text
+                    with open(raw_output, 'r', encoding='utf-8') as f:
+                        raw_text = f.read()
+                    
+                    # Clean with LLM
+                    clean_text = clean_pdfplumber_text(client, raw_text, cleaning_prompt)
+                    
+                    if not clean_text:
+                        logging.error(f"Chunk {chunk_num}: Text cleaning failed")
+                        return None
+                    
+                    # Save clean text
+                    clean_output = os.path.join(chunk_temp_dir, f"chunk_{chunk_num}_clean.txt")
+                    with open(clean_output, 'w', encoding='utf-8') as f:
+                        f.write(clean_text)
+                    
+                    print(f"✅ Chunk {chunk_num}: PDFPlumber + Clean complete ({len(clean_text)} chars)")
+                    return clean_text, clean_output
+                    
+                except Exception as e:
+                    logging.error(f"Chunk {chunk_num}: Extract/clean error: {e}")
+                    return None
+            
+            def generate_docx_summary():
+                """Generate DOCX and summary for chunk"""
+                pipeline = PDFToDocxAnalysisPipeline(chunk_pdf_path, chunk_temp_dir, state_code=state_code)
+                docx_results = pipeline.run_complete_pipeline()
+                
+                if not docx_results or not docx_results['success']:
+                    logging.warning(f"Chunk {chunk_num}: DOCX generation failed")
+                    return None
+                
+                summary_path = docx_results.get('summary_path')
+                
+                if summary_path and os.path.exists(summary_path):
+                    with open(summary_path, 'r', encoding='utf-8') as f:
+                        summary_content = f.read()
+                    print(f"✅ Chunk {chunk_num}: DOCX summary complete")
+                    return summary_content
+                else:
+                    print(f"⏭️ Chunk {chunk_num}: No formatted items found")
+                    return ""
+            
+            # Execute in parallel
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                future_clean = executor.submit(extract_and_clean)
+                future_summary = executor.submit(generate_docx_summary)
+                
+                # Wait for both
+                clean_result = future_clean.result()
+                summary_content = future_summary.result()
+            
+            # Check if cleaning succeeded
+            if not clean_result:
+                logging.error(f"Chunk {chunk_num}: Text cleaning failed")
+                return None
+            
+            clean_text, clean_output = clean_result
+            
+            # ============================================================
+            # SEQUENTIAL STEP: Verify chunk
+            # ============================================================
+            
+            # If we have a summary, verify the chunk
+            if summary_content and summary_content.strip():
+                formatted_summary = extract_formatted_items_summary(summary_content)
+                
+                # Verify this chunk
+                verified_text = verify_chunk_with_llm(
+                    clean_text,
+                    formatted_summary,
+                    state_code,
+                    client
+                )
+                
+                if verified_text:
+                    # Save verified text
+                    chunk_verified_path = os.path.join(chunk_temp_dir, f"chunk_{chunk_num}_verified.txt")
+                    with open(chunk_verified_path, 'w', encoding='utf-8') as f:
+                        f.write(verified_text)
+                    print(f"✅ Chunk {chunk_num}: Verification complete")
+                    
+                    return {
+                        'text': verified_text,
+                        'chunk_num': chunk_num,
+                        'page_range': chunk_info['page_range'],
+                        'verified': True,
+                        'text_path': clean_output,
+                        'verified_path': chunk_verified_path
+                    }
+                else:
+                    logging.warning(f"Chunk {chunk_num}: Verification failed, using clean text")
+                    return {
+                        'text': clean_text,
+                        'chunk_num': chunk_num,
+                        'page_range': chunk_info['page_range'],
+                        'verified': False,
+                        'text_path': clean_output,
+                        'verified_path': None
+                    }
+            else:
+                # No formatted items - use clean text
+                print(f"⏭️ Chunk {chunk_num}: No formatted items, using clean text")
+                return {
+                    'text': clean_text,
+                    'chunk_num': chunk_num,
+                    'page_range': chunk_info['page_range'],
+                    'verified': False,
+                    'text_path': clean_output,
+                    'verified_path': None
+                }
+                
+        except Exception as e:
+            logging.error(f"Chunk {chunk_num} raised exception: {e}")
+            return None
+    
+    # Process all chunks in parallel
+    max_workers = min(len(chunks), 10)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_chunk = {
+            executor.submit(process_single_pdfplumber_chunk, chunk_info, cleaning_prompt): chunk_info
+            for chunk_info in chunks
+        }
+        
+        # Collect results
+        for future in as_completed(future_to_chunk):
+            chunk_info = future_to_chunk[future]
+            try:
+                result = future.result()
+                
+                if result:
+                    verified_chunks.append(result)
+                    elapsed = time.time() - start_time
+                    status = "✅ VERIFIED" if result.get('verified') else "⚠️ UNVERIFIED"
+                    print(f"🎉 Chunk {result['chunk_num']} COMPLETE ({status}) - {elapsed:.1f}s elapsed")
+                else:
+                    logging.error(f"Chunk {chunk_info['chunk_num']} processing failed")
+            except Exception as e:
+                logging.error(f"Chunk {chunk_info['chunk_num']} raised exception: {e}")
+    
+    total_processing_time = time.time() - start_time
+    print(f"\n✅ All {len(verified_chunks)} chunks processed in {total_processing_time:.1f}s")
+    
+    if not verified_chunks:
+        logging.error("No chunks were successfully processed")
+        return None
+    
+    # Sort by chunk number
+    verified_chunks.sort(key=lambda x: x['chunk_num'])
+    
+    # ============================================================
+    # Phase 3: Merge verified chunks (simple concatenation)
+    # ============================================================
+    print(f"\n🔗 Phase 3: Merging {len(verified_chunks)} verified chunks...")
+    
+    merge_start = time.time()
+    
+    # Simple concatenation - join all verified chunk texts
+    merged_text = "\n\n".join(chunk['text'] for chunk in verified_chunks)
+    
+    merge_time = time.time() - merge_start
+    print(f"✅ Merged text: {len(merged_text)} characters (merge time: {merge_time:.1f}s)")
+    
+    # ============================================================
+    # Phase 4: Final cleanup
+    # ============================================================
+    print(f"\n🧹 Phase 4: Final text cleanup...")
+    # For sequential non-overlapping chunks, skip duplicate removal
+    # (no overlaps = no duplicates to remove)
+    print(f"   ℹ️ Sequential chunks used - skipping duplicate removal")
+    final_text = merged_text
+    print(f"✅ Final text ready ({len(final_text)} characters)")
+    
+    # ============================================================
+    # Summary
+    # ============================================================
+    total_time = time.time() - start_time
+    
+    print(f"\n{'='*70}")
+    print(f"🎉 PDFPLUMBER CHUNKED PROCESSING COMPLETE")
+    print(f"{'='*70}")
+    print(f"   Total chunks: {len(chunks)}")
+    print(f"   Verified chunks: {sum(1 for c in verified_chunks if c.get('verified'))}")
+    print(f"   Pages processed: {page_count}")
+    print(f"   Chunking strategy: Sequential (no overlap)")
+    print(f"   Processing time: {total_processing_time:.1f}s")
     print(f"   Total time: {total_time:.1f}s")
     print(f"   Output size: {len(final_text)} characters")
     print(f"{'='*70}\n")

@@ -98,8 +98,8 @@ CHUNK_CONFIG = {
     'max_output_tokens_per_chunk': 16384,  # Claude output limit per chunk
     
     # Page thresholds  
-    'max_pages_no_chunk': 5,               # Don't chunk if ≤5 pages
-    'pages_per_chunk': 5,                  # 5 pages per chunk
+    'max_pages_no_chunk': 7,               # Don't chunk if ≤7 pages
+    'pages_per_chunk': 6,                  # 6 pages per chunk with 1-page overlap
     
     # Token estimation
     'estimated_tokens_per_page': 1200,     # Conservative estimate (varies by content density)

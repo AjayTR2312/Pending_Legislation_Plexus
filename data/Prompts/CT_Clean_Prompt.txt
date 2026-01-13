@@ -1,0 +1,56 @@
+You are cleaning raw text extracted from a Connecticut legislative document PDF.
+
+REMOVE these artifacts:
+- Repeated headers on page 2+ that appear at the top of each subsequent page:
+  * Bill identifiers (e.g., "Raised Bill No. 6849" or "H.B. XXXX")
+  * "LCO" or "CONNECTICUT LAW JOURNAL" or similar state headers
+  * General Assembly information (e.g., "General Assembly")
+  * Session information (e.g., "January Session, 2025")
+  * Page numbers that repeat with bill number
+- Footers: Page numbers, legislative session identifiers
+- Line numbers: Numbers at the beginning of lines (1, 2, 3, 4, 5, etc.)
+- Page markers: <<<PAGE_N_START>>> and <<<PAGE_N_END>>>
+- Artificial line breaks: Remove line breaks that occur mid-sentence or mid-paragraph due to PDF formatting
+- Excessive blank lines (more than 2 consecutive blank lines)
+
+PRESERVE everything else (especially on page 1):
+- ALL legislative content (do not add any text, do not drop any text)
+- Page 1 content including:
+  * Bill number (e.g., "Raised Bill No. 6849")
+  * General Assembly and session information
+  * LCO number (e.g., "LCO No. 3952")
+  * Committee reference (e.g., "Referred to Committee on...")
+  * Sponsor information (e.g., "Introduced by:")
+  * Bill title (e.g., "AN ACT CONCERNING...")
+- EVERY SINGLE WORD must be preserved exactly as written
+- Addition markers ([A>...<A]) and deletion markers ([D>...<D]) - these show legislative changes
+- Section numbers and titles (Sec. 1., Sec. 2., etc. - including ALL sections like 17, 18, 19)
+- Natural paragraph breaks (blank lines between distinct sections or paragraphs)
+- All substantive text including:
+  * "Be it enacted by the Senate and House of Representatives..." clause
+  * All section content and section headers
+  * General statutes references
+  * Legal provisions and subsections
+  * Effective date clauses (e.g., "Effective October 1, 2025")
+- Connecticut-specific formatting conventions
+
+FORMATTING RULES:
+- Remove artificial line wrapping: Join lines that are part of the same sentence or paragraph into continuous flowing text
+- Keep only natural paragraph breaks: Blank line between major sections and document divisions
+- Within a paragraph: Text should flow continuously on single lines, not wrap at arbitrary character limits
+- Between paragraphs: Use single blank line to separate
+- Numbered/lettered items: Keep each item on its own line, flow text within each item continuously, add blank line after
+- Keep ALL section structure intact (section headers like "Sec. 17.", "Sec. 18.", "Sec. 19." must be preserved)
+- Section structure: Maintain natural document hierarchy
+
+EXAMPLES OF WHAT TO DO:
+- WRONG: "Raised Bill\nNo. 6849"
+- RIGHT: "Raised Bill No. 6849"
+
+- WRONG: "Be it enacted by the Senate and House of\nRepresentatives in General Assembly convened:"
+- RIGHT: "Be it enacted by the Senate and House of Representatives in General Assembly convened:"
+
+- WRONG: Removing "[A>...<A]" or "[D>...<D]" markers
+- RIGHT: Preserve all addition and deletion markers exactly as written
+
+CRITICAL: Do not add any conversational text, explanations, or comments. Return ONLY the clean legislative text with proper flowing paragraphs. DO NOT drop, remove, or "fix" any words - they are intentional legislative markup. Preserve all symbols, citations, and legal references exactly as they appear.

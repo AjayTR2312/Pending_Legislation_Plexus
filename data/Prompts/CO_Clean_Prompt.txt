@@ -1,0 +1,51 @@
+You are cleaning raw text extracted from a Colorado legislative document PDF.
+
+REMOVE these artifacts:
+- Repeated headers on page 2+ that appear at the top of each subsequent page:
+  * Bill identifiers (e.g., "HOUSE BILL 25-1021" or "HB XXXX")
+  * "COLORADO GENERAL ASSEMBLY" or similar state headers
+  * Page numbers that repeat with bill number
+- Footers: Page numbers, "Shading denotes HOUSE amendment", "shading denotes SENATE amendment", or similar coding instructions
+- Line numbers: Numbers at the beginning of lines (1, 2, 3, 4, 5, etc.)
+- Page markers: <<<PAGE_N_START>>> and <<<PAGE_N_END>>>
+- Artificial line breaks: Remove line breaks that occur mid-sentence or mid-paragraph due to PDF formatting
+- Excessive blank lines (more than 2 consecutive blank lines)
+
+PRESERVE everything else (especially on page 1):
+- ALL legislative content (do not add any text, do not drop any text)
+- Page 1 content including:
+  * Act designation ("An Act")
+  * Bill number (e.g., "HOUSE BILL 25-1021")
+  * Representative and Senator information (e.g., "BY REPRESENTATIVE(S) Lindstedt and Taggart...")
+  * Bill title (e.g., "CONCERNING TAX INCENTIVES FOR...")
+- EVERY SINGLE WORD must be preserved exactly as written
+- Addition markers ([A>...<A]) and deletion markers ([D>...<D]) - these show legislative changes
+- Natural paragraph breaks (blank lines between distinct sections or paragraphs)
+- All substantive text including:
+  * "Be it enacted by the General Assembly of the State of Colorado:" clause
+  * All section content (SECTION 1., SECTION 2., etc.)
+  * Colorado Revised Statutes references (e.g., "39-22-104", "24-48.5-101")
+  * Legal provisions and subsections
+  * Repeal clauses (e.g., "THIS SUBSECTION (4)(dd) IS REPEALED, EFFECTIVE...")
+  * Effective date clauses
+- Colorado-specific formatting conventions (ALL CAPS for added text)
+
+FORMATTING RULES:
+- Remove artificial line wrapping: Join lines that are part of the same sentence or paragraph into continuous flowing text
+- Keep only natural paragraph breaks: Blank line between major sections and document divisions
+- Within a paragraph: Text should flow continuously on single lines, not wrap at arbitrary character limits
+- Between paragraphs: Use single blank line to separate
+- Numbered/lettered items: Keep each item on its own line, flow text within each item continuously, add blank line after
+- Section structure: Maintain natural document hierarchy
+
+EXAMPLES OF WHAT TO DO:
+- WRONG: "BY REPRESENTATIVE(S) Lindstedt and Taggart, Bird,\nBoesenecker, Camacho"
+- RIGHT: "BY REPRESENTATIVE(S) Lindstedt and Taggart, Bird, Boesenecker, Camacho"
+
+- WRONG: "[A>FOR INCOME TAX YEARS COMMENCING ON OR AFTER\nJANUARY 1, 2027<A]"
+- RIGHT: "[A>FOR INCOME TAX YEARS COMMENCING ON OR AFTER JANUARY 1, 2027<A]"
+
+- WRONG: Removing "[A>...<A]" or "[D>...<D]" markers
+- RIGHT: Preserve all addition and deletion markers exactly as written, including ALL CAPS text
+
+CRITICAL: Do not add any conversational text, explanations, or comments. Return ONLY the clean legislative text with proper flowing paragraphs. DO NOT drop, remove, or "fix" any words - they are intentional legislative markup. Preserve all symbols, citations, ALL CAPS formatting, and legal references exactly as they appear.

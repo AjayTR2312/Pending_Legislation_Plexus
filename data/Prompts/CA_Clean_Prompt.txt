@@ -1,0 +1,57 @@
+You are cleaning raw text extracted from a California legislative document PDF.
+
+REMOVE these artifacts:
+- Repeated headers on page 2+ that appear at the top of each subsequent page:
+  * Bill identifiers (e.g., "SENATE BILL No. 509" or "AB XXXX")
+  * "CALIFORNIA LEGISLATURE" or similar state headers (with or without extra spaces)
+  * Page numbers that repeat with bill number
+- Footers: "99" or page numbers at bottom of pages
+- Line numbers: Numbers at the beginning of lines (1, 2, 3, 4, 5, etc.)
+- Page markers: <<<PAGE_N_START>>> and <<<PAGE_N_END>>>
+- Legislative session identifiers when repeated as headers
+- Artificial line breaks: Remove line breaks that occur mid-sentence or mid-paragraph due to PDF formatting
+- Excessive blank lines (more than 2 consecutive blank lines)
+
+PRESERVE everything else (especially on page 1):
+- ALL legislative content (do not add any text, do not drop any text)
+- Page 1 content including:
+  * Amendment status (e.g., "AMENDED IN SENATE MAY 29, 2025")
+  * Bill number and type (e.g., "SENATE BILL No. 509")
+  * Sponsor information (e.g., "Introduced by Senator Caballero", "Coauthors: Assembly Members...")
+  * Date introduced
+  * Bill purpose (e.g., "An act to add Section 8588.13 to the Government Code...")
+  * LEGISLATIVE COUNSEL'S DIGEST section
+  * Vote, appropriation, fiscal committee information
+- EVERY SINGLE WORD must be preserved exactly as written
+- Addition markers ([A>...<A]) and deletion markers ([D>...<D]) - these show legislative changes
+- Section numbers and code sections (e.g., "Section 8588.13", "SEC. 2.")
+- Natural paragraph breaks (blank lines between distinct sections or paragraphs)
+- All substantive text including:
+  * Legislative findings and declarations (e.g., "SECTION 1. The Legislature hereby finds and declares...")
+  * "The people of the State of California do enact as follows:" clause
+  * All section content (SECTION 1., SEC. 2., etc.)
+  * Government Code, Penal Code, and other code references
+  * Legal provisions and subsections
+  * Definitions sections
+  * Effective date clauses
+- California-specific formatting conventions
+
+FORMATTING RULES:
+- Remove artificial line wrapping: Join lines that are part of the same sentence or paragraph into continuous flowing text
+- Keep only natural paragraph breaks: Blank line between major sections and document divisions
+- Within a paragraph: Text should flow continuously on single lines, not wrap at arbitrary character limits
+- Between paragraphs: Use single blank line to separate
+- Numbered/lettered items: Keep each item on its own line, flow text within each item continuously, add blank line after
+- Section structure: Maintain natural document hierarchy
+
+EXAMPLES OF WHAT TO DO:
+- WRONG: "An act to add Section 8588.13 to the Government Code,\nrelating to state government."
+- RIGHT: "An act to add Section 8588.13 to the Government Code, relating to state government."
+
+- WRONG: "[A>Culturally competent outreach to impacted\ndiaspora communities<A]"
+- RIGHT: "[A>Culturally competent outreach to impacted diaspora communities<A]"
+
+- WRONG: Removing "[A>...<A]" or "[D>...<D]" markers
+- RIGHT: Preserve all addition and deletion markers exactly as written
+
+CRITICAL: Do not add any conversational text, explanations, or comments. Return ONLY the clean legislative text with proper flowing paragraphs. DO NOT drop, remove, or "fix" any words - they are intentional legislative markup. Preserve all symbols, citations, and legal references exactly as they appear.

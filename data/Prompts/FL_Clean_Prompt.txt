@@ -1,0 +1,74 @@
+You are cleaning raw text extracted from a Florida legislative document PDF.
+
+REMOVE these artifacts:
+- Headers: "F L O R I D A   H O U S E   O F   R E P R E S E N T A T I V E S" (with or without spaces)
+- Footers: "CODING: Words stricken are deletions..." or similar coding instructions
+- Line numbers: Numbers at the beginning of lines (1, 2, 3, 4, 5, etc.)
+- Page markers: <<<PAGE_N_START>>> and <<<PAGE_N_END>>>
+- Bill identifiers when repeated as headers: "HB 385" or similar bill numbers
+- Year markers when repeated as headers: "2025" or similar years
+- Artificial line breaks: Remove line breaks that occur mid-sentence or mid-paragraph due to PDF formatting (text wrapped at ~50-80 characters)
+- Excessive blank lines (more than 2 consecutive blank lines)
+
+PRESERVE everything else:
+- ALL legislative content (do not add any text, do not drop any text)
+- EVERY SINGLE WORD must be preserved exactly as written, even if words seem redundant (e.g., "must shall" should stay as "must shall", not become "must" or "shall")
+- Section numbers and titles (e.g., "Section 1.", "736.04117", etc.)
+- Punctuation and formatting marks EXACTLY as written:
+  * Double hyphens "--" must stay as "--" (do not convert to em dash "—")
+  * Single spaces after numbers/letters: "(1) DEFINITIONS" not "(1)  DEFINITIONS"
+  * Example: "(1) DEFINITIONS.--" (single space after ), double hyphen --)
+- Natural paragraph breaks (blank lines between distinct sections or paragraphs)
+- All substantive text including:
+  - Bill title and description
+  - Enacting clause
+  - All section content
+  - Definitions
+  - Legal provisions
+  - Effective date clauses
+- Strikethrough and underline markers: Keep phrases like "must shall", "are shall be", "does not affect affects" exactly as they appear - these show legislative changes
+
+FORMATTING RULES:
+- Remove artificial line wrapping: Join lines that are part of the same sentence or paragraph into continuous flowing text
+- Keep only natural paragraph breaks: Blank line between "A bill to be entitled" and the act description, blank line before "Be It Enacted", blank line between sections
+- Within a paragraph: Text should flow continuously on single lines, not wrap at arbitrary character limits
+- Between paragraphs: Use single blank line to separate
+- Numbered/lettered items spacing (VERY IMPORTANT):
+  * Section headers like "(2) DISTRIBUTION FROM...": Add BLANK LINE after the header
+  * Each numbered item (1., 2., 3.): Put on its own line, then add BLANK LINE after it
+  * Each lettered item ((a), (b), (c)): Put on its own line, then add BLANK LINE after it
+  * Sub-numbered items under letters: Put on its own line, then add BLANK LINE after it
+  * Example format:
+    ```
+    (2) SECTION HEADER.--
+    
+    (a) Text of paragraph a...
+    
+    1. Text of item 1...
+    
+    2. Text of item 2...
+    
+    (b) Text of paragraph b...
+    ```
+- Section structure: Maintain natural document hierarchy and spacing
+
+EXAMPLES OF WHAT TO DO:
+- WRONG: "An act relating to trusts; amending s. 736.04117,\nF.S.; revising the definition"
+- RIGHT: "An act relating to trusts; amending s. 736.04117, F.S.; revising the definition"
+
+- WRONG: "otherwise, an authorized trustee who has absolute\npower under the terms"
+- RIGHT: "otherwise, an authorized trustee who has absolute power under the terms"
+
+- WRONG: "must grant" (dropping "shall")
+- RIGHT: "must shall grant" (keep both words exactly as written)
+
+- WRONG: "does not affect" (dropping "affects")
+- RIGHT: "does not affect affects" (keep both words - they show legislative changes)
+
+- WRONG: "(1)  DEFINITIONS.—" (double space, em dash)
+- RIGHT: "(1) DEFINITIONS.--" (single space, double hyphen)
+
+- WRONG: "(2)  DISTRIBUTION..." (double space)
+- RIGHT: "(2) DISTRIBUTION..." (single space)
+
+CRITICAL: Do not add any conversational text, explanations, or comments. Return ONLY the clean legislative text with proper flowing paragraphs. DO NOT drop, remove, or "fix" any words that seem redundant - they are intentional legislative markup. DO NOT change punctuation (-- stays as --, not —).
