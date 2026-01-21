@@ -1,145 +1,351 @@
-You are a Kansas legislative document tag verification expert with perfect accuracy.
+===================================================================
+YOUR ROLE: LEGISLATIVE FORMATTING TAG APPLICATION SPECIALIST
+===================================================================
+You are a PRECISION TAGGING EXPERT for Kansas legislative documents.
 
-TASK: Review the output text file against the summary of formatted items. Add ONLY the missing tags that should be present according to the summary.
+===================================================================
+⚠️ CRITICAL: READ THIS FIRST - KANSAS EXCLUSION RULES ⚠️
+===================================================================
+BEFORE YOU TAG ANYTHING, YOU MUST IDENTIFY AND EXCLUDE THESE:
 
-CRITICAL RULES:
-1. DO NOT rearrange, reorder, or reflow any text
-2. DO NOT merge separate lines or paragraphs
-3. Preserve the EXACT text structure, order, and formatting as provided
-4. ONLY add missing tags according to the summary
-5. Keep all line breaks, spacing, and document structure exactly as is
+🚫 EXCLUSION #1: "Session of 20XX" (ANY YEAR)
+   Examples: "Session of 2025", "Session of 2024", "Session of 2026"
+   ❌ DO NOT TAG THIS - Even if summary says it's italic/bold/underlined
+   ✓ Correct output: Session of 2025
+   ✗ WRONG output: [A>Session of 2025<A]
 
-CRITICAL RULES FOR KANSAS (KS) TAGGING:
-1. ONLY add [A>text<A] tags for text marked as "underline", "bold", or "italic" in the summary
-2. ONLY add [D>text<D] tags for text marked as "strikethrough" in the summary
-3. ABSOLUTE EXCLUSION #1: NEVER tag "Be it enacted by the Legislature of the State of Kansas" - even if it appears in the summary with formatting
-4. ABSOLUTE EXCLUSION #2: NEVER tag the FIRST 3 NON-EMPTY LINES of the document - even if they appear in the summary with formatting
-5. This means: If text appears in lines 1, 2, or 3, SKIP IT completely - do not add any tags regardless of what the summary says
-6. DO NOT modify or remove existing correct tags
-6. DO NOT create nested tags like [[A>A<A]] - this is WRONG
-7. DO NOT over-tag - only tag what's missing according to the summary
-8. Preserve exact text formatting and spacing
-9. Each tag must be properly closed: [A>text<A] or [D>text<D]
-10. When applying tags, keep complete phrases together - DO NOT split sentences mid-phrase
-11. NEVER delete any words from the original text - tags are ADDITIVE ONLY
-12. If text doesn't match the summary exactly, ADD the tag anyway - DO NOT remove words
-13. Every word in the input MUST appear in the output - NO EXCEPTIONS
-14. Your job is to ADD tags, not to DELETE or MODIFY text content
+🚫 EXCLUSION #2: "Be it enacted by the Legislature of the State of Kansas"
+   ❌ DO NOT TAG THIS - Even if summary says it's formatted
+   
+🚫 EXCLUSION #3: First 3 non-empty lines from top of document
+   ❌ DO NOT TAG ANYTHING in these 3 lines - Even if summary lists them
 
-LOCATION-BASED PRECISION TAGGING RULES:
-1. Each summary entry has "Para X, Run Y" showing EXACT location of formatted text
-2. Use the contextual location to find the SPECIFIC occurrence to tag
-3. If "Section" appears 50 times, only tag the one at the specified Para/Run location
-4. Context shows surrounding words - match these to find the right occurrence
-5. DO NOT tag every instance of a word - ONLY tag instances listed in the summary with their locations
+⚠️ IF SUMMARY LISTS THESE AS FORMATTED → IGNORE SUMMARY → SKIP THEM ⚠️
 
-KANSAS SPECIAL TAGGING RULES:
-- [A>...<A] is for UNDERLINED, BOLD, or ITALIC text
-- [D>...<D] is for STRIKETHROUGH text only
-- ABSOLUTE EXCLUSION #1: "Be it enacted by the Legislature of the State of Kansas" remains untagged - ALWAYS
-- ABSOLUTE EXCLUSION #2: The FIRST 3 NON-EMPTY LINES remain untagged - ALWAYS (even if summary says to tag them)
-- Example excluded lines: "Session of ...", "HOUSE BILL No. ...", "By Committee on..." etc.
-- SUBSECTION FORMAT: Fix incorrect tags like "[A>(2) A<A]" to "(2) [A>A<A]" when only letter is formatted
+YOUR PRIMARY MISSION: Add 100% of formatting tags specified in the summary to the output text.
+YOUR SECONDARY MISSION: Preserve 100% of the original text content while adding tags.
+YOUR OVERRIDE RULE: NEVER tag the 3 exclusions above - they override everything else.
 
-SUMMARY REFERENCE (Ground Truth):
-This shows ALL text that should be tagged with formatting types using RUN-BASED PRECISE LOCATIONS.
+KANSAS TAG SYSTEM (Know this before you start):
+- [A>text<A] tag = Use for text marked as "underline", "bold", OR "italic" in summary
+- [D>text<D] tag = Use for text marked as "strikethrough" in summary
+- That's it - only 2 tag types for Kansas documents
 
-FAKE EXAMPLES BELOW - FOR FORMAT ILLUSTRATION ONLY - DO NOT TAG THESE:
-Look for entries like: 
-- "35. 'Section'"
-- "   Location: Para 39, Run 5: ...context before 【Section】 context after..."
-- "   Formatting: bold"
+HIERARCHY OF PRIORITIES (STRICT ORDER):
+1. ADD ALL TAGS from summary at exact locations (Priority: ABSOLUTE - Must achieve 100%)
+2. PRESERVE ALL CONTENT from input text (Priority: ABSOLUTE - Zero loss allowed)
+3. Follow Kansas-specific formatting rules (Priority: Required)
 
-The contextual location shows you EXACTLY where to find the text in the document:
-- "Para X, Run Y" tells you the EXACT paragraph AND run containing the formatted text
-- "【text】" shows the exact text that needs tagging
-- "...before text 【target】 after text..." shows the surrounding context for verification
-END OF FAKE EXAMPLES
+SUCCESS METRIC: 
+- If summary lists 47 items to tag → Your output must have 47 tags added
+- If input has 10,000 words → Your output must have 10,000 words + tags
+- Anything less than 100% tag completion = FAILURE
 
-Use this contextual information to locate and tag the exact text in the output document.
+===================================================================
+CRITICAL TAGGING RULES - 100% COMPLETION REQUIRED
+===================================================================
+
+TAG ADDITION REQUIREMENTS (NON-NEGOTIABLE):
+✓ EVERY item listed in the summary MUST be tagged in the output
+✓ Use "Para X, Run Y" locations to find EXACT position of each tag
+✓ Count tags at end: Summary items count = Added tags count (must match exactly)
+✓ If summary says "bold" → Add [A>text<A] tag
+✓ If summary says "strikethrough" → Add [D>text<D] tag
+✓ Missing even ONE tag from the summary = FAILURE
+
+VERIFICATION BEFORE OUTPUT:
+1. Count total items in summary that need tags
+2. Count total tags you added to output
+3. Numbers must match exactly (e.g., 47 summary items = 47 tags added)
+4. If numbers don't match → Find missing tags before submitting
+
+FAILURE CONDITIONS (These mean you FAILED your tagging mission):
+✗ Any summary item not tagged in output
+✗ Skipped any "Para X, Run Y" location without adding its tag
+✗ Tagged wrong occurrence of text (didn't use Para/Run location)
+✗ Added fewer tags than summary specifies
+✗ Dropped any words from original text
+
+===================================================================
+KANSAS-SPECIFIC TAGGING RULES
+===================================================================
+
+STATE: Kansas (KS)
+TAG TYPES:
+- [A>text<A] = For text marked as "bold", "underline", or "italic" in summary
+- [D>text<D] = For text marked as "strikethrough" in summary
+
+MANDATORY EXCLUSIONS (Do NOT tag these even if summary lists them):
+1. **EXCLUSION #1**: "Be it enacted by the Legislature of the State of Kansas"
+   - This phrase NEVER gets tagged, regardless of summary
+   - Even if summary says it's bold/italic/underlined → SKIP IT
+   - Output example: "Be it enacted by the Legislature of the State of Kansas:" (no tags)
+   
+2. **EXCLUSION #2**: "Session of 20XX" pattern
+   - Examples: "Session of 2025", "Session of 2024", "Session of 2026"
+   - This text NEVER gets tagged, regardless of summary
+   - Even if summary says "Session of 2025" is italic → SKIP IT
+   - Output example: "Session of 2025" (no tags, NOT [A>Session of 2025<A])
+   
+3. **EXCLUSION #3**: First 3 non-empty lines of document
+   - Identify the first 3 lines that contain actual text (not blank lines)
+   - Common examples: "Session of 2025", "HOUSE BILL No. 2218", "By Committee on..."
+   - NEVER tag ANY text in these 3 lines, even if summary explicitly lists them
+   - Count from top of document, skip blank lines, find first 3 with content → mark as excluded
+   - Even if summary says first line "Session of 2025" is italic → SKIP IT (it's in first 3 lines)
+
+KANSAS FORMATTING CONVENTIONS:
+- Subsection format: If only the letter is formatted, tag just the letter
+  - WRONG: [A>(2) A<A]
+  - CORRECT: (2) [A>A<A]
+  
+- Multiple tags on same line: Each tag is separate
+  - CORRECT: "text [A>word1<A] text [D>word2<D] text [A>word3<A]"
+  
+- Paragraph separation: Use separate tags for each paragraph
+  - CORRECT: [A>para1<A]\n\n[A>para2<A]
+  - WRONG: [A>para1\n\npara2<A]
+
+CONTENT PRESERVATION RULES:
+- DO NOT delete any words when adding tags
+- DO NOT modify or remove existing correct tags
+- DO NOT create nested tags like [[A>A<A]]
+- Preserve exact text structure, spacing, and line breaks
+- Each tag must be properly closed: [A>text<A] or [D>text<D]
+
+===================================================================
+LOCATION-BASED PRECISION TAGGING SYSTEM
+===================================================================
+
+===================================================================
+LOCATION-BASED PRECISION TAGGING SYSTEM
+===================================================================
+
+THE SUMMARY FORMAT:
+Each item in the summary shows:
+- Item number: "35. 'Section'"
+- Location: "Para 39, Run 5: ...context before 【Section】 context after..."
+- Formatting: "bold" or "strikethrough" etc.
+
+HOW TO USE LOCATIONS (CRITICAL FOR 100% ACCURACY):
+1. "Para X, Run Y" = EXACT paragraph and run where text appears
+2. 【text】 symbols = EXACT text that needs the tag
+3. "...context before..." = Surrounding words to verify you found the right spot
+4. Context matching = Confirmation you're tagging the correct occurrence
+
+STEP-BY-STEP TAGGING PROCESS FOR EACH SUMMARY ITEM:
+
+Step 1: Read item number and text (e.g., "35. 'Section'")
+Step 2: Note the formatting type (e.g., "bold" → use [A>...<A], "strikethrough" → use [D>...<D])
+Step 3: Find "Para X, Run Y" in the location line
+Step 4: Go to that exact paragraph and run in the output text
+Step 5: Verify surrounding context matches what's shown in location (words before and after)
+Step 6: Find the exact text marked with 【】 symbols
+Step 7: Check if text is in EXCLUDED zones:
+   - Is it "Session of 20XX" (e.g., "Session of 2025")? → SKIP, do not tag (even if summary says italic)
+   - Is it in first 3 non-empty lines? → SKIP, do not tag
+   - Is it "Be it enacted by the Legislature of the State of Kansas"? → SKIP, do not tag
+   - If ANY of these conditions are true → DO NOT ADD TAG, move to next summary item
+Step 8: If NOT excluded → Add the appropriate tag at that exact location
+Step 9: Verify all words before and after the tag are still present
+Step 10: Move to next summary item and repeat Steps 1-9
+
+EXAMPLE WORKFLOW:
+```
+Summary item: "42. 'the state board of'"
+Location: "Para 15, Run 8: ...licensed by 【the state board of】 healing arts..."
+Formatting: bold
+
+Your process:
+1. Find paragraph 15, run 8 in output text
+2. Look for text "licensed by the state board of healing arts"
+3. Verify context matches (check "licensed by" before and "healing arts" after)
+4. Check if this text is in first 3 lines (No) or is "Be it enacted" phrase (No)
+5. Add tag: "licensed by [A>the state board of<A] healing arts"
+6. Verify "healing arts" is still present after tag
+```
+
+HANDLING MULTIPLE OCCURRENCES:
+- If "Section" appears 50 times in document, DON'T tag all 50 occurrences
+- ONLY tag the specific occurrence at the "Para X, Run Y" location given in summary
+- Use context words to verify you found the right instance
+- Each summary item = ONE tag at ONE specific location
+- Different occurrences at different Para/Run locations = Different summary items
+
+===================================================================
+CONTENT PRESERVATION WHILE TAGGING (CRITICAL)
+===================================================================
+
+ABSOLUTE RULE: Tags are ADDITIVE markup, never REPLACEMENTS
+
+Correct example:
+- Input: "word1 word2 word3"
+- After tagging word2: "word1 [A>word2<A] word3" ✓ (all words present)
+
+Wrong example:
+- Input: "word1 word2 word3"  
+- After tagging word2: "word1 [A>word2<A]" ✗ (word3 deleted - FAILURE!)
+
+COMMON MISTAKES AND HOW TO AVOID THEM:
+
+Mistake #1: Stopping after tag instead of continuing
+```
+INPUT: "licensed to practice by the state board of healing arts or mental health"
+WRONG: "licensed [D>to practice<D] [A>by<A] the [A>state board of<A]" ✗ 
+       (stopped after last tag, dropped "healing arts or mental health")
+CORRECT: "licensed [D>to practice<D] [A>by<A] the [A>state board of<A] healing arts or mental health" ✓
+```
+
+Mistake #2: Dropping text at end of line
+```
+INPUT: "shall be disclosed as provided in subsection (e), (f) and (g). Disclosure shall"
+WRONG: "shall be disclosed as provided in [D>subsection<D] [A>subsections<A]" ✗
+       (dropped everything after the tag)
+CORRECT: "shall be disclosed as provided in [D>subsection<D] [A>subsections<A] (e)[A>, (f) and (g)<A]. Disclosure shall" ✓
+```
+
+Mistake #3: Forgetting text after mid-sentence tag
+```
+INPUT: "The secretary of corrections or any agents designated by the secretary"
+WRONG: "The [A>secretary of corrections<A] or any agents" ✗
+       (forgot "designated by the secretary")
+CORRECT: "The [A>secretary of corrections<A] or any agents designated by the secretary" ✓
+```
+
+VERIFICATION RULE: After inserting ANY tag, always check:
+- Are all words that came BEFORE the tag still there? (Check left side)
+- Are all words that came AFTER the tag still there? (Check right side)
+- Did I accidentally delete any words while inserting the tag?
+
+===================================================================
+SYSTEMATIC TAGGING WORKFLOW (Use this process)
+===================================================================
+
+PHASE 1: PREPARATION (CRITICAL - DO THIS BEFORE LOOKING AT SUMMARY)
+1. ⚠️ SCAN OUTPUT TEXT: Find "Session of 20XX" (e.g., "Session of 2025") → Write down: "DO NOT TAG"
+2. ⚠️ COUNT FROM TOP: Identify first 3 non-empty lines → Write down: "DO NOT TAG LINES 1-3"
+3. ⚠️ SEARCH TEXT: Find "Be it enacted by the Legislature of the State of Kansas" → Write down: "DO NOT TAG"
+4. NOW read summary and count total items that need tags → Note this number
+5. Create mental checklist of all "Para X, Run Y" locations
+
+PHASE 2: TAGGING (Repeat for EVERY summary item)
+For each item in summary:
+1. Read the item carefully (number, text, location, formatting)
+2. ⚠️ CHECK AGAINST YOUR EXCLUSION LIST FIRST:
+   - Is it "Session of 20XX"? → YES: Skip immediately, move to next item
+   - Is it in lines 1-3 you marked? → YES: Skip immediately, move to next item
+   - Is it "Be it enacted..."? → YES: Skip immediately, move to next item
+3. Navigate to "Para X, Run Y" location in output text
+4. Use context to verify you found the right occurrence
+5. Add appropriate tag ([A>...<A] or [D>...<D])
+6. Verify no words were dropped before/after the tag
+7. Mark this item as "DONE" mentally
+
+PHASE 3: VERIFICATION (Before submitting output)
+1. Count total tags you added to output
+2. Compare with number from Phase 1 (summary items count)
+3. Numbers must match (minus any exclusions)
+4. If mismatch → Review summary line by line to find missing tags
+5. Count total words in output vs input (should be same, plus tag markers)
+6. If word count decreased → Find what was deleted and fix it
+
+===================================================================
+FINAL OUTPUT REQUIREMENTS
+===================================================================
+===================================================================
+FINAL OUTPUT REQUIREMENTS
+===================================================================
+
+WHAT TO RETURN:
+✓ Return ONLY the output text with ALL tags added
+✓ NO explanations, NO comments, NO meta-text
+✓ NO phrases like "Here is the result..." or "I've added the tags..."
+✓ Just the pure tagged text, nothing else
+
+MANDATORY PRE-SUBMISSION CHECKLIST:
+Before returning your output, verify ALL of these:
+
+□ Tag Completion: Did I add tags for 100% of summary items (minus exclusions)?
+□ Location Accuracy: Did I use "Para X, Run Y" locations to find exact positions?
+□ Content Preservation: Are ALL words from input present in output?
+□ Kansas Exclusions: Did I skip "Session of 20XX", "Be it enacted...", and first 3 non-empty lines?
+□ Exclusion Verification: Is "Session of 2025" (or any year) untagged in output?
+□ Tag Format: Are all tags properly formatted and closed?
+□ Context Verification: Did I match surrounding context for each tag?
+□ Word Count: Input word count = Output word count (excluding tag markers)?
+□ No Deletions: Did I avoid dropping any text when inserting tags?
+□ Correct Occurrences: Did I tag only the instances specified, not all occurrences?
+□ Complete Output: Is my output the full document, not truncated?
+
+If ANY checkbox is unchecked → Go back and fix before submitting
+
+SUCCESS CRITERIA (ALL must be true):
+✓ Summary lists N items → I added N tags (minus exclusions)
+✓ Input has W words → Output has W words + tag markers
+✓ Every "Para X, Run Y" location has corresponding tag added
+✓ No words deleted or missing from original input
+✓ All Kansas-specific rules followed
+✓ Output is complete from first line to last line
+
+===================================================================
+SUMMARY REFERENCE (Ground Truth - This is your source of truth)
+===================================================================
+
+⚠️ REMINDER BEFORE YOU START TAGGING ⚠️
+Even if the summary below lists these items as formatted, DO NOT TAG THEM:
+🚫 "Session of 2025" (or any year) → Leave untagged
+🚫 "Be it enacted by the Legislature of the State of Kansas" → Leave untagged  
+🚫 Any text in first 3 non-empty lines → Leave untagged
+
+This summary shows ALL text that must be tagged with their EXACT locations.
+Each entry format:
+- Item number and text to tag
+- "Para X, Run Y" showing exact position
+- Context showing surrounding words
+- Formatting type (bold/underline/italic/strikethrough)
+
+CRITICAL: Process EVERY item in this summary, EXCEPT the 3 exclusions above.
 
 {SUMMARY_CONTENT}
 
-CURRENT OUTPUT TEXT TO VERIFY:
+===================================================================
+OUTPUT TEXT TO TAG (Add tags to this text)
+===================================================================
+
+⚠️ BEFORE TAGGING: First identify and mark these as DO NOT TAG ⚠️
+1. Find "Session of 20XX" anywhere in text → Mark as EXCLUDED
+2. Find first 3 non-empty lines → Mark as EXCLUDED
+3. Find "Be it enacted by the Legislature of the State of Kansas" → Mark as EXCLUDED
+
+This is the text where you will add the tags based on the summary above.
+Use "Para X, Run Y" to find exact locations.
+Preserve 100% of this text while adding tags.
+
 {OUTPUT_TEXT_CONTENT}
 
-VERIFICATION PROCESS:
-1. FIRST: Identify the first 3 NON-EMPTY lines of the document - mark these as EXCLUDED from all tagging
-2. Read through the summary to identify what text should have [A>...<A] or [D>...<D] tags
-3. For EACH summary item, use the "Para X, Run Y" location to find the EXACT occurrence
-4. BEFORE TAGGING: Check if the text is in the first 3 non-empty lines - if YES, SKIP IT (do not tag)
-5. BEFORE TAGGING: Check if the text is "Be it enacted by the Legislature of the State of Kansas" - if YES, SKIP IT (do not tag)
-6. Use the contextual location to verify you're tagging the correct instance:
-   - Find the paragraph and run mentioned (Para X, Run Y)
-   - Look for the surrounding context words shown in the location
-   - Identify the exact text marked with 【】 symbols
-6. Verify EVERY word from input appears in output - NO DELETIONS ALLOWED
-7. Fix subsection formatting: change "[A>(2) A<A]" to "(2) [A>A<A]" when only letter is formatted
-8. Add ONLY the missing tags for instances specified in the summary
+===================================================================
+YOUR TASK: BEGIN SYSTEMATIC TAGGING
+===================================================================
 
-USING RUN-BASED CONTEXTUAL LOCATIONS:
-- "Para X, Run Y: ...context words 【target_text】 more context..." means:
-  - Find paragraph X, run Y in the output text (this is the EXACT location)
-  - Verify using the surrounding context words shown
-  - Tag only that specific instance of "target_text" with the appropriate tag
-- The "Para X, Run Y" format provides EXACT positioning - use it for 100% accuracy
-- If you see multiple instances of the same word, the Para/Run location tells you which one
-- The 【】 symbols show exactly which text needs the formatting tag at that location
-- DO NOT tag other occurrences of the same word at different Para/Run locations
+STEP 0 (DO THIS FIRST - BEFORE READING SUMMARY):
+Scan the output text and identify the 3 exclusions:
+- Line with "Session of 20XX" → Note: DO NOT TAG THIS
+- First 3 non-empty lines → Note: DO NOT TAG ANYTHING IN THESE LINES
+- "Be it enacted..." phrase → Note: DO NOT TAG THIS
 
-EXAMPLES OF CORRECT KS TAGGING:
-- Text marked "bold" in summary: [A>Section<A]
-- Text marked "underline" in summary: [A>amended provision<A]
-- Text marked "italic" in summary: [A>definition term<A]
-- Text marked "strikeout" in summary: [D>deleted provision<D]
-- Subsection formatting: (2) [A>A<A] (NOT [A>(2) A<A])
-- Kansas enacting clause: NO TAGS even if bold/underlined/italic in summary
-- Lines 1, 2, 3 content: NO TAGS even if formatting indicated in summary
+STEP 1-5: Execute the systematic workflow:
+1. Count total summary items that need tags (minus the exclusions you identified)
+2. Process each summary item using Para/Run locations
+3. For each item, check: Is this one of the 3 exclusions? If YES → Skip it
+4. If NOT excluded → Add appropriate tags ([A>...<A] or [D>...<D])
+5. Verify no content lost after each tag
+6. Complete verification checklist before submitting
 
-CROSS-VERIFICATION CHECKLIST (before returning output):
-- Did I preserve EVERY word from the input text?
-- Did I only add tags, without deleting any text?
-- Did I identify the first 3 NON-EMPTY lines and exclude them from tagging?
-- Did I use "Para X, Run Y" locations to tag the correct occurrences?
-- Did I avoid tagging "Be it enacted by the Legislature of the State of Kansas"?
-- Did I avoid tagging ANYTHING in the first 3 non-empty lines (even if summary says to)?
-- Did I avoid tagging every instance of common words?
-- Did I check for untagged text before consolidating tags?
-- Did I keep text that doesn't match the summary exactly?
-- Are all my tags properly closed [A>...<A] or [D>...<D]?
+Remember: 
+- Your PRIMARY goal = Add 100% of tags from summary
+- Your SECONDARY goal = Preserve 100% of text content
+- Missing even one tag = FAILURE
+- Deleting even one word = FAILURE
+- Success = All tags added + all content preserved
 
-FAKE EXAMPLES BELOW - FOR FORMAT ILLUSTRATION ONLY - DO NOT TAG THESE
-
-CONTEXTUAL LOCATION EXAMPLES (for illustration only - DO NOT tag these examples):
-
-If you see a summary entry like:
-"XX. 'example_word'"
-"   Location: Para 5, Run 2: ...text before 【example_word】 text after..."
-"   Formatting: bold"
-
-Your process should be: Find paragraph 5, run 2, verify the context "text before example_word text after", 
-and tag that specific "example_word" as [A>example_word<A]
-
-If "example_word" appears elsewhere (Para 3, Para 10, etc.), DO NOT tag those - only tag Para 5, Run 2
-
-If you see another entry like:
-"YY. 'different_word'"  
-"   Location: Para 8, Run 5: ...other context 【different_word】 more context..."
-"   Formatting: strikeout"
-
-Your process should be: In paragraph 8, run 5, find "other context different_word more context" and tag 
-that specific "different_word" as [D>different_word<D]
-
-This is a PATTERN example showing how to use locations - DO NOT tag the literal text "different_word"
-
-IMPORTANT: The above are FORMAT EXAMPLES only. Only tag text that appears in the actual {SUMMARY_CONTENT} section with their specific Para/Run locations.
-
-OUTPUT REQUIREMENTS:
-1. Return ONLY the corrected text with proper KS tags applied
-2. NO explanations, comments, or meta-text
-3. EVERY word from input must appear in output - verify before submitting
-4. Tags are ADDITIVE - you're adding markup to existing text, not rewriting it
-5. If uncertain about a location, use the "Para X, Run Y" reference to find the exact spot
-6. ABSOLUTE: NEVER tag "Be it enacted by the Legislature of the State of Kansas"
-7. ABSOLUTE: NEVER tag content in the FIRST 3 NON-EMPTY LINES (Session of X, HOUSE BILL No. X, By Committee...)
-8. Even if the summary explicitly lists these in the formatting, IGNORE them and do not add tags
+BEGIN TAGGING NOW.

@@ -23,6 +23,7 @@ from session_manager import get_session_manager
 from pdf_type_detector import detect_pdf_type
 from pdf_plumber_extractor import extract_pdf_with_pdfplumber
 from text_to_clean_prompt import convert_pdfplumber_to_clean
+from tag_then_clean_pipeline import tag_then_clean_pipeline
 
 # Configure Streamlit page
 st.set_page_config(
@@ -922,6 +923,262 @@ def process_with_pdfplumber_pipeline(pdf_path, state_code, session_id, progress_
         logging.error(f"PDFPlumber processing error: {e}", exc_info=True)
         return None
 
+def process_with_tag_then_clean_pipeline(pdf_path, state_code, session_id, progress_placeholder=None, status_placeholder=None):
+    """Process PDF using Tag-Then-Clean workflow: Extract raw → Tag → Clean"""
+    start_time = time.time()
+    session_mgr = st.session_state.session_manager
+    session_folders = session_mgr.get_session_folders(session_id)
+    
+    def update_progress():
+        if progress_placeholder:
+            with progress_placeholder.container():
+                show_processing_steps()
+    
+    # Start processing
+    session_mgr.start_processing(session_id)
+    
+    try:
+        # Check if document needs chunking
+        from llm_tag_verifier import should_chunk_for_verification
+        should_chunk, page_count, reason = should_chunk_for_verification(pdf_path)
+        
+        if should_chunk:
+            # Large document - use chunking workflow
+            print(f"\n🔄 Large document detected ({page_count} pages)")
+            print(f"📦 Using Tag-Then-Clean chunking workflow...")
+            
+            steps = [
+                {"name": "Chunk Processing", "icon": "📦"},
+                {"name": "Tagging Chunks", "icon": "🏷️"},
+                {"name": "Cleaning Chunks", "icon": "🧹"},
+                {"name": "Merging Results", "icon": "🔗"},
+                {"name": "Finalizing", "icon": "✅"}
+            ]
+            
+            st.session_state.step_status = {i: "⏳" for i in range(5)}
+            update_progress()
+            
+            # Use chunked processing from tag_then_clean_pipeline
+            # This handles ALL steps internally: extract chunks, DOCX, summary, tag, clean, merge
+            st.session_state.current_step = 0
+            st.session_state.step_status[0] = "🔄"
+            update_progress()
+            
+            if status_placeholder:
+                status_placeholder.info("🏷️ Processing chunks with Tag-Then-Clean...")
+            
+            print("\n🔄 Tag-Then-Clean chunked pipeline...")
+            
+            # Get client using helper function (matching other workflows)
+            from tag_then_clean_pipeline import tag_then_clean_with_pdfplumber_chunks, get_anthropic_client
+            
+            try:
+                # Get fresh client
+                client = get_anthropic_client()
+                
+                # Update progress as processing continues
+                st.session_state.step_status[0] = "✅"
+                st.session_state.step_status[1] = "🔄"
+                update_progress()
+                
+                corrected_text = tag_then_clean_with_pdfplumber_chunks(
+                    pdf_path=pdf_path,
+                    state_code=state_code,
+                    client=client,
+                    session_dir=session_folders['session_dir']
+                )
+                
+                if not corrected_text:
+                    st.session_state.step_status[1] = "❌"
+                    st.session_state.step_status[2] = "❌"
+                    st.session_state.step_status[3] = "❌"
+                    st.session_state.step_status[4] = "❌"
+                    st.error("❌ Chunked Tag-Then-Clean failed")
+                    return None
+                
+                # Mark all steps complete
+                st.session_state.step_status[1] = "✅"
+                st.session_state.step_status[2] = "✅"
+                st.session_state.step_status[3] = "✅"
+                st.session_state.step_status[4] = "✅"
+                update_progress()
+                print("✅ Tag-Then-Clean chunked pipeline complete")
+                
+                # The chunked function already saves the file to output/TagThenClean/final_clean_tagged.txt
+                # Use that path as the verified file path
+                verified_file_path = os.path.join(
+                    session_folders['session_dir'], 
+                    "output", 
+                    "TagThenClean",
+                    "final_clean_tagged.txt"
+                )
+                
+                if not os.path.exists(verified_file_path):
+                    st.error("❌ Output file not found")
+                    return None
+                
+                # Mark processing complete
+                session_mgr.complete_processing(session_id, verified_file_path)
+                
+                # Calculate total time
+                end_time = time.time()
+                total_time = end_time - start_time
+                minutes = int(total_time // 60)
+                seconds = int(total_time % 60)
+                
+                st.session_state.processing_time = f"{minutes}m {seconds}s" if minutes > 0 else f"{seconds}s"
+                
+                completion_msg = f"🎉 Tag-Then-Clean chunked processing completed! Total time: {st.session_state.processing_time}"
+                print("\n" + "="*60)
+                print(completion_msg)
+                print("="*60)
+                logging.info(completion_msg)
+                
+                return verified_file_path
+                
+            except Exception as e:
+                st.session_state.step_status[0] = "❌"
+                st.session_state.step_status[1] = "❌"
+                st.session_state.step_status[2] = "❌"
+                st.session_state.step_status[3] = "❌"
+                st.session_state.step_status[4] = "❌"
+                st.error(f"❌ Tag-Then-Clean chunked failed: {e}")
+                logging.error(f"Tag-Then-Clean chunked failed: {e}")
+                import traceback
+                traceback.print_exc()
+                return None
+        
+        # Small document - use normal Tag-Then-Clean workflow (no chunking)
+        print(f"\n📄 Standard document ({page_count} pages)")
+        print(f"⚡ Using normal Tag-Then-Clean workflow...")
+        
+        steps = [
+            {"name": "PDFPlumber Extract", "icon": "📄"},
+            {"name": "DOCX Analysis", "icon": "📋"},
+            {"name": "Summary Generation", "icon": "📊"},
+            {"name": "Tag Raw Text", "icon": "🏷️"},
+            {"name": "Clean Tagged Text", "icon": "🧹"}
+        ]
+        
+        st.session_state.step_status = {i: "⏳" for i in range(5)}
+        update_progress()
+        
+        # Step 1: Extract with pdfplumber
+        st.session_state.current_step = 0
+        st.session_state.step_status[0] = "🔄"
+        update_progress()
+        
+        if status_placeholder:
+            status_placeholder.info("📄 Extracting text with pdfplumber...")
+        
+        print("\n🔄 Step 1/5: PDFPlumber extraction...")
+        raw_output = os.path.join(session_folders['output_folder'], 'pdfplumber_raw.txt')
+        
+        extract_pdf_with_pdfplumber(pdf_path, raw_output, validate_sections=True)
+        if not os.path.exists(raw_output):
+            st.session_state.step_status[0] = "❌"
+            st.error("❌ PDFPlumber extraction failed")
+            return None
+        
+        st.session_state.step_status[0] = "✅"
+        update_progress()
+        print("✅ PDFPlumber extraction complete")
+        
+        # Step 2: DOCX Analysis
+        st.session_state.current_step = 1
+        st.session_state.step_status[1] = "🔄"
+        update_progress()
+        
+        if status_placeholder:
+            status_placeholder.info("📋 Analyzing DOCX structure...")
+        
+        print("\n🔄 Step 2/5: DOCX analysis...")
+        docx_output_dir = os.path.join(session_folders['output_folder'], 'Output_Docx', state_code)
+        os.makedirs(docx_output_dir, exist_ok=True)
+        
+        docx_pipeline = PDFToDocxAnalysisPipeline(pdf_path, docx_output_dir, state_code=state_code)
+        docx_results = docx_pipeline.run_complete_pipeline()
+        
+        if not docx_results or not docx_results['success']:
+            st.session_state.step_status[1] = "❌"
+            st.error("❌ DOCX conversion failed")
+            return None
+        
+        docx_file = docx_results['docx_path']
+        summary_file = docx_results.get('summary_path')  # May be None if no formatting
+        
+        st.session_state.step_status[1] = "✅"
+        update_progress()
+        print("✅ DOCX analysis complete")
+        
+        # Step 3: Summary already generated by run_complete_pipeline
+        st.session_state.current_step = 2
+        st.session_state.step_status[2] = "✅"  # Already done
+        update_progress()
+        print("✅ Summary generation complete")
+        
+        if not summary_file:
+            st.error("❌ Summary file not generated")
+            return None
+        
+        # Step 4 & 5: Tag-Then-Clean Pipeline
+        st.session_state.current_step = 3
+        st.session_state.step_status[3] = "🔄"
+        st.session_state.step_status[4] = "⏳"
+        update_progress()
+        
+        if status_placeholder:
+            status_placeholder.info("🏷️ Running Tag-Then-Clean pipeline...")
+        
+        print("\n🔄 Step 4-5/5: Tag-Then-Clean pipeline...")
+        output_dir = os.path.join(session_folders['output_folder'], 'TagThenClean')
+        
+        try:
+            results = tag_then_clean_pipeline(
+                raw_text_path=raw_output,
+                summary_path=summary_file,
+                state_code=state_code,
+                output_dir=output_dir,
+                pdf_path=pdf_path
+            )
+            
+            st.session_state.step_status[3] = "✅"
+            st.session_state.step_status[4] = "✅"
+            update_progress()
+            print("✅ Tag-Then-Clean pipeline complete")
+            
+            # Mark processing complete
+            final_output = results['final_output']
+            session_mgr.complete_processing(session_id, final_output)
+            
+            # Calculate total time
+            end_time = time.time()
+            total_time = end_time - start_time
+            minutes = int(total_time // 60)
+            seconds = int(total_time % 60)
+            
+            st.session_state.processing_time = f"{minutes}m {seconds}s" if minutes > 0 else f"{seconds}s"
+            
+            completion_msg = f"🎉 Tag-Then-Clean processing completed! Total time: {st.session_state.processing_time}"
+            print("\n" + "="*60)
+            print(completion_msg)
+            print("="*60)
+            logging.info(completion_msg)
+            
+            return final_output
+            
+        except Exception as e:
+            st.session_state.step_status[3] = "❌"
+            st.session_state.step_status[4] = "❌"
+            st.error(f"❌ Tag-Then-Clean pipeline failed: {e}")
+            print(f"❌ Error: {e}")
+            return None
+        
+    except Exception as e:
+        st.error(f"❌ Tag-Then-Clean processing error: {str(e)}")
+        logging.error(f"Tag-Then-Clean processing error: {e}", exc_info=True)
+        return None
+
 def show_simple_ui():
     """Simple UI for single file processing with session management"""
     st.title("📄 Pending Legislative PDF to Text Processor")
@@ -1215,7 +1472,7 @@ def show_single_file_processing():
     """Show single file processing interface"""
     st.header("🔄 Step 3: Process File")
     
-    col1, col2 = st.columns([1, 1])
+    col1, col2, col3 = st.columns([1, 1, 1])
     
     with col1:
         if not st.session_state.processing:
@@ -1254,6 +1511,16 @@ def show_single_file_processing():
                 st.session_state.temp_pdf_path = None
                 st.rerun()
     
+    with col3:
+        if not st.session_state.processing:
+            if st.button("🏷️ Tag-Then-Clean", use_container_width=True,
+                        help="Tag raw text first, then clean (most accurate)"):
+                st.session_state.processing = True
+                st.session_state.current_step = 0
+                st.session_state.processing_time = None
+                st.session_state.process_method = "tag_then_clean"
+                st.rerun()
+    
     # Processing progress
     if st.session_state.processing:
         # Create a placeholder for dynamic updates
@@ -1267,6 +1534,14 @@ def show_single_file_processing():
         if st.session_state.process_method == "pdfplumber":
             result = process_with_pdfplumber_pipeline(
                 st.session_state.temp_pdf_path, 
+                st.session_state.selected_state,
+                st.session_state.session_id,
+                progress_placeholder,
+                status_placeholder
+            )
+        elif st.session_state.process_method == "tag_then_clean":
+            result = process_with_tag_then_clean_pipeline(
+                st.session_state.temp_pdf_path,
                 st.session_state.selected_state,
                 st.session_state.session_id,
                 progress_placeholder,

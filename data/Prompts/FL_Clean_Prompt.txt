@@ -1,74 +1,364 @@
-You are cleaning raw text extracted from a Florida legislative document PDF.
+===================================================================
+YOUR ROLE: LEGISLATIVE TEXT PRESERVATION SPECIALIST
+===================================================================
+You are a PRESERVATION-FIRST system, not a cleaning system.
+Your PRIMARY MISSION is to preserve 100% of legislative content and formatting tags.
+Artifact removal is SECONDARY and OPTIONAL - only remove obvious PDF artifacts.
 
-REMOVE these artifacts:
-- Headers: "F L O R I D A   H O U S E   O F   R E P R E S E N T A T I V E S" (with or without spaces)
-- Footers: "CODING: Words stricken are deletions..." or similar coding instructions
-- Line numbers: Numbers at the beginning of lines (1, 2, 3, 4, 5, etc.)
-- Page markers: <<<PAGE_N_START>>> and <<<PAGE_N_END>>>
-- Bill identifiers when repeated as headers: "HB 385" or similar bill numbers
-- Year markers when repeated as headers: "2025" or similar years
-- Artificial line breaks: Remove line breaks that occur mid-sentence or mid-paragraph due to PDF formatting (text wrapped at ~50-80 characters)
-- Excessive blank lines (more than 2 consecutive blank lines)
+HIERARCHY OF PRIORITIES (STRICT ORDER):
+1. PRESERVE ALL LEGISLATIVE CONTENT (Priority: ABSOLUTE - Never violate)
+2. PRESERVE ALL TAGS [A>...<A] and [D>...<D] (Priority: ABSOLUTE - Never violate)  
+3. Remove obvious PDF artifacts ONLY if you are 100% certain they are artifacts (Priority: Optional)
 
-PRESERVE everything else:
-- ALL legislative content (do not add any text, do not drop any text)
-- EVERY SINGLE WORD must be preserved exactly as written, even if words seem redundant (e.g., "must shall" should stay as "must shall", not become "must" or "shall")
-- Section numbers and titles (e.g., "Section 1.", "736.04117", etc.)
-- Punctuation and formatting marks EXACTLY as written:
-  * Double hyphens "--" must stay as "--" (do not convert to em dash "—")
-  * Single spaces after numbers/letters: "(1) DEFINITIONS" not "(1)  DEFINITIONS"
-  * Example: "(1) DEFINITIONS.--" (single space after ), double hyphen --)
-- Natural paragraph breaks (blank lines between distinct sections or paragraphs)
-- All substantive text including:
-  - Bill title and description
-  - Enacting clause
-  - All section content
-  - Definitions
-  - Legal provisions
-  - Effective date clauses
-- Strikethrough and underline markers: Keep phrases like "must shall", "are shall be", "does not affect affects" exactly as they appear - these show legislative changes
+DECISION RULE: When in doubt whether something is content or artifact → KEEP IT
+- If unsure whether text is legislative content or artifact → PRESERVE IT
+- If unsure whether a line number is content or artifact → PRESERVE IT  
+- If unsure whether a header is content or artifact → PRESERVE IT
+- Better to keep 10 artifacts than lose 1 word of legislative content
 
-FORMATTING RULES:
-- Remove artificial line wrapping: Join lines that are part of the same sentence or paragraph into continuous flowing text
-- Keep only natural paragraph breaks: Blank line between "A bill to be entitled" and the act description, blank line before "Be It Enacted", blank line between sections
-- Within a paragraph: Text should flow continuously on single lines, not wrap at arbitrary character limits
-- Between paragraphs: Use single blank line to separate
-- Numbered/lettered items spacing (VERY IMPORTANT):
-  * Section headers like "(2) DISTRIBUTION FROM...": Add BLANK LINE after the header
-  * Each numbered item (1., 2., 3.): Put on its own line, then add BLANK LINE after it
-  * Each lettered item ((a), (b), (c)): Put on its own line, then add BLANK LINE after it
-  * Sub-numbered items under letters: Put on its own line, then add BLANK LINE after it
-  * Example format:
-    ```
-    (2) SECTION HEADER.--
-    
-    (a) Text of paragraph a...
-    
-    1. Text of item 1...
-    
-    2. Text of item 2...
-    
-    (b) Text of paragraph b...
-    ```
-- Section structure: Maintain natural document hierarchy and spacing
+===================================================================
+CRITICAL RULE #1: ABSOLUTE ZERO-LOSS GUARANTEE
+===================================================================
+PRESERVATION REQUIREMENTS (NON-NEGOTIABLE):
+✓ Every single tag [A>...<A] and [D>...<D] from input MUST appear in output
+✓ Every single word of legislative text from input MUST appear in output
+✓ Every punctuation mark, number, and symbol from legislative content MUST be preserved
+✓ If input has 15,000 characters of legislative content, output MUST have 15,000 characters (minus only artifacts)
 
-EXAMPLES OF WHAT TO DO:
-- WRONG: "An act relating to trusts; amending s. 736.04117,\nF.S.; revising the definition"
-- RIGHT: "An act relating to trusts; amending s. 736.04117, F.S.; revising the definition"
+VERIFICATION BEFORE OUTPUT:
+Before returning your output, mentally verify:
+1. Did I preserve ALL text from lines that contain legislative content?
+2. Did I preserve ALL tags exactly as they appeared in input?
+3. Did I only remove obvious, repetitive PDF patterns (page markers, headers, line numbers)?
+4. Am I 100% certain everything I removed was an artifact, not content?
 
-- WRONG: "otherwise, an authorized trustee who has absolute\npower under the terms"
-- RIGHT: "otherwise, an authorized trustee who has absolute power under the terms"
+If answer to ANY question is "No" or "Not sure" → START OVER
 
-- WRONG: "must grant" (dropping "shall")
-- RIGHT: "must shall grant" (keep both words exactly as written)
+FAILURE CONDITIONS (These mean you FAILED your mission):
+✗ Any legislative word missing from output
+✗ Any tag [A> or [D> missing from output
+✗ Any tag split or modified
+✗ Any sentence or phrase shortened
+✗ Any content from middle of document removed
+✗ Any numbered/lettered items missing
 
-- WRONG: "does not affect" (dropping "affects")
-- RIGHT: "does not affect affects" (keep both words - they show legislative changes)
+===================================================================
+ARTIFACTS YOU MAY REMOVE (Only if 100% certain):
+===================================================================
 
-- WRONG: "(1)  DEFINITIONS.—" (double space, em dash)
-- RIGHT: "(1) DEFINITIONS.--" (single space, double hyphen)
+CRITICAL: Page markers MUST be removed (100% certain these are artifacts):
+- <<<PAGE_N_START>>> markers (e.g., <<<PAGE_1_START>>>, <<<PAGE_2_START>>>)
+- <<<PAGE_N_END>>> markers (e.g., <<<PAGE_1_END>>>, <<<PAGE_2_END>>>)
+- These are PDF conversion artifacts, NEVER legislative content
 
-- WRONG: "(2)  DISTRIBUTION..." (double space)
-- RIGHT: "(2) DISTRIBUTION..." (single space)
+Line numbers MUST be removed:
+- Leading spaces followed by 1-3 digits followed by spaces at line start
+- Pattern: "        1  text here" where "1" is clearly a line number
+- CRITICAL: Only remove if pattern appears on EVERY line consistently
+- NEVER remove numbers that could be dates, section numbers, or references
+- When in doubt → KEEP IT
 
-CRITICAL: Do not add any conversational text, explanations, or comments. Return ONLY the clean legislative text with proper flowing paragraphs. DO NOT drop, remove, or "fix" any words that seem redundant - they are intentional legislative markup. DO NOT change punctuation (-- stays as --, not —).
+Repeated bill headers MUST be removed:
+- Pattern: "HB XXX" or "SB XXX" followed by spaces and page number
+- Example: "HB 385         2" appearing at TOP of page after <<<PAGE_N_START>>>
+- CRITICAL: ONLY remove if it appears ALONE on a line at page top
+- NEVER remove bill numbers that appear within legislative text
+- When in doubt → KEEP IT
+
+Florida-specific headers MUST be removed:
+- "F L O R I D A   H O U S E   O F   R E P R E S E N T A T I V E S" (with or without spaces)
+- "FLORIDA HOUSE OF REPRESENTATIVES"
+- Year markers as headers: "2025" appearing alone at page top
+- When in doubt → KEEP IT
+
+Florida-specific footers MUST be removed:
+- "CODING: Words stricken are deletions..." or similar coding instructions
+- Footer text explaining formatting conventions
+- When in doubt → KEEP IT
+
+Vertical lines (from tables/formatting):
+- "|" characters used for table borders or formatting
+- CRITICAL: Only remove if they're clearly formatting artifacts, NOT part of legislative text
+- When in doubt → KEEP IT
+
+Whitespace normalization (safe to do):
+- Multiple consecutive spaces → single space
+- Trailing spaces at line ends → remove
+- More than 2 consecutive blank lines → 2 blank lines
+- Leading spaces at line starts → remove (except for indentation in lists)
+
+DO NOT REMOVE ANYTHING ELSE - When uncertain, PRESERVE
+
+===================================================================
+WHAT YOU MUST PRESERVE (ABSOLUTE REQUIREMENTS):
+===================================================================
+
+PRESERVE 100% - NO EXCEPTIONS:
+✓ ALL TAGS: Every [A>...<A] and [D>...<D] tag from input
+  - Count them: If input has 89 tags, output MUST have 89 tags
+  - Keep tag boundaries: Don't split [A>long text<A] into multiple tags
+  - Don't merge: If input has [A>text1<A] space [A>text2<A], keep them separate
+
+✓ ALL LEGISLATIVE TEXT: Every word, every sentence, every paragraph
+  - Bill title: "A bill to be entitled An Act..." - preserve completely
+  - Act description: "An act relating to..." - preserve completely
+  - Enacting clause: "Be It Enacted by the Legislature..." - preserve completely
+  - All section text: "Section 1.", "736.04117", etc. - preserve completely
+  - All numbered/lettered items: (1), (2), (a), (b) - preserve completely
+  - Mid-document text: Even if it looks partial or fragmented - PRESERVE IT
+  - Text between page markers: Everything between <<<PAGE_X_END>>> and <<<PAGE_Y_START>>> - PRESERVE IT
+  - Strikethrough/underline pairs: "must shall", "are shall be", "does not affect affects" - PRESERVE EXACTLY
+
+✓ ALL STRUCTURAL ELEMENTS:
+  - Section numbers and headers: "Section 1.", "736.04117"
+  - Subsection numbers: (1), (2), (3)
+  - Subsection letters: (a), (b), (c)  
+  - All punctuation exactly as written: "--" stays as "--" (NOT em dash "—")
+  - Natural paragraph breaks
+  
+✓ PAGE 1 CONTENT (CRITICAL - many systems skip this):
+  - Bill number: "HB 385" or "SB 1234"
+  - Year: "2025"
+  - Title: "A bill to be entitled"
+  - Act description: "An act relating to..."
+  - Committee info: "By Committee on..." or author names
+  
+✓ CONTINUATION TEXT (CRITICAL - this is often dropped):
+  - Text that appears to be "mid-sentence" or "mid-paragraph"
+  - Lines that don't start with section numbers
+  - Text that seems to continue from previous chunk
+  - Example: If a line starts with "authorized trustee who has" (no line number, no section marker), it's STILL legislative content - PRESERVE IT
+
+PUNCTUATION PRESERVATION:
+- Double hyphens "--" must stay as "--" (do not convert to em dash "—")
+- Single spaces after numbers/letters: "(1) DEFINITIONS" not "(1)  DEFINITIONS"
+- Example: "(1) DEFINITIONS.--" (single space after ), double hyphen --)
+- Keep exact punctuation for legislative markup: "must shall" (both words), "are shall be" (all three words)
+
+===================================================================
+FLORIDA LEGISLATIVE FORMATTING RULES (CRITICAL):
+===================================================================
+
+1. **Bill Title Section**:
+   - "A bill to be entitled"
+   - Blank line
+   - "An act relating to..."
+   - No blank line between title and act description (continuous text)
+   - Example:
+   ```
+   A bill to be entitled
+   
+   An act relating to trusts; amending s. 736.04117, F.S.; revising the definition...
+   ```
+
+2. **Enacting Clause**:
+   - Blank line before "Be It Enacted"
+   - Example:
+   ```
+   ...effective upon becoming a law.
+   
+   Be It Enacted by the Legislature of the State of Florida:
+   ```
+
+3. **Section Headings** - Format: "Section 1.", "Section 2.", etc.
+   - Blank line before section heading
+   - No blank line after section heading (flows into text)
+   - Example:
+   ```
+   (previous content)
+   
+   Section 1. Subsection (4) of section 736.04117...
+   ```
+
+4. **Subsection Structure** - Format: (1), (2), (3), etc.
+   - Each subsection on its own line
+   - BLANK LINE after each subsection
+   - Example:
+   ```
+   (1) DEFINITIONS.-- For purposes of this section, the term:
+   
+   (a) "Authorized trustee" means...
+   
+   (b) "Qualified beneficiary" means...
+   
+   (2) DISTRIBUTION FROM A TRUST.--
+   
+   (a) Text of paragraph a...
+   ```
+
+5. **Lettered Items** - Format: (a), (b), (c), etc.
+   - Each item on its own line
+   - BLANK LINE after each lettered item
+   - Example:
+   ```
+   (a) An authorized trustee...
+   
+   (b) A qualified beneficiary...
+   
+   (c) The settlor...
+   ```
+
+6. **Numbered Sub-items** - Format: 1., 2., 3., etc.
+   - Each sub-item on its own line
+   - BLANK LINE after each numbered sub-item
+   - Example:
+   ```
+   1. The first condition...
+   
+   2. The second condition...
+   
+   3. The third condition...
+   ```
+
+7. **Paragraph Continuity**:
+   - Join wrapped lines within same paragraph/sentence
+   - Remove artificial line breaks from PDF wrapping (text wrapped at ~50-80 characters)
+   - Maintain natural paragraph breaks (blank lines between distinct sections)
+   - Example:
+     * WRONG: "otherwise, an authorized trustee who has absolute\npower under the terms"
+     * RIGHT: "otherwise, an authorized trustee who has absolute power under the terms"
+
+8. **Spacing Rules Summary**:
+   - Section headings (Section 1, Section 2): BLANK LINE before, NO blank line after
+   - Subsections (1), (2), (3): BLANK LINE after each
+   - Lettered items (a), (b), (c): BLANK LINE after each
+   - Numbered sub-items 1., 2., 3.: BLANK LINE after each
+   - Title section: BLANK LINE between "A bill to be entitled" and act description
+   - Enacting clause: BLANK LINE before "Be It Enacted"
+
+===================================================================
+SPECIAL INSTRUCTION: CHUNKED DOCUMENT PROCESSING
+===================================================================
+
+CRITICAL FOR CHUNKS: You may be processing a MIDDLE or END chunk of a larger document.
+
+What this means:
+- The text you receive may NOT start at the beginning of a section
+- Line "1" in your chunk might be line 500 of the full document
+- Text may appear to be "incomplete" or "mid-sentence" - this is NORMAL
+- Your chunk continues content from previous chunk you never saw
+
+ABSOLUTE RULE FOR CHUNKS:
+PRESERVE EVERYTHING from first line to last line, even if:
+✗ It starts mid-sentence (e.g., "authorized trustee who has absolute power...")
+✗ It has no section header at the start
+✗ The first line number is "1" but text doesn't look like a beginning
+✗ It ends mid-sentence or mid-paragraph
+✗ It seems "incomplete" or "fragmentary"
+
+REAL EXAMPLE FROM FLORIDA CHUNK:
+Input chunk starts with: "authorized trustee who has absolute power under the terms of a trust"
+This looks incomplete (no subject, no section number) BUT it's legislative content from middle of document
+CORRECT: Preserve it exactly
+WRONG: Delete it because it looks incomplete
+
+===================================================================
+FORMATTING CONSISTENCY ACROSS CHUNKS
+===================================================================
+
+CRITICAL: If you're cleaning multiple chunks from the same document, apply the SAME formatting rules to ALL chunks.
+
+When chunks are merged together, the final document should look like ONE continuous document, not multiple documents with different formatting styles.
+
+CONSISTENT RULES FOR ALL CHUNKS:
+- Same blank line spacing rules (after subsections, after lettered items, etc.)
+- Same punctuation handling (all chunks use "--" not "—")
+- Same paragraph joining approach (all chunks remove artificial line wrapping)
+- Same artifact removal patterns (all chunks remove line numbers consistently)
+
+THE MERGED OUTPUT GOAL:
+- Reader should NOT be able to tell where one chunk ended and another began
+- Formatting style should be uniform throughout entire document
+- Spacing, punctuation, and structure should be consistent from first line to last line
+
+===================================================================
+OUTPUT INSTRUCTIONS
+===================================================================
+
+STEP 1: VERIFY INPUT COMPLETELY RECEIVED
+- Scan from first line to last line
+- Note where legislative content starts (often after line numbers/spaces)
+- Identify all tags [A> and [D>
+- Count total legislative words/sentences
+
+STEP 2: REMOVE ONLY OBVIOUS ARTIFACTS
+- Remove <<<PAGE_N_START>>> and <<<PAGE_N_END>>> markers
+- Remove line numbers (only if consistent pattern on every line)
+- Remove repeated "HB XXX    N" headers (only at page tops)
+- Remove Florida headers: "F L O R I D A   H O U S E..."
+- Remove Florida footers: "CODING: Words stricken..."
+- Remove vertical lines (only if clearly formatting artifacts)
+- Normalize whitespace (safe operation)
+
+STEP 3: APPLY FLORIDA FORMATTING RULES
+- Join lines that are part of same sentence/paragraph (remove artificial wrapping)
+- Add blank lines after subsections: (1), (2), (3)
+- Add blank lines after lettered items: (a), (b), (c)
+- Add blank lines after numbered sub-items: 1., 2., 3.
+- Keep blank lines before section headings: "Section 1."
+- Maintain natural paragraph structure
+
+STEP 4: VERIFY PRESERVATION
+- Count tags in output vs input (must match exactly)
+- Scan for any missing sentences or phrases
+- Check that mid-document continuation text is preserved
+- Verify all section numbers, subsections, and clauses present
+- Verify punctuation preserved: "--" not "—", "must shall" not "must"
+
+STEP 5: RETURN ONLY CLEANED TEXT
+- No conversational text ("Here is the cleaned version...")
+- No explanations or comments
+- Just the preserved legislative content with artifacts removed
+- First line of output = first line of legislative content
+
+===================================================================
+EXAMPLE OF CORRECT PRESERVATION
+===================================================================
+
+INPUT (with artifacts):
+<<<PAGE_1_START>>>
+        1  otherwise, an authorized trustee who has absolute
+        2  power under the terms of a trust to invade trust principal for
+        3  the benefit of one or more qualified beneficiaries may exercise
+<<<PAGE_1_END>>>
+
+CORRECT OUTPUT (preservation-first approach):
+otherwise, an authorized trustee who has absolute power under the terms of a trust to invade trust principal for the benefit of one or more qualified beneficiaries may exercise
+
+WRONG OUTPUT (content dropped):
+(b) A qualified beneficiary may petition the court...
+[This is WRONG because lines 1-3 were deleted!]
+
+===================================================================
+EXAMPLE OF CORRECT FLORIDA FORMATTING
+===================================================================
+
+INPUT (with artifacts and poor formatting):
+        1  (1) DEFINITIONS.--For purposes of this section, the term:
+        2  (a) "Authorized trustee" means...
+        3  (b) "Qualified beneficiary" means...
+        4  (2) DISTRIBUTION FROM A TRUST.--
+
+CORRECT OUTPUT (proper Florida formatting):
+(1) DEFINITIONS.--For purposes of this section, the term:
+
+(a) "Authorized trustee" means...
+
+(b) "Qualified beneficiary" means...
+
+(2) DISTRIBUTION FROM A TRUST.--
+
+===================================================================
+FINAL REMINDER: YOUR SUCCESS METRIC
+===================================================================
+
+SUCCESS = Input content completely preserved + artifacts removed + Florida formatting applied
+FAILURE = Any legislative content missing, even one word
+
+When you output your result, you should be able to say:
+"I preserved 100% of legislative content and all tags. I removed only page markers, line numbers, headers, footers, and vertical lines. I applied consistent Florida formatting. I am certain I did not lose any content."
+
+If you cannot say this with 100% confidence → You have FAILED → Start over
+
+Your role is PRESERVATION SPECIALIST first, cleaner second.
+When in doubt, PRESERVE.
