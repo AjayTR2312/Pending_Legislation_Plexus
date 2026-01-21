@@ -8,7 +8,8 @@ Artifact removal is SECONDARY and OPTIONAL - only remove obvious PDF artifacts.
 HIERARCHY OF PRIORITIES (STRICT ORDER):
 1. PRESERVE ALL LEGISLATIVE CONTENT (Priority: ABSOLUTE - Never violate)
 2. PRESERVE ALL TAGS [A>...<A] and [D>...<D] (Priority: ABSOLUTE - Never violate)  
-3. Remove obvious PDF artifacts ONLY if you are 100% certain they are artifacts (Priority: Optional)
+3. PRESERVE CALIFORNIA LEGISLATURE--2025-26 REGULAR SESSION on page 1.
+4. Remove obvious PDF artifacts ONLY if you are 100% certain they are artifacts (Priority: Optional)
 
 DECISION RULE: When in doubt whether something is content or artifact → KEEP IT
 - If unsure whether text is legislative content or artifact → PRESERVE IT
@@ -59,11 +60,16 @@ Line numbers MUST be removed:
 - When in doubt → KEEP IT
 
 Repeated headers on pages 2+ MUST be removed:
-- Pattern: "SENATE BILL No. 509" or "AB XXXX" appearing at TOP of page after <<<PAGE_N_START>>>
-- Pattern: "CALIFORNIA LEGISLATURE" or similar state headers (with or without extra spaces)
-- Page numbers that repeat with bill number (e.g., "99" at top of page)
-- CRITICAL: ONLY remove if it appears ALONE on a line at page top on page 2+
-- NEVER remove bill numbers/headers on PAGE 1
+- Pattern: "SENATE BILL No. 509" or "AB XXXX" appearing at TOP of page after <<<PAGE_2_START>>> or higher
+- Pattern: "CALIFORNIA LEGISLATURE--2025-26 REGULAR SESSION" appearing on pages 2+ (with or without extra spaces/dashes)
+- Pattern: "ASSEMBLY BILL                                 No. 360" on pages 2+
+- Page numbers that repeat with bill number (e.g., "99" at top of page 2+)
+- CRITICAL: ONLY remove if it appears ALONE on a line at page top on page 2 or higher
+- 🚫 NEVER REMOVE FROM PAGE 1: "CALIFORNIA LEGISLATURE--2025-26 REGULAR SESSION" MUST stay on page 1
+- 🚫 NEVER REMOVE FROM PAGE 1: Bill number/type (e.g., "ASSEMBLY BILL                                 No. 360") MUST stay on page 1
+- ⚠️ CHECK PAGE MARKERS: Only remove these headers if they appear AFTER <<<PAGE_1_END>>>
+- ⚠️ IF NO PAGE MARKERS: Assume first occurrence is page 1 and KEEP IT
+- NEVER remove bill numbers/headers on PAGE 1 (between <<<PAGE_1_START>>> and <<<PAGE_1_END>>>)
 - When in doubt → KEEP IT
 
 California-specific footers MUST be removed:
@@ -84,15 +90,19 @@ WHAT YOU MUST PRESERVE (ABSOLUTE REQUIREMENTS):
 ===================================================================
 
 PRESERVE 100% - NO EXCEPTIONS:
-✓ ALL TAGS: Every [A>...<A] and [D>...<D] tag from input
+✓ ALL TAGS: Every [A>...<A] and [D>...<D> tag from input
   - Count them: If input has 73 tags, output MUST have 73 tags
   - Keep tag boundaries: Don't split [A>long text<A] into multiple tags
   - Don't merge: If input has [A>text1<A] space [A>text2<A], keep them separate
 
 ✓ ALL LEGISLATIVE TEXT: Every word, every sentence, every paragraph
+  - 🚫 NEVER REMOVE: "CALIFORNIA LEGISLATURE--2025-26 REGULAR SESSION" (PAGE 1 HEADER - MUST PRESERVE)
+  - 🚫 NEVER REMOVE: "ASSEMBLY BILL                                 No. 360" (PAGE 1 HEADER - MUST PRESERVE)
+  - 🚫 NEVER REMOVE: "SENATE BILL                                 No. 509" (PAGE 1 HEADER - MUST PRESERVE)
+  - ⚠️ These headers only get removed on pages 2+ (after <<<PAGE_1_END>>>), NEVER on page 1
   - Amendment status: "AMENDED IN SENATE MAY 29, 2025" - preserve completely (PAGE 1 ONLY)
-  - Bill number and type: "SENATE BILL No. 509" - preserve completely (PAGE 1 ONLY)
-  - Sponsor information: "Introduced by Senator..." - preserve completely
+  - Bill number and type after header - preserve completely
+  - Sponsor information: "Introduced by Senator/Assembly Member..." - preserve completely
   - Date introduced - preserve completely
   - Bill purpose: "An act to add Section..." - preserve completely
   - LEGISLATIVE COUNSEL'S DIGEST section - preserve completely
