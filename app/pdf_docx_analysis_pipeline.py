@@ -142,10 +142,11 @@ class PDFToDocxAnalysisPipeline:
             print(f"❌ Error in PDF conversion: {e}")
             return False
 
-    def get_accurate_contextual_location(self, target_text, paragraph_obj, paragraph_index, target_run_index, context_words=20):
+    def get_accurate_contextual_location(self, target_text, paragraph_obj, paragraph_index, target_run_index, page_number=1, context_words=20):
         """
         Get contextual location using run-based positioning for 100% accuracy.
         Uses the specific run index within paragraph to pinpoint exact location.
+        Now includes page number for complete location reference.
         """
         try:
             clean_target = target_text.strip()
@@ -229,7 +230,7 @@ class PDFToDocxAnalysisPipeline:
                 else:
                     context_str = f"【{display_target}】"
                 
-                return f"Para {paragraph_index}, Run {target_run_index}: {context_str}"
+                return f"Pageno {page_number}, Para {paragraph_index}, Run {target_run_index}: {context_str}"
             
             # For regular words, use word-based positioning
             words = clean_paragraph.split()
@@ -294,11 +295,11 @@ class PDFToDocxAnalysisPipeline:
                 context_str = f"【{display_target}】"
             
             # Return with precise run-based location for 100% accuracy
-            return f"Para {paragraph_index}, Run {target_run_index}: {context_str}"
+            return f"Pageno {page_number}, Para {paragraph_index}, Run {target_run_index}: {context_str}"
                 
         except Exception as e:
             print(f"⚠️ Error getting contextual location: {e}")
-            return f"Para {paragraph_index}, Run {target_run_index}: '{target_text[:30]}...'" if len(target_text) > 30 else f"Para {paragraph_index}, Run {target_run_index}: '{target_text}'"
+            return f"Pageno {page_number}, Para {paragraph_index}, Run {target_run_index}: '{target_text[:30]}...'" if len(target_text) > 30 else f"Pageno {page_number}, Para {paragraph_index}, Run {target_run_index}: '{target_text}'"
 
     def step2_analyze_docx_formatting(self):
         """
@@ -315,6 +316,9 @@ class PDFToDocxAnalysisPipeline:
             doc = Document(self.docx_path)
             formatted_items = []
             
+            # Track current page number (starts at 1)
+            current_page = 1
+            
             # First, extract all text from the document for context searching
             full_document_text = ""
             for paragraph in doc.paragraphs:
@@ -330,8 +334,44 @@ class PDFToDocxAnalysisPipeline:
             print(f"📖 Analyzing: {self.docx_path}")
             print(f"📄 Document contains {len(full_document_text.split())} words")
             
-            # First, process hyperlinks with strikethrough (they need special handling)
+            # FIRST PASS: Build page map for all paragraphs
+            print(f"📍 Building page number map...")
+            paragraph_to_page = {}
+            current_page = 1
+            page_breaks_found = 0
+            
             for para_idx, paragraph in enumerate(doc.paragraphs, 1):
+                # Store current page for this paragraph
+                paragraph_to_page[para_idx] = current_page
+                
+                # Check for page breaks in this paragraph (which affect NEXT paragraph)
+                for run in paragraph.runs:
+                    # Check if this run contains a page break
+                    if '\f' in run.text or '\x0c' in run.text:
+                        current_page += 1
+                        page_breaks_found += 1
+                        print(f"   📄 Form feed page break found at paragraph {para_idx}")
+                    # Also check XML for explicit page breaks
+                    for br in run._element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}br'):
+                        br_type = br.get('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}type')
+                        if br_type == 'page':
+                            current_page += 1
+                            page_breaks_found += 1
+                            print(f"   📄 XML page break found at paragraph {para_idx}")
+            
+            print(f"✅ Page map built: {len(paragraph_to_page)} paragraphs across {current_page} pages")
+            print(f"   Total page breaks found: {page_breaks_found}")
+            
+            if page_breaks_found == 0:
+                print(f"   ⚠️ WARNING: No page breaks found in DOCX!")
+                print(f"   ⚠️ Adobe PDF→DOCX conversion may not preserve page breaks")
+                print(f"   ⚠️ All items will show 'Pageno 1' (accurate para/run locations maintained)")
+            
+            # SECOND PASS: Process hyperlinks with strikethrough (they need special handling)
+            for para_idx, paragraph in enumerate(doc.paragraphs, 1):
+                # Get page number for this paragraph
+                current_page = paragraph_to_page.get(para_idx, 1)
+                
                 # Check for hyperlinks with strikethrough using XML
                 hyperlinks = paragraph._element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}hyperlink')
                 
@@ -365,9 +405,9 @@ class PDFToDocxAnalysisPipeline:
                                 all_runs = paragraph._element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}r')
                                 run_idx = all_runs.index(run_elem) if run_elem in all_runs else 0
                                 
-                                # Get contextual location
+                                # Get contextual location with page number
                                 contextual_location = self.get_accurate_contextual_location(
-                                    text, paragraph, para_idx, run_idx + 1
+                                    text, paragraph, para_idx, run_idx + 1, current_page
                                 )
                                 
                                 formatted_item = {
@@ -384,8 +424,10 @@ class PDFToDocxAnalysisPipeline:
                                 }
                                 formatted_items.append(formatted_item)
             
-            # Then process regular formatted text (non-hyperlink formatting)
+            # THIRD PASS: Process regular formatted text (non-hyperlink formatting)
             for para_idx, paragraph in enumerate(doc.paragraphs, 1):
+                # Get page number for this paragraph
+                current_page = paragraph_to_page.get(para_idx, 1)
                 if paragraph.text.strip():  # Skip empty paragraphs
                     # Check each run in the paragraph
                     for run_idx, run in enumerate(paragraph.runs):
@@ -430,7 +472,7 @@ class PDFToDocxAnalysisPipeline:
                             if formatting_types:
                                 # Get accurate contextual location using run-based positioning for 100% accuracy
                                 contextual_location = self.get_accurate_contextual_location(
-                                    run.text, paragraph, para_idx, run_idx + 1
+                                    run.text, paragraph, para_idx, run_idx + 1, current_page
                                 )
                                 
                                 formatted_item = {
@@ -446,12 +488,16 @@ class PDFToDocxAnalysisPipeline:
                                 }
                                 formatted_items.append(formatted_item)
             
-            # Check tables for formatted text (including hyperlinks with strikethrough)
+            # FOURTH PASS: Check tables for formatted text (including hyperlinks with strikethrough)
+            # Note: Tables don't have reliable page tracking, so we'll estimate based on position
             table_count = 0
             for table in doc.tables:
                 table_count += 1
                 for row_idx, row in enumerate(table.rows):
                     for cell_idx, cell in enumerate(row.cells):
+                        # Use page 1 as default for tables (can be enhanced later)
+                        current_page = 1
+                        
                         # First, process hyperlinks with strikethrough in table cells
                         for para_idx, paragraph in enumerate(cell.paragraphs):
                             hyperlinks = paragraph._element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}hyperlink')
@@ -479,7 +525,7 @@ class PDFToDocxAnalysisPipeline:
                                             run_idx = all_runs.index(run_elem) if run_elem in all_runs else 0
                                             
                                             base_location = self.get_accurate_contextual_location(
-                                                text, paragraph, para_idx + 1, run_idx + 1
+                                                text, paragraph, para_idx + 1, run_idx + 1, current_page
                                             )
                                             
                                             table_context = f"Table {table_count}, Row {row_idx + 1}, Cell {cell_idx + 1}"
@@ -541,7 +587,7 @@ class PDFToDocxAnalysisPipeline:
                                     if formatting_types:
                                         # Get accurate contextual location for table text using run-based positioning
                                         base_location = self.get_accurate_contextual_location(
-                                            run.text, paragraph, para_idx + 1, run_idx + 1
+                                            run.text, paragraph, para_idx + 1, run_idx + 1, current_page
                                         )
                                         
                                         # Enhance with table info
@@ -678,28 +724,6 @@ class PDFToDocxAnalysisPipeline:
         """
         Execute the complete pipeline from PDF to final analysis.
         """
-        # Skip the entire pipeline for DC and IN states
-        if self.state_code in ["DC", "IN"]:
-            skip_reason = "don't contain formatting to analyze" if self.state_code == "DC" else "analysis not required"
-            print(f"⏭️  SKIPPING DOCX ANALYSIS PIPELINE FOR {self.state_code}")
-            print("=" * 60)
-            print(f"🔍 {self.state_code} documents {skip_reason}")
-            print("📝 No DOCX conversion or summary generation needed")
-            print("=" * 60)
-            
-            # Return a mock successful result for DC/IN
-            skip_reason_detail = "does not require formatting analysis" if self.state_code == "DC" else "DOCX analysis not required"
-            results = {
-                'success': True,
-                'input_pdf': self.input_pdf_path,
-                'docx_path': None,
-                'summary_path': None,
-                'formatted_items_count': 0,
-                'errors': [],
-                'skipped_reason': f'{self.state_code} state {skip_reason_detail}'
-            }
-            return results
-        
         print("🔄 STARTING COMPLETE PDF-TO-DOCX ANALYSIS PIPELINE")
         print("=" * 60)
         

@@ -147,6 +147,13 @@ CALIFORNIA LEGISLATIVE FORMATTING RULES (CRITICAL):
 ===================================================================
 
 1. **Page 1 Header Section** (PRESERVE ALL OF THIS):
+   - **CAPITALIZATION RULE**: The legislative session header MUST be in ALL CAPITAL LETTERS
+     * Pattern: "CALIFORNIA LEGISLATURE—[YEAR]–[YEAR] REGULAR SESSION" or
+     * Pattern: "SENATE, CALIFORNIA LEGISLATURE—[YEAR]–[YEAR] REGULAR SESSION" or  
+     * Pattern: "ASSEMBLY, CALIFORNIA LEGISLATURE—[YEAR]–[YEAR] REGULAR SESSION"
+     * Example: "senate, california legislature—2025–26 regular session" → "SENATE, CALIFORNIA LEGISLATURE—2025–26 REGULAR SESSION"
+     * Example: "california legislature—2024–25 regular session" → "CALIFORNIA LEGISLATURE—2024–25 REGULAR SESSION"
+     * This applies to ANY year combination (2023–24, 2025–26, etc.)
    - Amendment status line (if present)
    - Bill number and type
    - Author and coauthors
@@ -156,6 +163,8 @@ CALIFORNIA LEGISLATIVE FORMATTING RULES (CRITICAL):
    - Vote/appropriation/fiscal committee information
    - Example:
    ```
+   SENATE, CALIFORNIA LEGISLATURE—2025–26 REGULAR SESSION
+   
    AMENDED IN SENATE MAY 29, 2025
    
    SENATE BILL No. 509

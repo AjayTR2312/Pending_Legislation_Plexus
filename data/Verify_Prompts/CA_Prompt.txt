@@ -37,33 +37,61 @@ CALIFORNIA TAG SYSTEM (Know this before you start):
 - California does NOT use bold or underline tags
 - That's it - only 2 tag types for California documents
 
+⚠️ CRITICAL: TAG PAIRING RULES (ABSOLUTE REQUIREMENT) ⚠️
+🚫 OPENING AND CLOSING TAGS MUST MATCH - NO EXCEPTIONS!
+
+✓ CORRECT TAG PAIRS (These are the ONLY valid combinations):
+  - [A>text<A] ← Opens with [A>, closes with <A]
+  - [D>text<D] ← Opens with [D>, closes with <D]
+
+✗ INVALID TAG PAIRS (You will FAIL if you create these):
+  - [A>text<D] ← WRONG! Opens with A, closes with D
+  - [D>text<A] ← WRONG! Opens with D, closes with A
+  - [A>text<A> ← WRONG! Missing closing bracket
+  - <A>text<A] ← WRONG! Wrong opening bracket
+
+🔍 TAG MATCHING VERIFICATION:
+  - Every [A> MUST have matching <A]
+  - Every [D> MUST have matching <D]
+  - Count: [A> count = <A] count (must be equal)
+  - Count: [D> count = <D] count (must be equal)
+  - If counts don't match → You made a mistake, fix it!
+
 HIERARCHY OF PRIORITIES (STRICT ORDER):
 1. ADD ALL TAGS from summary at exact locations (Priority: ABSOLUTE - Must achieve 100%)
 2. PRESERVE ALL CONTENT from input text (Priority: ABSOLUTE - Zero loss allowed)
 3. Follow California-specific formatting rules (Priority: Required)
 
 SUCCESS METRIC: 
-- If summary lists 73 items to tag → Your output must have 73 tags added
+- Count ONLY items with "italic" or "strikethrough" formatting in summary
+- EXCLUDE California's 4 mandatory exclusions from count
+- If summary lists 75 total items BUT 2 are exclusions → Your output must have 73 tags added
+- All excluded phrases should remain in output WITHOUT tags
 - If input has 12,000 words → Your output must have 12,000 words + tags
-- Anything less than 100% tag completion = FAILURE
+- Anything less than 100% tag completion (minus exclusions) = FAILURE
 
 ===================================================================
 CRITICAL TAGGING RULES - 100% COMPLETION REQUIRED
 ===================================================================
 
 TAG ADDITION REQUIREMENTS (NON-NEGOTIABLE):
-✓ EVERY item listed in the summary MUST be tagged in the output
-✓ Use "Para X, Run Y" locations to find EXACT position of each tag
-✓ Count tags at end: Summary items count = Added tags count (must match exactly)
-✓ If summary says "italic" → Add [A>text<A] tag
-✓ If summary says "strikethrough" → Add [D>text<D] tag
-✓ Missing even ONE tag from the summary = FAILURE
+✓ EVERY item listed in the summary MUST be tagged in the output (EXCEPT the 4 California exclusions)
+✓ SKIP California exclusions: "The people of...", "Resolved by the Senate/Assembly...", standalone "Resolved,"
+✓ Use "Pageno X, Para Y, Run Z" locations to find EXACT position of each tag
+✓ Count tags at end: (Summary items count - Excluded items count) = Added tags count
+✓ If summary says "italic" → Add [A>text<A] tag (NOT [A>text<D]!)
+✓ If summary says "strikethrough" → Add [D>text<D] tag (NOT [D>text<A]!)
+✓ EVERY opening tag MUST have matching closing tag: [A> pairs with <A], [D> pairs with <D]
+✓ Missing even ONE non-excluded tag from the summary = FAILURE
+✓ Even ONE mismatched tag pair = FAILURE
 
 VERIFICATION BEFORE OUTPUT:
-1. Count total items in summary that need tags
-2. Count total tags you added to output
-3. Numbers must match exactly (e.g., 73 summary items = 73 tags added, minus exclusions)
-4. If numbers don't match → Find missing tags before submitting
+1. Count total items in summary that need tags (exclude the 4 California exclusions)
+2. Count total tags you added to output ([A>...<A] and [D>...<D])
+3. Numbers must match exactly (summary items minus exclusions = added tags)
+4. If numbers don't match → Find missing tags OR check if you tagged an exclusion by mistake
+5. Count total words in output vs input (should be same, plus tag markers)
+6. If word count decreased → Find what was deleted and fix it
 
 FAILURE CONDITIONS (These mean you FAILED your tagging mission):
 ✗ Any summary item not tagged in output
@@ -71,6 +99,8 @@ FAILURE CONDITIONS (These mean you FAILED your tagging mission):
 ✗ Tagged wrong occurrence of text (didn't use Para/Run location)
 ✗ Added fewer tags than summary specifies
 ✗ Dropped any words from original text
+✗ Created mismatched tag pairs like [A>text<D] or [D>text<A]
+✗ Tag counts don't match: [A> count ≠ <A] count OR [D> count ≠ <D] count
 
 ===================================================================
 CALIFORNIA-SPECIFIC TAGGING RULES
@@ -109,52 +139,67 @@ LOCATION-BASED PRECISION TAGGING SYSTEM
 THE SUMMARY FORMAT:
 Each item in the summary shows:
 - Item number: "34. 'Government Code'"
-- Location: "Para 8, Run 12: ...context before 【Government Code】 context after..."
+- Location: "Pageno X, Para 8, Run 12: ...context before 【Government Code】 context after..."
 - Formatting: "italic" or "strikethrough"
 
 HOW TO USE LOCATIONS (CRITICAL FOR 100% ACCURACY):
-1. "Para X, Run Y" = EXACT paragraph and run where text appears
-2. 【text】 symbols = EXACT text that needs the tag
-3. "...context before..." = Surrounding words to verify you found the right spot
-4. Context matching = Confirmation you're tagging the correct occurrence
+1. "Pageno X" = The PDF page number where the text appears (navigate to this page FIRST)
+2. "Para Y, Run Z" = EXACT paragraph and run within that page where text appears
+3. 【text】 symbols = EXACT text that needs the tag
+4. "...context before..." = Surrounding words to verify you found the right spot
+5. Context matching = Confirmation you're tagging the correct occurrence
+
+⚠️ TAGGING SEQUENCE:
+   STEP 1: Find the page using "Pageno X"
+   STEP 2: Within that page, navigate to "Para Y, Run Z"
+   STEP 3: Verify context, then add the tag
 
 STEP-BY-STEP TAGGING PROCESS FOR EACH SUMMARY ITEM:
 
 Step 1: Read item number and text (e.g., "34. 'Government Code'")
-Step 2: Note the formatting type (e.g., "italic" → use [A>...<A], "strikethrough" → use [D>...<D])
+Step 2: Note the formatting type and write down the COMPLETE tag pair:
+   - If "italic" → Write: [A>text<A] (memorize: opens A, closes A)
+   - If "strikethrough" → Write: [D>text<D] (memorize: opens D, closes D)
+   ⚠️ CRITICAL: Opening and closing MUST match! [A> always pairs with <A], [D> always pairs with <D]
 Step 3: ⚠️ CHECK AGAINST CALIFORNIA EXCLUSIONS:
    - Is it "The people of the State of California do enact as follows:"? → SKIP, do not tag
    - Is it "Resolved by the Senate..." or "Resolved by the Assembly..."? → SKIP, do not tag
    - Is it standalone "Resolved,"? → SKIP, do not tag
-Step 4: Find "Para X, Run Y" in the location line
-Step 5: Go to that exact paragraph and run in the output text
-Step 6: Verify surrounding context matches what's shown in location (words before and after)
-Step 7: Find the exact text marked with 【】 symbols
-Step 8: Add the appropriate tag at that exact location
-Step 9: Verify all words before and after the tag are still present
-Step 10: Move to next summary item and repeat Steps 1-9
+Step 4: Find "Pageno X, Para Y, Run Z" in the location line
+Step 5: Navigate to that page number FIRST (Pageno X)
+Step 6: Within that page, go to the exact paragraph and run (Para Y, Run Z)
+Step 7: Verify surrounding context matches what's shown in location (words before and after)
+Step 8: Find the exact text marked with 【】 symbols
+Step 9: Add the appropriate tag at that exact location
+Step 10: Verify all words before and after the tag are still present
+Step 10a: Verify the tag pair matches (opening and closing are same type)
+   - If you wrote [A> → You MUST close with <A]
+   - If you wrote [D> → You MUST close with <D]
+   - Example: [A>text<A] ✓ CORRECT | [A>text<D] ✗ WRONG!
+Step 11: Move to next summary item and repeat Steps 1-10a
 
 EXAMPLE WORKFLOW:
 ```
 Summary item: "18. 'Section 8588.13'"
-Location: "Para 4, Run 9: ...An act to add 【Section 8588.13】 to the Government..."
+Location: "Pageno 1, Para 4, Run 9: ...An act to add 【Section 8588.13】 to the Government..."
 Formatting: italic
 
 Your process:
-1. Find paragraph 4, run 9 in output text
-2. Look for text "An act to add Section 8588.13 to the Government"
-3. Verify context matches (check "An act to add" before and "to the Government" after)
-4. Check if this is a California exclusion (No)
-5. Add tag: "An act to add [A>Section 8588.13<A] to the Government"
-6. Verify "to the Government" is still present after tag
+1. Navigate to Pageno 1 FIRST
+2. Within page 1, find paragraph 4, run 9
+3. Look for text "An act to add Section 8588.13 to the Government"
+4. Verify context matches (check "An act to add" before and "to the Government" after)
+5. Check if this is a California exclusion (No)
+6. Add tag: "An act to add [A>Section 8588.13<A] to the Government"
+7. Verify "to the Government" is still present after tag
 ```
 
 HANDLING MULTIPLE OCCURRENCES:
 - If "Section" appears 60 times in document, DON'T tag all 60 occurrences
-- ONLY tag the specific occurrence at the "Para X, Run Y" location given in summary
-- Use context words to verify you found the right instance
-- Each summary item = ONE tag at ONE specific location
-- Different occurrences at different Para/Run locations = Different summary items
+- ONLY tag the specific occurrence at the "Pageno X, Para Y, Run Z" location given in summary
+- Use page number + context words to verify you found the right instance
+- Each summary item = ONE tag at ONE specific location (specific page + para + run)
+- Different occurrences at different Pageno/Para/Run locations = Different summary items
 
 ===================================================================
 CONTENT PRESERVATION WHILE TAGGING (CRITICAL)
@@ -286,6 +331,12 @@ Before returning your output, verify ALL of these:
 □ No Deletions: Did I avoid dropping any text when inserting tags?
 □ Correct Occurrences: Did I tag only the instances specified, not all occurrences?
 □ Complete Output: Is my output the full document, not truncated?
+□ ⚠️ TAG PAIRING: Do ALL opening/closing tags match?
+   - Count [A> in output = Count <A] in output? (must be equal)
+   - Count [D> in output = Count <D] in output? (must be equal)
+   - Search output for [A>...<D] or [D>...<A] → Found any? If YES → FIX IMMEDIATELY!
+□ Tag Pair Verification: Did I verify EACH tag has matching open/close?
+   - [A>text<A] ✓ | [A>text<D] ✗ | [D>text<D] ✓ | [D>text<A] ✗
 
 If ANY checkbox is unchecked → Go back and fix before submitting
 
@@ -296,6 +347,8 @@ SUCCESS CRITERIA (ALL must be true):
 ✓ No words deleted or missing from original input
 ✓ All California-specific rules followed
 ✓ Output is complete from first line to last line
+✓ ⚠️ ALL TAG PAIRS MATCH: [A> count = <A] count AND [D> count = <D] count
+✓ ⚠️ NO MISMATCHED PAIRS: Zero instances of [A>text<D] or [D>text<A> in output
 
 ===================================================================
 🚫 CRITICAL: OUTPUT FORMAT - NO META-COMMENTARY! 🚫

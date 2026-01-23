@@ -31,33 +31,60 @@ KANSAS TAG SYSTEM (Know this before you start):
 - [D>text<D] tag = Use for text marked as "strikethrough" in summary
 - That's it - only 2 tag types for Kansas documents
 
+⚠️ CRITICAL: TAG PAIRING RULES (ABSOLUTE REQUIREMENT) ⚠️
+🚫 OPENING AND CLOSING TAGS MUST MATCH - NO EXCEPTIONS!
+
+✓ CORRECT TAG PAIRS (These are the ONLY valid combinations):
+  - [A>text<A] ← Opens with [A>, closes with <A]
+  - [D>text<D] ← Opens with [D>, closes with <D]
+
+✗ INVALID TAG PAIRS (You will FAIL if you create these):
+  - [A>text<D] ← WRONG! Opens with A, closes with D
+  - [D>text<A] ← WRONG! Opens with D, closes with A
+  - [A>text<A> ← WRONG! Missing closing bracket
+  - <A>text<A] ← WRONG! Wrong opening bracket
+
+🔍 TAG MATCHING VERIFICATION:
+  - Every [A> MUST have matching <A]
+  - Every [D> MUST have matching <D]
+  - Count: [A> count = <A] count (must be equal)
+  - Count: [D> count = <D] count (must be equal)
+  - If counts don't match → You made a mistake, fix it!
+
 HIERARCHY OF PRIORITIES (STRICT ORDER):
 1. ADD ALL TAGS from summary at exact locations (Priority: ABSOLUTE - Must achieve 100%)
 2. PRESERVE ALL CONTENT from input text (Priority: ABSOLUTE - Zero loss allowed)
 3. Follow Kansas-specific formatting rules (Priority: Required)
 
 SUCCESS METRIC: 
-- If summary lists 47 items to tag → Your output must have 47 tags added
+- Count ONLY items that are NOT in the 3 exclusion zones ("Session of 20XX", first 3 lines, "Be it enacted...")
+- If summary lists 50 total items BUT 3 are exclusions → Your output must have 47 tags added
+- All excluded items should remain in output WITHOUT tags
 - If input has 10,000 words → Your output must have 10,000 words + tags
-- Anything less than 100% tag completion = FAILURE
+- Anything less than 100% tag completion (minus exclusions) = FAILURE
 
 ===================================================================
 CRITICAL TAGGING RULES - 100% COMPLETION REQUIRED
 ===================================================================
 
 TAG ADDITION REQUIREMENTS (NON-NEGOTIABLE):
-✓ EVERY item listed in the summary MUST be tagged in the output
-✓ Use "Para X, Run Y" locations to find EXACT position of each tag
-✓ Count tags at end: Summary items count = Added tags count (must match exactly)
-✓ If summary says "bold" → Add [A>text<A] tag
-✓ If summary says "strikethrough" → Add [D>text<D] tag
-✓ Missing even ONE tag from the summary = FAILURE
+✓ EVERY item listed in the summary MUST be tagged in the output (EXCEPT the 3 exclusions)
+✓ SKIP items in exclusion zones: "Session of 20XX", first 3 non-empty lines, "Be it enacted..."
+✓ Use "Pageno X, Para Y, Run Z" locations to find EXACT position of each tag
+✓ Count tags at end: (Summary items count - Excluded items count) = Added tags count
+✓ If summary says "bold", "italic", or "underline" → Add [A>text<A] tag (NOT [A>text<D]!)
+✓ If summary says "strikethrough" → Add [D>text<D] tag (NOT [D>text<A]!)
+✓ EVERY opening tag MUST have matching closing tag: [A> pairs with <A], [D> pairs with <D]
+✓ Missing even ONE non-excluded tag from the summary = FAILURE
+✓ Even ONE mismatched tag pair = FAILURE
 
 VERIFICATION BEFORE OUTPUT:
-1. Count total items in summary that need tags
-2. Count total tags you added to output
-3. Numbers must match exactly (e.g., 47 summary items = 47 tags added)
-4. If numbers don't match → Find missing tags before submitting
+1. Count total items in summary that need tags (exclude the 3 exclusion types)
+2. Count total tags you added to output ([A>...<A] and [D>...<D])
+3. Numbers must match exactly (summary items minus exclusions = added tags)
+4. If numbers don't match → Find missing tags OR check if you tagged an exclusion by mistake
+5. Count total words in output vs input (should be same, plus tag markers)
+6. If word count decreased → Find what was deleted and fix it
 
 FAILURE CONDITIONS (These mean you FAILED your tagging mission):
 ✗ Any summary item not tagged in output
@@ -65,6 +92,8 @@ FAILURE CONDITIONS (These mean you FAILED your tagging mission):
 ✗ Tagged wrong occurrence of text (didn't use Para/Run location)
 ✗ Added fewer tags than summary specifies
 ✗ Dropped any words from original text
+✗ Created mismatched tag pairs like [A>text<D] or [D>text<A]
+✗ Tag counts don't match: [A> count ≠ <A] count OR [D> count ≠ <D] count
 
 ===================================================================
 KANSAS-SPECIFIC TAGGING RULES
@@ -111,7 +140,11 @@ CONTENT PRESERVATION RULES:
 - DO NOT modify or remove existing correct tags
 - DO NOT create nested tags like [[A>A<A]]
 - Preserve exact text structure, spacing, and line breaks
-- Each tag must be properly closed: [A>text<A] or [D>text<D]
+- Each tag must be properly closed with MATCHING markers:
+  * [A>text<A] ✓ (opens A, closes A)
+  * [D>text<D] ✓ (opens D, closes D)
+  * [A>text<D] ✗ WRONG! (opens A, closes D - MISMATCH!)
+  * [D>text<A] ✗ WRONG! (opens D, closes A - MISMATCH!)
 
 ===================================================================
 LOCATION-BASED PRECISION TAGGING SYSTEM
@@ -124,53 +157,75 @@ LOCATION-BASED PRECISION TAGGING SYSTEM
 THE SUMMARY FORMAT:
 Each item in the summary shows:
 - Item number: "35. 'Section'"
-- Location: "Para 39, Run 5: ...context before 【Section】 context after..."
+- Location: "Pageno X, Para 39, Run 5: ...context before 【Section】 context after..."
 - Formatting: "bold" or "strikethrough" etc.
 
 HOW TO USE LOCATIONS (CRITICAL FOR 100% ACCURACY):
-1. "Para X, Run Y" = EXACT paragraph and run where text appears
-2. 【text】 symbols = EXACT text that needs the tag
-3. "...context before..." = Surrounding words to verify you found the right spot
-4. Context matching = Confirmation you're tagging the correct occurrence
+1. "Pageno X" = The PDF page number where the text appears (navigate to this page FIRST)
+2. "Para Y, Run Z" = EXACT paragraph and run within that page where text appears
+3. 【text】 symbols = EXACT text that needs the tag
+4. "...context before..." = Surrounding words to verify you found the right spot
+5. Context matching = Confirmation you're tagging the correct occurrence
+
+⚠️ TAGGING SEQUENCE:
+   STEP 1: Find the page using "Pageno X"
+   STEP 2: Within that page, navigate to "Para Y, Run Z"
+   STEP 3: Verify context, then add the tag
 
 STEP-BY-STEP TAGGING PROCESS FOR EACH SUMMARY ITEM:
 
 Step 1: Read item number and text (e.g., "35. 'Section'")
-Step 2: Note the formatting type (e.g., "bold" → use [A>...<A], "strikethrough" → use [D>...<D])
-Step 3: Find "Para X, Run Y" in the location line
-Step 4: Go to that exact paragraph and run in the output text
-Step 5: Verify surrounding context matches what's shown in location (words before and after)
-Step 6: Find the exact text marked with 【】 symbols
-Step 7: Check if text is in EXCLUDED zones:
+Step 2: Note the formatting type and write down the COMPLETE tag pair:
+   - If "bold" → Write: [A>text<A] (memorize: opens A, closes A)
+   - If "italic" → Write: [A>text<A] (memorize: opens A, closes A)
+   - If "underline" → Write: [A>text<A] (memorize: opens A, closes A)
+   - If "strikethrough" → Write: [D>text<D] (memorize: opens D, closes D)
+   ⚠️ CRITICAL: Opening and closing MUST match! [A> always pairs with <A], [D> always pairs with <D]
+Step 3: Find "Pageno X, Para Y, Run Z" in the location line
+Step 4: Navigate to that page number FIRST (Pageno X)
+Step 5: Within that page, go to the exact paragraph and run (Para Y, Run Z)
+Step 6: Verify surrounding context matches what's shown in location (words before and after)
+Step 7: Find the exact text marked with 【】 symbols
+Step 8: Check if text is in EXCLUDED zones:
    - Is it "Session of 20XX" (e.g., "Session of 2025")? → SKIP, do not tag (even if summary says italic)
    - Is it in first 3 non-empty lines? → SKIP, do not tag
    - Is it "Be it enacted by the Legislature of the State of Kansas"? → SKIP, do not tag
    - If ANY of these conditions are true → DO NOT ADD TAG, move to next summary item
-Step 8: If NOT excluded → Add the appropriate tag at that exact location
-Step 9: Verify all words before and after the tag are still present
-Step 10: Move to next summary item and repeat Steps 1-9
+Step 9: If NOT excluded → Add the appropriate tag at that exact location
+   ⚠️ DOUBLE-CHECK: Does opening match closing?
+   - If you wrote [A> → You MUST close with <A]
+   - If you wrote [D> → You MUST close with <D]
+   - Example: [A>text<A] ✓ CORRECT | [A>text<D] ✗ WRONG!
+Step 10: Verify all words before and after the tag are still present
+Step 11: Verify the tag pair matches (opening and closing are same type)
+   - If you wrote [A> → You MUST close with <A]
+   - If you wrote [D> → You MUST close with <D]
+   - Example: [A>text<A] ✓ CORRECT | [A>text<D] ✗ WRONG!
+Step 12: Move to next summary item and repeat Steps 1-11
+Step 11: Move to next summary item and repeat Steps 1-10
 
 EXAMPLE WORKFLOW:
 ```
 Summary item: "42. 'the state board of'"
-Location: "Para 15, Run 8: ...licensed by 【the state board of】 healing arts..."
+Location: "Pageno 3, Para 15, Run 8: ...licensed by 【the state board of】 healing arts..."
 Formatting: bold
 
 Your process:
-1. Find paragraph 15, run 8 in output text
-2. Look for text "licensed by the state board of healing arts"
-3. Verify context matches (check "licensed by" before and "healing arts" after)
-4. Check if this text is in first 3 lines (No) or is "Be it enacted" phrase (No)
-5. Add tag: "licensed by [A>the state board of<A] healing arts"
-6. Verify "healing arts" is still present after tag
+1. Navigate to Pageno 3 FIRST
+2. Within page 3, find paragraph 15, run 8
+3. Look for text "licensed by the state board of healing arts"
+4. Verify context matches (check "licensed by" before and "healing arts" after)
+5. Check if this text is in first 3 lines (No) or is "Be it enacted" phrase (No)
+6. Add tag: "licensed by [A>the state board of<A] healing arts"
+7. Verify "healing arts" is still present after tag
 ```
 
 HANDLING MULTIPLE OCCURRENCES:
 - If "Section" appears 50 times in document, DON'T tag all 50 occurrences
-- ONLY tag the specific occurrence at the "Para X, Run Y" location given in summary
-- Use context words to verify you found the right instance
-- Each summary item = ONE tag at ONE specific location
-- Different occurrences at different Para/Run locations = Different summary items
+- ONLY tag the specific occurrence at the "Pageno X, Para Y, Run Z" location given in summary
+- Use page number + context words to verify you found the right instance
+- Each summary item = ONE tag at ONE specific location (specific page + para + run)
+- Different occurrences at different Pageno/Para/Run locations = Different summary items
 
 ===================================================================
 CONTENT PRESERVATION WHILE TAGGING (CRITICAL)
@@ -271,6 +326,12 @@ Before returning your output, verify ALL of these:
 □ Kansas Exclusions: Did I skip "Session of 20XX", "Be it enacted...", and first 3 non-empty lines?
 □ Exclusion Verification: Is "Session of 2025" (or any year) untagged in output?
 □ Tag Format: Are all tags properly formatted and closed?
+□ ⚠️ TAG PAIRING: Do ALL opening/closing tags match?
+   - Count [A> in output = Count <A] in output? (must be equal)
+   - Count [D> in output = Count <D] in output? (must be equal)
+   - Search output for [A>...<D] or [D>...<A] → Found any? If YES → FIX IMMEDIATELY!
+□ Tag Pair Verification: Did I verify EACH tag has matching open/close?
+   - [A>text<A] ✓ | [A>text<D] ✗ | [D>text<D] ✓ | [D>text<A] ✗
 □ Context Verification: Did I match surrounding context for each tag?
 □ Word Count: Input word count = Output word count (excluding tag markers)?
 □ No Deletions: Did I avoid dropping any text when inserting tags?
@@ -286,6 +347,8 @@ SUCCESS CRITERIA (ALL must be true):
 ✓ No words deleted or missing from original input
 ✓ All Kansas-specific rules followed
 ✓ Output is complete from first line to last line
+✓ ⚠️ ALL TAG PAIRS MATCH: [A> count = <A] count AND [D> count = <D] count
+✓ ⚠️ NO MISMATCHED PAIRS: Zero instances of [A>text<D] or [D>text<A] in output
 
 ===================================================================
 SUMMARY REFERENCE (Ground Truth - This is your source of truth)
