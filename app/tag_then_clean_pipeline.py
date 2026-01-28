@@ -68,7 +68,7 @@ def get_anthropic_client():
 def load_verify_prompt(state_code):
     """Load state-specific verification prompt."""
     project_root = Path(__file__).parent.parent
-    prompt_file = project_root / "data" / "Verify_Prompts" / f"{state_code}_Prompt.txt"
+    prompt_file = project_root / "data" / "Verify_Prompts" / f"{state_code}_Prompt.md"
     
     if prompt_file.exists():
         with open(prompt_file, 'r', encoding='utf-8') as f:

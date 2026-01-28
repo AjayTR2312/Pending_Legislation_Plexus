@@ -91,7 +91,7 @@ def split_pdf_into_pages(pdf_path: str, output_dir: str) -> List[str]:
 def load_verify_prompt(state_code: str) -> str:
     """Load state-specific verification prompt."""
     project_root = Path(__file__).parent.parent
-    prompt_file = project_root / "data" / "Verify_Prompts" / f"{state_code}_Prompt.txt"
+    prompt_file = project_root / "data" / "Verify_Prompts" / f"{state_code}_Prompt.md"
     
     if prompt_file.exists():
         with open(prompt_file, 'r', encoding='utf-8') as f:
@@ -179,7 +179,6 @@ OUTPUT: Return ONLY the cleaned text - NO preamble, NO explanation."""
             model="claude-opus-4-20250514",  # Opus 4 for cleaning
             max_tokens=16000,
             temperature=0,
-            top_p=1.0,
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}]
         ) as stream:

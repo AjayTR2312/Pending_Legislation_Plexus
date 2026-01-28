@@ -89,7 +89,7 @@ def load_verification_prompt(state_code):
     """
     try:
         # Try state-specific prompt first from data/Verify_Prompts folder
-        prompt_file = os.path.join(PROJECT_ROOT, "data", "Verify_Prompts", f"{state_code}_Prompt.txt")
+        prompt_file = os.path.join(PROJECT_ROOT, "data", "Verify_Prompts", f"{state_code}_Prompt.md")
         
         if os.path.exists(prompt_file):
             with open(prompt_file, "r", encoding='utf-8') as f:
@@ -101,7 +101,7 @@ def load_verification_prompt(state_code):
             print("📝 Using default FL prompt as fallback")
             
             # Fall back to FL prompt as default
-            fl_prompt_file = os.path.join(PROJECT_ROOT, "data", "Verify_Prompts", "FL_Prompt.txt")
+            fl_prompt_file = os.path.join(PROJECT_ROOT, "data", "Verify_Prompts", "FL_Prompt.md")
             if os.path.exists(fl_prompt_file):
                 with open(fl_prompt_file, "r", encoding='utf-8') as f:
                     prompt_template = f.read().strip()

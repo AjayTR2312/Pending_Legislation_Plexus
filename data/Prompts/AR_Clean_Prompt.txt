@@ -7,6 +7,28 @@ You are cleaning raw text extracted from an Arkansas legislative document PDF.
 YOUR ROLE: Remove PDF artifacts while preserving 100% of legislative content.
 YOUR MISSION: Clean formatting, NOT content - every word must remain.
 
+⚠️⚠️⚠️ CRITICAL: PAGE 1 CONTENT - NEVER REMOVE THESE ⚠️⚠️⚠️
+
+These elements appear on PAGE 1 ONLY and are PART OF THE BILL (NOT repeated headers):
+
+1. ✓ MANDATORY: "Stricken language would be deleted from and underlined language would be added to present law."
+2. ✓ MANDATORY: "A Bill" or "An Act" designation
+3. ✓ MANDATORY: "State of Arkansas"
+4. ✓ MANDATORY: "95th General Assembly" (or other assembly number)
+5. ✓ MANDATORY: "Regular Session, 2025" (or other session)
+6. ✓ MANDATORY: Bill number (e.g., "HOUSE BILL 1377")
+7. ✓ MANDATORY: "By: Representatives..." (ALL representative lines)
+8. ✓ MANDATORY: "By: Senator..." (ALL senator lines)
+9. ✓ MANDATORY: "For An Act To Be Entitled"
+10. ✓ MANDATORY: Bill title and subtitle
+
+🚫 ONLY REMOVE these when they appear on PAGES 2, 3, 4, etc. (repeated headers)
+✓ ALWAYS KEEP these when they appear on PAGE 1 (part of bill header)
+
+⚠️ CRITICAL DISTINCTION:
+- Page 1: "HOUSE BILL 1377", "State of Arkansas" → KEEP (bill header)
+- Page 2+: "HOUSE BILL 1377", "State of Arkansas" → REMOVE (repeated header)
+
 ===================================================================
 ARKANSAS DOCUMENT STRUCTURE (Know this first)
 ===================================================================
@@ -68,15 +90,50 @@ WHAT TO PRESERVE (100% - Zero Loss Policy)
 
 ✓ PRESERVE EVERYTHING ELSE (ESPECIALLY):
 
-1. **Page 1 Content** (CRITICAL - Keep ALL of this):
-   - Explanatory text: "Stricken language would be deleted from..."
-   - Bill number: "HOUSE BILL 1374"
-   - "A Bill" or "An Act" designation
-   - State and session: "State of Arkansas", "95th General Assembly"
-   - Representatives/Sponsors: "By: Representatives Pilkington, J. Richardson"
-   - "For An Act To Be Entitled" section
-   - Bill title and subtitle
-   - ⚠️ These appear ONCE on page 1 and are PART OF THE BILL
+1. **Page 1 Content** (⚠️ ABSOLUTE PRESERVATION REQUIRED - READ CAREFULLY ⚠️):
+   
+   ⚠️ THE FOLLOWING 10 ELEMENTS MUST BE PRESERVED ON PAGE 1:
+   
+   ✓ #1: "Stricken language would be deleted from and underlined language would be added to present law."
+        → This explanatory line appears ONLY on page 1 - ALWAYS KEEP IT!
+   
+   ✓ #2: "A Bill" or "An Act" designation
+        → Part of bill header - KEEP on page 1!
+   
+   ✓ #3: "State of Arkansas"
+        → When on page 1 = bill header (KEEP)
+        → When on pages 2+ = repeated header (REMOVE)
+   
+   ✓ #4: "95th General Assembly" (or other assembly number)
+        → When on page 1 = bill header (KEEP)
+        → When on pages 2+ = repeated header (REMOVE)
+   
+   ✓ #5: "Regular Session, 2025" (or other session info)
+        → When on page 1 = bill header (KEEP)
+        → When on pages 2+ = repeated header (REMOVE)
+   
+   ✓ #6: Bill number ("HOUSE BILL 1377", "HB 1377", "SENATE BILL 245", etc.)
+        → When on page 1 = bill identifier (KEEP)
+        → When on pages 2+ = repeated header (REMOVE)
+   
+   ✓ #7: "By: Representatives Pilkington, J. Richardson" (ALL representative lines)
+        → Sponsor information - KEEP on page 1!
+   
+   ✓ #8: "By: Senator K. Hammer" (ALL senator lines)
+        → Sponsor information - KEEP on page 1!
+   
+   ✓ #9: "For An Act To Be Entitled"
+        → Bill purpose header - KEEP on page 1!
+   
+   ✓ #10: Bill title and subtitle
+        → Full bill title - KEEP on page 1!
+   
+   🔍 HOW TO DISTINGUISH PAGE 1 vs PAGES 2+:
+   - After cleaning page markers, look for "BE IT ENACTED BY THE GENERAL ASSEMBLY..."
+   - Everything BEFORE this enacting clause = Page 1 content (KEEP IT ALL)
+   - Everything AFTER this enacting clause = Legislative text (may have repeated headers to remove)
+   
+   ⚠️ These elements are PART OF THE BILL and appear ONCE on page 1 - NEVER REMOVE!
 
 2. **Legislative Tags** (ABSOLUTE - Never remove):
    - Addition markers: [A>text<A]
@@ -242,25 +299,52 @@ QUALITY CHECKLIST (Verify before returning)
 
 Before returning your output, verify ALL of these:
 
+⚠️ CRITICAL: PAGE 1 CONTENT PRESERVATION (CHECK EACH ELEMENT):
+□ 1. "Stricken language would be deleted from and underlined language would be added to present law." - PRESENT?
+□ 2. "A Bill" or "An Act" designation - PRESENT?
+□ 3. "State of Arkansas" on page 1 - PRESENT?
+□ 4. "95th General Assembly" on page 1 - PRESENT?
+□ 5. "Regular Session, 2025" (or other session) on page 1 - PRESENT?
+□ 6. Bill number ("HOUSE BILL 1377") on page 1 - PRESENT?
+□ 7. ALL "By: Representatives..." lines - PRESENT?
+□ 8. ALL "By: Senator..." lines - PRESENT?
+□ 9. "For An Act To Be Entitled" - PRESENT?
+□ 10. Bill title and subtitle - PRESENT?
+
+🔍 ARTIFACT REMOVAL:
 □ Line numbers removed from all pages?
 □ Page markers (<<<PAGE_X_START>>>) removed from all pages?
 □ Repeated headers removed from pages 2+ only (NOT page 1)?
-□ Page 1 bill header intact (bill number, representatives, title)?
+□ Page numbers and footers removed?
+
+🔍 TAG PRESERVATION:
 □ All [A>...<A] tags present and unchanged?
 □ All [D>...<D] tags present and unchanged?
 □ Tag count: [A> count = <A] count?
 □ Tag count: [D> count = <D] count?
+
+🔍 CONTENT PRESERVATION:
 □ "BE IT ENACTED BY THE GENERAL ASSEMBLY..." clause present?
 □ All SECTION numbers present (SECTION 1., SECTION 2., etc.)?
 □ Arkansas Code references intact?
 □ No sentences cut off mid-thought?
+□ Every word from input preserved in output?
+
+🔍 FORMATTING:
 □ Artificial line breaks within sentences removed?
 □ Natural paragraph breaks preserved (blank lines between sections)?
 □ No more than 1 consecutive blank line anywhere?
+□ Text flows naturally within paragraphs?
+
+🔍 OUTPUT QUALITY:
 □ NO explanatory text or commentary in output?
 □ Output starts with actual legislative text (not your thoughts)?
+□ Output is complete bill from start to finish?
 
 If ANY checkbox is unchecked → Fix it before returning output
+
+⚠️ SPECIAL ATTENTION: Items 1-10 are the MOST COMMONLY REMOVED by mistake!
+Double-check these BEFORE returning output!
 
 ===================================================================
 OUTPUT REQUIREMENTS
@@ -301,17 +385,40 @@ Here is the cleaned version:
 ^ This is WRONG! No line numbers, no page markers, no explanations!
 
 ===================================================================
+⚠️⚠️⚠️ BEFORE YOU START: READ THIS CRITICAL REMINDER ⚠️⚠️⚠️
+===================================================================
+
+THE #1 MISTAKE: Removing page 1 content thinking it's a "repeated header"
+
+❌ WRONG THINKING: "HOUSE BILL 1377 appears multiple times, I'll remove all of them"
+✓ CORRECT THINKING: "HOUSE BILL 1377 on page 1 = KEEP, on pages 2+ = REMOVE"
+
+❌ WRONG: Removing "State of Arkansas" from everywhere
+✓ CORRECT: Keep "State of Arkansas" from page 1, remove from pages 2+
+
+❌ WRONG: Removing "Stricken language would be deleted from..." as "instructions"
+✓ CORRECT: This is PART OF THE BILL - always keep it!
+
+HOW TO IDENTIFY PAGE 1 CONTENT:
+→ Everything BEFORE "BE IT ENACTED BY THE GENERAL ASSEMBLY..." = Page 1 (KEEP ALL)
+→ Everything AFTER "BE IT ENACTED..." = Legislative sections (remove repeated headers)
+
+⚠️ IF IN DOUBT: KEEP IT! It's better to keep extra content than delete bill headers!
+
+===================================================================
 FINAL INSTRUCTIONS
 ===================================================================
 
 NOW CLEAN THE TEXT:
 
-1. Remove PDF artifacts (line numbers, page markers, repeated headers on pages 2+)
+1. Remove PDF artifacts (line numbers, page markers, repeated headers on pages 2+ ONLY)
 2. Join artificial line breaks into flowing paragraphs
 3. Preserve 100% of legislative content including ALL tags
-4. Keep page 1 headers (they're part of the bill)
+4. Keep ALL page 1 headers (10 elements listed above - they're part of the bill)
 5. Maintain document structure with appropriate blank lines
 6. Return ONLY the cleaned text - no explanations
+
+⚠️ FINAL CHECK: Before returning, verify all 10 page 1 elements are present (see checklist)
 
 BEGIN CLEANING NOW - OUTPUT ONLY THE CLEANED LEGISLATIVE TEXT.
 
