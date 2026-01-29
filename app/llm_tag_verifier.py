@@ -50,6 +50,12 @@ def strip_conversational_headers(text):
         r"^Based on the summary.*?(?:\n|:)\s*",
         r"^I'll now add.*?(?:\n|:)\s*",
         r"^Here is the.*?(?:\n|:)\s*",
+        # New patterns for Connecticut conversational responses
+        r"^I understand\..*?(?:\n\n|\n$)",  # "I understand. I'm ready to receive..."
+        r"^I understand the instructions completely\..*?(?:\n\n|\n$)",  # Full confirmation paragraph
+        r"^\*\*Key Points Confirmed:\*\*.*?(?=\n[^\-\*\n]|\Z)",  # Bullet point confirmations
+        r"^I'm ready to (apply|receive|begin).*?(?:\n\n|\n$)",  # "I'm ready to..." statements
+        r"^Please provide the.*?(?:\n\n|\n$)",  # "Please provide the input..."
     ]
     
     # Try each pattern

@@ -37,6 +37,49 @@ def load_file(file_path):
         logging.error(f"Error loading file {file_path}: {e}")
         raise
 
+def wrap_ct_bracketed_text(text):
+    """
+    Wrap Connecticut bracketed text with [D>...<D] tags.
+    
+    In CT documents, text enclosed in brackets [like this] represents deletions/amendments
+    and should be tagged as [D>[like this]<D].
+    
+    This function ONLY wraps plain bracketed text, NOT text that already contains tags.
+    
+    Args:
+        text (str): The text to process
+    
+    Returns:
+        str: Text with bracketed content wrapped in [D>...<D] tags
+    """
+    # Strategy: Find all bracketed text and wrap it ONLY if it doesn't already contain tags
+    # Pattern explanation:
+    # (?<!\[D>) - negative lookbehind: not preceded by [D>
+    # \[ - opening bracket
+    # ([^\[\]]+) - capture group: one or more characters that are not [ or ]
+    # \] - closing bracket  
+    # (?!<D\]) - negative lookahead: not followed by <D]
+    
+    pattern = r'(?<!\[D>)\[([^\[\]]+)\](?!<D\])'
+    
+    def replace_bracket(match):
+        bracketed_content = match.group(1)
+        
+        # CRITICAL: Skip if content already contains tags (has > and < characters)
+        # Tags look like: A>text<A, D>text<D, etc.
+        if '>' in bracketed_content and '<' in bracketed_content:
+            # This is already tagged content, don't wrap it
+            return match.group(0)  # Return original unchanged
+        
+        # Plain bracketed text - wrap it with [D>...<D]
+        return f"[D>[{bracketed_content}]<D]"
+    
+    # Apply the replacement
+    result = re.sub(pattern, replace_bracket, text)
+
+    
+    return result
+
 def save_file(content, file_path):
     """Save content to a file."""
     try:
@@ -453,6 +496,13 @@ def tag_then_clean_pipeline(
         verify_prompt_template=verify_prompt
     )
     
+    # CT-SPECIFIC: Wrap bracketed text with [D>...<D] tags
+    if state_code == "CT":
+        logging.info("\n🔧 CT-Specific Post-Processing: Wrapping bracketed text...")
+        original_length = len(tagged_raw)
+        tagged_raw = wrap_ct_bracketed_text(tagged_raw)
+        logging.info(f"✓ CT bracket wrapping complete (length change: {len(tagged_raw) - original_length} chars)")
+    
     # Save intermediate output
     tagged_raw_path = os.path.join(output_dir, "tagged_raw.txt")
     save_file(tagged_raw, tagged_raw_path)
@@ -676,6 +726,12 @@ def tag_then_clean_with_pdfplumber_chunks(pdf_path, state_code, client, session_
                 verify_prompt_template=verify_prompt
             )
             
+            # CT-SPECIFIC: Wrap bracketed text with [D>...<D] tags
+            if state_code == "CT":
+                print(f"   🔧 CT-Specific: Wrapping bracketed text...")
+                tagged_text = wrap_ct_bracketed_text(tagged_text)
+                print(f"   ✅ CT bracket wrapping complete")
+            
             # Save intermediate tagged output
             tagged_path = os.path.join(chunk_temp_dir, f"chunk_{chunk_num}_tagged.txt")
             with open(tagged_path, 'w', encoding='utf-8') as f:
@@ -771,7 +827,16 @@ def tag_then_clean_with_pdfplumber_chunks(pdf_path, state_code, client, session_
     print(f"   ⏱️ Total time: {elapsed_time:.1f} seconds")
     print(f"   💾 Saved to: {final_output_path}")
     
-    return clean_text
+    # Return dict with details for UI display
+    return {
+        'success': True,
+        'output_path': final_output_path,
+        'text': clean_text,
+        'chunks_processed': len(processed_chunks),
+        'total_chunks': len(chunks),
+        'elapsed_time': elapsed_time,
+        'character_count': len(clean_text)
+    }
 
 
 if __name__ == "__main__":

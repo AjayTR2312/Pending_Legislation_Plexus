@@ -60,6 +60,8 @@ try:
         st.session_state.processing_time = None
     if 'process_method' not in st.session_state:
         st.session_state.process_method = "vision"  # default: "vision" or "pdfplumber"
+    if 'chunk_stats' not in st.session_state:
+        st.session_state.chunk_stats = None
     
     # Batch processing state
     if 'batch_mode' not in st.session_state:
@@ -1004,7 +1006,7 @@ def process_with_tag_then_clean_pipeline(pdf_path, state_code, session_id, progr
                     session_dir=session_folders['session_dir']
                 )
                 
-                if not corrected_text:
+                if not corrected_text or not corrected_text.get('success'):
                     st.session_state.step_status[1] = "❌"
                     st.session_state.step_status[2] = "❌"
                     st.session_state.step_status[3] = "❌"
@@ -1020,16 +1022,10 @@ def process_with_tag_then_clean_pipeline(pdf_path, state_code, session_id, progr
                 update_progress()
                 print("✅ Tag-Then-Clean chunked pipeline complete")
                 
-                # The chunked function already saves the file to output/TagThenClean/final_clean_tagged.txt
-                # Use that path as the verified file path
-                verified_file_path = os.path.join(
-                    session_folders['session_dir'], 
-                    "output", 
-                    "TagThenClean",
-                    "final_clean_tagged.txt"
-                )
+                # Extract file path from results
+                verified_file_path = corrected_text.get('output_path')
                 
-                if not os.path.exists(verified_file_path):
+                if not verified_file_path or not os.path.exists(verified_file_path):
                     st.error("❌ Output file not found")
                     return None
                 
@@ -1044,7 +1040,16 @@ def process_with_tag_then_clean_pipeline(pdf_path, state_code, session_id, progr
                 
                 st.session_state.processing_time = f"{minutes}m {seconds}s" if minutes > 0 else f"{seconds}s"
                 
-                completion_msg = f"🎉 Tag-Then-Clean chunked processing completed! Total time: {st.session_state.processing_time}"
+                # Store chunk processing stats for display
+                st.session_state.chunk_stats = {
+                    'chunks_processed': corrected_text.get('chunks_processed', 0),
+                    'total_chunks': corrected_text.get('total_chunks', 0),
+                    'character_count': corrected_text.get('character_count', 0)
+                }
+                
+                completion_msg = f"🎉 Tag-Then-Clean chunked processing completed! " \
+                                f"Processed {st.session_state.chunk_stats['chunks_processed']}/{st.session_state.chunk_stats['total_chunks']} chunks. " \
+                                f"Total time: {st.session_state.processing_time}"
                 print("\n" + "="*60)
                 print(completion_msg)
                 print("="*60)
@@ -1240,6 +1245,7 @@ def show_simple_ui():
             st.session_state.client = None
             st.session_state.temp_pdf_path = None
             st.session_state.processing_time = None
+            st.session_state.chunk_stats = None
             st.session_state.last_uploaded_file_id = None  # Reset upload tracking
             
             # Reset batch processing state
@@ -1446,6 +1452,14 @@ def show_results_section():
     
     st.success(success_msg)
     
+    # Show chunk processing stats if available (for chunked documents)
+    if hasattr(st.session_state, 'chunk_stats') and st.session_state.chunk_stats:
+        chunk_info = st.session_state.chunk_stats
+        st.info(
+            f"📊 **Chunked Processing Details:** Processed {chunk_info['chunks_processed']}/{chunk_info['total_chunks']} chunks | "
+            f"Final output: {chunk_info['character_count']:,} characters"
+        )
+    
     col1, col2 = st.columns([2, 1])
     
     with col1:
@@ -1468,6 +1482,12 @@ def show_results_section():
         st.metric("File Size", format_file_size(file_size))
         if st.session_state.processing_time:
             st.metric("Processing Time", st.session_state.processing_time)
+        
+        # Show chunk stats in metrics if available
+        if hasattr(st.session_state, 'chunk_stats') and st.session_state.chunk_stats:
+            chunk_info = st.session_state.chunk_stats
+            st.metric("Chunks Processed", f"{chunk_info['chunks_processed']}/{chunk_info['total_chunks']}")
+            st.metric("Character Count", f"{chunk_info['character_count']:,}")
         
         # Download button
         try:
@@ -1497,6 +1517,7 @@ def show_single_file_processing():
                 st.session_state.processing = True
                 st.session_state.current_step = 0
                 st.session_state.processing_time = None
+                st.session_state.chunk_stats = None
                 st.session_state.process_method = "vision"
                 st.rerun()
         else:
@@ -1512,6 +1533,7 @@ def show_single_file_processing():
                 st.session_state.processing = True
                 st.session_state.current_step = 0
                 st.session_state.processing_time = None
+                st.session_state.chunk_stats = None
                 st.session_state.process_method = "pdfplumber"
                 st.rerun()
         else:
@@ -1522,6 +1544,7 @@ def show_single_file_processing():
                 st.session_state.step_status = {}
                 st.session_state.processed_file_path = None
                 st.session_state.processing_time = None
+                st.session_state.chunk_stats = None
                 if st.session_state.temp_pdf_path and os.path.exists(st.session_state.temp_pdf_path):
                     os.remove(st.session_state.temp_pdf_path)
                 st.session_state.temp_pdf_path = None
@@ -1534,6 +1557,7 @@ def show_single_file_processing():
                 st.session_state.processing = True
                 st.session_state.current_step = 0
                 st.session_state.processing_time = None
+                st.session_state.chunk_stats = None
                 st.session_state.process_method = "tag_then_clean"
                 st.rerun()
     
