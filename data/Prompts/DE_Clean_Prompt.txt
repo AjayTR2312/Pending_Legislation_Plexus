@@ -122,11 +122,216 @@ EXAMPLE - DISTINGUISH LINE NUMBERS FROM SUBSECTION NUMBERS:
 - Output: "(5) "Maximum annual match" means the maximum match"
 
 ===================================================================
+PAGE MARKERS - MUST BE REMOVED (All Pages)
+===================================================================
+
+⚠️ CRITICAL: PAGE MARKERS ARE ARTIFACTS - REMOVE FROM ALL PAGES
+
+WHAT ARE PAGE MARKERS?
+Delaware documents include page boundary markers added during PDF extraction:
+- Format: <<<PAGE_X_START>>> and <<<PAGE_X_END>>> where X is the page number
+- Examples: <<<PAGE_1_START>>>, <<<PAGE_1_END>>>, <<<PAGE_2_START>>>, <<<PAGE_2_END>>>
+- These appear at the beginning and end of each page
+- They are NOT part of the legislative text
+
+EXAMPLES OF PAGE MARKERS TO REMOVE:
+```
+<<<PAGE_1_START>>>
+SPONSOR: Sen. Paradee & Rep. Carson
+...
+<<<PAGE_1_END>>>
+
+<<<PAGE_2_START>>>
+Section 2. Amend § 5605, Title 29 of the Delaware Code
+...
+<<<PAGE_2_END>>>
+```
+
+AFTER REMOVING PAGE MARKERS:
+```
+SPONSOR: Sen. Paradee & Rep. Carson
+...
+
+Section 2. Amend § 5605, Title 29 of the Delaware Code
+...
+```
+
+⚠️ SAFE PAGE MARKER REMOVAL PROCESS:
+
+1. IDENTIFY page markers:
+   - Look for <<<PAGE_X_START>>> at the beginning of pages
+   - Look for <<<PAGE_X_END>>> at the end of pages
+   - Pattern: <<<PAGE_1_START>>>, <<<PAGE_1_END>>>, <<<PAGE_2_START>>>, etc.
+
+2. BEFORE REMOVING: Read the text AFTER the marker
+   - Example: "<<<PAGE_2_START>>>\nSection 2. Amend § 5605"
+   - Text after marker: "Section 2. Amend § 5605"
+   - COPY mentally: This text must be preserved
+
+3. REMOVE ONLY the page marker line (including the newline after it)
+   - Delete: "<<<PAGE_2_START>>>\n"
+   - Keep: "Section 2. Amend § 5605"
+
+4. IMMEDIATELY VERIFY:
+   - Is "Section 2. Amend § 5605" still present?
+   - Did any text get deleted along with the marker?
+   - If ANY text missing → RESTORE IT immediately
+
+5. SPECIAL CASE: Blank lines around page markers
+   - If there's a blank line before <<<PAGE_X_END>>>, keep ONE blank line
+   - If there's a blank line after <<<PAGE_X_START>>>, remove the marker but keep natural spacing
+   - Goal: Maintain natural paragraph breaks between sections
+
+⚠️ CRITICAL: Remove ALL page markers from ALL pages (including page 1)
+These are purely technical artifacts and serve no purpose in cleaned output
+
+===================================================================
+LAYOUT AND INDENTATION - MUST BE NORMALIZED
+===================================================================
+
+⚠️ CRITICAL: EXCESSIVE LEADING WHITESPACE REMOVAL
+
+WHAT IS EXCESSIVE LEADING WHITESPACE?
+Delaware PDF extraction often adds excessive indentation (10-30+ spaces) to lines:
+- Pattern: Many spaces before content starts
+- Example: "                Section 1. Amend § 5601" (20+ leading spaces)
+- Example: "                (a) (1) There shall be established" (15+ leading spaces)
+- These spaces are PDF formatting artifacts, NOT intentional indentation
+
+DELAWARE LAYOUT RULES (CRITICAL):
+
+1. **Page 1 Headers** - Special formatting:
+   ```
+   SPONSOR: Sen. Paradee & Rep. Carson
+            Rep. Dukes
+   
+   DELAWARE STATE SENATE
+   
+   153rd GENERAL ASSEMBLY
+   
+   SENATE BILL NO. 42
+   
+   AS AMENDED BY
+   
+   SENATE AMENDMENT NO. 1
+   ```
+   - SPONSOR line: Left-aligned (no indentation)
+   - Additional sponsors: Indented to align under "SPONSOR:" (approximately 9 spaces)
+   - Chamber name: Centered or left-aligned
+   - Session info: Centered or left-aligned
+   - Bill number: Centered or left-aligned
+   - Amendment info: Centered or left-aligned
+   - Blank line after each major element
+
+2. **Main Sections** - Left-aligned (NO leading spaces):
+   ```
+   Section 1. Amend § 5601, Title 29 of the Delaware Code
+   
+   § 5601. State Judiciary Retirement Fund
+   
+   BE IT ENACTED BY THE GENERAL ASSEMBLY
+   ```
+   - "Section X." headings: Left-aligned (column 0)
+   - "§ XXXX." headings: Left-aligned (column 0)
+   - "BE IT ENACTED" clause: Left-aligned (column 0)
+   - Bill titles ("AN ACT TO AMEND"): Left-aligned (column 0)
+
+3. **Subsections (a), (b), (c)** - Left-aligned (NO leading spaces):
+   ```
+   (a) (1) There shall be established a State Judiciary Retirement Fund
+   
+   (b) A member first appointed before July 1, 1980, may elect
+   
+   (c) Any declaration of acceptance of this chapter
+   ```
+   - Main subsections like (a), (b), (c): Left-aligned (column 0)
+   - Nested numbering like (1), (2): Left-aligned with parent
+   - Remove ALL excessive leading whitespace from these
+
+4. **Sub-subsections a., b., c.** - Natural indentation (1-2 spaces):
+   ```
+   a. Who was first appointed to the state judiciary
+   
+   b. Who is a member covered by the revised plan
+   
+   c. Who is a member [A>first<A] covered by the revised plan
+   ```
+   - Letter items (a., b., c.) under numbered items: Indented slightly (1-2 spaces)
+   - This is NATURAL structural indentation - preserve it
+   - Do NOT remove this natural indentation
+
+5. **Continuation lines** - Left-aligned (NO extra indentation):
+   ```
+   (a) (1) There shall be established a State Judiciary Retirement Fund,
+   hereinafter referred to as "Fund." Each member who elects or who has
+   elected the provisions of this chapter and:
+   ```
+   - Text continuing from previous line: Left-aligned (no extra spaces)
+   - Remove excessive leading whitespace from continuation lines
+
+⚠️ WHITESPACE REMOVAL PROCESS:
+
+1. IDENTIFY excessive leading whitespace:
+   - Count spaces at start of line
+   - If 10+ spaces before text → Excessive (likely PDF artifact)
+   - If 0-2 spaces before letter items (a., b., c.) → Natural indentation (keep)
+   - If 0 spaces before main content → Already correct (keep)
+
+2. REMOVE excessive indentation:
+   - Main sections ("Section 1.", "§ 5601.") → Remove ALL leading spaces (left-align)
+   - Subsections ((a), (b), (c), (1), (2)) → Remove ALL leading spaces (left-align)
+   - BE IT ENACTED clause → Remove ALL leading spaces (left-align)
+   - Bill titles → Remove ALL leading spaces (left-align)
+   - Continuation text → Remove ALL leading spaces (left-align)
+
+3. PRESERVE natural indentation:
+   - Letter items (a., b., c.) under numbered items → Keep 1-2 spaces
+   - Additional sponsor names → Keep alignment under "SPONSOR:" (~9 spaces)
+   - Text that naturally continues from above → Keep minimal indentation if structural
+
+4. VERIFY proper layout:
+   - Most lines should be left-aligned (column 0)
+   - Only small indents for sub-subsections (a., b., c.)
+   - No lines with 10+ leading spaces
+   - Text should look clean and professional
+
+EXAMPLE - BEFORE CLEANING (with excessive indentation):
+```
+                Section 1. Amend § 5601, Title 29 of the Delaware Code
+                
+                § 5601. State Judiciary Retirement Fund
+                
+                (a) (1) There shall be established a State Judiciary Retirement Fund
+                
+                  a. Who was first appointed to the state judiciary
+                     
+                  b. Who is a member covered by the revised plan
+```
+
+EXAMPLE - AFTER CLEANING (proper layout):
+```
+Section 1. Amend § 5601, Title 29 of the Delaware Code
+
+§ 5601. State Judiciary Retirement Fund
+
+(a) (1) There shall be established a State Judiciary Retirement Fund
+
+a. Who was first appointed to the state judiciary
+
+b. Who is a member covered by the revised plan
+```
+
+⚠️ CRITICAL: Most Delaware legislative text should be LEFT-ALIGNED
+Only preserve small indents for structural sub-items (a., b., c. under numbered items)
+
+===================================================================
 WHAT YOU WILL CLEAN vs WHAT YOU WILL PRESERVE
 ===================================================================
 
 ⚠️ REMOVE ONLY THESE ARTIFACTS (and ONLY these):
 ✓ Line numbers at the beginning of lines (all pages)
+✓ Page markers: <<<PAGE_X_START>>> and <<<PAGE_X_END>>> (all pages)
+✓ Excessive leading whitespace (10+ spaces before text - normalize to left-aligned)
 ✓ Repeated headers on pages 2+ (NOT page 1!)
 ✓ Artificial line breaks within sentences/paragraphs
 ✓ Extra blank lines (more than 2 consecutive)
@@ -406,7 +611,27 @@ PHASE 2: REMOVE ARTIFACTS (ONE TYPE AT A TIME)
 
 ⚠️ FOR EACH ARTIFACT REMOVAL, FOLLOW THIS EXACT SEQUENCE:
 
-1. Remove line numbers (ALL pages - this is ALWAYS safe):
+1. Remove page markers (ALL pages - do this FIRST):
+   a. BEFORE REMOVING: Read text immediately after <<<PAGE_X_START>>>
+   b. Example: "<<<PAGE_2_START>>>\nSection 2. Amend..."
+   c. COPY: "Section 2. Amend..." (must preserve this)
+   d. REMOVE: "<<<PAGE_2_START>>>" and the newline
+   e. VERIFY: Is "Section 2. Amend..." still the first line? ✓
+   f. Repeat for all <<<PAGE_X_END>>> markers
+   g. VERIFY: Output contains no <<<PAGE markers at all
+
+1.5. Remove excessive leading whitespace (CRITICAL FOR DELAWARE):
+   a. Scan each line for leading spaces (count them)
+   b. Main sections ("Section X.", "§ XXXX.", "BE IT ENACTED") → Left-align (remove ALL leading spaces)
+   c. Subsections ((a), (b), (c), (1), (2)) → Left-align (remove ALL leading spaces)
+   d. Bill titles ("AN ACT TO AMEND") → Left-align (remove ALL leading spaces)
+   e. Continuation text → Left-align (remove ALL leading spaces)
+   f. EXCEPTION: Keep 1-2 spaces for letter items (a., b., c.) under numbered items
+   g. EXCEPTION: Keep ~9 spaces for additional sponsors under "SPONSOR:" line
+   h. VERIFY: Most lines start at column 0 (left-aligned)
+   i. VERIFY: Only small natural indents remain for structural sub-items
+
+2. Remove line numbers (ALL pages - this is ALWAYS safe):
    a. BEFORE REMOVING: Read the text AFTER each line number
    b. COPY mentally: "After removal, line should start with: [that text]"
    c. Remove ONLY the line number and immediate spacing (e.g., "  7       ")
@@ -484,27 +709,32 @@ PHASE 4: FINAL CHECKS (Before submitting)
 CONCRETE EXAMPLES (Delaware-Specific)
 ===================================================================
 
-EXAMPLE 0: Remove line numbers - CORRECT
+EXAMPLE 0: Remove line numbers and excessive whitespace - CORRECT
 INPUT:
 ```
- 1       Section 1. Amend § 6052, Chapter 60A, Title 29 of the Delaware Code by making deletions as shown by strike through
- 3       § 6052. Definitions.
- 5       (5) "Maximum annual match" means the maximum match multiplied by the number of pay periods in the plan year.
- 7       (6) "Maximum match" means $20 from and after [the effective date of this Act].
+ 1                Section 1. Amend § 6052, Chapter 60A, Title 29 of the Delaware Code
+ 3                § 6052. Definitions.
+ 5                (5) "Maximum annual match" means the maximum match
+ 7                (6) "Maximum match" means $20 from and after [the effective date of this Act].
 ```
 
-✅ CORRECT OUTPUT (Line numbers removed, all content preserved):
+✅ CORRECT OUTPUT (Line numbers removed, excessive indentation removed, all content preserved):
 ```
-Section 1. Amend § 6052, Chapter 60A, Title 29 of the Delaware Code by making deletions as shown by strike through
+Section 1. Amend § 6052, Chapter 60A, Title 29 of the Delaware Code
+
 § 6052. Definitions.
-(5) "Maximum annual match" means the maximum match multiplied by the number of pay periods in the plan year.
+
+(5) "Maximum annual match" means the maximum match
+
 (6) "Maximum match" means $20 from and after [the effective date of this Act].
 ```
-^ Removed "  1       ", "  3       ", "  5       ", "  7       " (line numbers with spacing)
+^ Removed "  1       ", "  3       ", "  5       ", "  7       " (line numbers)
+^ Removed excessive leading whitespace (16+ spaces) → Left-aligned all content
 ^ Preserved ALL legislative text including subsection numbers (5), (6)
-^ Preserved § symbol and all tags
+^ Preserved § symbol exactly
+^ Added proper blank lines between sections
 
-EXAMPLE 1A: Remove repeated header (Page 2+), preserve tags - CORRECT
+EXAMPLE 1A: Remove page markers and repeated header (Page 2+), preserve tags - CORRECT
 INPUT:
 ```
 <<<PAGE_1_END>>>
@@ -516,9 +746,10 @@ Section 2. Amend [A>§ 9042C<A], Title 29 of the Delaware Code to establish stan
 
 ✅ CORRECT OUTPUT (All content preserved):
 ```
-<<<PAGE_2_START>>>
+
 Section 2. Amend [A>§ 9042C<A>, Title 29 of the Delaware Code to establish standards for artificial intelligence governance, including definitions, enforcement mechanisms, and reporting requirements.
 ```
+^ Removed "<<<PAGE_1_END>>>", "<<<PAGE_2_START>>>" (page markers)
 ^ Removed "HOUSE BILL NO. 33", "DELAWARE GENERAL ASSEMBLY" (page 2 header)
 ^ Preserved "[A>§ 9042C<A]" tag
 ^ Preserved "Section 2." heading
@@ -541,7 +772,7 @@ Section 2. Amend [A>§ 9042C<A], Title 29 of the Delaware Code.
 - AFTER removing header: Verify that copied text is still present
 - If missing → RESTORE IT immediately
 
-EXAMPLE 2: Page 1 preservation (Keep everything)
+EXAMPLE 2: Page 1 headers preserved, page markers removed
 INPUT:
 ```
 <<<PAGE_1_START>>>
@@ -551,11 +782,11 @@ HOUSE OF REPRESENTATIVES
 HOUSE BILL NO. 33
 
 AN ACT TO AMEND TITLE 29 OF THE DELAWARE CODE
+<<<PAGE_1_END>>>
 ```
 
 OUTPUT:
 ```
-<<<PAGE_1_START>>>
 SPONSOR: Rep. K. Williams
 HOUSE OF REPRESENTATIVES
 153rd GENERAL ASSEMBLY
@@ -563,7 +794,9 @@ HOUSE BILL NO. 33
 
 AN ACT TO AMEND TITLE 29 OF THE DELAWARE CODE
 ```
-^ Everything preserved exactly (this is page 1)
+^ Removed "<<<PAGE_1_START>>>" and "<<<PAGE_1_END>>>" (page markers)
+^ Preserved all page 1 headers (SPONSOR, Chamber, Session, Bill number)
+^ Preserved all legislative content
 
 EXAMPLE 3: Text reflow with § symbol
 INPUT:
@@ -744,7 +977,12 @@ TAG PRESERVATION:
 □ No tags modified or merged?
 
 CLEANING COMPLETENESS:
+□ Page markers removed from ALL pages (<<<PAGE_X_START>>> and <<<PAGE_X_END>>>)?
 □ Line numbers removed from ALL lines (e.g., "  1  ", "  3  ", " 10  ")?
+□ Excessive leading whitespace removed (most lines left-aligned)?
+□ Main sections left-aligned ("Section X.", "§ XXXX.", "BE IT ENACTED")?
+□ Subsections left-aligned ((a), (b), (c), (1), (2))?
+□ Only natural indents remain (a., b., c. under numbered items have 1-2 spaces)?
 □ Subsection numbers preserved ((1), (2), (3), a., b., c.)?
 □ Repeated headers removed from pages 2+ (NOT page 1)?
 □ "Page X of Y" footers removed?

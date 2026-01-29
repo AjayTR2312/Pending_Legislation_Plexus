@@ -58,17 +58,24 @@ Line numbers MUST be removed:
 - NEVER remove numbers that could be dates, section numbers, or references
 - When in doubt → KEEP IT
 
-Repeated bill headers MUST be removed:
+Repeated bill headers on pages 2+ MUST be removed:
 - Pattern: "HB XXX" or "SB XXX" followed by spaces and page number
-- Example: "HB 385         2" appearing at TOP of page after <<<PAGE_N_START>>>
-- CRITICAL: ONLY remove if it appears ALONE on a line at page top
+- Example: "HB 385         2" appearing at TOP of page 2, 3, 4, etc.
+- CRITICAL: ONLY remove if it appears at page top on page 2 or higher (AFTER <<<PAGE_1_END>>>)
+- 🚫 NEVER REMOVE FROM PAGE 1: Bill number "HB 385" on page 1 is LEGISLATIVE CONTENT - MUST PRESERVE
+- 🚫 NEVER REMOVE FROM PAGE 1: Page 1 bill identifier is part of official document - KEEP IT
+- ⚠️ CHECK PAGE MARKERS: Only remove these headers if they appear AFTER <<<PAGE_1_END>>>
+- ⚠️ IF NO PAGE MARKERS: First occurrence of bill number is page 1 - PRESERVE IT, remove only subsequent repetitions
 - NEVER remove bill numbers that appear within legislative text
+- These are REPEATED headers - the same header appearing again and again on each page
 - When in doubt → KEEP IT
 
-Florida-specific headers MUST be removed:
+Florida-specific headers on pages 2+ MUST be removed:
 - "F L O R I D A   H O U S E   O F   R E P R E S E N T A T I V E S" (with or without spaces)
-- "FLORIDA HOUSE OF REPRESENTATIVES"
+- "FLORIDA HOUSE OF REPRESENTATIVES"  
 - Year markers as headers: "2025" appearing alone at page top
+- CRITICAL: Only remove if appearing on pages 2+ (AFTER <<<PAGE_1_END>>>)
+- 🚫 NEVER REMOVE FROM PAGE 1: These may be legitimate page 1 content - PRESERVE on page 1
 - When in doubt → KEEP IT
 
 Florida-specific footers MUST be removed:
@@ -284,8 +291,10 @@ STEP 1: VERIFY INPUT COMPLETELY RECEIVED
 STEP 2: REMOVE ONLY OBVIOUS ARTIFACTS
 - Remove <<<PAGE_N_START>>> and <<<PAGE_N_END>>> markers
 - Remove line numbers (only if consistent pattern on every line)
-- Remove repeated "HB XXX    N" headers (only at page tops)
-- Remove Florida headers: "F L O R I D A   H O U S E..."
+- Remove repeated "HB XXX    N" or "SB XXX    N" headers (ONLY from pages 2+ after <<<PAGE_1_END>>>)
+- Remove Florida headers: "F L O R I D A   H O U S E..." (ONLY from pages 2+ after <<<PAGE_1_END>>>)
+- CRITICAL: NEVER remove page 1 bill number - first occurrence of "HB XXX" is legislative content
+- CRITICAL: Only remove REPEATED headers (same header appearing on multiple pages)
 - Remove Florida footers: "CODING: Words stricken..."
 - Remove vertical lines (only if clearly formatting artifacts)
 - Normalize whitespace (safe operation)
@@ -328,6 +337,48 @@ otherwise, an authorized trustee who has absolute power under the terms of a tru
 WRONG OUTPUT (content dropped):
 (b) A qualified beneficiary may petition the court...
 [This is WRONG because lines 1-3 were deleted!]
+
+===================================================================
+EXAMPLE OF CORRECT HEADER REMOVAL (CRITICAL)
+===================================================================
+
+INPUT (multi-page document):
+<<<PAGE_1_START>>>
+HB 385                                                    2025
+
+A bill to be entitled
+An act relating to trusts; amending s. 736.04117, F.S.; revising the definition...
+<<<PAGE_1_END>>>
+<<<PAGE_2_START>>>
+HB 385                                                    2
+
+Section 1. Subsection (4) of section 736.04117, Florida Statutes, is amended...
+<<<PAGE_2_END>>>
+<<<PAGE_3_START>>>
+HB 385                                                    3
+
+(a) An authorized trustee who has absolute power under the terms...
+<<<PAGE_3_END>>>
+
+CORRECT OUTPUT:
+HB 385                                                    2025
+
+A bill to be entitled
+An act relating to trusts; amending s. 736.04117, F.S.; revising the definition...
+
+Section 1. Subsection (4) of section 736.04117, Florida Statutes, is amended...
+
+(a) An authorized trustee who has absolute power under the terms...
+
+^ Notice: Page 1 bill header "HB 385    2025" PRESERVED (it's legislative content)
+^ Notice: Page 2 repeated header "HB 385    2" REMOVED (it's a repeated artifact)
+^ Notice: Page 3 repeated header "HB 385    3" REMOVED (it's a repeated artifact)
+
+WRONG OUTPUT:
+A bill to be entitled
+An act relating to trusts; amending s. 736.04117, F.S.; revising the definition...
+
+[This is WRONG because page 1 bill number "HB 385    2025" was removed!]
 
 ===================================================================
 EXAMPLE OF CORRECT FLORIDA FORMATTING

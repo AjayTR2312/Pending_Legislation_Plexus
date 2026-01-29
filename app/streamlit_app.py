@@ -98,10 +98,14 @@ except Exception as e:
         st.code(traceback.format_exc())
     st.stop()
 
+# Maximum allowed pages for processing
+MAX_PAGES_ALLOWED = 15
+
 def validate_pdf_not_scanned(pdf_path, filename):
     """
-    Check if PDF is scanned and reject if so.
-    Also check if PDF has more than 10 pages (would require chunking).
+    Check if PDF is valid for processing:
+    1. Not scanned (must be digital/native PDF)
+    2. Not exceeding page limit (max 15 pages)
     Returns: (is_valid, error_message)
     """
     try:
@@ -111,22 +115,34 @@ def validate_pdf_not_scanned(pdf_path, filename):
             total_pages = result.get('total_pages', 0)
             pdf_type = result.get('type', 'unknown')
             high_dpi_images = result.get('high_dpi_images', 0)
+            large_images = result.get('large_images', 0)
             total_images = result.get('total_images', 0)
+            avg_chars = result.get('average_chars_per_page', 0)
             text_ratio = result.get('text_ratio', 0)
             image_ratio = result.get('image_ratio', 0)
             
             # Log detailed detection results
-            logging.info(f"PDF Detection: type={pdf_type}, pages={total_pages}, high_dpi_imgs={high_dpi_images}/{total_images}, text={text_ratio}%, image={image_ratio}%")
+            logging.info(f"PDF Detection: type={pdf_type}, pages={total_pages}, large_imgs={large_images}/{total_images}, high_dpi={high_dpi_images}, avg_chars={avg_chars:.1f}, text={text_ratio}%, image={image_ratio}%")
             
-            # Check 1: Scanned PDF validation
-            if result['type'] == 'scanned':
-                error_msg = f"**{filename}** — Scanned document detected. This file format cannot be processed due to technical limitations in text extraction."
+            # Check 1: Page count validation (CRITICAL - must be first)
+            if total_pages > MAX_PAGES_ALLOWED:
+                error_msg = f"**{filename}** — Document exceeds maximum page limit ({total_pages} pages > {MAX_PAGES_ALLOWED} pages allowed). Please split into smaller documents."
+                logging.warning(f"File rejected: {filename} has {total_pages} pages (limit: {MAX_PAGES_ALLOWED})")
                 return False, error_msg.strip()
             
+            # Check 2: Scanned PDF validation
+            if pdf_type == 'scanned':
+                error_msg = f"**{filename}** — Scanned document detected. This file format cannot be processed due to technical limitations in text extraction."
+                logging.warning(f"File rejected: {filename} is a scanned PDF (type: {pdf_type})")
+                return False, error_msg.strip()
+            
+            # Check 3: Hybrid PDF validation (mixed digital/scanned content)
+            if pdf_type == 'hybrid':
                 error_msg = f"**{filename}** — Hybrid document detected (contains signatures or scanned content). This file format cannot be processed due to technical limitations."
+                logging.warning(f"File rejected: {filename} is a hybrid PDF (type: {pdf_type})")
                 return False, error_msg.strip()
         
-        # Digital or empty PDFs are OK
+        # Digital or empty PDFs with acceptable page count are OK
         return True, None
         
     except Exception as e:
