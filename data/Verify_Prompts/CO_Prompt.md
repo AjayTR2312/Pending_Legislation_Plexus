@@ -935,3 +935,19 @@ Formatting: strikethrough
 **Proceed with systematic tagging following the Phase 1-2-3 workflow.**
 
 **Good luck! 🎯**
+
+---
+
+## 📥 Input Documents
+
+**Summary File:**
+
+```
+{SUMMARY_CONTENT}
+```
+
+**Document to Tag:**
+
+```
+{OUTPUT_TEXT_CONTENT}
+```
