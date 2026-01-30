@@ -1,0 +1,94 @@
+from docx import Document  
+from docx.oxml.ns import qn
+import os
+import glob
+
+# Specific file to analyze
+docx_path = r'C:\Users\C302602\OneDrive - Thomson Reuters Incorporated\Documents\Pending_Legislation\tmp\sessions\3814cc41-6a87-41d5-afdf-f09f82f657dc\output\Output_Docx\CO\2025_2025_6_3_2_000261_0_4_1_20250331_0.docx'
+
+print(f"Analyzing file: {docx_path}")
+print(f"File exists: {os.path.exists(docx_path)}")
+
+if not os.path.exists(docx_path):
+    print("❌ File not found!")
+    exit(1)
+
+print(f"File size: {os.path.getsize(docx_path)} bytes")
+
+try:
+    # Open the document  
+    doc = Document(docx_path)
+    print(f"\n✅ Document opened successfully!")
+    print(f"Total paragraphs: {len(doc.paragraphs)}")
+except Exception as e:
+    print(f"❌ Error opening document: {e}")
+    exit(1)
+  
+# Method 3: For shapes that are not inline (floating shapes like your line)  
+# You need to access them through the underlying XML  
+from docx.oxml import parse_xml
+
+drawing_count = 0
+print("\n[Method 3] Analyzing drawing objects with associated text:")
+print("=" * 100)
+
+for para_idx, paragraph in enumerate(doc.paragraphs):
+    # Look for drawing elements in this paragraph
+    drawings = paragraph._element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}drawing')
+    
+    if drawings:
+        para_text = paragraph.text.strip()
+        print(f"\n📍 PARAGRAPH {para_idx + 1} (contains {len(drawings)} drawing object(s)):")
+        print(f"\n   📝 EXACT TEXT AT THIS LOCATION:")
+        print(f"   {'─' * 90}")
+        print(f"   {para_text if para_text else '(empty paragraph)'}")
+        print(f"   {'─' * 90}")
+        print(f"   Text length: {len(para_text)} characters")
+        
+        for draw_idx, drawing in enumerate(drawings):
+            drawing_count += 1
+            print(f"\n   🎨 Drawing Object {draw_idx + 1}:")
+            
+            # Check if inline or anchored
+            inline = drawing.find('.//{http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing}inline')
+            anchor = drawing.find('.//{http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing}anchor')
+            
+            if inline is not None:
+                print(f"      Type: Inline (embedded in text flow)")
+            elif anchor is not None:
+                print(f"      Type: Anchored/Floating (positioned independently)")
+            
+            # Look for shape geometry type
+            shape_types = drawing.findall('.//{http://schemas.openxmlformats.org/drawingml/2006/main}prstGeom')
+            for shape_type in shape_types:
+                prst = shape_type.get('prst')
+                shape_name = {
+                    'line': 'Horizontal/Vertical Line',
+                    'straightConnector1': 'Straight Connector Line',
+                    'rect': 'Rectangle',
+                    'ellipse': 'Ellipse/Circle'
+                }.get(prst, prst)
+                print(f"      Shape: {shape_name}")
+                
+                if prst in ['line', 'straightConnector1']:
+                    print(f"      ✅ THIS IS A LINE SHAPE!")
+            
+            # Look for line properties
+            lines = drawing.findall('.//{http://schemas.openxmlformats.org/drawingml/2006/main}ln')
+            if lines:
+                for line in lines:
+                    width = line.get('w')
+                    if width:
+                        # EMUs to points conversion (1 EMU = 1/914400 inch, 1 point = 1/72 inch)
+                        width_pt = int(width) / 12700
+                        print(f"      Line width: {width} EMUs (~{width_pt:.2f} points)")
+        
+        print(f"\n   {'═' * 90}")
+
+print(f"\n{'=' * 100}")
+print(f"[Method 3] Total drawing objects found: {drawing_count}")
+
+if drawing_count == 0:
+    print("\n❌ No shapes or drawings found in this document!")
+else:
+    print(f"\n✅ Found total: {drawing_count} drawing objects")  

@@ -36,9 +36,11 @@ CLEANING RULES (Apply to ALL pages):
 3. Remove ALL page numbers
 
 FORMATTING RULES (Apply PRECISELY):
-CRITICAL: Only apply tags to text that is ACTUALLY underlined or has strikethrough in the original PDF.
-- ONLY tag underlined text with [A>text<A]
-- ONLY tag strikethrough text with [D>text<D]
+CRITICAL: Only apply tags to text that is ACTUALLY underlined or has strikethrough in the document.
+- Tag underlined text with [A>text<A]
+- Tag strikethrough text with [D>text<D]
+- Do NOT tag text that is only bold or only italic
+- Do NOT tag regular text without underline/strikethrough
 
 TAG APPLICATION RULES (Word-Level Precision):
 1. Examine EACH WORD individually for underline/strikethrough formatting
@@ -48,6 +50,19 @@ TAG APPLICATION RULES (Word-Level Precision):
 5. Do NOT extend tags to words that are NOT underlined
 6. Each tagged section must have both opening [A> and closing <A] or [D> and <D]
 7. When multiple consecutive words have the same formatting, group them in ONE tag: [A>word1 word2 word3<A]
+
+⚠️ CRITICAL TAGGING VERIFICATION (MANDATORY FOR EVERY TAG):
+For EACH section you tag:
+1. BEFORE TAGGING: Read the ENTIRE sentence (minimum 10 words before + target + 10 words after)
+2. COPY mentally: Remember all the words before and after the target text
+3. ADD THE TAG: Wrap ONLY the formatted text with [A>...<A] or [D>...<D]
+4. IMMEDIATELY VERIFY: Are all words before the tag still there?
+5. IMMEDIATELY VERIFY: Are all words after the tag still there?
+6. If ANY word is missing → STOP and restore it immediately
+
+⚠️ COMMON TAGGING FAILURE (YOU MUST AVOID):
+❌ WRONG: "text1 text2 [A>target<A]" (dropped words after target)
+✅ CORRECT: "text1 text2 [A>target<A] text3 text4" (all words preserved)
 
 SPECIAL CASE - PARTIAL NUMBERING/SUBSECTIONS:
 CRITICAL: Pay special attention to section numbers like (b)(1), (a)(2), etc.
@@ -74,19 +89,104 @@ ARKANSAS-SPECIFIC REQUIREMENTS:
 5. Handle Arkansas bill numbering system correctly
 6. Preserve Arkansas-specific section reference format
 
+⚠️ CRITICAL: PRESERVE ALL PAGE 1 CONTENT (MANDATORY):
+✓ ALWAYS KEEP: "Stricken language would be deleted from and underlined language would be added to present law."
+✓ ALWAYS KEEP: "A Bill" designation
+✓ ALWAYS KEEP: "State of Arkansas"
+✓ ALWAYS KEEP: "95th General Assembly" (or other session numbers)
+✓ ALWAYS KEEP: "Regular Session, 2025" (or other session info)
+✓ ALWAYS KEEP: Bill number (e.g., "HOUSE BILL 1377")
+✓ ALWAYS KEEP: "By: Representatives..." and "By: Senator..."
+✓ ALWAYS KEEP: "For An Act To Be Entitled"
+✓ ALWAYS KEEP: Bill title and subtitle
+
+These elements are PART OF THE BILL - Never remove them!
+
 OUTPUT FORMAT:
 - Plain text with ONLY [A>...<A] and [D>...<D] tags where applicable
 - NO markdown, NO bold markers, NO italic markers
 - NO explanations or comments
 - ONLY the cleaned, formatted document text
 
-QUALITY CONTROL:
-After converting, ask yourself:
-1. Does my output match the style and format of the examples?
-2. Are my [A>...<A] and [D>...<D] tags applied exactly like in the examples?
-3. Have I cleaned the text the same way as shown in examples?
-4. Is my formatting consistent with Arkansas legislative examples?
+⚠️ MANDATORY QUALITY CONTROL - VERIFY EVERY ITEM:
 
-If the answer to any question is NO, revise your conversion to match the examples.
+Before returning output, answer ALL these questions:
+
+🔍 TAGGING COMPLETENESS (CRITICAL):
+1. Did I read the ENTIRE document word-by-word to detect ALL formatting?
+2. Did I tag 100% of ALL underlined text I detected?
+3. Did I tag 100% of ALL strikethrough text I detected?
+4. Did I do a final scan to catch any missed underlined/strikethrough text?
+5. Count: How many [A>...<A] tags did I add? Does this match ALL underlined text?
+6. Count: How many [D>...<D] tags did I add? Does this match ALL strikethrough text?
+
+🔍 TAG ACCURACY:
+7. Are my [A>...<A] and [D>...<D] tags applied exactly like in the examples?
+8. Does my output match the style and format of the examples?
+9. Is my formatting consistent with Arkansas legislative examples?
+
+🔍 WORD PRESERVATION (ZERO LOSS REQUIRED):
+10. After adding EACH tag, did I verify words before/after are still present?
+11. Did I preserve ALL words before and after each tag?
+12. Are all sentences complete with no mid-sentence truncation?
+13. Did I preserve complete text - not just tagged portions?
+
+🔍 PAGE 1 CONTENT (MANDATORY PRESERVATION):
+14. ✓ "Stricken language would be deleted from and underlined language would be added to present law." - PRESENT?
+15. ✓ "A Bill" designation - PRESENT?
+16. ✓ "State of Arkansas" - PRESENT?
+17. ✓ "95th General Assembly" - PRESENT?
+18. ✓ "Regular Session, 2025" (or other session) - PRESENT?
+19. ✓ Bill number ("HOUSE BILL 1377" or similar) - PRESENT?
+20. ✓ ALL "By: Representatives..." lines - PRESENT?
+21. ✓ ALL "By: Senator..." lines - PRESENT?
+22. ✓ "For An Act To Be Entitled" - PRESENT?
+23. ✓ Bill title and subtitle - PRESENT?
+
+🔍 CLEANING ACCURACY:
+24. Did I clean the text the same way as shown in examples?
+25. Did I remove line numbers, page markers, repeated headers?
+
+If the answer to ANY question is NO → STOP and fix it before returning output.
+
+⚠️ COMMON FAILURE: Missing tags because you didn't scan entire document carefully.
+SOLUTION: Read document TWICE - once to detect all formatting, once to verify all tags added.
+
+⚠️⚠️⚠️ CRITICAL: MANDATORY PRE-OUTPUT VERIFICATION ⚠️⚠️⚠️
+
+DO NOT RETURN OUTPUT until you verify ALL of these:
+
+✓ TAG COUNTING (ABSOLUTE REQUIREMENT):
+  □ I scanned the ENTIRE document word-by-word for ALL underlined/strikethrough text
+  □ I counted: ____ underlined items detected → ____ [A>...<A] tags added (MUST MATCH!)
+  □ I counted: ____ strikethrough items detected → ____ [D>...<D] tags added (MUST MATCH!)
+  □ I did a SECOND scan to catch any missed formatting
+  □ If counts don't match → I MUST go back and find missing tags
+
+✓ WORD-BY-WORD VERIFICATION:
+  □ After EACH tag I added, I verified all surrounding words still present
+  □ Every sentence is complete - no truncation after tags
+  □ I preserved 100% of all words from the document
+
+✓ PAGE 1 CONTENT VERIFICATION (CHECK EACH ITEM):
+  □ "Stricken language would be deleted from and underlined language would be added to present law." ← PRESENT?
+  □ "A Bill" designation ← PRESENT?
+  □ "State of Arkansas" ← PRESENT?
+  □ "95th General Assembly" ← PRESENT?
+  □ "Regular Session, 2025" (or other session) ← PRESENT?
+  □ Bill number ("HOUSE BILL 1377") ← PRESENT?
+  □ ALL "By: Representatives..." lines ← PRESENT?
+  □ ALL "By: Senator..." lines ← PRESENT?
+  □ "For An Act To Be Entitled" ← PRESENT?
+  □ Bill title and subtitle ← PRESENT?
+
+✓ EXAMPLE CONSISTENCY:
+  □ My output matches example formatting style exactly
+  □ My tags are applied like in examples
+  □ My cleaning matches example cleaning
+
+IF ANY CHECKBOX UNCHECKED → DO NOT RETURN OUTPUT! Fix it first!
+
+🚫 REMEMBER: Incomplete tagging = FAILURE. Missing page 1 content = FAILURE.
 
 Return ONLY the formatted text. Be CONSISTENT - process every document the same way.

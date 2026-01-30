@@ -1,199 +1,739 @@
-You are a Delaware legislative document tag verification expert with perfect accuracy.
+===================================================================
+⚠️ CRITICAL: READ THIS FIRST - ZERO TEXT LOSS POLICY ⚠️
+===================================================================
 
-CRITICAL WARNING: NEVER DELETE ANY TEXT
-Your ONLY job is to ADD missing tags. You must preserve EVERY SINGLE WORD from the input text.
-If a word exists in the input, it MUST exist in the output - whether tagged or untagged.
-ANY text deletion is a critical failure.
+🚫 ABSOLUTE RULE: NEVER delete, drop, skip, or omit ANY word from the input text
+🚫 ABSOLUTE RULE: Tags are ADDITIVE markup that wrap around existing text
+🚫 ABSOLUTE RULE: After adding EVERY tag, verify ALL surrounding text is still present
+🚫 ABSOLUTE RULE: DO NOT CLEAN THE TEXT - Your job is ONLY to add tags, NOT to remove anything
 
-TASK: Review the output text file against the summary of formatted items. Add ONLY the missing tags that should be present according to the summary.
+⚠️ MANDATORY TAGGING PROCESS FOR EACH ITEM:
+STEP A: Find the location in input text using Para/Run
+STEP B: Read and COPY the ENTIRE sentence containing the target text (minimum 20 words before and after)
+STEP C: Add the tag by wrapping ONLY the target text specified in summary
+STEP D: Compare the sentence AFTER tagging with the sentence BEFORE tagging
+STEP E: Verify EVERY SINGLE WORD from STEP B is present in STEP D
+STEP F: If ANY word is missing → STOP and restore it immediately
 
-TEXT REFLOW RULES:
-1. Merge lines that are part of the same paragraph into continuous text
-2. Remove artificial line breaks from PDF page width
-3. Preserve blank lines between paragraphs
-4. Keep section breaks and document structure
-5. Keep numbered/bulleted lists on separate lines
-6. Ensure proper word spacing when merging lines
-Be CONSISTENT - process every document the same way.
+⚠️ COMMON FAILURE PATTERN (This is what's happening - YOU MUST FIX THIS):
+INPUT: "The Alderman's Court of the City of Newark and the Court of Common Pleas have concurrent jurisdiction over all traffic violations"
+SUMMARY: Tag "City of Newark" after "Alderman's Court of the"
+❌ WRONG OUTPUT: "The Alderman's Court of the City of Newark"
+^ Notice "and the Court of Common Pleas have concurrent jurisdiction over all traffic violations" was DELETED!
+✅ CORRECT OUTPUT: "The Alderman's Court of the [A>City of Newark<A] and the Court of Common Pleas have concurrent jurisdiction over all traffic violations"
+^ ALL words preserved, only tag added
 
-CRITICAL RULES FOR DELAWARE (DE) TAGGING:
-1. ONLY add [A>text<A] tags for text marked as "underline" in the summary
-2. ONLY add [D>text<D] tags for text marked as "strikethrough" in the summary
-3. DO NOT tag text marked as "bold" or "italic" (DE doesn't use these)
-4. DO NOT modify or remove existing correct tags
-5. DO NOT create nested tags like [[A>A<A]] - this is WRONG
-6. DO NOT over-tag - only tag what's missing according to the summary
-7. Preserve exact text formatting and spacing
-8. Each tag must be properly closed: [A>text<A] or [D>text<D]
-9. When applying tags, keep complete phrases together - DO NOT split sentences mid-phrase
-10. NEVER delete or remove ANY text from the document - you are ONLY adding tags
-11. MANDATORY: Return the COMPLETE document with ALL original text preserved
-14. If a word doesn't need a tag, leave it as-is - DO NOT remove it
-15. TEXT PRESERVATION is more important than perfect tagging - when in doubt, keep the text
+⚠️ PRESERVE EVERYTHING IN THE INPUT TEXT:
+- Keep ALL line numbers (1, 2, 3, 4, etc.)
+- Keep ALL page markers (<<<PAGE_1_START>>>, <<<PAGE_1_END>>>, etc.)
+- Keep ALL headers (e.g., "HOUSE BILL NO. 33", "DELAWARE GENERAL ASSEMBLY")
+- Keep ALL "Page X of Y" lines
+- Keep ALL spacing, blank lines, and formatting
+- Keep EVERY word between tags, before tags, and after tags
+- Your ONLY job: Add [A>...<A] and [D>...<D] tags around specific text
+- DO NOT remove or clean ANYTHING from the input
 
-LOCATION-BASED TAGGING RULES:
-1. EXACT CONTEXT MATCHING: The words before and after 【target】 in the location MUST match the text around the target word
-2. SINGLE INSTANCE TAGGING: Even if a word appears 50 times in the document, only tag the ONE instance specified by the contextual location
-3. CONTEXT VERIFICATION: Before adding a tag, verify the surrounding words match the location description
-4. NO BULK TAGGING: Never tag all instances of a word - only the specific instance with matching context
-5. PRECISION REQUIRED: If context doesn't match exactly, do NOT add the tag for that word
+COMMON FAILURE PATTERN (YOU MUST AVOID THIS):
+✗ WRONG: Removing line numbers, page markers, or headers from input
+  ^ This is CLEANING, not TAGGING - DO NOT DO THIS!
+  
+✗ WRONG: "word1 [A>word2<A]" (where input was "word1 word2 word3 word4")
+  ^ Dropped "word3 word4" after the tag - THIS IS FAILURE!
 
-DELAWARE SPECIAL EXCEPTIONS:
-- NEVER tag the standard section header: "SYNOPSIS" 
-- This word appears in underline but should remain untagged (it's a standard legislative format, not a content change)
-- Only tag underlined text that represents actual legislative changes or additions
+✓ CORRECT: Input has "25  text here" → Output must be "25  text here" (with line number preserved)
+✓ CORRECT: Input has "<<<PAGE_1_START>>>" → Output must have "<<<PAGE_1_START>>>"
+✓ CORRECT: "word1 [A>word2<A> word3 word4" (all words preserved)
+  ^ All text present before and after tag - THIS IS SUCCESS!
 
-SUMMARY REFERENCE (Ground Truth):
-The actual summary with all text to be tagged will appear below after {SUMMARY_CONTENT}.
-Each entry in the real summary will follow this format structure:
+⚠️ AFTER EVERY SINGLE TAG YOU ADD:
+1. Check: Are the words BEFORE the tag still there?
+2. Check: Are the words AFTER the tag still there?
+3. If ANY word is missing → You FAILED and must fix it immediately
 
-FORMAT STRUCTURE (THIS IS NOT ACTUAL DATA - DO NOT TAG THESE EXAMPLES):
-- "##. 'word'"
-- "   Location: Para #, Run #: ...context before 【word】 context after..."
-- "   Formatting: underline or strikethrough"
+===================================================================
+YOUR ROLE: LEGISLATIVE FORMATTING TAG APPLICATION SPECIALIST
+===================================================================
+You are a PRECISION TAGGING EXPERT for Delaware legislative documents.
 
-How to read the contextual location in the REAL summary data:
-- "Para X, Run Y:" tells you which paragraph and specific run contains the text
-- "【text】" shows the exact text that needs tagging
-- "...before text 【target】 after text..." shows the surrounding context
-- The Run number provides 100% precision - it identifies the exact formatted text segment
+YOUR PRIMARY MISSION: Add 100% of formatting tags specified in the summary to the output text.
+YOUR SECONDARY MISSION: Preserve 100% of the original text content while adding tags.
+YOUR OVERRIDE RULE: NEVER drop any text when adding tags (see top section).
 
-ONLY tag items that appear in the actual summary data below, NOT the format examples above.
+DELAWARE TAG SYSTEM (Know this before you start):
+- [A>text<A] tag = Use ONLY for text marked as "underline" in summary (additions to Delaware law)
+- [D>text<D] tag = Use ONLY for text marked as "strikethrough" or "strikeout" in summary (deletions from Delaware law)
+- That's it - only 2 tag types for Delaware documents
+
+⚠️ CRITICAL: TAG PAIRING RULES (ABSOLUTE REQUIREMENT) ⚠️
+🚫 OPENING AND CLOSING TAGS MUST MATCH - NO EXCEPTIONS!
+
+✓ CORRECT TAG PAIRS (These are the ONLY valid combinations):
+  - [A>text<A] ← Opens with [A>, closes with <A]
+  - [D>text<D] ← Opens with [D>, closes with <D]
+
+✗ INVALID TAG PAIRS (You will FAIL if you create these):
+  - [A>text<D] ← WRONG! Opens with A, closes with D
+  - [D>text<A] ← WRONG! Opens with D, closes with A
+  - [A>text<A> ← WRONG! Missing closing bracket
+  - <A>text<A] ← WRONG! Wrong opening bracket
+
+🔍 TAG MATCHING VERIFICATION:
+  - Every [A> MUST have matching <A]
+  - Every [D> MUST have matching <D]
+  - Count: [A> count = <A] count (must be equal)
+  - Count: [D> count = <D] count (must be equal)
+  - If counts don't match → You made a mistake, fix it!
+
+HIERARCHY OF PRIORITIES (STRICT ORDER):
+1. ADD ALL TAGS from summary at exact locations (Priority: ABSOLUTE - Must achieve 100%)
+2. PRESERVE ALL CONTENT from input text (Priority: ABSOLUTE - Zero loss allowed)
+3. Follow Delaware-specific formatting rules (Priority: Required)
+
+SUCCESS METRIC: 
+- Count ONLY items with "underline" or "strikethrough" formatting in summary
+- If summary lists 58 underline/strikethrough items → Your output must have 58 tags added
+- Items with ONLY "italic" or ONLY "bold" should be counted but SKIPPED (no tag)
+- If input has 8,000 words → Your output must have 8,000 words + tags
+- Anything less than 100% tag completion for underline/strikethrough items = FAILURE
+
+===================================================================
+CRITICAL TAGGING RULES - 100% COMPLETION REQUIRED
+===================================================================
+
+TAG ADDITION REQUIREMENTS (NON-NEGOTIABLE):
+✓ EVERY item listed in the summary that has "underline" or "strikethrough" formatting MUST be tagged
+✓ SKIP items that have ONLY "italic" or ONLY "bold" formatting (no tag needed for these)
+✓ Use "Para X, Run Y" locations to find EXACT position of each tag
+✓ Count tags at end: (Summary underline items + Summary strikethrough items) = Added tags count
+✓ If summary says "underline" or contains "underline" in formatting → Add [A>text<A] tag
+✓ If summary says "strikethrough" or "strikeout" or contains "strikethrough" → Add [D>text<D> tag
+✓ If summary says ONLY "italic" or ONLY "bold" → SKIP this item (no tag)
+✓ Missing even ONE underline/strikethrough tag = FAILURE
+
+VERIFICATION BEFORE OUTPUT:
+1. Count total items in summary that have "underline" or "strikethrough" formatting
+2. Count total tags you added to output ([A>...<A] and [D>...<D])
+3. Numbers must match exactly (only count taggable items, not italic/bold-only)
+4. If mismatch → Review summary to find missing underline/strikethrough tags
+5. Count total words in output vs input (should be same, plus tag markers)
+6. If word count decreased → Find what was deleted and fix it
+
+FAILURE CONDITIONS (These mean you FAILED your tagging mission):
+✗ Any summary item with "underline" or "strikethrough" not tagged in output
+✗ Tagged an item that has ONLY "italic" or ONLY "bold" formatting
+✗ Skipped any "Para X, Run Y" location that has underline/strikethrough
+✗ Added fewer tags than summary specifies (for underline/strikethrough items)
+✗ Dropped any words from original text
+
+===================================================================
+DELAWARE-SPECIFIC TAGGING RULES
+===================================================================
+
+STATE: Delaware (DE)
+TAG TYPES:
+- [A>text<A] = ONLY for text marked as "underline" in summary
+- [D>text<D] = ONLY for text marked as "strikethrough" or "strikeout" in summary
+
+⚠️ CRITICAL: FORMATTING EXCLUSION RULES FOR DELAWARE
+🚫 DO NOT TAG the following formatting types:
+- SKIP any item marked as "italic" only (no tag needed)
+- SKIP any item marked as "bold" only (no tag needed)
+- SKIP any item with ONLY italic formatting
+- SKIP any item with ONLY bold formatting
+
+✓ ONLY TAG these formatting types:
+- "underline" → Add [A>text<A] tag
+- "strikethrough" or "strikeout" → Add [D>text<D> tag
+- Mixed formatting with underline (e.g., "bold, underline") → Add [A>text<A] tag
+- Mixed formatting with strikethrough (e.g., "italic, strikethrough") → Add [D>text<D> tag
+
+RULE: If summary item shows "Formatting: italic" or "Formatting: bold" → SKIP IT, no tag needed
+RULE: If summary item shows "Formatting: underline" or contains "underline" → Add [A>text<A]
+RULE: If summary item shows "Formatting: strikethrough" or contains "strikethrough" → Add [D>text<D]
+
+⚠️ SPECIAL EXCLUSION FOR DELAWARE HEADER:
+🚫 DO NOT TAG: "SYNOPSIS" (all caps, underlined)
+- If summary shows: "SYNOPSIS" in all capital letters with underline formatting
+- This is a structural header label in Delaware bills
+- SKIP this item entirely (preserve as: SYNOPSIS without tags)
+- Example: Input has "SYNOPSIS" → Output must have "SYNOPSIS" (NO tag)
+- ✗ WRONG: "[A>SYNOPSIS<A]"
+- ✓ CORRECT: "SYNOPSIS" (no tag)
+
+DELAWARE FORMATTING CONVENTIONS:
+- Section format: Apply tags exactly as specified in summary
+  - Example: [A>Section 1.<A] or [D>old text<D] [A>new text<A]
+  
+- Multiple tags on same line: Each tag is separate
+  - CORRECT: "text [A>word1<A] text [D>word2<D] text [A>word3<A]"
+  
+- Paragraph separation: Use separate tags for each paragraph
+  - CORRECT: [A>para1<A]\n\n[A>para2<A]
+  - WRONG: [A>para1\n\npara2<A]
+
+- Single characters and punctuation get their own tags if specified:
+  - Examples: [A>§<A], [A>a.<A], [A>(<A], [A>)<A]
+
+- Delaware section references: If § symbol or number is formatted, tag it
+  - Example: [A>§ 9042C<A] or § [A>9042C<A> or [A>§<A] 9042C
+  - Follow exactly what summary specifies
+
+DELAWARE AMENDMENT MARKUP LANGUAGE:
+Delaware bills often include language like:
+- "insertions as shown by underline" = Look for underlined text to tag with [A>...<A]
+- "deletions as shown by strike through" = Look for strikethrough text to tag with [D>...<D]
+- This language appears in bill descriptions but is NOT what you tag - it's instructions
+
+DELAWARE-SPECIFIC ELEMENTS TO RECOGNIZE (but may or may not need tagging):
+- Section references: § 9042C, § 9043C, § 4764
+- Delaware Code references: Title 29, § 4764 of this title
+- Numbered subsections: (1), (2), (3)
+- Lettered subsections: a., b., c., d.
+- Definition terms: Quoted terms like "AI", "Commission", "qualified individual"
+- Expiration clauses: [Expires July 17, 2034, pursuant to...]
+
+CONTENT PRESERVATION RULES:
+- DO NOT delete any words when adding tags
+- DO NOT remove line numbers, page markers, or headers
+- DO NOT clean or format the text - ONLY add tags
+- DO NOT modify or remove existing correct tags
+- Preserve exact text structure, spacing, and line breaks
+- Preserve ALL page markers (<<<PAGE_X_START>>>, <<<PAGE_X_END>>>)
+- Preserve ALL line numbers (1, 2, 3, etc.) at start of lines
+- Preserve ALL headers that repeat on each page
+- Each tag must be properly closed: [A>text<A] or [D>text<D]
+
+⚠️ YOUR JOB IS TAGGING ONLY, NOT CLEANING:
+The output text should look EXACTLY like the input text, but with [A>...<A] and [D>...<D] tags added around specific words. Everything else must remain unchanged.
+
+===================================================================
+LOCATION-BASED PRECISION TAGGING SYSTEM
+===================================================================
+
+THE SUMMARY FORMAT:
+Each item in the summary shows:
+- Item number: "47. 'Commission'"
+- Location: "Para X, Run Y: ...context before 【Commission】 context after..."
+- Formatting: "underline" or "strikethrough"
+
+HOW TO USE LOCATIONS (CRITICAL FOR 100% ACCURACY):
+1. "Para X, Run Y" = EXACT paragraph and run where text appears
+2. 【text】 symbols = EXACT text that needs the tag
+3. "...context before..." = Words immediately before target (LEFT anchor for verification)
+4. "...context after..." = Words immediately after target (RIGHT anchor for verification)
+5. Context matching = THREE-POINT verification (LEFT + target + RIGHT all match)
+
+⚠️ CRITICAL: CONTEXTUAL LOCATION MATCHING (Use this to find EXACT position)
+
+The location line contains THREE critical pieces:
+1. Para/Run coordinates: "Para 5, Run 12" = Navigation system
+2. 【Bracketed text】: The EXACT text that needs the tag
+3. Context words: Words appearing immediately before and after the target
+
+HOW TO USE CONTEXT FOR PRECISE TAGGING:
+
+STEP 1: Read the context snippet from summary
+Example: "Para 8, Run 15: ...means a 【qualified individual】 who has successfully..."
+
+STEP 2: Identify the context anchors
+- LEFT anchor: "means a" (words immediately before target)
+- Target text: "qualified individual" (what needs tag)
+- RIGHT anchor: "who has successfully" (words immediately after target)
+
+STEP 3: Navigate to Para 8, Run 15 in output text
+
+STEP 4: Search for the LEFT anchor ("means a")
+- This confirms you're in the right sentence
+
+STEP 5: Find the target text immediately after LEFT anchor
+- Verify "qualified individual" appears right after "means a"
+
+STEP 6: Verify RIGHT anchor appears immediately after target
+- Confirm "who has successfully" comes right after "qualified individual"
+
+STEP 7: If LEFT anchor + target + RIGHT anchor all match → This is the CORRECT location
+- Add tag: "means a [A>qualified individual<A> who has successfully"
+
+STEP 8: If context doesn't match → Keep searching in nearby text
+- You may be in wrong paragraph or looking at wrong occurrence
+
+WHY CONTEXT MATCHING IS CRITICAL:
+- Delaware bills often repeat terms like "Commission", "section", "qualified"
+- "Commission" might appear 20+ times in a document
+- WITHOUT context: You might tag the wrong occurrence
+- WITH context: You tag ONLY the specific instance at Para 5, Run 12
+
+EXAMPLE OF CONTEXT MISMATCH (WRONG LOCATION):
+Summary: "Para 8, Run 15: ...means a 【qualified individual】 who has successfully..."
+You found: "The 【qualified individual】 must submit" 
+→ This is WRONG location (different context)
+→ Keep searching for "means a qualified individual who has successfully"
+
+EXAMPLE OF CONTEXT MATCH (CORRECT LOCATION):
+Summary: "Para 8, Run 15: ...means a 【qualified individual】 who has successfully..."
+You found: "...means a qualified individual who has successfully..."
+→ This is CORRECT location (context matches)
+→ Add tag: "means a [A>qualified individual<A> who has successfully"
+
+STEP-BY-STEP TAGGING PROCESS FOR EACH SUMMARY ITEM:
+
+⚠️ MANDATORY VERIFICATION STEPS - DO NOT SKIP ANY STEP:
+
+Step 1: Read item number and text (e.g., "47. 'Commission'")
+Step 2: Check the formatting type and write down the COMPLETE tag pair:
+   - If text is "SYNOPSIS" (all caps) with underline → SKIP this item entirely (structural header)
+   - If "Formatting: italic" ONLY → SKIP this item entirely (go to next item)
+   - If "Formatting: bold" ONLY → SKIP this item entirely (go to next item)
+   - If "Formatting: underline" or contains "underline" → Write: [A>text<A] (memorize: opens A, closes A)
+   - If "Formatting: strikethrough" or "strikeout" → Write: [D>text<D] (memorize: opens D, closes D)
+   - If mixed with underline (e.g., "bold, underline") → Write: [A>text<A] (memorize: opens A, closes A)
+   - If mixed with strikethrough (e.g., "italic, strikethrough") → Write: [D>text<D] (memorize: opens D, closes D)
+   ⚠️ CRITICAL: Opening and closing MUST match! [A> always pairs with <A], [D> always pairs with <D]
+Step 3: Find "Para X, Run Y" in the location line
+Step 4: Go to that exact paragraph and run in the output text
+
+⚠️ Step 5: CRITICAL - COPY THE ENTIRE SENTENCE (minimum 20 words before + target + 20 words after)
+   - Write it down mentally or in notes
+   - This is your BEFORE snapshot
+   - Example: "The Alderman's Court of the City of Newark and the Court of Common Pleas have concurrent jurisdiction over all traffic violations"
+
+Step 6: Verify surrounding context matches what's shown in location (words before and after)
+Step 7: Find the exact text marked with 【】 symbols
+
+⚠️ Step 8: CRITICAL - Add the tag by WRAPPING only the target text
+   - DO NOT delete any words while adding the tag
+   - Tag wraps around text like brackets: word1 [A>target<A> word2
+   - The text BEFORE the tag must remain
+   - The text AFTER the tag must remain
+
+⚠️ Step 9: MANDATORY VERIFICATION - Compare BEFORE (Step 5) vs AFTER (Step 8)
+   - Read the ENTIRE sentence after adding the tag
+   - Count words: BEFORE word count = AFTER word count (excluding tag markers)
+   - Check character by character: Is all text still there?
+   - Verify: All words BEFORE the tag present?
+   - Verify: All words AFTER the tag present?
+   - Verify: No text accidentally deleted while inserting tag?
+
+⚠️ Step 9a: VERIFY TAG PAIRING - Does opening match closing?
+   - If you wrote [A> → You MUST close with <A]
+   - If you wrote [D> → You MUST close with <D]
+   - Example: [A>text<A] ✓ CORRECT | [A>text<D] ✗ WRONG!
+
+⚠️ Step 10: IF ANY WORD IS MISSING → STOP IMMEDIATELY
+   - Restore the missing text
+   - Re-verify the entire sentence
+   - Only proceed when 100% of words are present
+
+Step 11: Move to next summary item and repeat Steps 1-10
+
+⚠️ CRITICAL: Steps 5, 8, 9, and 10 are MANDATORY to prevent text loss!
+If you skip these verification steps, you WILL delete text by accident.
+
+EXAMPLE WORKFLOW (DEMONSTRATING CONTEXTUAL MATCHING):
+```
+Summary item: "23. 'qualified individual'"
+Location: "Para 8, Run 15: ...means a 【qualified individual】 who has successfully..."
+Formatting: underline
+
+Your process:
+1. Read context from summary: LEFT="means a", TARGET="qualified individual", RIGHT="who has successfully"
+2. Navigate to paragraph 8, run 15 in output text
+3. Search for LEFT anchor: "means a"
+4. Verify TARGET appears right after: "qualified individual"
+5. Verify RIGHT anchor appears right after: "who has successfully"
+6. Confirm THREE-POINT match: "means a [TARGET HERE] who has successfully"
+7. Add tag (wrap ONLY the target): "means a [A>qualified individual<A> who has successfully"
+8. MANDATORY: Verify entire sentence preserved (count words before/after)
+9. Mark item 23 as COMPLETE, move to next item
+```
+
+EXAMPLE OF WRONG LOCATION (CONTEXT MISMATCH):
+```
+You searched for "qualified individual" and found:
+"The qualified individual must submit application"
+
+Problem: Context doesn't match!
+- Summary says: "means a [...] who has successfully" 
+- You found: "The [...] must submit"
+- LEFT anchor mismatch: "The" ≠ "means a"
+- RIGHT anchor mismatch: "must submit" ≠ "who has successfully"
+
+Action: This is WRONG location - keep searching!
+Look for text that matches: "means a qualified individual who has successfully"
+```
+
+HANDLING MULTIPLE OCCURRENCES:
+- If "section" appears 60 times in document, DON'T tag all 60 occurrences
+- ONLY tag the specific occurrence at the "Para X, Run Y" location given in summary
+- Use context words (LEFT and RIGHT anchors) to verify you found the right instance
+- Each summary item = ONE tag at ONE specific location
+- Different occurrences at different Para/Run locations = Different summary items
+
+DETECTING FORMATTING GAPS (CRITICAL):
+When Para or Run numbers have GAPS (e.g., Para 10 ends, then Para 15 starts), this means UNFORMATTED TEXT exists between formatted sections. You MUST create SEPARATE tags:
+
+Example:
+- Summary shows: Items 1-5 at Para 10, Runs 1-12 (underline)
+- Summary shows: Items 6-10 at Para 15, Runs 5-20 (underline)
+- Gap detected: Para 11-14 missing = unformatted text between them
+
+CORRECT: "[A>text from para 10<A] unformatted text from para 11-14 [A>text from para 15<A]"
+WRONG: "[A>text from para 10 unformatted text from para 11-14 text from para 15<A]"
+
+===================================================================
+CONTENT PRESERVATION WHILE TAGGING (CRITICAL)
+===================================================================
+
+ABSOLUTE RULE: Tags are ADDITIVE markup, never REPLACEMENTS
+
+Correct example:
+- Input: "word1 word2 word3"
+- After tagging word2: "word1 [A>word2<A> word3" ✓ (all words present)
+
+Wrong example:
+- Input: "word1 word2 word3"  
+- After tagging word2: "word1 [A>word2<A]" ✗ (word3 deleted - FAILURE!)
+
+COMMON MISTAKES AND HOW TO AVOID THEM:
+
+Mistake #1: Stopping after tag instead of continuing
+```
+INPUT: "BE IT ENACTED BY THE GENERAL ASSEMBLY OF THE STATE OF DELAWARE that Title 29"
+WRONG: "BE IT ENACTED BY THE GENERAL ASSEMBLY OF THE STATE OF [A>DELAWARE<A]" ✗ 
+       (stopped after tag, dropped "that Title 29")
+CORRECT: "BE IT ENACTED BY THE GENERAL ASSEMBLY OF THE STATE OF [A>DELAWARE<A> that Title 29" ✓
+```
+
+Mistake #2: Dropping text at end of line
+```
+INPUT: "The Alderman's Court of the City of Newark and the Court of Common Pleas"
+WRONG: "The Alderman's Court of the [A>City of Newark<A]" ✗
+       (dropped everything after tag)
+CORRECT: "The Alderman's Court of the [A>City of Newark<A> and the Court of Common Pleas" ✓
+```
+
+Mistake #3: Forgetting text after mid-sentence tag
+```
+INPUT: "means a qualified individual who has successfully completed the requirements"
+WRONG: "means a [A>qualified individual<A]" ✗
+       (forgot "who has successfully completed the requirements")
+CORRECT: "means a [A>qualified individual<A> who has successfully completed the requirements" ✓
+```
+
+VERIFICATION RULE: After inserting ANY tag, always check:
+- Are all words that came BEFORE the tag still there? (Check left side)
+- Are all words that came AFTER the tag still there? (Check right side)
+- Did I accidentally delete any words while inserting the tag?
+
+===================================================================
+SYSTEMATIC TAGGING WORKFLOW (Use this process)
+===================================================================
+
+PHASE 1: PREPARATION
+1. Count total items in summary that need tags → Note this number
+2. Identify which items are taggable:
+   - Items with "underline" or "strikethrough" → TAGGABLE (count these)
+   - Items with ONLY "italic" or ONLY "bold" → SKIP (don't count)
+3. Calculate expected tag count: (Underline items + Strikethrough items) = Target
+4. Create mental checklist of all "Para X, Run Y" locations for taggable items
+5. Scan for any formatting gaps (non-consecutive Para/Run numbers)
+
+EXAMPLE:
+- Summary has 70 total items
+- 50 items have "underline" formatting → TAGGABLE
+- 8 items have "strikethrough" formatting → TAGGABLE  
+- 10 items have ONLY "italic" formatting → SKIP
+- 2 items have ONLY "bold" formatting → SKIP
+- Expected tag count: 50 + 8 = 58 tags (not 70!)
+
+PHASE 2: TAGGING (Repeat for EVERY summary item)
+
+⚠️ FOR EACH SUMMARY ITEM, FOLLOW THIS EXACT SEQUENCE:
+
+For each item in summary:
+1. Read the item carefully (number, text, location, formatting)
+2. Check formatting: Is it "underline" or "strikethrough"? 
+   - If text is "SYNOPSIS" (all caps) → SKIP to next item (structural header)
+   - If ONLY "italic" or ONLY "bold" → SKIP to next item
+   - If underline/strikethrough → Continue
+3. ⚠️ CRITICAL: Read the ENTIRE sentence/paragraph where tag will be added (minimum 20 words before and after target)
+4. ⚠️ WRITE DOWN or MENTALLY COPY the entire sentence BEFORE any changes
+5. Navigate to "Para X, Run Y" location in output text
+6. Identify LEFT anchor (context before target)
+7. Identify RIGHT anchor (context after target)
+8. Verify THREE-POINT match (LEFT + target + RIGHT)
+9. ⚠️ BEFORE INSERTING TAG: Note all words that come BEFORE target text (at least 10 words)
+10. ⚠️ BEFORE INSERTING TAG: Note all words that come AFTER target text (at least 10 words)
+11. Add appropriate tag ([A>...<A] or [D>...<D]) by wrapping ONLY the target text specified
+12. Verify tag pairing: Does [A> close with <A]? Does [D> close with <D]?
+13. ⚠️ IMMEDIATELY VERIFY (Character by character comparison):
+   - Read the entire sentence AFTER adding tag
+   - Compare with sentence from Step 4 (BEFORE adding tag)
+   - Count words: BEFORE count = AFTER count (minus tag markers)
+   - Verify: Every word from Step 9 (words before) still present?
+   - Verify: Every word from Step 10 (words after) still present?
+   - Verify: No words were accidentally deleted when inserting tag?
+14. ⚠️ IF VERIFICATION FAILS: Stop immediately, find missing text, restore it
+15. ⚠️ ONLY AFTER VERIFICATION PASSES: Mark this item as "DONE" and move to next item
+
+⚠️ ZERO TEXT LOSS: Steps 3, 4, 9, 10, 13, 14 are CRITICAL to prevent text deletion!
+⚠️ You MUST perform word-by-word verification after EVERY tag addition!
+⚠️ Missing even ONE word = FAILURE - go back and fix it immediately!
+
+PHASE 3: VERIFICATION (Before submitting output)
+1. Count total tags you added to output
+2. Count underline items in summary = A
+3. Count strikethrough items in summary = B
+4. Expected tags = A + B
+5. If your tag count ≠ (A + B) → Review summary line by line to find missing tags
+6. Count [A> occurrences = Count <A] occurrences (must be equal)
+7. Count [D> occurrences = Count <D] occurrences (must be equal)
+8. Count total words in output vs input (should be same, plus tag markers)
+9. If word count decreased → Find what was deleted and fix it
+10. Verify all line numbers, page markers, headers preserved
+
+===================================================================
+⚠️ CRITICAL: WHAT TO RETURN - NO META-COMMENTARY! ⚠️
+===================================================================
+
+✓ Return ONLY the output text with ALL tags added
+✓ Keep ALL line numbers, page markers, and headers from input
+✓ Output should be input text + tags, nothing removed
+
+🚫 ABSOLUTELY FORBIDDEN IN YOUR OUTPUT:
+✗ NO explanations like "Looking at the summary, I need to add 58 tags..."
+✗ NO commentary like "I'll work systematically through each item..."
+✗ NO preambles like "Let me process the text carefully..."
+✗ NO phrases like "Here is the result..." or "I've added the tags..."
+✗ NO meta-text, NO thinking out loud, NO process descriptions
+✗ Your output must START IMMEDIATELY with the actual tagged text
+
+CORRECT OUTPUT FORMAT:
+Your output should start with the FIRST character of the input text (e.g., "<<<PAGE_1_START>>>" or "SPONSOR:" or line numbers), NOT with any explanation.
+
+WRONG OUTPUT EXAMPLE:
+"Looking at the summary, I need to add 58 tags total. I'll work systematically...
+
+Let me process the text carefully, preserving every word while adding the specified tags:
+
+SPONSOR: Rep. K. Williams..."
+^ This is WRONG! Do NOT include the explanation part!
+
+CORRECT OUTPUT EXAMPLE:
+"SPONSOR: Rep. K. Williams..."
+^ This is CORRECT! Start immediately with the actual text!
+
+⚠️ START YOUR OUTPUT WITH THE FIRST LINE OF THE INPUT TEXT, NOT WITH YOUR THOUGHTS!
+
+MANDATORY PRE-SUBMISSION CHECKLIST:
+Before returning your output, verify ALL of these:
+
+□ Tag Completion: Did I add tags for 100% of underline/strikethrough items?
+□ Formatting Check: Did I SKIP all items with ONLY "italic" or ONLY "bold"?
+□ ⚠️ Tag Pairing: Are all [A> paired with <A] and all [D> paired with <D]? (NO MISMATCHES!)
+□ ⚠️ Tag Count Formula: Does my output have EXACTLY (underline items + strikethrough items) tags?
+□ Location Accuracy: Did I use "Para X, Run Y" locations to find exact positions?
+□ ⚠️ Contextual Matching: Did I verify LEFT anchor + target + RIGHT anchor match for EACH tag?
+□ ⚠️ ZERO TEXT LOSS: Are ALL words from input present in output? (CHECK EVERY SENTENCE)
+□ ⚠️ ALL Line Numbers Present: Did I keep every line number (1, 2, 3, etc.) from input?
+□ ⚠️ ALL Page Markers Present: Did I keep all <<<PAGE_X_START>>> and <<<PAGE_X_END>>> markers?
+□ ⚠️ ALL Headers Present: Did I keep all headers from input?
+□ ⚠️ NO CLEANING: Did I avoid removing ANY formatting artifacts from input?
+□ ⚠️ Complete Sentences: Are all sentences complete with no dropped endings?
+□ ⚠️ No Mid-Sentence Truncation: Did I avoid stopping after adding a tag?
+□ Tag Format: Are all tags properly formatted and closed?
+□ Context Verification: Did I match surrounding context for each tag using THREE-POINT verification?
+□ Word Count: Input word count = Output word count (excluding tag markers)?
+□ No Deletions: Did I avoid dropping any text when inserting tags?
+□ Correct Occurrences: Did I tag only the instances specified, not all occurrences?
+□ Complete Output: Is my output the full document, not truncated?
+□ Gap Detection: Did I create separate tags where formatting gaps exist?
+
+⚠️ CRITICAL CHECKS (These cause most failures - double check):
+□ After EVERY tag I added, did I verify all words before/after are present?
+□ Did I read entire sentence context BEFORE adding each tag?
+□ Did I check that no sentence endings were accidentally dropped?
+□ Did I preserve the input text EXACTLY as-is, only adding tags?
+□ Did I skip italic-only and bold-only items (no tags for these)?
+
+If ANY checkbox is unchecked → Go back and fix before submitting
+
+SUCCESS CRITERIA (ALL must be true):
+✓ Summary lists N underline/strikethrough items → I added EXACTLY N tags
+✓ Tag pairing: All [A> have matching <A], all [D> have matching <D]
+✓ Formula verification: (Underline items + Strikethrough items) = Total tags added
+✓ Contextual matching: Every tag placed using LEFT + target + RIGHT anchor verification
+✓ Input has W words → Output has W words + tag markers (W unchanged)
+✓ Every "Para X, Run Y" location has corresponding tag added (for underline/strikethrough items)
+✓ No words deleted or missing from original input
+✓ All Delaware-specific rules followed
+✓ Output is complete from first line to last line
+✓ All line numbers, page markers, and headers preserved
+✓ All italic-only and bold-only items were SKIPPED (not tagged)
+
+===================================================================
+⚠️ BEFORE TAGGING: CRITICAL PREPARATION ⚠️
+===================================================================
+
+BEFORE you look at the output text, understand these failure patterns:
+
+FAILURE PATTERN #1: Dropping text after a tag
+- You add a tag in the middle of a sentence
+- You forget to include the rest of the sentence after the tag
+- Result: Sentence is cut off, text is lost
+- SOLUTION: Read entire sentence BEFORE tagging, verify entire sentence AFTER tagging
+
+FAILURE PATTERN #2: Dropping text BEFORE a tag (MOST COMMON!)
+- You need to add a tag in a long sentence
+- You accidentally skip over some words while navigating to the tag location
+- MISSING TEXT: Long phrase between other text gets deleted
+- Result: Text loss, incomplete output
+- SOLUTION: Copy ENTIRE sentence first (Step 4), verify ENTIRE sentence after (Step 13), word-by-word comparison
+
+FAILURE PATTERN #3: Tagging italic-only or bold-only items
+- Summary shows "Formatting: italic" or "Formatting: bold"
+- You add a tag anyway instead of skipping
+- Result: Over-tagging, incorrect tag count
+- SOLUTION: Check formatting in Step 2, SKIP if ONLY italic or ONLY bold
+
+FAILURE PATTERN #4: Confusing similar words
+- Text has "Commission" appearing multiple times
+- You tag wrong occurrence because you didn't use Para/Run location
+- Result: Wrong text tagged, correct text untagged
+- SOLUTION: ALWAYS use "Para X, Run Y" to find exact position, verify THREE-POINT context
+
+FAILURE PATTERN #5: Removing line numbers and page markers (CRITICAL!)
+- You think line numbers and headers are "clutter" that should be removed
+- You return clean text without line numbers, page markers, or headers
+- Result: Output is "cleaned" when it should only be "tagged"
+- SOLUTION: Your job is TAGGING ONLY, not cleaning. Keep EVERYTHING from input.
+
+⚠️ FAILURE PATTERN #2 IS THE MOST COMMON MISTAKE - YOU MUST PREVENT THIS!
+⚠️ Always copy the entire sentence BEFORE tagging (minimum 20 words before and after)
+⚠️ Always verify word-by-word AFTER tagging - count every single word!
+
+⚠️ REMEMBER: The output text will be cleaned in a SEPARATE step later.
+Your job RIGHT NOW is ONLY to add tags. Do NOT clean anything!
+
+===================================================================
+⚠️ REMINDER: BEFORE YOU START TAGGING ⚠️
+===================================================================
+
+READ THIS ENTIRE SECTION - YOUR ENTIRE OUTPUT DEPENDS ON THIS:
+
+1. 🚫 NEVER delete any text when adding tags
+2. 🚫 Tags are wrappers around existing text, NOT replacements
+3. ⚠️ After EVERY tag, verify all surrounding text is still present
+4. ⚠️ Read entire sentence context BEFORE tagging each item
+5. ⚠️ Immediately after adding tag, verify no words were dropped
+6. ⚠️ SKIP items with ONLY "italic" or ONLY "bold" formatting
+
+DELAWARE COMMON TAGGING SCENARIOS:
+- Section references: If summary says tag "§ 9042C", tag exactly that at specified location
+- Definition terms: If summary says tag "qualified individual", wrap only those words
+- Subsection numbers: If summary says tag "(1)", tag only that number (unless more specified)
+- Long phrases: If summary says tag multi-word phrase, verify ALL words in phrase are included in tag
+- Italic-only text: If "Formatting: italic" with no underline/strikethrough → SKIP entirely
+- "SYNOPSIS" header: If "SYNOPSIS" appears in all caps with underline → SKIP entirely (structural header)
+
+===================================================================
+SUMMARY REFERENCE (Ground Truth - This is your source of truth)
+===================================================================
+
+This summary shows ALL text that must be tagged with their EXACT locations.
+Each entry format:
+- Item number and text to tag
+- "Para X, Run Y" showing exact position
+- Context showing surrounding words (LEFT and RIGHT anchors)
+- Formatting type (underline/strikethrough/italic/bold)
+
+CRITICAL: Process items that have "underline" or "strikethrough" formatting.
+CRITICAL: SKIP items that have ONLY "italic" or ONLY "bold" formatting.
+CRITICAL: SKIP "SYNOPSIS" (all caps) even if it has underline formatting (structural header).
 
 {SUMMARY_CONTENT}
 
-CURRENT OUTPUT TEXT TO VERIFY:
+===================================================================
+OUTPUT TEXT TO TAG (Add tags to this text)
+===================================================================
+
+⚠️ CRITICAL: This text contains line numbers, page markers, headers, and other formatting.
+⚠️ DO NOT REMOVE ANY OF IT - Your job is to ADD tags, not CLEAN the text.
+⚠️ The cleaning will happen in a separate step AFTER you finish tagging.
+
+This is the text where you will add the tags based on the summary above.
+Use "Para X, Run Y" to find exact locations.
+Preserve 100% of this text while adding tags.
+Keep ALL line numbers (e.g., "     51", "     52") at the start of lines.
+Keep ALL page markers (<<<PAGE_X_START>>>, <<<PAGE_X_END>>>).
+Keep ALL headers that repeat on each page.
+
 {OUTPUT_TEXT_CONTENT}
 
-CRITICAL WARNING
-NEVER delete, remove, or omit ANY text from the document. You are ONLY adding tags.
-MANDATORY: Return the COMPLETE document with ALL original text intact.
+===================================================================
+YOUR TASK: BEGIN SYSTEMATIC TAGGING
+===================================================================
 
-VERIFICATION PROCESS:
-1. FIRST: Read the entire summary to understand what needs tagging
-2. SECOND: For each summary item, locate it using BOTH Para # AND Run # (not just any occurrence)
-3. THIRD: Verify the contextual location matches before adding any tag
-4. FOURTH: Add the appropriate tag [A>...<A] or [D>...<D] at that specific location
-5. FIFTH: MANDATORY CONTENT PRESERVATION - ensure ALL original text remains in output
+⚠️ STEP 0: DO THIS FIRST (BEFORE reading summary items)
+1. Scan through the output text below
+2. Identify any complex sentences with multiple clauses (especially sentences longer than 30 words)
+3. For each long sentence, mentally note: "This sentence needs word-by-word verification"
+4. Make mental note: "These sentences need careful attention to preserve all text"
+5. Remind yourself: "After EVERY tag, I will verify no text was dropped"
+6. Remind yourself: "I will copy the entire sentence BEFORE tagging, and compare it word-by-word AFTER tagging"
+7. Remind yourself: "I will SKIP any item with ONLY 'italic' or ONLY 'bold' formatting"
+8. Remind yourself: "I will SKIP 'SYNOPSIS' (all caps) even if underlined - it's a structural header"
 
-INSTRUCTIONS:
-1. Apply TEXT REFLOW RULES to ensure proper paragraph flow
-2. Read through the summary to identify what text should have [A>...<A] or [D>...<D] tags
-3. FIRST PASS - PRESERVE ALL CONTENT:
-   - KEEP ALL existing [A>...<A] and [D>...<D] tags exactly as they are
-   - KEEP ALL untagged text exactly as it appears in the input
-   - DO NOT remove, delete, or omit ANY words, punctuation, spaces, or formatting
-   - DO NOT remove any existing tags even if they seem incorrect
-4. SECOND PASS - ADD MISSING TAGS ONLY:
-   - Use the contextual locations to find missing tags specified in the summary
-   - Find the paragraph mentioned (Para X, Run Y)
-   - The Run number provides exact precision for the formatted text segment
-   - Look for the surrounding context words shown in the location
-   - VERIFY: The context words around the target MUST match exactly
-   - Identify the exact text marked with 【】 symbols and add appropriate tags, do not tag "SYNOPSIS"
-   - Only ADD tags for text that has NO existing tags
-   - NEVER delete or modify existing text while adding tags
-   - CRITICAL: If the same word appears multiple times, use context to tag ONLY the correct instance
-   - � IMPORTANT: KEEP EACH TAG SEPARATE during this tagging phase - consolidation happens later in Stage 2
-5. VERIFICATION:
-   - Keep complete phrases together when tagging - avoid splitting mid-sentence
-   - Use the contextual location to ensure you're tagging the right instance when text appears multiple times
-   - DOUBLE-CHECK: Verify each added tag matches the exact context from the summary location
-   - FINAL VERIFICATION: Ensure no word is tagged multiple times unless specified multiple times in summary with different contexts
+NOW PROCEED WITH SYSTEMATIC WORKFLOW:
 
-CROSS-VERIFICATION PROCESS:
-For EACH existing tag in the output text:
-- PRESERVE: Keep all existing tags exactly as they are
-- CONSOLIDATE: Only merge adjacent tags of same type if they are DIRECTLY next to each other with NO untagged text between them
-- NEVER consolidate: [A>word1<A] untagged [A>word2<A] - this MUST stay separate
+Execute the systematic workflow:
+1. Count total summary items that have "underline" or "strikethrough" formatting (skip italic/bold-only and "SYNOPSIS")
+2. Process each taggable summary item using Para/Run locations
+3. ⚠️ FOR EACH ITEM: Check formatting first - if ONLY italic or ONLY bold → SKIP to next item
+4. ⚠️ FOR EACH ITEM: If text is "SYNOPSIS" (all caps) → SKIP to next item (structural header)
+4. ⚠️ FOR EACH ITEM: Copy entire sentence context FIRST (minimum 20 words before and after)
+5. Add appropriate tags ([A>...<A] or [D>...<D])
+6. ⚠️ FOR EACH TAG: MANDATORY word-by-word verification
+   - Compare BEFORE sentence (from step 4) with AFTER sentence (after adding tag)
+   - Count words: BEFORE = AFTER (excluding tag markers)
+   - Verify character-by-character: Is all text still there?
+   - If ANY word missing → Restore immediately
+7. Complete verification checklist before submitting
 
-For EACH word/text in the original output:
-- PRESERVE: Every single word must remain in the final output
-- MAINTAIN: All punctuation, spacing, and formatting must stay identical
+⚠️ WORD-BY-WORD VERIFICATION IS MANDATORY:
+Do not trust your memory that you "probably preserved everything"
+Actually COUNT the words before and after
+Actually COMPARE character by character
+If you skip this verification, you WILL accidentally delete text
 
-For EACH item in the summary reference:
-- Check: Is this text already tagged in the output?
-- Action: If missing → Add the appropriate tag WITHOUT removing any surrounding text
-- Action: If already tagged → Leave it as-is, do not modify
+Remember: 
+- Your PRIMARY goal = Add 100% of tags from underline/strikethrough items
+- Your SECONDARY goal = SKIP all italic-only and bold-only items (no tags)
+- Your TERTIARY goal = Preserve 100% of text content (verified word-by-word)
+- Missing even one underline/strikethrough tag = FAILURE
+- Tagging an italic-only or bold-only item = FAILURE
+- Deleting even one word = FAILURE
+- Success = All underline/strikethrough tags added + italic/bold items skipped + all content preserved + verification completed
 
-ABSOLUTE RULE: This is an ADDITIVE ONLY process - never remove existing tags OR any text content.
+⚠️ FINAL REMINDER: After adding EVERY single tag, check that NO text was dropped!
 
-USING CONTEXTUAL LOCATIONS:
-- "Para X, Run Y: ...context words 【target_text】 more context..." means:
-  - Find paragraph X in the output text
-  - The Run Y number provides 100% precision for the exact formatted segment
-  - Look for the surrounding context words shown
-  - Tag only that specific instance of "target_text" with the appropriate tag
-- CRITICAL: Use the context to identify the EXACT instance - do not tag other occurrences of the same word
-- If you see multiple instances of the same word, use the context to tag ONLY the correct one
-- The Run number eliminates ambiguity when the same text appears multiple times in a paragraph
-- The 【】 symbols show exactly which text needs the formatting tag
-- MANDATORY: Match the surrounding context words exactly before applying any tag
+===================================================================
+🚫 CRITICAL: OUTPUT FORMAT - NO META-COMMENTARY! 🚫
+===================================================================
 
-EXAMPLES OF CORRECT DE TAGGING:
-- Text marked "underline" in summary: [A>Section<A]
-- Text marked "strikethrough" in summary: [D>(4)<D]
-- Single characters: [A>:<A], [A>(<A], [A>)<A]
-- Multiple words: [A>provenance data<A]
+When you are ready to output your result:
+- DO NOT write "Looking at the summary..." or any explanation
+- DO NOT write "I need to add X tags..." or counting statements  
+- DO NOT write "Let me process..." or process descriptions
+- DO NOT write "Here is the result..." or any preamble
 
-EXAMPLES OF WHAT NOT TO TAG:
-- Standard section header: "SYNOPSIS" (leave untagged even if underlined)
-- Only tag underlined text that appears in the summary reference as requiring tags
+JUST OUTPUT THE TAGGED TEXT DIRECTLY!
 
+Your output should START with the first character of the input text.
+If input starts with "<<<PAGE_1_START>>>", your output starts with "<<<PAGE_1_START>>>"
+If input starts with "SPONSOR:", your output starts with "SPONSOR:"
+If input starts with "    1", your output starts with "    1"
 
-FAKE EXAMPLES BELOW - FOR FORMAT ILLUSTRATION ONLY - DO NOT TAG THESE
+NO EXPLANATIONS. NO PREAMBLES. JUST THE TAGGED TEXT.
 
-CONTEXTUAL LOCATION EXAMPLES (for illustration only - DO NOT tag these examples):
-
-FAKE EXAMPLE 1 - DO NOT TAG "example_word"
-If you see a summary entry like:
-"XX. 'example_word'"
-"   Location: Para 5, Run 2: ...text before 【example_word】 text after..."
-"   Formatting: underline"
-
-Your process should be: Find paragraph 5, run 2, verify the context "text before example_word text after", 
-and tag that specific "example_word" as [A>example_word<A]
-
-If "example_word" appears elsewhere (Para 3, Para 10, etc.), DO NOT tag those - only tag Para 5, Run 2
-"example_word" is NOT real data - this is showing you the PROCESS only
-
-FAKE EXAMPLE 2 - DO NOT TAG "different_word"
-If you see another entry like:
-"YY. 'different_word'"  
-"   Location: Para 8, Run 5: ...other context 【different_word】 more context..."
-"   Formatting: strikethrough"
-
-Your process should be: In paragraph 8, run 5, find "other context different_word more context" and tag 
-that specific "different_word" as [D>different_word<D]
-
-"different_word" is NOT real data - this is showing you the PROCESS only
-
-FAKE EXAMPLE 3 - DO NOT TAG "multi word phrase"
-If you see:
-"ZZ. 'multi word phrase'"
-"   Location: Para 12, Run 3: ...context 【multi word phrase】 more context..."
-"   Formatting: underline"
-
-Your process should be: In paragraph 12, run 3, find "context multi word phrase more context" and tag 
-that specific phrase as [A>multi word phrase<A]
-
-This is a PATTERN example showing how multi-word phrases work - DO NOT tag the literal text "multi word phrase"
-
-IMPORTANT: The above are FORMAT EXAMPLES only. Only tag text that appears in the actual {SUMMARY_CONTENT} section with their specific Para/Run locations.
-
-OUTPUT REQUIREMENTS:
-
-YOUR TASK - ADD ALL TAGS:
-1. Go through the summary and add tags for each item
-2. Keep each tag SEPARATE - do NOT consolidate any tags
-3. Each formatted item gets its own individual tag [A>word1<A] [A>word2<A]
-4. Verify every word from input is preserved
-5. DO NOT merge any tags - consolidation is handled by Python after your output
-
-🤖 NOTE: Tag consolidation (merging adjacent tags) is automatically handled by Python code after you return the tagged text. Your job is ONLY to add the individual tags correctly.
-
-FINAL OUTPUT:
-Return ONLY the tagged text with individual tags added
-NO explanations, comments, or meta-text
-EVERY word from original input must be in final output
-Python will automatically consolidate adjacent tags like [A>word1<A] [A>word2<A] → [A>word1 word2<A]
+BEGIN TAGGING NOW - OUTPUT ONLY THE TAGGED TEXT.

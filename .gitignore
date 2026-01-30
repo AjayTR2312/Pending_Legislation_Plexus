@@ -22,6 +22,8 @@ data/output/
 batch_file_comparison.py
 quick_test.py
 setup_testing.py
+app/FL_analysis
+app/LLM as Judge
 
 # IDE
 .vscode/

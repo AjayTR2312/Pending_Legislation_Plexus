@@ -21,6 +21,9 @@ from pdf_to_text_llm import (
 from pdf_docx_analysis_pipeline import PDFToDocxAnalysisPipeline
 from session_manager import get_session_manager
 from pdf_type_detector import detect_pdf_type
+from pdf_plumber_extractor import extract_pdf_with_pdfplumber
+from text_to_clean_prompt import convert_pdfplumber_to_clean
+from tag_then_clean_pipeline import tag_then_clean_pipeline
 
 # Configure Streamlit page
 st.set_page_config(
@@ -55,6 +58,30 @@ try:
         st.session_state.temp_pdf_path = None
     if 'processing_time' not in st.session_state:
         st.session_state.processing_time = None
+    if 'process_method' not in st.session_state:
+        st.session_state.process_method = "vision"  # default: "vision" or "pdfplumber"
+    if 'chunk_stats' not in st.session_state:
+        st.session_state.chunk_stats = None
+    
+    # Batch processing state
+    if 'batch_mode' not in st.session_state:
+        st.session_state.batch_mode = False
+    if 'batch_queue' not in st.session_state:
+        st.session_state.batch_queue = []
+    if 'batch_processing' not in st.session_state:
+        st.session_state.batch_processing = False
+    if 'batch_current_file' not in st.session_state:
+        st.session_state.batch_current_file = None
+    if 'batch_results' not in st.session_state:
+        st.session_state.batch_results = []
+    if 'batch_progress' not in st.session_state:
+        st.session_state.batch_progress = 0
+    if 'batch_paused' not in st.session_state:
+        st.session_state.batch_paused = False
+    if 'uploaded_files' not in st.session_state:
+        st.session_state.uploaded_files = []
+    if 'last_uploaded_file_id' not in st.session_state:
+        st.session_state.last_uploaded_file_id = None
 
     # Get session folders
     session_mgr = st.session_state.session_manager
@@ -73,45 +100,14 @@ except Exception as e:
         st.code(traceback.format_exc())
     st.stop()
 
-def validate_pdf_not_scanned(pdf_path, filename):
-    """
-    Check if PDF is scanned and reject if so.
-    Also check if PDF has more than 10 pages (would require chunking).
-    Returns: (is_valid, error_message)
-    """
-    try:
-        result = detect_pdf_type(pdf_path)
-        
-        if result:
-            total_pages = result.get('total_pages', 0)
-            
-            # Check 1: Page count validation
-            if total_pages > 15:
-                error_msg = f"**{filename}** — Document exceeds technical capacity({total_pages} pages). Processing time would be excessive and exceeds system capacity limits."
-                return False, error_msg.strip()
-            
-            # Check 2: Scanned PDF validation
-            if result['type'] == 'scanned':
-                error_msg = f"**{filename}** —  Scanned document detected. This file format cannot be processed due to technical limitations in text extraction."
-                return False, error_msg.strip()
-            
-            # Check 3: Hybrid PDF warning
-            elif result['type'] == 'hybrid':
-                warning_msg = f"**{filename}** — Contains mix of digital and scanned pages ({total_pages} pages). Some content may not be fully extracted."
-                return True, warning_msg.strip()
-        
-        # Digital or empty PDFs are OK
-        return True, None
-        
-    except Exception as e:
-        # If detection fails, allow processing but log the error
-        logging.warning(f"PDF type detection failed for {filename}: {str(e)}")
-        return True, None
+# Maximum allowed pages for processing
+MAX_PAGES_ALLOWED = 15
 
 def validate_pdf_not_scanned(pdf_path, filename):
     """
-    Check if PDF is scanned and reject if so.
-    Also check if PDF has more than 10 pages (would require chunking).
+    Check if PDF is valid for processing:
+    1. Not scanned (must be digital/native PDF)
+    2. Not exceeding page limit (max 15 pages)
     Returns: (is_valid, error_message)
     """
     try:
@@ -119,23 +115,36 @@ def validate_pdf_not_scanned(pdf_path, filename):
         
         if result:
             total_pages = result.get('total_pages', 0)
+            pdf_type = result.get('type', 'unknown')
+            high_dpi_images = result.get('high_dpi_images', 0)
+            large_images = result.get('large_images', 0)
+            total_images = result.get('total_images', 0)
+            avg_chars = result.get('average_chars_per_page', 0)
+            text_ratio = result.get('text_ratio', 0)
+            image_ratio = result.get('image_ratio', 0)
             
-            # Check 1: Page count validation
-            if total_pages > 15:
-                error_msg = f"**{filename}** — Document exceeds technical capacity({total_pages} pages). Processing time would be excessive and exceeds system capacity limits."
+            # Log detailed detection results
+            logging.info(f"PDF Detection: type={pdf_type}, pages={total_pages}, large_imgs={large_images}/{total_images}, high_dpi={high_dpi_images}, avg_chars={avg_chars:.1f}, text={text_ratio}%, image={image_ratio}%")
+            
+            # Check 1: Page count validation (CRITICAL - must be first)
+            if total_pages > MAX_PAGES_ALLOWED:
+                error_msg = f"**{filename}** — Document exceeds maximum page limit ({total_pages} pages > {MAX_PAGES_ALLOWED} pages allowed). Please split into smaller documents."
+                logging.warning(f"File rejected: {filename} has {total_pages} pages (limit: {MAX_PAGES_ALLOWED})")
                 return False, error_msg.strip()
             
             # Check 2: Scanned PDF validation
-            if result['type'] == 'scanned':
-                error_msg = f"**{filename}** —  Scanned document detected. This file format cannot be processed due to technical limitations in text extraction."
+            if pdf_type == 'scanned':
+                error_msg = f"**{filename}** — Scanned document detected. This file format cannot be processed due to technical limitations in text extraction."
+                logging.warning(f"File rejected: {filename} is a scanned PDF (type: {pdf_type})")
                 return False, error_msg.strip()
             
-            # Check 3: Hybrid PDF warning
-            elif result['type'] == 'hybrid':
-                warning_msg = f"**{filename}** — Contains mix of digital and scanned pages ({total_pages} pages). Some content may not be fully extracted."
-                return True, warning_msg.strip()
+            # Check 3: Hybrid PDF validation (mixed digital/scanned content)
+            if pdf_type == 'hybrid':
+                error_msg = f"**{filename}** — Hybrid document detected (contains signatures or scanned content). This file format cannot be processed due to technical limitations."
+                logging.warning(f"File rejected: {filename} is a hybrid PDF (type: {pdf_type})")
+                return False, error_msg.strip()
         
-        # Digital or empty PDFs are OK
+        # Digital or empty PDFs with acceptable page count are OK
         return True, None
         
     except Exception as e:
@@ -386,9 +395,9 @@ def process_single_pdf_simple(pdf_path, state_code, session_id, progress_placeho
                 st.session_state.step_status[step] = "🔄"
             update_progress()
             
-            # Call chunked verification directly
-            from llm_tag_verifier import verify_with_pdf_chunking
-            corrected_text = verify_with_pdf_chunking(
+            # Call overlapping chunk verification for 100% accuracy
+            from llm_tag_verifier import verify_with_overlapping_chunks
+            corrected_text = verify_with_overlapping_chunks(
                 pdf_path, 
                 state_code, 
                 st.session_state.client, 
@@ -446,99 +455,154 @@ def process_single_pdf_simple(pdf_path, state_code, session_id, progress_placeho
             # Return file path (consistent with normal workflow)
             return verified_file_path
         
-        # Small document - use normal workflow
+        # Small document - use normal workflow with PARALLEL processing
         print(f"\n📄 Standard document ({page_count} pages)")
-        print(f"📋 Using normal processing workflow...")
+        print(f"⚡ Using parallel processing workflow (PDF→Text + PDF→DOCX simultaneously)...")
         
-        # Step 1: PDF to Text
-        st.session_state.current_step = 0
-        st.session_state.step_status[0] = "🔄"
-        session_mgr.update_processing_step(session_id, 0)
+        # Mark Steps 1-4 as in progress (they'll run in parallel)
+        for step in range(4):
+            st.session_state.step_status[step] = "🔄"
+            session_mgr.update_processing_step(session_id, step)
         update_progress()  # Update UI
         time.sleep(0.5)  # Brief pause for UI update
         
+        # Load conversion resources once
         conversion_prompt = load_conversion_prompt(state_code)
         examples = load_example_pairs(state_code)
         
-        formatted_text = process_pdf_with_claude(
-            st.session_state.client, pdf_path, examples, conversion_prompt
-        )
+        # Get client reference (must be done BEFORE threading)
+        client = st.session_state.client
         
-        if not formatted_text:
+        # ============================================================
+        # PARALLEL EXECUTION: PDF→Text + PDF→DOCX run simultaneously
+        # ============================================================
+        from concurrent.futures import ThreadPoolExecutor
+        
+        def run_pdf_to_text(client, pdf_path, examples, conversion_prompt, output_folder, state_code):
+            """Convert PDF to text (Step 1) - ~40 seconds"""
+            print("  🔄 Thread 1: Starting PDF→Text conversion...")
+            formatted_text = process_pdf_with_claude(
+                client, pdf_path, examples, conversion_prompt
+            )
+            
+            if not formatted_text:
+                print("  ❌ Thread 1: PDF→Text conversion failed")
+                return None
+            
+            # Save text file in session output folder
+            output_filename = Path(pdf_path).stem + ".txt"
+            text_output_path = os.path.join(output_folder, output_filename)
+            
+            if not save_to_text_file(formatted_text, text_output_path, state_code=state_code):
+                print("  ❌ Thread 1: Failed to save text file")
+                return None
+            
+            print(f"  ✅ Thread 1: PDF→Text complete ({len(formatted_text)} chars)")
+            return text_output_path
+        
+        def run_pdf_to_docx(pdf_path, output_folder, state_code):
+            """Convert PDF→DOCX→Analysis→Summary (Steps 2-4) - ~50 seconds"""
+            print("  🔄 Thread 2: Starting PDF→DOCX pipeline...")
+            pipeline = PDFToDocxAnalysisPipeline(pdf_path, output_folder, state_code=state_code)
+            docx_results = pipeline.run_complete_pipeline()
+            
+            if not docx_results or not docx_results['success']:
+                print("  ❌ Thread 2: DOCX pipeline failed")
+                return None
+            
+            print(f"  ✅ Thread 2: DOCX pipeline complete")
+            return docx_results
+        
+        # Execute both operations in parallel
+        print("\n⚡ Starting parallel processing...")
+        parallel_start = time.time()
+        
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            future_text = executor.submit(run_pdf_to_text, client, pdf_path, examples, conversion_prompt, output_folder, state_code)
+            future_docx = executor.submit(run_pdf_to_docx, pdf_path, session_folders['output_folder'], state_code)
+            
+            # Wait for both to complete
+            text_output_path = future_text.result()
+            docx_results = future_docx.result()
+        
+        parallel_time = time.time() - parallel_start
+        print(f"✅ Parallel processing complete in {parallel_time:.1f}s")
+        
+        # Check if both succeeded
+        if not text_output_path:
             st.session_state.step_status[0] = "❌"
             return None
-            
-        # Save text file in session output folder
-        output_filename = Path(pdf_path).stem + ".txt"
-        text_output_path = os.path.join(output_folder, output_filename)
         
-        if not save_to_text_file(formatted_text, text_output_path, state_code=state_code):
-            st.session_state.step_status[0] = "❌"
-            return None
-            
-        st.session_state.step_status[0] = "✅"
-        time.sleep(0.1)  # Brief pause for UI update
-        update_progress()  # Update UI
-        
-        # Step 2-4: DOCX Pipeline (combined)
-        for step in [1, 2, 3]:
-            st.session_state.current_step = step
-            st.session_state.step_status[step] = "🔄"
-            session_mgr.update_processing_step(session_id, step)
-            update_progress()  # Update UI
-            time.sleep(0.3)  # Brief pause for UI update
-        
-        # Use session output folder for pipeline
-        pipeline = PDFToDocxAnalysisPipeline(pdf_path, session_folders['output_folder'], state_code=state_code)
-        docx_results = pipeline.run_complete_pipeline()
-        
-        if not docx_results or not docx_results['success']:
+        if not docx_results:
             for step in [1, 2, 3]:
                 st.session_state.step_status[step] = "❌"
             return None
-            
-        # Mark steps 2-4 as complete
-        for step in [1, 2, 3]:
+        
+        # Mark all steps as complete
+        for step in range(4):
             st.session_state.step_status[step] = "✅"
         time.sleep(0.1)  # Brief pause for UI update
         update_progress()  # Update UI
         
-        # Step 5: LLM Verification
+        # Step 5: LLM Verification (only if there are formatted items)
         st.session_state.current_step = 4
         st.session_state.step_status[4] = "🔄"
         session_mgr.update_processing_step(session_id, 4)
         update_progress()  # Update UI
         time.sleep(0.5)  # Brief pause for UI update
         
-        corrected_text = verify_text_with_llm(
-            text_output_path, docx_results['summary_path'], 
-            state_code, st.session_state.client,
-            pdf_path=None,  # Don't pass PDF path - already decided not to chunk
-            session_dir=None  # Don't pass session dir
-        )
-        
-        if not corrected_text:
-            st.session_state.step_status[4] = "❌"
-            return None
+        # Check if summary file exists (only if there were formatted items)
+        if docx_results.get('summary_path'):
+            corrected_text = verify_text_with_llm(
+                text_output_path, docx_results['summary_path'], 
+                state_code, st.session_state.client,
+                pdf_path=None,  # Don't pass PDF path - already decided not to chunk
+                session_dir=None  # Don't pass session dir
+            )
             
-        # Save verified file in session-specific Verified folder
-        verified_file_path = save_verified_file(
-            corrected_text, 
-            text_output_path, 
-            state_code, 
-            session_folders['output_folder']  # Pass session output folder
-        )
-        
-        if not verified_file_path:
-            st.session_state.step_status[4] = "❌"
-            return None
+            if not corrected_text:
+                st.session_state.step_status[4] = "❌"
+                return None
+                
+            # Save verified file in session-specific Verified folder
+            verified_file_path = save_verified_file(
+                corrected_text, 
+                text_output_path, 
+                state_code, 
+                session_folders['output_folder']  # Pass session output folder
+            )
             
-        # Create verification report
-        original_text = read_file_content(text_output_path)
-        create_verification_report(
-            docx_results['summary_path'], text_output_path, verified_file_path,
-            state_code, original_text, corrected_text
-        )
+            if not verified_file_path:
+                st.session_state.step_status[4] = "❌"
+                return None
+                
+            # Create verification report
+            original_text = read_file_content(text_output_path)
+            create_verification_report(
+                docx_results['summary_path'], text_output_path, verified_file_path,
+                state_code, original_text, corrected_text
+            )
+        else:
+            # No formatted items found - copy original text to Verified folder
+            st.info("ℹ️ No formatted items found - copying to Verified folder without verification")
+            original_text = read_file_content(text_output_path)
+            
+            if not original_text:
+                st.session_state.step_status[4] = "❌"
+                st.error("Failed to read converted text file")
+                return None
+                
+            verified_file_path = save_verified_file(
+                original_text, 
+                text_output_path, 
+                state_code, 
+                session_folders['output_folder']  # Pass session output folder
+            )
+            
+            if not verified_file_path:
+                st.session_state.step_status[4] = "❌"
+                st.error("Failed to save verified file")
+                return None
         
         st.session_state.step_status[4] = "✅"
         st.session_state.current_step = 5  # Complete
@@ -569,6 +633,571 @@ def process_single_pdf_simple(pdf_path, state_code, session_id, progress_placeho
     except Exception as e:
         st.error(f"❌ Processing error: {str(e)}")
         logging.error(f"Processing error: {e}", exc_info=True)
+        return None
+
+def process_with_pdfplumber_pipeline(pdf_path, state_code, session_id, progress_placeholder=None, status_placeholder=None):
+    """Process PDF using pdfplumber extraction + LLM prompt cleaning workflow"""
+    start_time = time.time()
+    
+    session_mgr = st.session_state.session_manager
+    
+    # Helper function to update UI
+    def update_progress():
+        if progress_placeholder:
+            with progress_placeholder.container():
+                show_processing_steps()
+    
+    # Start processing
+    session_mgr.start_processing(session_id)
+    
+    # Get session-specific folders
+    session_folders = session_mgr.get_session_folders(session_id)
+    output_folder = session_mgr.get_output_file_path(session_id, state_code, Path(pdf_path).stem)
+    
+    # Initialize client if needed
+    if not st.session_state.client:
+        st.session_state.client = get_anthropic_client()
+        if not st.session_state.client:
+            st.error("❌ Failed to initialize AI client")
+            return None
+    
+    try:
+        # Check if document needs chunking (same 7-page threshold as vision workflow)
+        from llm_tag_verifier import should_chunk_for_verification
+        should_chunk, page_count, reason = should_chunk_for_verification(pdf_path)
+        
+        if should_chunk:
+            # Large document - use PDFPlumber chunking workflow
+            print(f"\n🔄 Large document detected ({page_count} pages)")
+            print(f"📦 Using PDFPlumber chunking workflow...")
+            
+            steps = [
+                {"name": "PDFPlumber Chunks", "icon": "📦"},
+                {"name": "LLM Clean Chunks", "icon": "🧹"}, 
+                {"name": "DOCX Analysis", "icon": "📋"},
+                {"name": "Verify Chunks", "icon": "🤖"},
+                {"name": "Merge Results", "icon": "🔗"}
+            ]
+            
+            st.session_state.step_status = {i: "🔄" for i in range(5)}
+            update_progress()
+            
+            # Call PDFPlumber chunk verification
+            from llm_tag_verifier import verify_with_pdfplumber_chunks
+            corrected_text = verify_with_pdfplumber_chunks(
+                pdf_path, 
+                state_code, 
+                st.session_state.client, 
+                session_folders['session_dir']
+            )
+            
+            if not corrected_text:
+                for step in range(5):
+                    st.session_state.step_status[step] = "❌"
+                return None
+            
+            # Mark all steps as complete
+            for step in range(5):
+                st.session_state.step_status[step] = "✅"
+            update_progress()
+            
+            # Save the final verified text
+            output_filename = Path(pdf_path).stem + ".txt"
+            
+            # Determine verified output path
+            verified_folder = os.path.join(session_folders['output_folder'], 'Verified', state_code)
+            os.makedirs(verified_folder, exist_ok=True)
+            verified_file_path = os.path.join(verified_folder, output_filename)
+            
+            with open(verified_file_path, 'w', encoding='utf-8') as f:
+                f.write(corrected_text)
+            
+            print(f"✅ Chunked PDFPlumber processing complete!")
+            print(f"📄 Verified file saved to: {verified_file_path}")
+            
+            # Mark processing complete in session manager
+            session_mgr.complete_processing(session_id, verified_file_path)
+            
+            # Calculate total processing time
+            end_time = time.time()
+            total_time = end_time - start_time
+            minutes = int(total_time // 60)
+            seconds = int(total_time % 60)
+            
+            # Store processing time
+            st.session_state.processing_time = f"{minutes}m {seconds}s" if minutes > 0 else f"{seconds}s"
+            
+            # Log completion
+            completion_msg = f"🎉 Chunked PDFPlumber processing completed! Total time: {st.session_state.processing_time}"
+            print("\n" + "="*60)
+            print(completion_msg)
+            print("="*60)
+            logging.info(completion_msg)
+            
+            return verified_file_path
+        
+        # Small document - use normal PDFPlumber workflow (5 steps)
+        print(f"\n📄 Standard document ({page_count} pages)")
+        print(f"⚡ Using normal PDFPlumber workflow...")
+        
+        steps = [
+            {"name": "PDFPlumber Extract", "icon": "📄"},
+            {"name": "LLM Text Clean", "icon": "🧹"}, 
+            {"name": "DOCX Analysis", "icon": "📋"},
+            {"name": "Summary Generation", "icon": "📊"},
+            {"name": "LLM Verification", "icon": "🤖"}
+        ]
+        
+        st.session_state.step_status = {i: "⏳" for i in range(5)}
+        update_progress()  # Show initial progress
+        
+        # Step 1: Extract with pdfplumber
+        st.session_state.current_step = 0
+        st.session_state.step_status[0] = "🔄"
+        session_mgr.update_processing_step(session_id, 0)
+        update_progress()
+        
+        if status_placeholder:
+            status_placeholder.info("📄 Extracting text with pdfplumber...")
+        
+        print("\n🔄 Step 1/5: PDFPlumber extraction...")
+        raw_output = os.path.join(session_folders['output_folder'], 'pdfplumber_raw.txt')
+        
+        try:
+            extract_pdf_with_pdfplumber(pdf_path, raw_output, validate_sections=True)
+            if not os.path.exists(raw_output):
+                st.session_state.step_status[0] = "❌"
+                st.error("❌ PDFPlumber extraction failed - no output file")
+                return None
+            print(f"✅ PDFPlumber extraction complete: {raw_output}")
+        except Exception as e:
+            st.session_state.step_status[0] = "❌"
+            st.error(f"❌ PDFPlumber extraction error: {str(e)}")
+            logging.error(f"PDFPlumber extraction error: {e}", exc_info=True)
+            return None
+        
+        st.session_state.step_status[0] = "✅"
+        update_progress()
+        
+        # Step 2: Clean with LLM prompt
+        st.session_state.current_step = 1
+        st.session_state.step_status[1] = "🔄"
+        session_mgr.update_processing_step(session_id, 1)
+        update_progress()
+        
+        if status_placeholder:
+            status_placeholder.info(f"🧹 Cleaning text with {state_code}-specific prompt...")
+        
+        print(f"\n🔄 Step 2/5: LLM text cleaning with {state_code} prompt...")
+        clean_output = os.path.join(output_folder, Path(pdf_path).stem + ".txt")
+        
+        try:
+            clean_text = convert_pdfplumber_to_clean(
+                raw_output, 
+                state_code, 
+                clean_output, 
+                st.session_state.client
+            )
+            
+            if not clean_text:
+                st.session_state.step_status[1] = "❌"
+                st.error("❌ Text cleaning failed")
+                return None
+            
+            print(f"✅ Text cleaning complete: {len(clean_text)} chars")
+        except Exception as e:
+            st.session_state.step_status[1] = "❌"
+            st.error(f"❌ Text cleaning error: {str(e)}")
+            logging.error(f"Text cleaning error: {e}", exc_info=True)
+            return None
+        
+        st.session_state.step_status[1] = "✅"
+        update_progress()
+        
+        # Steps 3-4: DOCX Analysis Pipeline (same as vision workflow)
+        for step in [2, 3]:
+            st.session_state.step_status[step] = "🔄"
+            session_mgr.update_processing_step(session_id, step)
+        update_progress()
+        
+        if status_placeholder:
+            status_placeholder.info("📋 Analyzing DOCX formatting...")
+        
+        print(f"\n🔄 Steps 3-4/5: DOCX analysis pipeline...")
+        
+        try:
+            pipeline = PDFToDocxAnalysisPipeline(pdf_path, session_folders['output_folder'], state_code=state_code)
+            docx_results = pipeline.run_complete_pipeline()
+            
+            if not docx_results or not docx_results['success']:
+                for step in [2, 3]:
+                    st.session_state.step_status[step] = "❌"
+                st.error("❌ DOCX analysis failed")
+                return None
+            
+            print(f"✅ DOCX analysis complete")
+        except Exception as e:
+            for step in [2, 3]:
+                st.session_state.step_status[step] = "❌"
+            st.error(f"❌ DOCX analysis error: {str(e)}")
+            logging.error(f"DOCX analysis error: {e}", exc_info=True)
+            return None
+        
+        for step in [2, 3]:
+            st.session_state.step_status[step] = "✅"
+        update_progress()
+        
+        # Step 5: LLM Verification (only if there are formatted items)
+        st.session_state.current_step = 4
+        st.session_state.step_status[4] = "🔄"
+        session_mgr.update_processing_step(session_id, 4)
+        update_progress()
+        
+        if status_placeholder:
+            status_placeholder.info("🤖 Verifying with LLM...")
+        
+        print(f"\n🔄 Step 5/5: LLM verification...")
+        
+        # Check if summary file exists (only if there were formatted items)
+        if docx_results.get('summary_path'):
+            corrected_text = verify_text_with_llm(
+                clean_output, 
+                docx_results['summary_path'], 
+                state_code, 
+                st.session_state.client,
+                pdf_path=None,
+                session_dir=None
+            )
+            
+            if not corrected_text:
+                st.session_state.step_status[4] = "❌"
+                st.error("❌ LLM verification failed")
+                return None
+                
+            # Save verified file
+            verified_file_path = save_verified_file(
+                corrected_text, 
+                clean_output, 
+                state_code, 
+                session_folders['output_folder']
+            )
+            
+            if not verified_file_path:
+                st.session_state.step_status[4] = "❌"
+                st.error("❌ Failed to save verified file")
+                return None
+                
+            # Create verification report
+            original_text = clean_text  # Use clean text as "original"
+            create_verification_report(
+                docx_results['summary_path'], clean_output, verified_file_path,
+                state_code, original_text, corrected_text
+            )
+            
+            print(f"✅ LLM verification complete")
+        else:
+            # No formatted items found - copy clean text to Verified folder
+            st.info("ℹ️ No formatted items found - copying to Verified folder without verification")
+            
+            verified_file_path = save_verified_file(
+                clean_text, 
+                clean_output, 
+                state_code, 
+                session_folders['output_folder']
+            )
+            
+            if not verified_file_path:
+                st.session_state.step_status[4] = "❌"
+                st.error("❌ Failed to save verified file")
+                return None
+            
+            print(f"✅ Clean text saved to Verified folder")
+        
+        st.session_state.step_status[4] = "✅"
+        st.session_state.current_step = 5  # Complete
+        update_progress()
+        
+        # Mark processing complete
+        session_mgr.complete_processing(session_id, verified_file_path)
+        
+        # Calculate total processing time
+        end_time = time.time()
+        total_time = end_time - start_time
+        minutes = int(total_time // 60)
+        seconds = int(total_time % 60)
+        
+        st.session_state.processing_time = f"{minutes}m {seconds}s" if minutes > 0 else f"{seconds}s"
+        
+        completion_msg = f"🎉 PDFPlumber processing completed! Total time: {st.session_state.processing_time}"
+        print("\n" + "="*60)
+        print(completion_msg)
+        print("="*60)
+        logging.info(completion_msg)
+        
+        return verified_file_path
+        
+    except Exception as e:
+        st.error(f"❌ PDFPlumber processing error: {str(e)}")
+        logging.error(f"PDFPlumber processing error: {e}", exc_info=True)
+        return None
+
+def process_with_tag_then_clean_pipeline(pdf_path, state_code, session_id, progress_placeholder=None, status_placeholder=None):
+    """Process PDF using Tag-Then-Clean workflow: Extract raw → Tag → Clean"""
+    start_time = time.time()
+    session_mgr = st.session_state.session_manager
+    session_folders = session_mgr.get_session_folders(session_id)
+    
+    def update_progress():
+        if progress_placeholder:
+            with progress_placeholder.container():
+                show_processing_steps()
+    
+    # Start processing
+    session_mgr.start_processing(session_id)
+    
+    try:
+        # Check if document needs chunking
+        from llm_tag_verifier import should_chunk_for_verification
+        should_chunk, page_count, reason = should_chunk_for_verification(pdf_path)
+        
+        if should_chunk:
+            # Large document - use chunking workflow
+            print(f"\n🔄 Large document detected ({page_count} pages)")
+            print(f"📦 Using Tag-Then-Clean chunking workflow...")
+            
+            steps = [
+                {"name": "Chunk Processing", "icon": "📦"},
+                {"name": "Tagging Chunks", "icon": "🏷️"},
+                {"name": "Cleaning Chunks", "icon": "🧹"},
+                {"name": "Merging Results", "icon": "🔗"},
+                {"name": "Finalizing", "icon": "✅"}
+            ]
+            
+            st.session_state.step_status = {i: "⏳" for i in range(5)}
+            update_progress()
+            
+            # Use chunked processing from tag_then_clean_pipeline
+            # This handles ALL steps internally: extract chunks, DOCX, summary, tag, clean, merge
+            st.session_state.current_step = 0
+            st.session_state.step_status[0] = "🔄"
+            update_progress()
+            
+            if status_placeholder:
+                status_placeholder.info("🏷️ Processing chunks with Tag-Then-Clean...")
+            
+            print("\n🔄 Tag-Then-Clean chunked pipeline...")
+            
+            # Get client using helper function (matching other workflows)
+            from tag_then_clean_pipeline import tag_then_clean_with_pdfplumber_chunks, get_anthropic_client
+            
+            try:
+                # Get fresh client
+                client = get_anthropic_client()
+                
+                # Update progress as processing continues
+                st.session_state.step_status[0] = "✅"
+                st.session_state.step_status[1] = "🔄"
+                update_progress()
+                
+                corrected_text = tag_then_clean_with_pdfplumber_chunks(
+                    pdf_path=pdf_path,
+                    state_code=state_code,
+                    client=client,
+                    session_dir=session_folders['session_dir']
+                )
+                
+                if not corrected_text or not corrected_text.get('success'):
+                    st.session_state.step_status[1] = "❌"
+                    st.session_state.step_status[2] = "❌"
+                    st.session_state.step_status[3] = "❌"
+                    st.session_state.step_status[4] = "❌"
+                    st.error("❌ Chunked Tag-Then-Clean failed")
+                    return None
+                
+                # Mark all steps complete
+                st.session_state.step_status[1] = "✅"
+                st.session_state.step_status[2] = "✅"
+                st.session_state.step_status[3] = "✅"
+                st.session_state.step_status[4] = "✅"
+                update_progress()
+                print("✅ Tag-Then-Clean chunked pipeline complete")
+                
+                # Extract file path from results
+                verified_file_path = corrected_text.get('output_path')
+                
+                if not verified_file_path or not os.path.exists(verified_file_path):
+                    st.error("❌ Output file not found")
+                    return None
+                
+                # Mark processing complete
+                session_mgr.complete_processing(session_id, verified_file_path)
+                
+                # Calculate total time
+                end_time = time.time()
+                total_time = end_time - start_time
+                minutes = int(total_time // 60)
+                seconds = int(total_time % 60)
+                
+                st.session_state.processing_time = f"{minutes}m {seconds}s" if minutes > 0 else f"{seconds}s"
+                
+                # Store chunk processing stats for display
+                st.session_state.chunk_stats = {
+                    'chunks_processed': corrected_text.get('chunks_processed', 0),
+                    'total_chunks': corrected_text.get('total_chunks', 0),
+                    'character_count': corrected_text.get('character_count', 0)
+                }
+                
+                completion_msg = f"🎉 Tag-Then-Clean chunked processing completed! " \
+                                f"Processed {st.session_state.chunk_stats['chunks_processed']}/{st.session_state.chunk_stats['total_chunks']} chunks. " \
+                                f"Total time: {st.session_state.processing_time}"
+                print("\n" + "="*60)
+                print(completion_msg)
+                print("="*60)
+                logging.info(completion_msg)
+                
+                return verified_file_path
+                
+            except Exception as e:
+                st.session_state.step_status[0] = "❌"
+                st.session_state.step_status[1] = "❌"
+                st.session_state.step_status[2] = "❌"
+                st.session_state.step_status[3] = "❌"
+                st.session_state.step_status[4] = "❌"
+                st.error(f"❌ Tag-Then-Clean chunked failed: {e}")
+                logging.error(f"Tag-Then-Clean chunked failed: {e}")
+                import traceback
+                traceback.print_exc()
+                return None
+        
+        # Small document - use normal Tag-Then-Clean workflow (no chunking)
+        print(f"\n📄 Standard document ({page_count} pages)")
+        print(f"⚡ Using normal Tag-Then-Clean workflow...")
+        
+        steps = [
+            {"name": "PDFPlumber Extract", "icon": "📄"},
+            {"name": "DOCX Analysis", "icon": "📋"},
+            {"name": "Summary Generation", "icon": "📊"},
+            {"name": "Tag Raw Text", "icon": "🏷️"},
+            {"name": "Clean Tagged Text", "icon": "🧹"}
+        ]
+        
+        st.session_state.step_status = {i: "⏳" for i in range(5)}
+        update_progress()
+        
+        # Step 1: Extract with pdfplumber
+        st.session_state.current_step = 0
+        st.session_state.step_status[0] = "🔄"
+        update_progress()
+        
+        if status_placeholder:
+            status_placeholder.info("📄 Extracting text with pdfplumber...")
+        
+        print("\n🔄 Step 1/5: PDFPlumber extraction...")
+        raw_output = os.path.join(session_folders['output_folder'], 'pdfplumber_raw.txt')
+        
+        extract_pdf_with_pdfplumber(pdf_path, raw_output, validate_sections=True)
+        if not os.path.exists(raw_output):
+            st.session_state.step_status[0] = "❌"
+            st.error("❌ PDFPlumber extraction failed")
+            return None
+        
+        st.session_state.step_status[0] = "✅"
+        update_progress()
+        print("✅ PDFPlumber extraction complete")
+        
+        # Step 2: DOCX Analysis
+        st.session_state.current_step = 1
+        st.session_state.step_status[1] = "🔄"
+        update_progress()
+        
+        if status_placeholder:
+            status_placeholder.info("📋 Analyzing DOCX structure...")
+        
+        print("\n🔄 Step 2/5: DOCX analysis...")
+        docx_output_dir = os.path.join(session_folders['output_folder'], 'Output_Docx', state_code)
+        os.makedirs(docx_output_dir, exist_ok=True)
+        
+        docx_pipeline = PDFToDocxAnalysisPipeline(pdf_path, docx_output_dir, state_code=state_code)
+        docx_results = docx_pipeline.run_complete_pipeline()
+        
+        if not docx_results or not docx_results['success']:
+            st.session_state.step_status[1] = "❌"
+            st.error("❌ DOCX conversion failed")
+            return None
+        
+        docx_file = docx_results['docx_path']
+        summary_file = docx_results.get('summary_path')  # May be None if no formatting
+        
+        st.session_state.step_status[1] = "✅"
+        update_progress()
+        print("✅ DOCX analysis complete")
+        
+        # Step 3: Summary already generated by run_complete_pipeline
+        st.session_state.current_step = 2
+        st.session_state.step_status[2] = "✅"  # Already done
+        update_progress()
+        print("✅ Summary generation complete")
+        
+        if not summary_file:
+            st.error("❌ Summary file not generated")
+            return None
+        
+        # Step 4 & 5: Tag-Then-Clean Pipeline
+        st.session_state.current_step = 3
+        st.session_state.step_status[3] = "🔄"
+        st.session_state.step_status[4] = "⏳"
+        update_progress()
+        
+        if status_placeholder:
+            status_placeholder.info("🏷️ Running Tag-Then-Clean pipeline...")
+        
+        print("\n🔄 Step 4-5/5: Tag-Then-Clean pipeline...")
+        output_dir = os.path.join(session_folders['output_folder'], 'TagThenClean')
+        
+        try:
+            results = tag_then_clean_pipeline(
+                raw_text_path=raw_output,
+                summary_path=summary_file,
+                state_code=state_code,
+                output_dir=output_dir,
+                pdf_path=pdf_path
+            )
+            
+            st.session_state.step_status[3] = "✅"
+            st.session_state.step_status[4] = "✅"
+            update_progress()
+            print("✅ Tag-Then-Clean pipeline complete")
+            
+            # Mark processing complete
+            final_output = results['final_output']
+            session_mgr.complete_processing(session_id, final_output)
+            
+            # Calculate total time
+            end_time = time.time()
+            total_time = end_time - start_time
+            minutes = int(total_time // 60)
+            seconds = int(total_time % 60)
+            
+            st.session_state.processing_time = f"{minutes}m {seconds}s" if minutes > 0 else f"{seconds}s"
+            
+            completion_msg = f"🎉 Tag-Then-Clean processing completed! Total time: {st.session_state.processing_time}"
+            print("\n" + "="*60)
+            print(completion_msg)
+            print("="*60)
+            logging.info(completion_msg)
+            
+            return final_output
+            
+        except Exception as e:
+            st.session_state.step_status[3] = "❌"
+            st.session_state.step_status[4] = "❌"
+            st.error(f"❌ Tag-Then-Clean pipeline failed: {e}")
+            print(f"❌ Error: {e}")
+            return None
+        
+    except Exception as e:
+        st.error(f"❌ Tag-Then-Clean processing error: {str(e)}")
+        logging.error(f"Tag-Then-Clean processing error: {e}", exc_info=True)
         return None
 
 def show_simple_ui():
@@ -616,14 +1245,33 @@ def show_simple_ui():
             st.session_state.client = None
             st.session_state.temp_pdf_path = None
             st.session_state.processing_time = None
+            st.session_state.chunk_stats = None
             st.session_state.last_uploaded_file_id = None  # Reset upload tracking
+            
+            # Reset batch processing state
+            st.session_state.batch_mode = False
+            st.session_state.batch_queue = []
+            st.session_state.batch_processing = False
+            st.session_state.batch_current_file = None
+            st.session_state.batch_results = []
+            st.session_state.batch_progress = 0
+            st.session_state.batch_paused = False
+            st.session_state.uploaded_files = []
             
             st.success(f"✅ New session created: {new_session_id[:8]}...")
             st.rerun()
     
-    # State selection
-    st.header("🏛️ Step 1: Select State")
+    # Processing mode toggle
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.header("🏛️ Step 1: Select State & Mode")
+    with col2:
+        batch_mode = st.toggle("📦 Batch Mode", value=st.session_state.batch_mode, help="Process multiple files at once")
+        if batch_mode != st.session_state.batch_mode:
+            st.session_state.batch_mode = batch_mode
+            st.rerun()
     
+    # State selection
     state_options = [f"{code} - {info['name']}" for code, info in AVAILABLE_STATES.items()]
     selected_state_option = st.selectbox(
         "Choose the state for processing:",
@@ -635,143 +1283,109 @@ def show_simple_ui():
     st.session_state.selected_state = selected_state_option.split(" - ")[0]
     
     # File upload
-    st.header("📁 Step 2: Upload PDF File")
+    st.header("📁 Step 2: Upload PDF File(s)")
     
     # Display file size limit warning
-    st.info("📊 **Maximum file size: 15 Pages**")
+    if st.session_state.batch_mode:
+        st.info("📊 **Batch Mode**: Upload multiple files (max 15 pages each)")
+    else:
+        st.info("📊 **Single File Mode**: Upload one file (max 15 pages)")
     
+    # File uploader - multiple files in batch mode
     uploaded_file = st.file_uploader(
-        "Choose a PDF file to process",
+        "Choose PDF file(s) to process",
         type=['pdf'],
-        accept_multiple_files=False,
+        accept_multiple_files=st.session_state.batch_mode,
         key="pdf_uploader",
-        help="Upload a PDF file (max 15 pages)"
+        help="Upload PDF file(s) (max 15 pages each)"
     )
     
     if uploaded_file is not None:
-        # Check file size (500 MB limit)
-        MAX_FILE_SIZE = 500 * 1024 * 1024  # 500 MB in bytes
-        
-        if uploaded_file.size > MAX_FILE_SIZE:
-            st.error(f"❌ **File too large!** ({format_file_size(uploaded_file.size)})")
-            st.error(f"Maximum allowed size is {format_file_size(MAX_FILE_SIZE)}")
-            st.stop()
-        
-        # Check if this is a new file (prevent re-uploading on every render)
-        current_file_id = f"{uploaded_file.name}_{uploaded_file.size}"
-        
-        if 'last_uploaded_file_id' not in st.session_state:
-            st.session_state.last_uploaded_file_id = None
-        
-        if st.session_state.last_uploaded_file_id != current_file_id:
-            try:
-                # Upload file using session manager
-                session_mgr = st.session_state.session_manager
+        # Batch mode - handle multiple files
+        if st.session_state.batch_mode:
+            if isinstance(uploaded_file, list) and len(uploaded_file) > 0:
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    st.success(f"✅ {len(uploaded_file)} file(s) selected")
+                with col2:
+                    if st.button("➕ Add to Queue", type="primary", use_container_width=True):
+                        with st.spinner("Adding files to batch queue..."):
+                            added = add_files_to_batch(
+                                uploaded_file, 
+                                st.session_state.selected_state,
+                                st.session_state.session_id
+                            )
+                        if added > 0:
+                            st.success(f"✅ Added {added} file(s) to batch queue")
+                        st.rerun()
                 
-                with st.spinner(f"Uploading {uploaded_file.name}..."):
-                    temp_path = session_mgr.upload_file(
-                        st.session_state.session_id, 
-                        uploaded_file, 
-                        st.session_state.selected_state
-                    )
-                
-                if temp_path:
-                    # Validate PDF is not scanned
-                    is_valid, message = validate_pdf_not_scanned(temp_path, uploaded_file.name)
-                    
-                    if not is_valid:
-                        # Scanned PDF detected - reject and clean up
-                        st.error(message)
-                        # Remove the uploaded file
-                        if os.path.exists(temp_path):
-                            os.remove(temp_path)
-                        st.session_state.temp_pdf_path = None
-                        st.stop()
-                    elif message:
-                        # Hybrid PDF warning
-                        st.warning(message)
-                    
-                    st.session_state.temp_pdf_path = temp_path
-                    st.session_state.last_uploaded_file_id = current_file_id
-                    st.success(f"✅ Uploaded: {uploaded_file.name} ({format_file_size(uploaded_file.size)})")
-                else:
-                    st.error("❌ Failed to upload file - check logs for details")
-            except Exception as e:
-                st.error(f"❌ **File Upload Failed**")
-                st.error(f"Error: {str(e)}")
-                import traceback
-                with st.expander("Error Details"):
-                    st.code(traceback.format_exc())
+                # Show batch processing interface
+                show_batch_processing_interface()
+            else:
+                st.info("👆 Please select files to add to batch queue")
+        
+        # Single file mode - handle one file
         else:
-            # File already uploaded
-            if st.session_state.temp_pdf_path:
-                st.success(f"✅ File ready: {uploaded_file.name} ({format_file_size(uploaded_file.size)})")
-        
-        # Processing section
-        st.header("🔄 Step 3: Process File")
-        
-        col1, col2 = st.columns([1, 1])
-        
-        with col1:
-            if not st.session_state.processing:
-                if st.button("🚀 Start Processing", type="primary", use_container_width=True):
-                    st.session_state.processing = True
-                    st.session_state.current_step = 0
-                    st.session_state.processing_time = None  # Reset processing time
-                    st.rerun()
+            # Check file size (500 MB limit)
+            MAX_FILE_SIZE = 500 * 1024 * 1024  # 500 MB in bytes
+            
+            if uploaded_file.size > MAX_FILE_SIZE:
+                st.error(f"❌ **File too large!** ({format_file_size(uploaded_file.size)})")
+                st.error(f"Maximum allowed size is {format_file_size(MAX_FILE_SIZE)}")
+                st.stop()
+            
+            # Check if this is a new file (prevent re-uploading on every render)
+            current_file_id = f"{uploaded_file.name}_{uploaded_file.size}"
+            
+            if 'last_uploaded_file_id' not in st.session_state:
+                st.session_state.last_uploaded_file_id = None
+            
+            if st.session_state.last_uploaded_file_id != current_file_id:
+                try:
+                    # Upload file using session manager
+                    session_mgr = st.session_state.session_manager
+                    
+                    with st.spinner(f"Uploading {uploaded_file.name}..."):
+                        temp_path = session_mgr.upload_file(
+                            st.session_state.session_id, 
+                            uploaded_file, 
+                            st.session_state.selected_state
+                        )
+                    
+                    if temp_path:
+                        # Validate PDF is not scanned
+                        is_valid, message = validate_pdf_not_scanned(temp_path, uploaded_file.name)
+                        
+                        if not is_valid:
+                            # Scanned PDF detected - reject and clean up
+                            st.error(message)
+                            # Remove the uploaded file
+                            if os.path.exists(temp_path):
+                                os.remove(temp_path)
+                            st.session_state.temp_pdf_path = None
+                            st.stop()
+                        elif message:
+                            # Hybrid PDF warning
+                            st.warning(message)
+                        
+                        st.session_state.temp_pdf_path = temp_path
+                        st.session_state.last_uploaded_file_id = current_file_id
+                        st.success(f"✅ Uploaded: {uploaded_file.name} ({format_file_size(uploaded_file.size)})")
+                    else:
+                        st.error("❌ Failed to upload file - check logs for details")
+                except Exception as e:
+                    st.error(f"❌ **File Upload Failed**")
+                    st.error(f"Error: {str(e)}")
+                    import traceback
+                    with st.expander("Error Details"):
+                        st.code(traceback.format_exc())
             else:
-                if st.button("⏹️ Stop Processing", type="secondary", use_container_width=True):
-                    st.session_state.processing = False
-                    st.session_state.current_step = 0
-                    st.rerun()
-        
-        with col2:
-            if st.button("🗑️ Clear & Reset", use_container_width=True):
-                # Reset everything
-                st.session_state.processing = False
-                st.session_state.current_step = 0
-                st.session_state.step_status = {}
-                st.session_state.processed_file_path = None
-                st.session_state.processing_time = None  # Reset processing time
-                if st.session_state.temp_pdf_path and os.path.exists(st.session_state.temp_pdf_path):
-                    os.remove(st.session_state.temp_pdf_path)
-                st.session_state.temp_pdf_path = None
-                st.rerun()
-        
-        # Processing progress
-        if st.session_state.processing:
-            # Create a placeholder for dynamic updates
-            progress_placeholder = st.empty()
-            status_placeholder = st.empty()
+                # File already uploaded
+                if st.session_state.temp_pdf_path:
+                    st.success(f"✅ File ready: {uploaded_file.name} ({format_file_size(uploaded_file.size)})")
             
-            with progress_placeholder.container():
-                show_processing_steps()
-            
-            # Auto-process with real-time updates
-            result = process_single_pdf_simple(
-                st.session_state.temp_pdf_path, 
-                st.session_state.selected_state,
-                st.session_state.session_id,
-                progress_placeholder,  # Pass placeholder for updates
-                status_placeholder
-            )
-            
-            if result:
-                st.session_state.processed_file_path = result
-                st.session_state.processing = False
-                success_msg = "🎉 Processing completed successfully!"
-                if st.session_state.processing_time:
-                    success_msg += f" ⏱️ Total time: {st.session_state.processing_time}"
-                st.success(success_msg)
-            else:
-                st.session_state.processing = False
-                st.error("❌ Processing failed!")
-            
-            st.rerun()
-        
-        # Results section
-        if st.session_state.processed_file_path and os.path.exists(st.session_state.processed_file_path):
-            show_results_section()
+            # Call the single file processing function (has both buttons)
+            show_single_file_processing()
     else:
         st.info("👆 Please upload a PDF file to begin processing")
 
@@ -838,6 +1452,14 @@ def show_results_section():
     
     st.success(success_msg)
     
+    # Show chunk processing stats if available (for chunked documents)
+    if hasattr(st.session_state, 'chunk_stats') and st.session_state.chunk_stats:
+        chunk_info = st.session_state.chunk_stats
+        st.info(
+            f"📊 **Chunked Processing Details:** Processed {chunk_info['chunks_processed']}/{chunk_info['total_chunks']} chunks | "
+            f"Final output: {chunk_info['character_count']:,} characters"
+        )
+    
     col1, col2 = st.columns([2, 1])
     
     with col1:
@@ -861,6 +1483,12 @@ def show_results_section():
         if st.session_state.processing_time:
             st.metric("Processing Time", st.session_state.processing_time)
         
+        # Show chunk stats in metrics if available
+        if hasattr(st.session_state, 'chunk_stats') and st.session_state.chunk_stats:
+            chunk_info = st.session_state.chunk_stats
+            st.metric("Chunks Processed", f"{chunk_info['chunks_processed']}/{chunk_info['total_chunks']}")
+            st.metric("Character Count", f"{chunk_info['character_count']:,}")
+        
         # Download button
         try:
             with open(st.session_state.processed_file_path, 'rb') as f:
@@ -880,14 +1508,17 @@ def show_single_file_processing():
     """Show single file processing interface"""
     st.header("🔄 Step 3: Process File")
     
-    col1, col2 = st.columns([1, 1])
+    col1, col2, col3 = st.columns([1, 1, 1])
     
     with col1:
         if not st.session_state.processing:
-            if st.button("🚀 Start Processing", type="primary", use_container_width=True):
+            if st.button("🚀 Process (Vision)", type="primary", use_container_width=True, 
+                        help="Fast processing with Claude Vision API"):
                 st.session_state.processing = True
                 st.session_state.current_step = 0
-                st.session_state.processing_time = None  # Reset processing time
+                st.session_state.processing_time = None
+                st.session_state.chunk_stats = None
+                st.session_state.process_method = "vision"
                 st.rerun()
         else:
             if st.button("⏹️ Stop Processing", type="secondary", use_container_width=True):
@@ -896,17 +1527,39 @@ def show_single_file_processing():
                 st.rerun()
     
     with col2:
-        if st.button("🗑️ Clear & Reset", use_container_width=True):
-            # Reset everything
-            st.session_state.processing = False
-            st.session_state.current_step = 0
-            st.session_state.step_status = {}
-            st.session_state.processed_file_path = None
-            st.session_state.processing_time = None  # Reset processing time
-            if st.session_state.temp_pdf_path and os.path.exists(st.session_state.temp_pdf_path):
-                os.remove(st.session_state.temp_pdf_path)
-            st.session_state.temp_pdf_path = None
-            st.rerun()
+        if not st.session_state.processing:
+            if st.button("📄 Process (PDFPlumber)", use_container_width=True, 
+                        help="Reliable extraction with state-specific cleaning"):
+                st.session_state.processing = True
+                st.session_state.current_step = 0
+                st.session_state.processing_time = None
+                st.session_state.chunk_stats = None
+                st.session_state.process_method = "pdfplumber"
+                st.rerun()
+        else:
+            if st.button("🗑️ Clear & Reset", use_container_width=True):
+                # Reset everything
+                st.session_state.processing = False
+                st.session_state.current_step = 0
+                st.session_state.step_status = {}
+                st.session_state.processed_file_path = None
+                st.session_state.processing_time = None
+                st.session_state.chunk_stats = None
+                if st.session_state.temp_pdf_path and os.path.exists(st.session_state.temp_pdf_path):
+                    os.remove(st.session_state.temp_pdf_path)
+                st.session_state.temp_pdf_path = None
+                st.rerun()
+    
+    with col3:
+        if not st.session_state.processing:
+            if st.button("🏷️ Tag-Then-Clean", use_container_width=True,
+                        help="Tag raw text first, then clean (most accurate)"):
+                st.session_state.processing = True
+                st.session_state.current_step = 0
+                st.session_state.processing_time = None
+                st.session_state.chunk_stats = None
+                st.session_state.process_method = "tag_then_clean"
+                st.rerun()
     
     # Processing progress
     if st.session_state.processing:
@@ -917,14 +1570,32 @@ def show_single_file_processing():
         with progress_placeholder.container():
             show_processing_steps()
         
-        # Auto-process with real-time updates
-        result = process_single_pdf_simple(
-            st.session_state.temp_pdf_path, 
-            st.session_state.selected_state,
-            st.session_state.session_id,
-            progress_placeholder,  # Pass placeholder for updates
-            status_placeholder
-        )
+        # Choose processing method
+        if st.session_state.process_method == "pdfplumber":
+            result = process_with_pdfplumber_pipeline(
+                st.session_state.temp_pdf_path, 
+                st.session_state.selected_state,
+                st.session_state.session_id,
+                progress_placeholder,
+                status_placeholder
+            )
+        elif st.session_state.process_method == "tag_then_clean":
+            result = process_with_tag_then_clean_pipeline(
+                st.session_state.temp_pdf_path,
+                st.session_state.selected_state,
+                st.session_state.session_id,
+                progress_placeholder,
+                status_placeholder
+            )
+        else:
+            # Default vision processing
+            result = process_single_pdf_simple(
+                st.session_state.temp_pdf_path, 
+                st.session_state.selected_state,
+                st.session_state.session_id,
+                progress_placeholder,
+                status_placeholder
+            )
         
         if result:
             st.session_state.processed_file_path = result
