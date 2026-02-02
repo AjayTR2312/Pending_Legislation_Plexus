@@ -1508,58 +1508,70 @@ def show_single_file_processing():
     """Show single file processing interface"""
     st.header("🔄 Step 3: Process File")
     
-    col1, col2, col3 = st.columns([1, 1, 1])
+    # Add some spacing
+    st.write("")
+    st.write("")
     
-    with col1:
-        if not st.session_state.processing:
-            if st.button("🚀 Process (Vision)", type="primary", use_container_width=True, 
-                        help="Fast processing with Claude Vision API"):
-                st.session_state.processing = True
-                st.session_state.current_step = 0
-                st.session_state.processing_time = None
-                st.session_state.chunk_stats = None
-                st.session_state.process_method = "vision"
-                st.rerun()
-        else:
-            if st.button("⏹️ Stop Processing", type="secondary", use_container_width=True):
-                st.session_state.processing = False
-                st.session_state.current_step = 0
-                st.rerun()
+    # Center the button with columns - wider button in middle
+    col1, col2, col3 = st.columns([1, 2, 1])
     
     with col2:
         if not st.session_state.processing:
-            if st.button("📄 Process (PDFPlumber)", use_container_width=True, 
-                        help="Reliable extraction with state-specific cleaning"):
-                st.session_state.processing = True
-                st.session_state.current_step = 0
-                st.session_state.processing_time = None
-                st.session_state.chunk_stats = None
-                st.session_state.process_method = "pdfplumber"
-                st.rerun()
-        else:
-            if st.button("🗑️ Clear & Reset", use_container_width=True):
-                # Reset everything
-                st.session_state.processing = False
-                st.session_state.current_step = 0
-                st.session_state.step_status = {}
-                st.session_state.processed_file_path = None
-                st.session_state.processing_time = None
-                st.session_state.chunk_stats = None
-                if st.session_state.temp_pdf_path and os.path.exists(st.session_state.temp_pdf_path):
-                    os.remove(st.session_state.temp_pdf_path)
-                st.session_state.temp_pdf_path = None
-                st.rerun()
-    
-    with col3:
-        if not st.session_state.processing:
-            if st.button("🏷️ Tag-Then-Clean", use_container_width=True,
-                        help="Tag raw text first, then clean (most accurate)"):
+            # Main process button - centered and prominent
+            if st.button("🚀 Process Document", 
+                        type="primary", 
+                        use_container_width=True,
+                        help="Start processing with AI-powered Tag-Then-Clean workflow"):
                 st.session_state.processing = True
                 st.session_state.current_step = 0
                 st.session_state.processing_time = None
                 st.session_state.chunk_stats = None
                 st.session_state.process_method = "tag_then_clean"
                 st.rerun()
+        else:
+            # Show processing status
+            st.warning("⏳ **Processing...**\n\nPlease wait while we process your document")
+    
+    # Commented out alternative processing methods
+    # with col1:
+    #     if not st.session_state.processing:
+    #         if st.button("🚀 Process (Vision)", type="primary", use_container_width=True, 
+    #                     help="Fast processing with Claude Vision API"):
+    #             st.session_state.processing = True
+    #             st.session_state.current_step = 0
+    #             st.session_state.processing_time = None
+    #             st.session_state.chunk_stats = None
+    #             st.session_state.process_method = "vision"
+    #             st.rerun()
+    #     else:
+    #         if st.button("⏹️ Stop Processing", type="secondary", use_container_width=True):
+    #             st.session_state.processing = False
+    #             st.session_state.current_step = 0
+    #             st.rerun()
+    
+    # with col2:
+    #     if not st.session_state.processing:
+    #         if st.button("📄 Process (PDFPlumber)", use_container_width=True, 
+    #                     help="Reliable extraction with state-specific cleaning"):
+    #             st.session_state.processing = True
+    #             st.session_state.current_step = 0
+    #             st.session_state.processing_time = None
+    #             st.session_state.chunk_stats = None
+    #             st.session_state.process_method = "pdfplumber"
+    #             st.rerun()
+    #     else:
+    #         if st.button("🗑️ Clear & Reset", use_container_width=True):
+    #             # Reset everything
+    #             st.session_state.processing = False
+    #             st.session_state.current_step = 0
+    #             st.session_state.step_status = {}
+    #             st.session_state.processed_file_path = None
+    #             st.session_state.processing_time = None
+    #             st.session_state.chunk_stats = None
+    #             if st.session_state.temp_pdf_path and os.path.exists(st.session_state.temp_pdf_path):
+    #                 os.remove(st.session_state.temp_pdf_path)
+    #             st.session_state.temp_pdf_path = None
+    #             st.rerun()
     
     # Processing progress
     if st.session_state.processing:
