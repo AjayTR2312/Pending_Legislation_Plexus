@@ -1,22 +1,28 @@
 """
 Simple PDF to Text Converter using Claude API (Visual Mode)
 ============================================================
-
+ 
 Converts PDFs to text using Claude Opus 4.6 with visual interpretation.
 Each PDF page is rendered as an image and sent to Claude for visual reading,
 which provides more accurate detection of strikethrough formatting.
-
+ 
 Uses pypdfium2 (Google PDFium) for PDF-to-image rendering.
-
+ 
 Usage:
-    python simple_pdf_to_text.py <pdf_file> [state_code] [output_file]
-
+    python simple_pdf_to_text.py <pdf_file> [state_code] [output_file] [--reconcile]
+ 
+Options:
+    --reconcile    Enable 3-pass reconciliation (visual + document + merge).
+                   Disabled by default for faster runtime.
+ 
 Examples:
     python simple_pdf_to_text.py document.pdf
     python simple_pdf_to_text.py document.pdf FL
     python simple_pdf_to_text.py document.pdf FL output.txt
+    python simple_pdf_to_text.py document.pdf FL output.txt --reconcile
+    python simple_pdf_to_text.py document.pdf FL --reconcile
 """
-
+ 
 import anthropic
 import requests
 import json
@@ -29,27 +35,27 @@ import io
 import logging
 from pathlib import Path
 from datetime import datetime
-
+ 
 import pypdfium2 as pdfium
 from PIL import Image
-
+ 
 # Fix encoding for Windows console
 if sys.platform == 'win32':
     import codecs
     sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer, 'strict')
     sys.stderr = codecs.getwriter('utf-8')(sys.stderr.buffer, 'strict')
-
+ 
 # Disable SSL warnings
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 ssl._create_default_https_context = ssl._create_unverified_context
-
+ 
 # Configuration
 WORKSPACE_ID = "AgentTraininJaH4"
 TOKEN_URL = "https://aiplatform.gcs.int.thomsonreuters.com/v1/anthropic/token"
 PROJECT_ROOT = Path(__file__).parent.absolute()
-PROMPTS_FILE = os.path.join(PROJECT_ROOT, "conversion_prompts.txt")
-
+PROMPTS_FILE = os.path.join(PROJECT_ROOT, "conversion_prompts.md")
+ 
 # Available states for prompts
 AVAILABLE_STATES = {
     "AR": "Arkansas", "CA": "California", "CO": "Colorado", "CT": "Connecticut",
@@ -60,37 +66,31 @@ AVAILABLE_STATES = {
     "OK": "Oklahoma", "SD": "South Dakota", "TN": "Tennessee", "TX": "Texas",
     "VT": "Vermont", "WI": "Wisconsin", "WY": "Wyoming"
 }
-
-# Pricing for claude-opus-4-6 (per 1,000 tokens)
-MODEL_PRICING = {
-    "input_cost_per_1k":  0.005,
-    "output_cost_per_1k": 0.025,
-}
-
+ 
 # Cached prompts from markdown file
 _PROMPTS_CACHE = None
-
+ 
 def load_prompts_from_markdown():
     """
-    Load prompt templates from conversion_prompts.txt file.
-    
+    Load prompt templates from conversion_prompts.md file.
+   
     Returns:
         dict: Dictionary containing all prompt templates
     """
     global _PROMPTS_CACHE
-    
+   
     if _PROMPTS_CACHE is not None:
         return _PROMPTS_CACHE
-    
+   
     try:
         with open(PROMPTS_FILE, 'r', encoding='utf-8') as f:
             content = f.read()
-        
+       
         # Parse sections from markdown
         sections = {}
         current_section = None
         current_content = []
-        
+       
         for line in content.split('\n'):
             if line.startswith('## '):
                 if current_section:
@@ -101,27 +101,27 @@ def load_prompts_from_markdown():
                 continue
             elif current_section:
                 current_content.append(line)
-        
+       
         # Add last section
         if current_section:
             sections[current_section] = '\n'.join(current_content).strip()
-        
+       
         _PROMPTS_CACHE = sections
         logging.info(f"✅ Loaded {len(sections)} prompt templates from {PROMPTS_FILE}")
         return sections
-        
+       
     except Exception as e:
         logging.error(f"❌ Error loading prompts from markdown: {e}")
         return {}
-
+ 
 def setup_logging():
     """Setup simple logging configuration."""
     log_folder = os.path.join(PROJECT_ROOT, "logs")
     os.makedirs(log_folder, exist_ok=True)
-    
+   
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     log_file = os.path.join(log_folder, f'simple_pdf_to_text_{timestamp}.log')
-    
+   
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s',
@@ -131,11 +131,11 @@ def setup_logging():
         ]
     )
     logging.info(f"Logging to: {log_file}")
-
+ 
 def get_anthropic_client():
     """
     Get Anthropic API client with credentials from Thomson Reuters platform.
-    
+   
     Returns:
         anthropic.Anthropic: Client instance or None if failed
     """
@@ -144,7 +144,7 @@ def get_anthropic_client():
         # Use verify=False since SSL verification is disabled globally
         resp = requests.post(TOKEN_URL, headers=None, json=payload, verify=False)
         credentials = json.loads(resp.content)
-        
+       
         if 'anthropic_api_key' in credentials:
             logging.info("✅ Successfully obtained Anthropic API key")
             return anthropic.Anthropic(api_key=credentials["anthropic_api_key"])
@@ -154,14 +154,14 @@ def get_anthropic_client():
     except Exception as e:
         logging.error(f"❌ Failed to initialize Anthropic client: {e}")
         return None
-
+ 
 def load_state_template(state_code=None):
     """
     Load state-specific rules from netscan_state_template.json.
-
+ 
     Args:
         state_code (str): Two-letter state code, or None for default
-
+ 
     Returns:
         dict: State config dict, or None if not found
     """
@@ -169,11 +169,11 @@ def load_state_template(state_code=None):
     if not os.path.exists(template_path):
         logging.warning(f"Template file not found: {template_path}")
         return None
-
+ 
     try:
         with open(template_path, 'r', encoding='utf-8') as f:
             template = json.load(f)
-
+ 
         if state_code and state_code in template.get("states", {}):
             state_config = template["states"][state_code]
             logging.info(f"Loaded template for {state_code} - {state_config.get('state_name', '')}")
@@ -186,26 +186,26 @@ def load_state_template(state_code=None):
     except Exception as e:
         logging.error(f"Error loading template: {e}")
         return None
-
+ 
 def detect_state_from_filename(pdf_path):
     """
     Attempt to detect state code from filename using numerical_id patterns
     in the template.
-
+ 
     Args:
         pdf_path (str): Path to PDF file
-
+ 
     Returns:
         str: Detected state code, or None
     """
     template_path = os.path.join(PROJECT_ROOT, "netscan_state_template.json")
     if not os.path.exists(template_path):
         return None
-
+ 
     try:
         with open(template_path, 'r', encoding='utf-8') as f:
             template = json.load(f)
-
+ 
         filename = Path(pdf_path).name
         for code, config in template.get("states", {}).items():
             num_id = config.get("numerical_id", "")
@@ -215,51 +215,50 @@ def detect_state_from_filename(pdf_path):
         return None
     except Exception:
         return None
-
+ 
 def detect_state_from_content(client, pdf_path):
     """
     Detect state from PDF content by analyzing the first page.
     Uses Claude to identify state based on bill format, structure, language, and content.
-
+ 
     Args:
         client: Anthropic client instance
         pdf_path (str): Path to PDF file
-
+ 
     Returns:
         str: Detected state code, or None
     """
     try:
-        detect_start = time.time()
         logging.info("🔍 Analyzing PDF content to detect state...")
-        
+       
         # Render first page only
         pdf = pdfium.PdfDocument(pdf_path)
         if len(pdf) == 0:
             return None
-        
+       
         page = pdf[0]
-        bitmap = page.render(scale=100/72)  # 100 DPI is enough to read state/bill text
+        bitmap = page.render(scale=400/72)
         pil_image = bitmap.to_pil()
-        
+       
         # Convert to base64
         buf = io.BytesIO()
         pil_image.save(buf, format="PNG", optimize=True)
         png_bytes = buf.getvalue()
         b64_data = base64.b64encode(png_bytes).decode('utf-8')
         pdf.close()
-
+ 
         # Ask Claude to identify the state
         template_path = os.path.join(PROJECT_ROOT, "netscan_state_template.json")
         with open(template_path, 'r', encoding='utf-8') as f:
             template = json.load(f)
-        
-        state_list = ", ".join([f"{code} ({config['state_name']})" 
+       
+        state_list = ", ".join([f"{code} ({config['state_name']})"
                                 for code, config in template.get("states", {}).items()])
-
+ 
         prompt = f"""Analyze this legislative bill document and identify which US state it is from.
-
+ 
 Available states: {state_list}
-
+ 
 Examine the ENTIRE PAGE for clues:
 1. Bill number format (e.g., HB 1234, SB 567, different states use different formats)
 2. Legislative language patterns (e.g., "Be it enacted by the Legislature of the State of...")
@@ -268,11 +267,11 @@ Examine the ENTIRE PAGE for clues:
 5. Footer/header patterns (some states have distinctive formats)
 6. Legal citation formats (different states cite statutes differently)
 7. Committee names, sponsor names, or procedural language
-
+ 
 State name may NOT appear explicitly in the header. You must judge based on the overall bill structure, format, and legislative language patterns that are unique to each state.
-
+ 
 Respond with ONLY the 2-letter state code (e.g., "KS", "FL", "CO"). If you cannot confidently determine the state, respond with "UNKNOWN"."""
-
+ 
         message = client.messages.create(
             model="claude-opus-4-6",
             max_tokens=100,
@@ -295,256 +294,346 @@ Respond with ONLY the 2-letter state code (e.g., "KS", "FL", "CO"). If you canno
                 ],
             }]
         )
-
+ 
         response = message.content[0].text.strip().upper()
-        
+       
         # Validate response is a known state code
         if response in template.get("states", {}):
             state_name = template["states"][response]["state_name"]
-            elapsed = time.time() - detect_start
             logging.info(f"✅ Auto-detected state {response} ({state_name}) from PDF content analysis")
-            print(f"⏱️  State detection took: {elapsed:.1f}s")
             return response
-        
-        elapsed = time.time() - detect_start
-        logging.warning(f"⚠️  Could not confidently detect state (response: {response}) — {elapsed:.1f}s")
-        print(f"⏱️  State detection took: {elapsed:.1f}s (inconclusive)")
+       
+        logging.warning(f"⚠️  Could not confidently detect state (response: {response})")
         return None
-
+ 
     except Exception as e:
-        elapsed = time.time() - detect_start
-        logging.error(f"❌ Content-based state detection failed: {e} — {elapsed:.1f}s")
+        logging.error(f"❌ Content-based state detection failed: {e}")
         return None
-
+ 
 def get_conversion_prompt(state_config=None):
     """
     Build conversion prompt from state template rules.
     Uses state-specific formatting rules for accurate markup detection.
-
+ 
     Args:
         state_config (dict): State config from netscan_state_template.json, or None for default
-
+ 
     Returns:
         str: Conversion prompt
     """
     prompts = load_prompts_from_markdown()
-    precision_guidance = prompts.get("🎯 PRECISION GUIDANCE (Common to All Templates)", "")
-    if precision_guidance:
-        logging.info(f"✅ Precision guidance loaded: {len(precision_guidance)} chars")
-    else:
-        logging.warning("⚠️  Precision guidance NOT found in conversion_prompts.txt")
-
+    precision_guidance = prompts.get("Precision Guidance (Common to All Prompts)", "")
+ 
     if not state_config:
-        raw = prompts.get("📋 TEMPLATE 1: Default Visual Mode Prompt (No State Specified)", "")
-        if "```" in raw:
-            parts = raw.split("```")
-            default_prompt = parts[1].strip() if len(parts) > 1 else raw
-        else:
-            default_prompt = raw
-        if default_prompt:
-            logging.info(f"✅ Default prompt template loaded: {len(default_prompt)} chars")
-        else:
-            logging.warning("⚠️  Default prompt template NOT found in conversion_prompts.txt")
+        default_prompt = prompts.get("Default Visual Mode Prompt (No State Specified)", "")
         return default_prompt.replace("{PRECISION_GUIDANCE}", precision_guidance)
-
-    state_name = state_config.get("state_name", "")
-
-    # -------------------------------------------------------------------------
-    # Section 1 — Task
-    # -------------------------------------------------------------------------
-    sections = []
-    sections.append(
-        f"Convert these PDF page images of a {state_name} legislative bill to plain text with markup tags."
-    )
-
-    # -------------------------------------------------------------------------
-    # Section 2 — What to remove
-    # -------------------------------------------------------------------------
+ 
+    # Build deletions instruction
     deletions = state_config.get("deletions", "")
-    if deletions:
-        sections.append(
-            "WHAT TO REMOVE FROM OUTPUT:\n"
-            f"{deletions}"
-        )
-
-    # -------------------------------------------------------------------------
-    # Section 3 — Tag format (always first so the model knows the syntax)
-    # -------------------------------------------------------------------------
-    sections.append(
-        "TAG FORMAT:\n"
-        "Two tag types only:\n"
-        "  Deleted / struck-through text  →  [D>text<D]   ([D> opens,  <D] closes)\n"
-        "  Added / underlined text        →  [A>text<A]   ([A> opens,  <A] closes)\n"
-        "Never use markdown formatting (**, *, ~~) anywhere in the output.\n"
-        "Every opening tag must have a matching closing tag.\n"
-        "Content inside tags must be completely plain text — no asterisks, no underscores."
-    )
-
-    # -------------------------------------------------------------------------
-    # Section 4 — Deleted text rules
-    # -------------------------------------------------------------------------
+    delete_instruction = f"REMOVE the following from the output: {deletions}." if deletions else ""
+ 
+    # Build delete markup instruction
     delete_markup = state_config.get("delete_markup", {})
     delete_rules = []
     if delete_markup.get("strike_out"):
-        delete_rules.append("text with strikethrough formatting (a horizontal line drawn through it)")
+        delete_rules.append("text with strikethrough/stricken formatting (a horizontal line drawn through it)")
     if delete_markup.get("brackets"):
         bracket_type = delete_markup.get("bracket_type", "bracketed")
-        delete_rules.append(f"{bracket_type} text — include the bracket characters inside the tag: [D>[text]<D]")
+        delete_rules.append(f"{bracket_type} text INCLUDING THE BRACKET CHARACTERS THEMSELVES (e.g., [D>[text]<D] NOT [D>text<D])")
     if delete_markup.get("italic"):
         delete_rules.append("italic text that is also bracketed")
     if delete_markup.get("bold"):
         delete_rules.append("bold text that is also bracketed")
-
-    delete_custom_rules = delete_markup.get("custom_rules", [])
-
-    if delete_rules or delete_custom_rules:
-        block = "DELETED TEXT — wrap these with [D>...<D]:\n"
-        for r in delete_rules:
-            block += f"  - {r}\n"
-        if delete_custom_rules:
-            block += "Additional delete rules:\n"
-            for r in delete_custom_rules:
-                block += f"  - {r}\n"
-        sections.append(block.rstrip())
-
-    # -------------------------------------------------------------------------
-    # Section 5 — Added text rules
-    # -------------------------------------------------------------------------
+    for rule in delete_markup.get("custom_rules", []):
+        delete_rules.append(rule)
+ 
+    delete_markup_instruction = ""
+    if delete_rules:
+        delete_markup_instruction = (
+            "DELETED TEXT MARKUP: Wrap the following types of text with [D> and <D] tags "
+            "(opening tag is [D> and closing tag is <D]): "
+            + "; ".join(delete_rules) + ". "
+        )
+ 
+    # Build add markup instruction
     add_markup = state_config.get("add_markup", {})
     add_rules = []
     if add_markup.get("underline"):
-        add_rules.append(
-            "underlined text — including special characters (commas, periods, semicolons). "
-            "If a special character is underlined it MUST be tagged."
-        )
+        add_rules.append("underlined text (including special characters such as commas, periods, semicolons, etc. If a special character like ',' is underlined, it MUST be tagged)")
     if add_markup.get("bold"):
-        add_rules.append("bold text (visibly thicker strokes than surrounding body text)")
+        add_rules.append("bold text")
     if add_markup.get("italic"):
-        add_rules.append("italic text (characters slant right; upright = not italic)")
+        add_rules.append("italic text")
     if add_markup.get("all_caps"):
         condition = add_markup.get("all_caps_condition", "")
-        add_rules.append(f"ALL CAPS text{' (' + condition + ')' if condition else ''}")
+        if condition:
+            add_rules.append(f"ALL CAPS text ({condition})")
+        else:
+            add_rules.append("ALL CAPS text")
     if add_markup.get("brackets"):
         add_rules.append("bracketed text")
-
-    add_custom_rules = add_markup.get("custom_rules", [])
-
+    for rule in add_markup.get("custom_rules", []):
+        add_rules.append(rule)
+   
+    # Log the add_rules for debugging
     if add_rules:
-        logging.info(f"Add markup rules for {state_name}: {', '.join(add_rules)}")
-    if add_custom_rules:
-        logging.info(f"Add custom rules for {state_name}: {', '.join(add_custom_rules)}")
-
-    if add_rules or add_custom_rules:
-        block = "ADDED TEXT — wrap these with [A>...<A]:\n"
-        for r in add_rules:
-            block += f"  - {r}\n"
-
-        # Negative instructions for disabled formats
-        no_tag_types = []
+        logging.info(f"Add markup rules for {state_config.get('state_name', 'Unknown')}: {', '.join(add_rules)}")
+    else:
+        logging.info(f"No add markup rules for {state_config.get('state_name', 'Unknown')}")
+ 
+    add_markup_instruction = ""
+    if add_rules:
+        # Build explicit negative instructions FIRST for maximum emphasis
+        negative_instructions = []
         if not add_markup.get("bold"):
-            no_tag_types.append("bold")
+            negative_instructions.append(
+                "CRITICAL: Do NOT tag bold text. Bold text has thicker strokes but should NOT be tagged. "
+                "Even if bold text looks important or different, do NOT tag it."
+            )
         if not add_markup.get("underline"):
-            no_tag_types.append("underlined")
+            negative_instructions.append(
+                "CRITICAL: Do NOT tag underlined text. Even if text has a line underneath, do NOT tag it."
+            )
         if not add_markup.get("italic"):
-            no_tag_types.append("italic")
+            negative_instructions.append(
+                "CRITICAL: Do NOT tag italic text. Even if text is slanted, do NOT tag it."
+            )
         if not add_markup.get("all_caps"):
-            no_tag_types.append("ALL CAPS")
-        if no_tag_types:
-            block += f"Do NOT tag {', '.join(no_tag_types)} text — output as plain text with no markers.\n"
-
-        if not add_markup.get("italic"):
-            block += (
-                "Italic text in the PDF = completely plain text in the output. "
-                "No asterisks (*text*), no underscores, no markers of any kind.\n"
+            negative_instructions.append(
+                "CRITICAL: Do NOT tag ALL CAPS text. Even if text is in all capital letters, do NOT tag it."
             )
-
-        # Visual detection hints for enabled formats
+       
+        # Build format-specific visual detection hints ONLY for enabled formats
+        visual_hints = []
+        if add_markup.get("italic"):
+            visual_hints.append(
+                "For italic: italic characters are visually slanted/tilted to the right. "
+                "Regular (roman) text has upright vertical strokes. "
+                "If text has the SAME upright style as the body text, it is NOT italic."
+            )
         if add_markup.get("underline"):
-            block += (
-                "Underline detection: look for a visible line BENEATH the text baseline (not through it). "
-                "Bold thick strokes are not underline. ALL CAPS without a line beneath is not underline. "
-                "Underline bleed: a word's underline often extends a few pixels past its last character — "
-                "only tag punctuation if it has a complete, unambiguous underline clearly separate from the "
-                "preceding word's underline tail. When in doubt, do NOT tag it.\n"
+            visual_hints.append(
+                "For underline: look for a visible horizontal line drawn BENEATH the text baseline. "
+                "The underline runs UNDER the characters, not through them. "
+                "Do NOT confuse underline with strikethrough (which goes THROUGH the middle of text horizontally). "
+                "CRITICAL DISTINCTION: Bold text has thicker strokes but NO line underneath - bold is NOT underlined. "
+                "ALL CAPS text is NOT underlined unless it has a visible line beneath it. "
+                "If there is no visible horizontal line beneath the text, it is NOT underlined, even if it looks different from body text."
             )
-
-        if add_custom_rules:
-            block += "Additional rules:\n"
-            for r in add_custom_rules:
-                block += f"  - {r}\n"
-
-        sections.append(block.rstrip())
-
-    # -------------------------------------------------------------------------
-    # Section 6 — Visual-only tagging rule
-    # -------------------------------------------------------------------------
-    sections.append(
-        "VISUAL ONLY — tagging is based solely on what you see in the PDF image:\n"
-        "  - Compare each word's formatting to the surrounding body text on the same page.\n"
-        "  - Do not use document position or legislative conventions to infer formatting.\n"
-        "  - Check every word individually, including short words like 'a', 'or', 'the'.\n"
-        "  - Subsection labels like (a), (b), (c) may differ in formatting from their body text — check each separately."
+        if add_markup.get("bold"):
+            visual_hints.append(
+                "For bold: bold text has visually thicker/heavier strokes compared to regular body text."
+            )
+        if add_markup.get("all_caps"):
+            visual_hints.append(
+                "For ALL CAPS: text where every letter is uppercase, distinct from normal mixed-case text."
+            )
+        if add_markup.get("brackets"):
+            visual_hints.append(
+                "For brackets: text enclosed within bracket characters [ ]."
+            )
+       
+        # Combine instructions with negative rules FIRST
+        formatting_guidance = " ".join(negative_instructions + visual_hints)
+ 
+        add_markup_instruction = (
+            "ADDED TEXT MARKUP: Wrap ONLY the following types of text with [A> and <A] tags "
+            "(opening tag is [A> and closing tag is <A]): "
+            + "; ".join(add_rules) + ". "
+            "CRITICAL TAG FORMAT REQUIREMENTS: "
+            "1. You MUST use [A> and <A] tags exactly as specified. Example: [A>new text<A] "
+            "2. Do NOT use asterisks (*), do NOT use Markdown formatting (**bold**, *italic*), do NOT use any other markup style. "
+            "3. NEVER write *text* or **text** - this is WRONG. Always write [A>text<A] instead. "
+            "4. For text that should NOT be tagged: output it as PLAIN TEXT with NO formatting markers at all. "
+            "5. Do NOT output **text** for bold text that should not be tagged - just output the plain text without any markers. "
+            "STRICT VISUAL DETECTION RULES: "
+            "6. Tag ONLY THE EXACT formatting types listed above: " + "; ".join(add_rules) + ". "
+            "7. Do NOT tag ANY other formatting types, regardless of how they look. "
+            "8. ONLY use visual appearance in the image to detect the SPECIFIC formatting types listed. "
+            "9. Do NOT use your knowledge of legislative conventions, bill formatting rules, or "
+            "how states typically mark new/added sections. Ignore what you know about how bills work. "
+            "10. Compare each word ONLY to the surrounding body text on the same page. "
+            "If it looks the same as the body text, do NOT tag it. "
+            f"{formatting_guidance} "
+        )
+ 
+    state_name = state_config.get("state_name", "")
+    prompt = (
+        f"Convert these PDF page images of a {state_name} legislative bill to text. "
+        f"{delete_instruction} "
+        f"{delete_markup_instruction}"
+        f"{add_markup_instruction}"
+        "Use regular quotes, not smart quotes. "
+        f"{precision_guidance} "
+        "Output only the converted text with markup tags, nothing else. "
+        "Combine all pages into one continuous document."
     )
-
-    # -------------------------------------------------------------------------
-    # Section 7 — General transcription rules (from precision_guidance)
-    # -------------------------------------------------------------------------
-    if precision_guidance:
-        sections.append(precision_guidance)
-
-    # -------------------------------------------------------------------------
-    # Section 8 — Output format
-    # -------------------------------------------------------------------------
-    sections.append(
-        "OUTPUT:\n"
-        "  - Use regular quotes, not smart quotes.\n"
-        "  - Output only the converted text with markup tags — no explanations, no commentary.\n"
-        "  - Combine all pages into one continuous document."
-    )
-
-    prompt = "\n\n".join(sections)
-
+ 
     logging.info(f"Built prompt for {state_name}: {len(prompt)} chars")
-    logging.info(f"\n{'='*70}")
-    logging.info(f"FULL PROMPT BEING SENT TO CLAUDE:")
-    logging.info(f"{'='*70}")
-    logging.info(prompt)
-    logging.info(f"{'='*70}\n")
     return prompt
-
+ 
+def get_document_mode_prompt(state_config=None):
+    """
+    Build a document mode prompt from state template rules.
+    Similar to visual mode prompt but adapted for PDF document text extraction.
+ 
+    Args:
+        state_config (dict): State config from netscan_state_template.json, or None for default
+ 
+    Returns:
+        str: Document mode conversion prompt
+    """
+    if not state_config:
+        return (
+            "Convert this PDF to text. "
+            "For any text that has strikethrough/stricken formatting, wrap it with [D> and <D] tags "
+            "(opening tag is [D> and closing tag is <D]). "
+            "Remove line numbers, headers, footers, and page numbers. "
+            "Use regular quotes, not smart quotes. "
+            "Output only the converted text, nothing else."
+        )
+ 
+    state_name = state_config.get("state_name", "")
+    deletions = state_config.get("deletions", "")
+    delete_instruction = f"REMOVE the following from the output: {deletions}." if deletions else ""
+ 
+    # Build delete markup rules
+    delete_markup = state_config.get("delete_markup", {})
+    delete_rules = []
+    if delete_markup.get("strike_out"):
+        delete_rules.append("text with strikethrough/stricken formatting")
+    if delete_markup.get("brackets"):
+        bracket_type = delete_markup.get("bracket_type", "bracketed")
+        delete_rules.append(f"{bracket_type} text (text enclosed in brackets)")
+    if delete_markup.get("italic"):
+        delete_rules.append("italic text that is also bracketed")
+    if delete_markup.get("bold"):
+        delete_rules.append("bold text that is also bracketed")
+    for rule in delete_markup.get("custom_rules", []):
+        delete_rules.append(rule)
+ 
+    delete_markup_instruction = ""
+    if delete_rules:
+        delete_markup_instruction = (
+            "DELETED TEXT MARKUP: Wrap the following types of text with [D> and <D] tags "
+            "(opening tag is [D> and closing tag is <D]): "
+            + "; ".join(delete_rules) + ". "
+        )
+ 
+    # Build add markup rules
+    add_markup = state_config.get("add_markup", {})
+    add_rules = []
+    if add_markup.get("underline"):
+        add_rules.append("underlined text")
+    if add_markup.get("bold"):
+        add_rules.append("bold text")
+    if add_markup.get("italic"):
+        add_rules.append("italic text")
+    if add_markup.get("all_caps"):
+        condition = add_markup.get("all_caps_condition", "")
+        if condition:
+            add_rules.append(f"ALL CAPS text ({condition})")
+        else:
+            add_rules.append("ALL CAPS text")
+    if add_markup.get("brackets"):
+        add_rules.append("bracketed text")
+    for rule in add_markup.get("custom_rules", []):
+        add_rules.append(rule)
+ 
+    add_markup_instruction = ""
+    if add_rules:
+        # Build format-specific hints
+        visual_hints = []
+        if add_markup.get("italic"):
+            visual_hints.append("For italic: only text visually slanted/tilted, not regular upright text.")
+        if add_markup.get("underline"):
+            visual_hints.append(
+                "For underline: a visible line beneath the text, not strikethrough. "
+                "Bold text is NOT underlined."
+            )
+        if add_markup.get("bold"):
+            visual_hints.append("For bold: visually thicker/heavier strokes than body text.")
+        if add_markup.get("all_caps"):
+            visual_hints.append("For ALL CAPS: every letter uppercase, distinct from mixed-case.")
+        if add_markup.get("brackets"):
+            visual_hints.append("For brackets: text enclosed in [ ].")
+       
+        # Add explicit negative instructions for formatting types NOT in the rules
+        negative_hints = []
+        if not add_markup.get("bold"):
+            negative_hints.append("Do NOT tag bold text.")
+        if not add_markup.get("underline"):
+            negative_hints.append("Do NOT tag underlined text.")
+        if not add_markup.get("italic"):
+            negative_hints.append("Do NOT tag italic text.")
+        if not add_markup.get("all_caps"):
+            negative_hints.append("Do NOT tag ALL CAPS text.")
+       
+        visual_guidance = " ".join(visual_hints)
+        if negative_hints:
+            visual_guidance += " " + " ".join(negative_hints)
+ 
+        add_markup_instruction = (
+            "ADDED TEXT MARKUP: Wrap the following types of text with [A> and <A] tags "
+            "(opening tag is [A> and closing tag is <A]): "
+            + "; ".join(add_rules) + ". "
+            "CRITICAL TAG FORMAT REQUIREMENTS: "
+            "1. You MUST use [A> and <A] tags exactly as specified. Example: [A>new text<A] "
+            "2. Do NOT use asterisks (*), do NOT use Markdown formatting, do NOT use any other markup style. "
+            "3. NEVER write *text* or **text** - this is WRONG. Always write [A>text<A] instead. "
+            "STRICT DETECTION: Only tag the EXACT formatting types listed above. "
+            "Only tag text that is VISUALLY rendered in the SPECIFIC formatting types listed. "
+            f"{visual_guidance} "
+            "Do NOT infer or guess formatting. Do NOT tag formatting types not explicitly listed. "
+        )
+ 
+    prompt = (
+        f"Convert this {state_name} legislative bill PDF to text. "
+        f"{delete_instruction} "
+        f"{delete_markup_instruction}"
+        f"{add_markup_instruction}"
+        "Use regular quotes, not smart quotes. "
+        "Pay close attention to subsection labels like (a), (b), (c) - they may be independently "
+        "struck through even when surrounding text is not. "
+        "Output only the converted text with markup tags, nothing else."
+    )
+ 
+    logging.info(f"Built document mode prompt for {state_name}: {len(prompt)} chars")
+    return prompt
+ 
 def trim_image_borders(image, border_percent=2):
     """
     Trim borders from an image to remove headers, footers, page numbers, and margins.
-    
+   
     Args:
         image: PIL Image object
         border_percent (int): Percentage of each edge to trim (default 5%)
-        
+       
     Returns:
         PIL Image: Cropped image
     """
     width, height = image.size
-    
+   
     # Calculate pixels to trim from each edge
     left_trim = int(width * border_percent / 100)
     right_trim = width - int(width * border_percent / 100)
     top_trim = int(height * border_percent / 100)
     bottom_trim = height - int(height * border_percent / 100)
-    
+   
     # Crop the image
     cropped = image.crop((left_trim, top_trim, right_trim, bottom_trim))
-    
+   
     logging.debug(f"  Trimmed borders: {width}x{height} → {cropped.size[0]}x{cropped.size[1]}")
     return cropped
-
+ 
 def pdf_pages_to_images(pdf_path, dpi=400, trim_borders=True, border_percent=5):
     """
     Convert each PDF page to a base64-encoded PNG image using pypdfium2.
-
+ 
     Args:
         pdf_path (str): Path to PDF file
         dpi (int): Resolution for rendering (default 400 DPI)
-
+ 
     Returns:
         list: List of base64-encoded PNG strings, or None if failed
     """
@@ -552,24 +641,6 @@ def pdf_pages_to_images(pdf_path, dpi=400, trim_borders=True, border_percent=5):
         pdf = pdfium.PdfDocument(pdf_path)
         num_pages = len(pdf)
         logging.info(f"📄 PDF loaded: {num_pages} pages, rendering at {dpi} DPI")
-
-        # Create temp folder for images
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        temp_dir = os.path.join(script_dir, "temp_images")
-        os.makedirs(temp_dir, exist_ok=True)
-        
-        # Clear old images from previous runs
-        old_files = [f for f in os.listdir(temp_dir) if f.endswith('.png')]
-        if old_files:
-            logging.info(f"🗑️  Clearing {len(old_files)} old images from temp folder")
-            for old_file in old_files:
-                try:
-                    os.remove(os.path.join(temp_dir, old_file))
-                except Exception:
-                    pass  # Ignore errors if file is locked or doesn't exist
-        
-        # Get PDF base name for temp file naming
-        pdf_basename = os.path.splitext(os.path.basename(pdf_path))[0]
 
         images = []
         scale = dpi / 72  # pypdfium2 default is 72 DPI
@@ -579,212 +650,216 @@ def pdf_pages_to_images(pdf_path, dpi=400, trim_borders=True, border_percent=5):
             bitmap = page.render(scale=scale)
             pil_image = bitmap.to_pil()
 
-            # Save image to temp folder for review
-            temp_image_path = os.path.join(temp_dir, f"{pdf_basename}_page_{i+1:03d}.png")
-            pil_image.save(temp_image_path, format="PNG", optimize=True)
-
-            # Convert to PNG bytes for API
+            # Convert to PNG bytes entirely in-memory — no disk writes needed
             buf = io.BytesIO()
             pil_image.save(buf, format="PNG", optimize=True)
             png_bytes = buf.getvalue()
             b64_data = base64.b64encode(png_bytes).decode('utf-8')
 
             images.append(b64_data)
-            logging.info(f"  Page {i+1}/{num_pages}: {len(png_bytes)/1024:.0f} KB → {temp_image_path}")
+            logging.info(f"  Page {i+1}/{num_pages}: {len(png_bytes)/1024:.0f} KB rendered in-memory")
 
         pdf.close()
-        logging.info(f"📄 All {num_pages} pages rendered to images")
-        logging.info(f"🖼️  Temp images saved to: {temp_dir}")
+        logging.info(f"📄 All {num_pages} pages rendered to images (in-memory, no temp files)")
         return images
-
+ 
     except Exception as e:
         logging.error(f"❌ Error converting PDF pages to images: {e}")
         return None
-
-def fix_page_break_tag_splits(text):
-    """
-    Fix deletion/addition tags that were split at page-batch boundaries.
-
-    With batch_size=1, each page is its own API call. When a bracketed
-    deletion spans a page break, the model splits it into two tags:
-        [D>[partial text<D]\n\ncontinuation[D>]<D]
-    This merges them back into one:
-        [D>[partial text continuation]<D]
-
-    Also handles plain (non-bracket) [D> and [A> continuations where
-    a short word or phrase at the top of the next page belongs to the
-    same formatting span.
-    """
-    import re
-
-    # CT-style bracket deletions: [D>[text (no ] inside)<D]\n\nword(s)[D>]<D]
-    # The first tag has '[' but no ']' inside; the second tag has ']' but no '['
-    ct_bracket = re.compile(r'\[D>\[([^\]<]+)<D\]\n\n([^\[<\n]+)\[D\]<D\]')
-    text = ct_bracket.sub(r'[D>[\1 \2]<D]', text)
-
-    # General plain split: <X]\n\nword(s)[X>rest<X] where middle is ≤ 4 words
-    # (short middle = continuation; long middle = new unrelated tag, leave alone)
-    for tag in ['D', 'A']:
-        ot = re.escape(f'[{tag}>')
-        ct = re.escape(f'<{tag}]')
-        pattern = re.compile(ct + r'\n\n([^\[<\n]{1,40})' + ot)
-        def _merge(m, _ct=f'<{tag}]', _ot=f'[{tag}>'):
-            middle = m.group(1)
-            # Only merge if the middle text is short (≤ 4 words) — clear continuation
-            if len(middle.split()) <= 4:
-                return ' ' + middle
-            return m.group(0)
-        text = pattern.sub(_merge, text)
-
-    return text
-
-
-def convert_pdf_to_text(client, pdf_path, prompt, batch_size=1):
+ 
+def convert_pdf_to_text(client, pdf_path, prompt, batch_size=None):
     """
     Convert PDF to text using Claude API with visual interpretation.
-    Pages are processed in small batches so each call focuses on a narrow
-    window — preventing Claude from silently dropping content when
-    processing many pages and rules at once.
-
+    Processes all pages in a single API call for maximum consistency.
+ 
     Args:
         client: Anthropic client instance
         pdf_path (str): Path to PDF file
         prompt (str): Conversion prompt
-        batch_size (int): Number of pages per API call (default 3)
-
+        batch_size (int): Ignored - kept for backward compatibility
+ 
     Returns:
         str: Converted text or None if failed
     """
     try:
         start_time = time.time()
-        logging.info(f"🔄 Converting PDF (visual mode, batch_size={batch_size}): {pdf_path}")
-
+        logging.info(f"🔄 Converting PDF (visual mode, ALL PAGES IN ONE CALL): {pdf_path}")
+ 
         # Render PDF pages to images
         page_images = pdf_pages_to_images(pdf_path)
         if not page_images:
             return None
-
+ 
         total_pages = len(page_images)
-        num_batches = (total_pages + batch_size - 1) // batch_size
-        all_text_parts = []
-        total_input_tokens  = 0
-        total_output_tokens = 0
-
-        for batch_idx in range(num_batches):
-            start = batch_idx * batch_size
-            end = min(start + batch_size, total_pages)
-            batch_images = page_images[start:end]
-
-            # Build content array for this batch
-            content = []
-            for img_b64 in batch_images:
-                content.append({
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": "image/png",
-                        "data": img_b64,
-                    },
-                })
-
-            # Add batch-specific prompt
-            batch_prompt = prompt
-            if num_batches > 1:
-                batch_prompt += (
-                    f" This is pages {start+1}-{end} of {total_pages}. "
-                    "Convert only these pages. Do not add any preamble or summary."
-                )
-
+       
+        # Build content array with ALL pages
+        content = []
+        for img_b64 in page_images:
             content.append({
-                "type": "text",
-                "text": batch_prompt
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": img_b64,
+                },
             })
-
-            messages = [{"role": "user", "content": content}]
-
-            logging.info(f"🤖 Batch {batch_idx+1}/{num_batches}: pages {start+1}-{end} ({len(batch_images)} images)...")
-
-            # Retry loop for transient overload/server errors
-            max_retries = 5
-            retry_delays = [10, 30, 60, 120, 180]  # seconds between retries
-            batch_text = ""
-            for attempt in range(max_retries):
-                try:
-                    batch_text = ""
-                    with client.messages.stream(
-                        model="claude-opus-4-6",
-                        max_tokens=32768,
-                        temperature=0,
-                        messages=messages
-                    ) as stream:
-                        for text in stream.text_stream:
-                            batch_text += text
-                        final_message = stream.get_final_message()
-
-                    # Accumulate token usage
-                    in_tok  = final_message.usage.input_tokens
-                    out_tok = final_message.usage.output_tokens
-                    total_input_tokens  += in_tok
-                    total_output_tokens += out_tok
-                    b_in_cost  = (in_tok  / 1000) * MODEL_PRICING["input_cost_per_1k"]
-                    b_out_cost = (out_tok / 1000) * MODEL_PRICING["output_cost_per_1k"]
-                    logging.info(
-                        f"  Batch {batch_idx+1} tokens — "
-                        f"input: {in_tok:,}  output: {out_tok:,}  "
-                        f"cost: ${b_in_cost + b_out_cost:.4f}"
-                    )
-                    break  # success — exit retry loop
-                except Exception as e:
-                    err_str = str(e)
-                    is_overload = "overloaded" in err_str.lower() or "529" in err_str or "500" in err_str or "503" in err_str
-                    if is_overload and attempt < max_retries - 1:
-                        delay = retry_delays[attempt]
-                        logging.warning(f"  ⚠️  API overloaded (attempt {attempt+1}/{max_retries}). Retrying in {delay}s...")
-                        print(f"  ⚠️  API overloaded — retrying in {delay}s (attempt {attempt+1}/{max_retries})...")
-                        time.sleep(delay)
-                    else:
-                        raise  # non-retryable or out of retries
-
-            logging.info(f"  Batch {batch_idx+1} complete: {len(batch_text)} characters")
-            all_text_parts.append(batch_text)
-
-        converted_text = "\n\n".join(all_text_parts)
-
-        # Merge any tag spans that were split at page-batch boundaries
-        converted_text = fix_page_break_tag_splits(converted_text)
-
-        # Calculate and report total cost
-        total_in_cost  = (total_input_tokens  / 1000) * MODEL_PRICING["input_cost_per_1k"]
-        total_out_cost = (total_output_tokens / 1000) * MODEL_PRICING["output_cost_per_1k"]
-        total_cost     = total_in_cost + total_out_cost
-        cost_summary = (
-            f"💰 Cost — input: {total_input_tokens:,} tokens (${total_in_cost:.4f})  "
-            f"output: {total_output_tokens:,} tokens (${total_out_cost:.4f})  "
-            f"TOTAL: ${total_cost:.4f}"
-        )
-        logging.info(cost_summary)
-        print(cost_summary)
-
+ 
+        # Add prompt
+        content.append({
+            "type": "text",
+            "text": prompt
+        })
+ 
+        messages = [{"role": "user", "content": content}]
+ 
+        # Call Claude API with streaming - ALL PAGES AT ONCE
+        logging.info(f"🤖 Processing all {total_pages} pages in single API call...")
+ 
+        converted_text = ""
+        with client.messages.stream(
+            model="claude-opus-4-6",
+            max_tokens=32768,
+            temperature=0,
+            messages=messages
+        ) as stream:
+            for text in stream.text_stream:
+                converted_text += text
+ 
         # Log total runtime
         total_time = time.time() - start_time
         minutes = int(total_time // 60)
         seconds = int(total_time % 60)
-        logging.info(f"✅ Conversion complete: {len(converted_text)} characters ({num_batches} batches)")
+        logging.info(f"✅ Conversion complete: {len(converted_text)} characters (single pass)")
         logging.info(f"⏱️  Total runtime: {minutes}m {seconds}s ({total_time:.1f} seconds)")
         return converted_text
-
+ 
     except Exception as e:
         logging.error(f"❌ Error converting PDF: {e}")
         return None
-
+ 
+def convert_pdf_document_mode(client, pdf_path, prompt):
+    """
+    Convert PDF to text using document mode (PDF sent as document, not images).
+    Used as a second pass for verification against visual mode output.
+ 
+    Args:
+        client: Anthropic client instance
+        pdf_path (str): Path to PDF file
+        prompt (str): Conversion prompt
+ 
+    Returns:
+        str: Converted text or None if failed
+    """
+    try:
+        logging.info(f"🔄 Document mode pass: {pdf_path}")
+ 
+        with open(pdf_path, "rb") as f:
+            pdf_data = base64.b64encode(f.read()).decode('utf-8')
+ 
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "document",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "application/pdf",
+                            "data": pdf_data,
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": prompt
+                    }
+                ],
+            }
+        ]
+ 
+        converted_text = ""
+        with client.messages.stream(
+            model="claude-opus-4-6",
+            max_tokens=32768,
+            temperature=0,
+            messages=messages
+        ) as stream:
+            for text in stream.text_stream:
+                converted_text += text
+ 
+        logging.info(f"✅ Document mode complete: {len(converted_text)} characters")
+        return converted_text
+ 
+    except Exception as e:
+        logging.error(f"❌ Error in document mode conversion: {e}")
+        return None
+ 
+def reconcile_outputs(client, visual_text, doc_text):
+    """
+    Compare visual mode and document mode outputs using Claude to identify
+    and fix discrepancies in [D> tag placement.
+ 
+    Args:
+        client: Anthropic client instance
+        visual_text (str): Output from visual (image) mode
+        doc_text (str): Output from document mode
+ 
+    Returns:
+        str: Reconciled text with corrections applied
+    """
+    try:
+        logging.info("🔍 Reconciling visual and document mode outputs...")
+ 
+        reconcile_prompt = (
+            "You are given two versions of the same legislative bill text converted from PDF. "
+            "Both use [D> and <D] tags to mark strikethrough (deleted) text.\n\n"
+            "VERSION A (from visual/image analysis - generally more accurate for formatting):\n"
+            "---\n"
+            f"{visual_text}\n"
+            "---\n\n"
+            "VERSION B (from document text extraction - may catch items visual mode missed):\n"
+            "---\n"
+            f"{doc_text}\n"
+            "---\n\n"
+            "TASK: Produce the best possible merged output by following these rules:\n"
+            "1. Use VERSION A as the base text since its formatting and structure is more accurate.\n"
+            "2. Compare the [D> tag placement between both versions line by line.\n"
+            "3. If VERSION B has a [D> tag around text that VERSION A left untagged, "
+            "this is likely a miss by the visual mode - ADD the [D> tag from VERSION B.\n"
+            "4. If VERSION A has a [D> tag that VERSION B does not, KEEP the VERSION A tag "
+            "(visual mode is more reliable for detecting formatting).\n"
+            "5. Pay special attention to subsection labels like (a), (b), (c) etc. - "
+            "if either version tags them, include the tag in the output.\n"
+            "6. Do NOT change any text content - only adjust [D> and <D] tag placement.\n"
+            "7. Output ONLY the merged text, nothing else. No explanations or commentary."
+        )
+ 
+        messages = [{"role": "user", "content": reconcile_prompt}]
+ 
+        reconciled = ""
+        with client.messages.stream(
+            model="claude-opus-4-6",
+            max_tokens=32768,
+            temperature=0,
+            messages=messages
+        ) as stream:
+            for text in stream.text_stream:
+                reconciled += text
+ 
+        logging.info(f"✅ Reconciliation complete: {len(reconciled)} characters")
+        return reconciled
+ 
+    except Exception as e:
+        logging.error(f"❌ Error during reconciliation: {e}")
+        return visual_text  # Fall back to visual output on error
+ 
 def save_text_file(text, output_path):
     """
     Save text to file.
-    
+   
     Args:
         text (str): Text content to save
         output_path (str): Output file path
-    
+   
     Returns:
         bool: True if successful, False otherwise
     """
@@ -793,17 +868,17 @@ def save_text_file(text, output_path):
         output_dir = os.path.dirname(output_path)
         if output_dir:
             os.makedirs(output_dir, exist_ok=True)
-        
+       
         # Save text file
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(text)
-        
+       
         logging.info(f"💾 Saved output to: {output_path}")
         return True
     except Exception as e:
         logging.error(f"❌ Error saving text file: {e}")
         return False
-
+ 
 def print_usage():
     """Print usage information."""
     print(__doc__)
@@ -813,68 +888,62 @@ def print_usage():
             print()
         print(f"  {code:3} - {name:20}", end="")
     print("\n")
-
+ 
 def main():
     """Main function."""
-    global _PROMPTS_CACHE
-    _PROMPTS_CACHE = None  # Clear prompt cache on each run
     setup_logging()
-    
+   
     print("="*70)
     print("PDF to Text Converter - Visual Mode (Claude Opus 4.6)")
     print("="*70)
-    
+   
     # Parse command line arguments
     if len(sys.argv) < 2:
         print("\n❌ Error: PDF file path required\n")
         print_usage()
         sys.exit(1)
-
-    args = sys.argv[1:]
-
+ 
+    # Check for --reconcile flag
+    args = [a for a in sys.argv[1:] if a != '--reconcile']
+    reconcile = '--reconcile' in sys.argv
+ 
     pdf_path = args[0] if len(args) > 0 else None
     state_code = args[1].upper() if len(args) > 1 else None
     output_path = args[2] if len(args) > 2 else None
-    
+   
     # Validate PDF file exists
     if not os.path.exists(pdf_path):
         print(f"\n❌ Error: PDF file not found: {pdf_path}\n")
         sys.exit(1)
-    
+   
     # Initialize Anthropic client (needed for content-based detection)
     print("🔧 Initializing Claude API client...")
     client = get_anthropic_client()
     if not client:
         print("❌ Failed to initialize API client")
         sys.exit(1)
-    
+   
     # Auto-detect state if not provided
     if not state_code:
-        # 1. Try to infer from the parent directory name first (free, instant)
-        parent_dir = os.path.basename(os.path.dirname(os.path.abspath(pdf_path))).upper()
-        if parent_dir in AVAILABLE_STATES:
-            state_code = parent_dir
-            print(f"✅ State inferred from folder name: {state_code} - {AVAILABLE_STATES[state_code]} (0.0s)")
+        # Use content analysis to detect state
+        detected = detect_state_from_content(client, pdf_path)
+        if detected:
+            state_code = detected
+            print(f"✅ Auto-detected state: {state_code} - {AVAILABLE_STATES[state_code]}")
         else:
-            # 2. Fall back to API content analysis only when needed
-            detected = detect_state_from_content(client, pdf_path)
-            if detected:
-                state_code = detected
-                print(f"✅ Auto-detected state: {state_code} - {AVAILABLE_STATES[state_code]}")
-            else:
-                print("⚠️  Could not auto-detect state, using default prompt")
-
+            print("⚠️  Could not auto-detect state, using default prompt")
+ 
     # Validate state code if provided
     if state_code and state_code not in AVAILABLE_STATES:
         print(f"\n❌ Error: Invalid state code '{state_code}'")
         print(f"Available codes: {', '.join(AVAILABLE_STATES.keys())}\n")
         sys.exit(1)
-    
+   
     # Generate default output path if not provided
     if not output_path:
         pdf_name = Path(pdf_path).stem
         output_path = f"{pdf_name}_converted.txt"
-    
+   
     # Display configuration
     print(f"\n📄 Input PDF:    {pdf_path}")
     if state_code:
@@ -882,33 +951,39 @@ def main():
     else:
         print(f"🏛️  State:        None (using default prompt)")
     print(f"💾 Output:       {output_path}")
+    print(f"🔄 Reconcile:   {'Enabled' if reconcile else 'Disabled'}")
     print()
-    
+   
     # Load state template and build prompt
     state_config = load_state_template(state_code) if state_code else None
     if state_config:
         print(f"📋 Using state-specific rules for {state_config['state_name']}...")
-        logging.info(f"\n{'='*70}")
-        logging.info(f"STATE CONFIG FOR {state_config['state_name']}:")
-        logging.info(f"{'='*70}")
-        logging.info(f"Add Markup: {state_config.get('add_markup', {})}")
-        logging.info(f"Delete Markup: {state_config.get('delete_markup', {})}")
-        logging.info(f"Deletions: {state_config.get('deletions', '')}")
-        logging.info(f"{'='*70}\n")
     else:
         print(f"📋 Using default visual interpretation prompt...")
     prompt = get_conversion_prompt(state_config)
-    
+   
     # Pass 1: Visual mode conversion (images)
     print(f"🔄 Visual mode conversion...")
     visual_text = convert_pdf_to_text(client, pdf_path, prompt)
-
+ 
     if not visual_text:
         print("❌ Visual mode conversion failed")
         sys.exit(1)
-
+ 
     converted_text = visual_text
-
+ 
+    # Pass 2 & 3: Document mode + Reconciliation (only if --reconcile is enabled)
+    if reconcile:
+        print(f"🔄 Document mode verification...")
+        doc_prompt = get_document_mode_prompt(state_config)
+        doc_text = convert_pdf_document_mode(client, pdf_path, doc_prompt)
+ 
+        if doc_text:
+            print(f"🔍 Reconciling outputs...")
+            converted_text = reconcile_outputs(client, visual_text, doc_text)
+        else:
+            print("⚠️ Document mode failed, using visual output only")
+ 
     # Save output
     print(f"💾 Saving output...")
     if save_text_file(converted_text, output_path):
@@ -918,9 +993,9 @@ def main():
     else:
         print("❌ Failed to save output file")
         sys.exit(1)
-    
+   
     print("\n" + "="*70)
-
+ 
 if __name__ == "__main__":
     try:
         main()

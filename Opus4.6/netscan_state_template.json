@@ -59,8 +59,7 @@
           "Begin mark up at line numbered lines starting with number 1",
           "When an entire new subsection is added (the subsection label AND all its content are new), include the subsection label inside the [A> tag — this applies to ANY label form: numeric e.g. (1), (2.5), letter e.g. (a), (b), Roman numeral e.g. (I), (II), or combined e.g. (2)(c)(I). Example: [A>(a) ALL CAPS TEXT HERE<A] — NOT (a) [A>ALL CAPS TEXT HERE<A]",
           "When ALL CAPS added text contains numbers, lowercase connectors, or subsection references within the same continuous replacement clause (e.g. 'PART 3, 4, 6, 7, 9, OR 19' or 'SUBSECTION (2.5)(b)(I)'), include them inside the same single [A> tag — do NOT split into separate tags per ALL CAPS word",
-          "SKIP the state logo/seal image and any text that is part of it (e.g. 'STATE OF COLORADO', state motto, or any text embedded within or directly surrounding the seal graphic). Do NOT skip any other bill text.",
-          "ALWAYS include the 'An Act' line. The text that begins with 'An act' or 'AN ACT' near the top of the first page is bill content, NOT a header — it MUST appear as the first line of output. Do not omit it under any circumstances."
+          "Skip the state logo/seal image. If the bill begins with 'An Act' text at the top of the first page, include it as the first line of output."
         ]
       },
       "delete_markup": {
@@ -82,26 +81,29 @@
         "italic": false,
         "all_caps": false,
         "brackets": false,
-        "custom_rules": ["Do not add underline tags to text inside quotation marks(\")"]
+        "custom_rules": ["Underline tags muts be added only when the text is visually underlined in the source document, Do not add underline tags to text inside quotation marks(\")."]
       },
       "delete_markup": {
         "strike_out": true,
         "brackets": false,
-        "custom_rules": []
+        "custom_rules": ["Do NOT add markup tags to text that is italicized."]
       }
     },
     "IN": {
       "state_name": "Indiana",
       "abbreviation": "IN",
       "file_type": ".pdf",
-      "deletions": "line numbers, page numbers on the header, footers, DO NOT add any stars or other markers around the text.",
+      "deletions": "line numbers, page numbers on the header, footers",
       "add_markup": {
         "underline": false,
         "bold": true,
         "italic": false,
         "all_caps": false,
         "brackets": false,
-        "custom_rules": []
+        "custom_rules": [
+          "Do NOT tag these three specific bold labels: Citations Affected:, Synopsis:, Effective:. These are digest metadata — output them as plain text. Tag ALL other bold text everywhere else in the document, including bold text in the PRINTING CODE section.",
+          "NEVER use asterisks (*) anywhere in the output. Italic text must be output as plain text with NO markers — no *text*, no **text**, no markdown of any kind. If text is italic in the PDF, just output the plain words."
+        ]
       },
       "delete_markup": {
         "strike_out": true,
