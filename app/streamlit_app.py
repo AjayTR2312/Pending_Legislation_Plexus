@@ -20,7 +20,6 @@ from pdf_to_text_llm import (
 )
 from pdf_docx_analysis_pipeline import PDFToDocxAnalysisPipeline
 from session_manager import get_session_manager
-from pdf_type_detector import detect_pdf_type
 from pdf_plumber_extractor import extract_pdf_with_pdfplumber
 from text_to_clean_prompt import convert_pdfplumber_to_clean
 from tag_then_clean_pipeline import tag_then_clean_pipeline
@@ -40,8 +39,8 @@ try:
         st.session_state.session_id = session_mgr.create_session()
         st.session_state.session_manager = session_mgr
 
-    if 'selected_state' not in st.session_state:
-        st.session_state.selected_state = "FL"
+    if 'detected_state' not in st.session_state:
+        st.session_state.detected_state = None
     if 'uploaded_file' not in st.session_state:
         st.session_state.uploaded_file = None
     if 'processing' not in st.session_state:
@@ -99,58 +98,6 @@ except Exception as e:
     with st.expander("Full Error Trace"):
         st.code(traceback.format_exc())
     st.stop()
-
-# Maximum allowed pages for processing
-MAX_PAGES_ALLOWED = 15
-
-def validate_pdf_not_scanned(pdf_path, filename):
-    """
-    Check if PDF is valid for processing:
-    1. Not scanned (must be digital/native PDF)
-    2. Not exceeding page limit (max 15 pages)
-    Returns: (is_valid, error_message)
-    """
-    try:
-        result = detect_pdf_type(pdf_path)
-        
-        if result:
-            total_pages = result.get('total_pages', 0)
-            pdf_type = result.get('type', 'unknown')
-            high_dpi_images = result.get('high_dpi_images', 0)
-            large_images = result.get('large_images', 0)
-            total_images = result.get('total_images', 0)
-            avg_chars = result.get('average_chars_per_page', 0)
-            text_ratio = result.get('text_ratio', 0)
-            image_ratio = result.get('image_ratio', 0)
-            
-            # Log detailed detection results
-            logging.info(f"PDF Detection: type={pdf_type}, pages={total_pages}, large_imgs={large_images}/{total_images}, high_dpi={high_dpi_images}, avg_chars={avg_chars:.1f}, text={text_ratio}%, image={image_ratio}%")
-            
-            # Check 1: Page count validation (CRITICAL - must be first)
-            if total_pages > MAX_PAGES_ALLOWED:
-                error_msg = f"**{filename}** — Document exceeds maximum page limit ({total_pages} pages > {MAX_PAGES_ALLOWED} pages allowed). Please split into smaller documents."
-                logging.warning(f"File rejected: {filename} has {total_pages} pages (limit: {MAX_PAGES_ALLOWED})")
-                return False, error_msg.strip()
-            
-            # Check 2: Scanned PDF validation
-            if pdf_type == 'scanned':
-                error_msg = f"**{filename}** — Scanned document detected. This file format cannot be processed due to technical limitations in text extraction."
-                logging.warning(f"File rejected: {filename} is a scanned PDF (type: {pdf_type})")
-                return False, error_msg.strip()
-            
-            # Check 3: Hybrid PDF validation (mixed digital/scanned content)
-            if pdf_type == 'hybrid':
-                error_msg = f"**{filename}** — Hybrid document detected (contains signatures or scanned content). This file format cannot be processed due to technical limitations."
-                logging.warning(f"File rejected: {filename} is a hybrid PDF (type: {pdf_type})")
-                return False, error_msg.strip()
-        
-        # Digital or empty PDFs with acceptable page count are OK
-        return True, None
-        
-    except Exception as e:
-        # If detection fails, allow processing but log the error
-        logging.warning(f"PDF type detection failed for {filename}: {str(e)}")
-        return True, None
 
 def setup_simple_logging():
     """Setup simple logging for the app with session-specific folder"""
@@ -212,28 +159,12 @@ def add_files_to_batch(uploaded_files, state_code, session_id):
     """Add uploaded files to batch processing queue"""
     session_mgr = st.session_state.session_manager
     added_count = 0
-    skipped_files = []
-    hybrid_warnings = []
-    
+
     for uploaded_file in uploaded_files:
         # Upload file using session manager
         temp_path = session_mgr.upload_file(session_id, uploaded_file, state_code)
-        
+
         if temp_path:
-            # Validate PDF (page count and scanned check)
-            is_valid, message = validate_pdf_not_scanned(temp_path, uploaded_file.name)
-            
-            if not is_valid:
-                # Invalid PDF (scanned or too many pages) - skip and clean up
-                skipped_files.append((uploaded_file.name, message))
-                if os.path.exists(temp_path):
-                    os.remove(temp_path)
-                continue
-            elif message:
-                # Hybrid PDF - add to queue but track warning
-                hybrid_warnings.append((uploaded_file.name, message))
-            
-            # Add to batch queue
             batch_item = {
                 'original_name': uploaded_file.name,
                 'temp_path': temp_path,
@@ -246,19 +177,7 @@ def add_files_to_batch(uploaded_files, state_code, session_id):
             }
             st.session_state.batch_queue.append(batch_item)
             added_count += 1
-    
-    # Show summary messages
-    if skipped_files:
-        st.error(f"**{len(skipped_files)} file(s) skipped** — Files are either too large or incompatible format (scanned documents).")
-        
-        # Show detailed error for each skipped file
-        with st.expander("📋 View Details", expanded=False):
-            for name, error_msg in skipped_files:
-                st.markdown(f"• {error_msg}")
-    
-    if hybrid_warnings:
-        st.warning(f"**{len(hybrid_warnings)} file(s) contain mixed content** — Processing will continue with reduced accuracy on scanned pages.")
-    
+
     return added_count
 
 def process_batch_sequentially():
@@ -1200,6 +1119,152 @@ def process_with_tag_then_clean_pipeline(pdf_path, state_code, session_id, progr
         logging.error(f"Tag-Then-Clean processing error: {e}", exc_info=True)
         return None
 
+def process_with_claude_opus(pdf_path, state_code, session_id, progress_placeholder=None, status_placeholder=None):
+    """Process PDF using Claude Opus 4.6 visual conversion (image-based, page by page)"""
+    import importlib.util
+
+    start_time = time.time()
+    session_mgr = st.session_state.session_manager
+    session_folders = session_mgr.get_session_folders(session_id)
+
+    # 5 steps to match the shared show_processing_steps() display
+    steps_labels = [
+        {"name": "Initialize Claude Opus",    "icon": "🤖"},
+        {"name": "Detect State",              "icon": "🔍"},
+        {"name": "Build Conversion Prompt",   "icon": "📋"},
+        {"name": "Visual Conversion",         "icon": "👁️"},
+        {"name": "Save Output",               "icon": "💾"},
+    ]
+    st.session_state.step_status = {i: "⏳" for i in range(5)}
+
+    def update_progress():
+        if progress_placeholder:
+            with progress_placeholder.container():
+                show_processing_steps()
+
+    session_mgr.start_processing(session_id)
+
+    try:
+        # ── Load the Opus4.6 module via importlib (filename contains dots) ──────
+        opus_module_path = os.path.normpath(
+            os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         '..', 'Opus4.6', 'Claude_Opus_4.6_Test.py')
+        )
+        spec = importlib.util.spec_from_file_location("claude_opus_converter", opus_module_path)
+        opus = importlib.util.module_from_spec(spec)
+        # Guard stdout/stderr so Streamlit's streams aren't replaced by the module's win32 patch
+        _orig_stdout, _orig_stderr = sys.stdout, sys.stderr
+        spec.loader.exec_module(opus)
+        sys.stdout, sys.stderr = _orig_stdout, _orig_stderr
+
+        # ── Step 1: Initialise client ────────────────────────────────────────────
+        st.session_state.current_step = 0
+        st.session_state.step_status[0] = "🔄"
+        update_progress()
+        if status_placeholder:
+            status_placeholder.info("🤖 Initializing Claude Opus 4.6 client...")
+
+        client = opus.get_anthropic_client()
+        if not client:
+            raise Exception("Failed to initialize Anthropic client")
+
+        st.session_state.step_status[0] = "✅"
+        update_progress()
+        logging.info("✅ Claude Opus client initialized")
+
+        # ── Step 2: Detect State ──────────────────────────────────────────────────
+        st.session_state.current_step = 1
+        st.session_state.step_status[1] = "🔄"
+        update_progress()
+        if status_placeholder:
+            status_placeholder.info("🔍 Detecting state from filename...")
+
+        # Try filename pattern first (fast, no API call)
+        detected_state = opus.detect_state_from_filename(pdf_path)
+        if detected_state:
+            logging.info(f"✅ State detected from filename: {detected_state}")
+        else:
+            # Fall back to Claude visual analysis of first page
+            if status_placeholder:
+                status_placeholder.info("🔍 Analyzing PDF content to identify state via AI...")
+            detected_state = opus.detect_state_from_content(client, pdf_path)
+
+        # Store and display the detected state
+        st.session_state.detected_state = detected_state
+        if detected_state:
+            _state_name = opus.AVAILABLE_STATES.get(detected_state, detected_state)
+            logging.info(f"✅ Detected state: {detected_state} — {_state_name}")
+            if status_placeholder:
+                status_placeholder.success(f"🏛️ Detected State: **{detected_state} — {_state_name}**")
+        else:
+            logging.warning("⚠️ Could not detect state — using default prompt")
+            if status_placeholder:
+                status_placeholder.warning("⚠️ Could not detect state — using default conversion prompt")
+
+        st.session_state.step_status[1] = "✅"
+        update_progress()
+
+        # ── Step 3: Build conversion prompt ──────────────────────────────────────
+        st.session_state.current_step = 2
+        st.session_state.step_status[2] = "🔄"
+        update_progress()
+        if status_placeholder:
+            status_placeholder.info("📋 Building state-specific conversion prompt...")
+
+        state_config = opus.load_state_template(detected_state) if detected_state else None
+        prompt = opus.get_conversion_prompt(state_config)
+
+        st.session_state.step_status[2] = "✅"
+        update_progress()
+        logging.info(f"✅ Conversion prompt built ({len(prompt)} chars)")
+
+        # ── Step 4: Visual conversion via Claude Opus ────────────────────────────
+        st.session_state.current_step = 3
+        st.session_state.step_status[3] = "🔄"
+        update_progress()
+        if status_placeholder:
+            status_placeholder.info("👁️ Running Claude Opus 4.6 visual conversion (this may take a few minutes)...")
+
+        converted_text = opus.convert_pdf_to_text(client, pdf_path, prompt)
+        if not converted_text:
+            raise Exception("Claude Opus visual conversion returned an empty result")
+
+        st.session_state.step_status[3] = "✅"
+        update_progress()
+        logging.info(f"✅ Visual conversion complete: {len(converted_text)} characters")
+
+        # ── Step 5: Save output ──────────────────────────────────────────────────
+        st.session_state.current_step = 4
+        st.session_state.step_status[4] = "🔄"
+        update_progress()
+        if status_placeholder:
+            status_placeholder.info("💾 Saving output...")
+
+        output_filename = Path(pdf_path).stem + "_claude_opus.txt"
+        output_path = os.path.join(session_folders['output_folder'], output_filename)
+        os.makedirs(session_folders['output_folder'], exist_ok=True)
+
+        if not opus.save_text_file(converted_text, output_path):
+            raise Exception(f"Failed to save output to {output_path}")
+
+        st.session_state.step_status[4] = "✅"
+        update_progress()
+        logging.info(f"✅ Output saved: {output_path}")
+
+        # ── Wrap up ──────────────────────────────────────────────────────────────
+        elapsed = time.time() - start_time
+        minutes, seconds = int(elapsed // 60), int(elapsed % 60)
+        st.session_state.processing_time = f"{minutes}m {seconds}s"
+
+        session_mgr.complete_processing(session_id, output_path)
+        logging.info(f"✅ Claude Opus processing complete in {st.session_state.processing_time}: {output_path}")
+        return output_path
+
+    except Exception as e:
+        st.error(f"❌ Claude Opus processing error: {str(e)}")
+        logging.error(f"Claude Opus processing error: {e}", exc_info=True)
+        return None
+
 def show_simple_ui():
     """Simple UI for single file processing with session management"""
     st.title("📄 Pending Legislative PDF to Text Processor")
@@ -1236,7 +1301,7 @@ def show_simple_ui():
             st.session_state.session_id = new_session_id
             
             # Reset all session state variables
-            st.session_state.selected_state = "FL"
+            st.session_state.detected_state = None
             st.session_state.uploaded_file = None
             st.session_state.processing = False
             st.session_state.current_step = 0
@@ -1264,40 +1329,32 @@ def show_simple_ui():
     # Processing mode toggle
     col1, col2 = st.columns([3, 1])
     with col1:
-        st.header("🏛️ Step 1: Select State & Mode")
+        st.header("🏛️ Step 1: Select Mode")
     with col2:
         batch_mode = st.toggle("📦 Batch Mode", value=st.session_state.batch_mode, help="Process multiple files at once")
         if batch_mode != st.session_state.batch_mode:
             st.session_state.batch_mode = batch_mode
             st.rerun()
     
-    # State selection
-    state_options = [f"{code} - {info['name']}" for code, info in AVAILABLE_STATES.items()]
-    selected_state_option = st.selectbox(
-        "Choose the state for processing:",
-        state_options,
-        index=list(AVAILABLE_STATES.keys()).index(st.session_state.selected_state),
-        key="state_selector"
-    )
-    
-    st.session_state.selected_state = selected_state_option.split(" - ")[0]
-    
+    # Auto-detection state display
+    if st.session_state.get('detected_state'):
+        _s = st.session_state.detected_state
+        _sval = AVAILABLE_STATES.get(_s, _s)
+        _sname = _sval.get('name', _s) if isinstance(_sval, dict) else _sval
+        st.success(f"🏛️ **Detected State:** {_s} — {_sname}")
+    else:
+        st.info("🔍 **State will be auto-detected** from your PDF using Claude Opus AI")
+
     # File upload
     st.header("📁 Step 2: Upload PDF File(s)")
-    
-    # Display file size limit warning
-    if st.session_state.batch_mode:
-        st.info("📊 **Batch Mode**: Upload multiple files (max 15 pages each)")
-    else:
-        st.info("📊 **Single File Mode**: Upload one file (max 15 pages)")
-    
+
     # File uploader - multiple files in batch mode
     uploaded_file = st.file_uploader(
         "Choose PDF file(s) to process",
         type=['pdf'],
         accept_multiple_files=st.session_state.batch_mode,
         key="pdf_uploader",
-        help="Upload PDF file(s) (max 15 pages each)"
+        help="Upload one or more PDF files"
     )
     
     if uploaded_file is not None:
@@ -1311,8 +1368,8 @@ def show_simple_ui():
                     if st.button("➕ Add to Queue", type="primary", use_container_width=True):
                         with st.spinner("Adding files to batch queue..."):
                             added = add_files_to_batch(
-                                uploaded_file, 
-                                st.session_state.selected_state,
+                                uploaded_file,
+                                "AUTO",
                                 st.session_state.session_id
                             )
                         if added > 0:
@@ -1342,32 +1399,26 @@ def show_simple_ui():
             
             if st.session_state.last_uploaded_file_id != current_file_id:
                 try:
+                    # Clear all previous run state so the new file starts fresh
+                    st.session_state.processed_file_path = None
+                    st.session_state.processing = False
+                    st.session_state.current_step = 0
+                    st.session_state.step_status = {}
+                    st.session_state.processing_time = None
+                    st.session_state.chunk_stats = None
+                    st.session_state.detected_state = None
+
                     # Upload file using session manager
                     session_mgr = st.session_state.session_manager
                     
                     with st.spinner(f"Uploading {uploaded_file.name}..."):
                         temp_path = session_mgr.upload_file(
-                            st.session_state.session_id, 
-                            uploaded_file, 
-                            st.session_state.selected_state
+                            st.session_state.session_id,
+                            uploaded_file,
+                            "AUTO"
                         )
                     
                     if temp_path:
-                        # Validate PDF is not scanned
-                        is_valid, message = validate_pdf_not_scanned(temp_path, uploaded_file.name)
-                        
-                        if not is_valid:
-                            # Scanned PDF detected - reject and clean up
-                            st.error(message)
-                            # Remove the uploaded file
-                            if os.path.exists(temp_path):
-                                os.remove(temp_path)
-                            st.session_state.temp_pdf_path = None
-                            st.stop()
-                        elif message:
-                            # Hybrid PDF warning
-                            st.warning(message)
-                        
                         st.session_state.temp_pdf_path = temp_path
                         st.session_state.last_uploaded_file_id = current_file_id
                         st.success(f"✅ Uploaded: {uploaded_file.name} ({format_file_size(uploaded_file.size)})")
@@ -1385,6 +1436,21 @@ def show_simple_ui():
                     st.success(f"✅ File ready: {uploaded_file.name} ({format_file_size(uploaded_file.size)})")
             
             # Call the single file processing function (has both buttons)
+            # Show page count hint if PDF is large
+            if st.session_state.temp_pdf_path:
+                try:
+                    import pypdfium2 as pdfium
+                    _pdf = pdfium.PdfDocument(st.session_state.temp_pdf_path)
+                    _page_count = len(_pdf)
+                    _pdf.close()
+                    if _page_count > 15:
+                        st.warning(
+                            f"⏱️ **Large document detected ({_page_count} pages).** "
+                            f"Processing will take a while as each page is visually analyzed by Claude Opus. "
+                            f"Please keep this tab open and do not close the browser."
+                        )
+                except Exception:
+                    pass  # Don't block processing if page count fails
             show_single_file_processing()
     else:
         st.info("👆 Please upload a PDF file to begin processing")
@@ -1392,14 +1458,23 @@ def show_simple_ui():
 def show_processing_steps():
     """Show processing steps with progress bar"""
     st.subheader("📊 Processing Progress")
-    
-    steps = [
-        {"name": "PDF to Text", "icon": "📄"},
-        {"name": "PDF to DOCX", "icon": "📋"}, 
-        {"name": "DOCX Analysis", "icon": "🔍"},
-        {"name": "Summary Generation", "icon": "📊"},
-        {"name": "LLM Verification", "icon": "🤖"}
-    ]
+
+    if st.session_state.get('process_method') == 'claude_opus':
+        steps = [
+            {"name": "Initialize Claude Opus",  "icon": "🤖"},
+            {"name": "Detect State",            "icon": "🔍"},
+            {"name": "Build Conversion Prompt", "icon": "📋"},
+            {"name": "Visual Conversion",       "icon": "👁️"},
+            {"name": "Save Output",             "icon": "💾"},
+        ]
+    else:
+        steps = [
+            {"name": "PDF to Text", "icon": "📄"},
+            {"name": "PDF to DOCX", "icon": "📋"},
+            {"name": "DOCX Analysis", "icon": "🔍"},
+            {"name": "Summary Generation", "icon": "📊"},
+            {"name": "LLM Verification", "icon": "🤖"}
+        ]
     
     # Calculate progress
     completed_steps = sum(1 for status in st.session_state.step_status.values() if status == "✅")
@@ -1408,7 +1483,14 @@ def show_processing_steps():
     
     # Show progress bar
     st.progress(progress_percentage, text=f"Completed {completed_steps} of {total_steps} steps")
-    
+
+    # Show detected state banner as soon as it's known (Step 2 onwards)
+    if st.session_state.get('process_method') == 'claude_opus' and st.session_state.get('detected_state'):
+        _ds = st.session_state.detected_state
+        _dsval = AVAILABLE_STATES.get(_ds, _ds)
+        _dsname = _dsval.get('name', _ds) if isinstance(_dsval, dict) else _dsval
+        st.success(f"🏛️ Processing **{_ds}** state document — *{_dsname}*")
+
     # Show current step status
     current_step = st.session_state.current_step
     if current_step < len(steps):
@@ -1426,7 +1508,7 @@ def show_processing_steps():
             st.error(f"❌ Failed: {step_info['icon']} {step_info['name']}")
     
     # Show step list in a more compact format
-    with st.expander("� View Step Details", expanded=False):
+    with st.expander("  View Step Details", expanded=False):
         for i, step in enumerate(steps):
             status = st.session_state.step_status.get(i, "⏳")
             if status == "✅":
@@ -1478,7 +1560,14 @@ def show_results_section():
     
     with col2:
         st.subheader("📥 Download")
-        
+
+        # Show detected state
+        if st.session_state.get('detected_state'):
+            _s = st.session_state.detected_state
+            _sval = AVAILABLE_STATES.get(_s, _s)
+            _sname = _sval.get('name', _s) if isinstance(_sval, dict) else _sval
+            st.metric("🏛️ Detected State", f"{_s} — {_sname}")
+
         st.metric("File Size", format_file_size(file_size))
         if st.session_state.processing_time:
             st.metric("Processing Time", st.session_state.processing_time)
@@ -1508,8 +1597,31 @@ def show_single_file_processing():
     """Show single file processing interface"""
     st.header("🔄 Step 3: Process File")
     
-    col1, col2, col3 = st.columns([1, 1, 1])
+    # Add some spacing
+    st.write("")
+    st.write("")
     
+    # Center the button with columns - wider button in middle
+    col1, col2, col3 = st.columns([1, 2, 1])
+    
+    with col2:
+        if not st.session_state.processing:
+            # Main process button - centered and prominent
+            if st.button("🚀 Process Document", 
+                        type="primary", 
+                        use_container_width=True,
+                        help="Start processing with Claude Opus 4.6 visual conversion"):
+                st.session_state.processing = True
+                st.session_state.current_step = 0
+                st.session_state.processing_time = None
+                st.session_state.chunk_stats = None
+                st.session_state.process_method = "claude_opus"
+                st.rerun()
+        else:
+            # Show processing status
+            st.warning("⏳ **Processing...**\n\nPlease wait while we process your document")
+    
+    # Commented out alternative processing methods
     # with col1:
     #     if not st.session_state.processing:
     #         if st.button("🚀 Process (Vision)", type="primary", use_container_width=True, 
@@ -1526,52 +1638,28 @@ def show_single_file_processing():
     #             st.session_state.current_step = 0
     #             st.rerun()
     
-    with col2:
-        if not st.session_state.processing:
-            # Custom CSS for red button
-            st.markdown("""
-                <style>
-                div[data-testid="stButton"] > button[kind="primary"] {
-                    background-color: #dc3545;
-                    border-color: #dc3545;
-                }
-                div[data-testid="stButton"] > button[kind="primary"]:hover {
-                    background-color: #c82333;
-                    border-color: #bd2130;
-                }
-                </style>
-            """, unsafe_allow_html=True)
-            if st.button("🚀 Process", type="primary", use_container_width=True, 
-                        help="Reliable extraction with state-specific cleaning"):
-                st.session_state.processing = True
-                st.session_state.current_step = 0
-                st.session_state.processing_time = None
-                st.session_state.chunk_stats = None
-                st.session_state.process_method = "pdfplumber"
-                st.rerun()
-        else:
-            if st.button("🗑️ Clear & Reset", use_container_width=True):
-                # Reset everything
-                st.session_state.processing = False
-                st.session_state.current_step = 0
-                st.session_state.step_status = {}
-                st.session_state.processed_file_path = None
-                st.session_state.processing_time = None
-                st.session_state.chunk_stats = None
-                if st.session_state.temp_pdf_path and os.path.exists(st.session_state.temp_pdf_path):
-                    os.remove(st.session_state.temp_pdf_path)
-                st.session_state.temp_pdf_path = None
-                st.rerun()
-    
-    # with col3:
+    # with col2:
     #     if not st.session_state.processing:
-    #         if st.button("🏷️ Tag-Then-Clean", use_container_width=True,
-    #                     help="Tag raw text first, then clean (most accurate)"):
+    #         if st.button("📄 Process (PDFPlumber)", use_container_width=True, 
+    #                     help="Reliable extraction with state-specific cleaning"):
     #             st.session_state.processing = True
     #             st.session_state.current_step = 0
     #             st.session_state.processing_time = None
     #             st.session_state.chunk_stats = None
-    #             st.session_state.process_method = "tag_then_clean"
+    #             st.session_state.process_method = "pdfplumber"
+    #             st.rerun()
+    #     else:
+    #         if st.button("🗑️ Clear & Reset", use_container_width=True):
+    #             # Reset everything
+    #             st.session_state.processing = False
+    #             st.session_state.current_step = 0
+    #             st.session_state.step_status = {}
+    #             st.session_state.processed_file_path = None
+    #             st.session_state.processing_time = None
+    #             st.session_state.chunk_stats = None
+    #             if st.session_state.temp_pdf_path and os.path.exists(st.session_state.temp_pdf_path):
+    #                 os.remove(st.session_state.temp_pdf_path)
+    #             st.session_state.temp_pdf_path = None
     #             st.rerun()
     
     # Processing progress
@@ -1584,10 +1672,11 @@ def show_single_file_processing():
             show_processing_steps()
         
         # Choose processing method
+        _state = st.session_state.get('detected_state', 'AUTO')
         if st.session_state.process_method == "pdfplumber":
             result = process_with_pdfplumber_pipeline(
-                st.session_state.temp_pdf_path, 
-                st.session_state.selected_state,
+                st.session_state.temp_pdf_path,
+                _state,
                 st.session_state.session_id,
                 progress_placeholder,
                 status_placeholder
@@ -1595,7 +1684,15 @@ def show_single_file_processing():
         elif st.session_state.process_method == "tag_then_clean":
             result = process_with_tag_then_clean_pipeline(
                 st.session_state.temp_pdf_path,
-                st.session_state.selected_state,
+                _state,
+                st.session_state.session_id,
+                progress_placeholder,
+                status_placeholder
+            )
+        elif st.session_state.process_method == "claude_opus":
+            result = process_with_claude_opus(
+                st.session_state.temp_pdf_path,
+                _state,
                 st.session_state.session_id,
                 progress_placeholder,
                 status_placeholder
@@ -1603,8 +1700,8 @@ def show_single_file_processing():
         else:
             # Default vision processing
             result = process_single_pdf_simple(
-                st.session_state.temp_pdf_path, 
-                st.session_state.selected_state,
+                st.session_state.temp_pdf_path,
+                _state,
                 st.session_state.session_id,
                 progress_placeholder,
                 status_placeholder

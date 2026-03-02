@@ -1,0 +1,1039 @@
+{
+  "document_title": "NetScan Data Conversion State Specific Instructions",
+  "global_rules": {
+    "use_regular_quotes": true,
+    "quote_type": "regular not smart quotes"
+  },
+  "states": {
+    "AL": {
+      "state_name": "Alabama",
+      "abbreviation": "AL",
+      "file_type": ".pdf-text",
+      "deletions": "Remove line numbers, page number",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": []
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": false,
+        "custom_rules": []
+      }
+    },
+    "AR": {
+      "state_name": "Arkansas",
+      "abbreviation": "AR",
+      "file_type": ".pdf-text",
+      "deletions": "Remove line numbers, all footers, page numbers, headers starting on page 2. KEEP the first line explanation on page 1 (e.g., 'Stricken language would be deleted from and underlined language would be added to present law.')",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": []
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": false,
+        "custom_rules": []
+      }
+    },
+    "CO": {
+      "state_name": "Colorado",
+      "abbreviation": "CO",
+      "file_type": ".pdf-text",
+      "deletions": "Remove line numbers, bill page footer (shading denotes...), subsequent page footers (page #/bill#). KEEP all first page header information including session details (e.g., 'Second Regular Session', 'Seventy-fifth General Assembly'), state name, bill status (e.g., 'INTRODUCED'), and LLS numbers",
+      "add_markup": {
+        "underline": false,
+        "bold": false,
+        "italic": false,
+        "all_caps": true,
+        "all_caps_condition": "w/in text (not 'SECTION' at the beginning of a line)",
+        "brackets": false,
+        "custom_rules": [
+          "Begin mark up at line numbered lines starting with number 1",
+          "When an entire new subsection is added (the subsection label AND all its content are new), include the subsection label inside the [A> tag — this applies to ANY label form: numeric e.g. (1), (2.5), letter e.g. (a), (b), Roman numeral e.g. (I), (II), or combined e.g. (2)(c)(I). Example: [A>(a) ALL CAPS TEXT HERE<A] — NOT (a) [A>ALL CAPS TEXT HERE<A]",
+          "When ALL CAPS added text contains numbers, lowercase connectors, or subsection references within the same continuous replacement clause (e.g. 'PART 3, 4, 6, 7, 9, OR 19' or 'SUBSECTION (2.5)(b)(I)'), include them inside the same single [A> tag — do NOT split into separate tags per ALL CAPS word",
+          "SKIP the state logo/seal image and any text that is part of it (e.g. 'STATE OF COLORADO', state motto, or any text embedded within or directly surrounding the seal graphic). Do NOT skip any other bill text.",
+          "ALWAYS include the 'An Act' line. The text that begins with 'An act' or 'AN ACT' near the top of the first page is bill content, NOT a header — it MUST appear as the first line of output. Do not omit it under any circumstances."
+        ]
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": false,
+        "custom_rules": [
+          "For signature blocks at the end: transcribe the signature line as '______________________________', then the printed name and title below it. Do NOT transcribe the actual handwritten signature image itself."
+        ]
+      }
+    },
+    "DC": {
+      "state_name": "District of Columbia",
+      "abbreviation": "DC",
+      "file_type": ".pdf-text or .pdf-tif",
+      "deletions": "headers (ex: 'enrolled original'), footers, line numbers, page numbers. NOTES on right margin move to left justified on separate line above the one on which it appears",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": ["Do not add underline tags to text inside quotation marks(\")"]
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": false,
+        "custom_rules": []
+      }
+    },
+    "IN": {
+      "state_name": "Indiana",
+      "abbreviation": "IN",
+      "file_type": ".pdf",
+      "deletions": "line numbers, page numbers on the header, footers, DO NOT add any stars or other markers around the text.",
+      "add_markup": {
+        "underline": false,
+        "bold": true,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": []
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": false,
+        "custom_rules": []
+      }
+    },
+    "KS": {
+      "state_name": "Kansas",
+      "abbreviation": "KS",
+      "file_type": ".pdf-text",
+      "deletions": "line numbers, headers on page two and subsequent (bill number, page #). KEEP all content on page one including any amendment status line (e.g., 'As Amended by Senate Committee', 'As Amended by House Committee').",
+      "add_markup": {
+        "underline": true,
+        "bold": true,
+        "italic": true,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": [
+          "Do not apply add to 'Be it enacted by the Legislature of the State of Kansas:'",
+          "KS italic text indicates newly added legislative language. Always wrap italic text in [A>...<A] tags. NEVER render italic as markdown asterisks (*text*). Correct: [A>italic text<A]. Wrong: *italic text* or *[A>italic text<A]*.",
+          "NEVER put markdown asterisk characters (*) inside [A>...<A] or [D>...<D] tags. Content inside redline tags must be completely plain text with no asterisks, no underscores, no markdown of any kind."
+        ]
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": false,
+        "custom_rules": [
+          "KEEP the amendment status line that appears at the top of page one (e.g., 'As Amended by Senate Committee', 'As Amended by House Committee'). This is bill metadata, not a repeating page header — do NOT remove it."
+        ]
+      }
+    },
+    "KY": {
+      "state_name": "Kentucky",
+      "abbreviation": "KY",
+      "file_type": ".doc",
+      "deletions": "all is processed",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": true,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": []
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": true,
+        "bracket_type": "bracketed",
+        "custom_rules": [
+          "note that brackets are removed when [D> added"
+        ]
+      }
+    },
+    "MD": {
+      "state_name": "Maryland",
+      "abbreviation": "MD",
+      "file_type": ".rtf",
+      "deletions": "line numbers, headers page 2 and after",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": false,
+        "all_caps": true,
+        "brackets": false,
+        "custom_rules": []
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": true,
+        "custom_rules": []
+      }
+    },
+    "MI": {
+      "state_name": "Michigan",
+      "abbreviation": "MI",
+      "file_type": ".html",
+      "deletions": "line numbers, footers",
+      "add_markup": {
+        "underline": false,
+        "bold": true,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": [
+          "<span style='text-transform:uppercase'> ending </span> or bold",
+          "blue bold with brackets",
+          "red bold within double angle brackets (remove all brackets)",
+          "NOTE: If w/in blue or red brackets, neither bold nor strike out, tag as add"
+        ]
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": false,
+        "custom_rules": [
+          "blue strike out with brackets",
+          "red strike out within double angle brackets (remove all brackets)"
+        ]
+      }
+    },
+    "NE": {
+      "state_name": "Nebraska",
+      "abbreviation": "NE",
+      "file_type": ".pdf-text",
+      "deletions": "line numbers, headers (bill number)",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": []
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": false,
+        "custom_rules": []
+      }
+    },
+    "OR": {
+      "state_name": "Oregon",
+      "abbreviation": "OR",
+      "file_type": ".pdf",
+      "deletions": "headers, footers and page numbers (starting on page 2), and all line numbers",
+      "add_markup": {
+        "underline": false,
+        "bold": true,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": []
+      },
+      "delete_markup": {
+        "strike_out": false,
+        "brackets": true,
+        "italic": true,
+        "custom_rules": [
+          "Italic and bracketed text"
+        ]
+      }
+    },
+    "PA": {
+      "state_name": "Pennsylvania",
+      "abbreviation": "PA",
+      "file_type": "html text",
+      "deletions": "line numbers <-- footers page numbers <hr>",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": false,
+        "all_caps": true,
+        "brackets": false,
+        "custom_rules": []
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": true,
+        "custom_rules": []
+      }
+    },
+    "TN": {
+      "state_name": "Tennessee",
+      "abbreviation": "TN",
+      "file_type": ".pdf-text",
+      "deletions": "line numbers, headers (bill number)",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": []
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": false,
+        "custom_rules": []
+      }
+    },
+    "WI": {
+      "state_name": "Wisconsin",
+      "abbreviation": "WI",
+      "file_type": ".pdf-text",
+      "deletions": "line numbers, headers (headers start on page 2)",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": []
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": false,
+        "custom_rules": []
+      }
+    },
+    "WY": {
+      "state_name": "Wyoming",
+      "abbreviation": "WY",
+      "file_type": ".pdf-text",
+      "deletions": "line numbers, footers",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": []
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": false,
+        "custom_rules": []
+      }
+    },
+    "AK": {
+      "state_name": "Alaska",
+      "abbreviation": "AK",
+      "file_type": ".pdf text last page of example is both .pdf, footers, graphic",
+      "deletions": "page numbers, Seal images, signatures at bottom",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": []
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": false,
+        "custom_rules": []
+      }
+    },
+    "DE": {
+      "state_name": "Delaware",
+      "abbreviation": "DE",
+      "file_type": ".pdf text",
+      "deletions": "line number, footers",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": []
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": false,
+        "custom_rules": []
+      }
+    },
+    "FL": {
+      "state_name": "Florida",
+      "abbreviation": "FL",
+      "file_type": ".pdf text",
+      "deletions": "Remove line numbers, vertical lines, headers, footers, and any document/tracking-code-only lines (numbers with hyphens/underscores). Do not delete the sponsor/committee attribution line that appears near the top of page 1 (between the page header and the bill title); keep it at the top of the cleaned output if present.",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": ["Only ADD tags when there is a visible underline in the source document",
+        "DO NOT tag even there is no visible underline in the source document"
+      ]
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": false,
+        "custom_rules": []
+      }
+    },
+    "HI": {
+      "state_name": "Hawaii",
+      "abbreviation": "HI",
+      "file_type": ".pdf graphic",
+      "deletions": "headers, footers, line numbers",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": []
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": false,
+        "custom_rules": []
+      }
+    },
+    "ID": {
+      "state_name": "Idaho",
+      "abbreviation": "ID",
+      "file_type": ".pdf-text",
+      "deletions": "explanation line, headers, footers, line numbers and page numbers",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": []
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": false,
+        "custom_rules": []
+      }
+    },
+    "IL": {
+      "state_name": "Illinois",
+      "abbreviation": "IL",
+      "file_type": ".pdf text",
+      "deletions": "headers, line numbers",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": []
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": false,
+        "custom_rules": []
+      }
+    },
+    "IA": {
+      "state_name": "Iowa",
+      "abbreviation": "IA",
+      "file_type": ".pdf or html text",
+      "deletions": "1st page header, line numbers, all line with number zero explanation line.",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": ["Tag 'NEW SUBSECTION' as underlined even if in all caps",
+      "Do NOT add asterisks or any other markers around subsection labels",
+      "Do NOT tag subsection labels (a., b., c.) if they only appear in italic font"]
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": false,
+        "custom_rules": ["Do NOT tag italic text when italic is false",
+      "Remove asterisks (*) if they appear around text",
+      "Do NOT add any markdown-style formatting markers"]
+      }
+
+    },
+    "LA": {
+      "state_name": "Louisiana",
+      "abbreviation": "LA",
+      "file_type": ".pdf-text",
+      "deletions": "headers, footers, line numbers and page numbers",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": []
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": false,
+        "custom_rules": []
+      }
+    },
+    "MN": {
+      "state_name": "Minnesota",
+      "abbreviation": "MN",
+      "file_type": ".pdf",
+      "deletions": "line numbers, footers, page numbers",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": []
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": false,
+        "custom_rules": []
+      }
+    },
+    "MO": {
+      "state_name": "Missouri",
+      "abbreviation": "MO",
+      "file_type": ".pdf",
+      "deletions": "line numbers, headers and page numbers starting on page 2, check mark at bottom of last page",
+      "add_markup": {
+        "underline": false,
+        "bold": true,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": [
+          "start after 'be it enacted' or 'be it resolved'"
+        ]
+      },
+      "delete_markup": {
+        "strike_out": false,
+        "brackets": true,
+        "bold": true,
+        "custom_rules": [
+          "start after 'be it enacted' or 'be it resolved'",
+          "bold brackets"
+        ]
+      }
+    },
+    "MT": {
+      "state_name": "Montana",
+      "abbreviation": "MT",
+      "file_type": "Html, PDF",
+      "deletions": "headers, footers, page numbers",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": [
+          "-- not in table headings"
+        ]
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": false,
+        "custom_rules": []
+      }
+    },
+    "NV": {
+      "state_name": "Nevada",
+      "abbreviation": "NV",
+      "file_type": ".pdf-text",
+      "deletions": "explanation line, footers, line numbers and page numbers",
+      "add_markup": {
+        "underline": false,
+        "bold": true,
+        "italic": true,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": [
+          "blue bold italics"
+        ]
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": true,
+        "custom_rules": [
+          "bracketed red strike through"
+        ]
+      }
+    },
+    "NH": {
+      "state_name": "New Hampshire",
+      "abbreviation": "NH",
+      "file_type": ".pdf",
+      "deletions": "line numbers, page numbers, headers starting on page 2",
+      "add_markup": {
+        "underline": false,
+        "bold": true,
+        "italic": true,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": []
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": false,
+        "custom_rules": []
+      }
+    },
+    "NJ": {
+      "state_name": "New Jersey",
+      "abbreviation": "NJ",
+      "file_type": "Html, PDF",
+      "deletions": "page numbers and footers, headers, line numbers",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": []
+      },
+      "delete_markup": {
+        "strike_out": false,
+        "brackets": true,
+        "custom_rules": []
+      }
+    },
+    "NY": {
+      "state_name": "New York",
+      "abbreviation": "NY",
+      "file_type": ".pdf text",
+      "deletions": "line numbers, page numbers footers",
+      "add_markup": {
+        "underline": false,
+        "bold": false,
+        "italic": true,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": []
+      },
+      "delete_markup": {
+        "strike_out": false,
+        "brackets": true,
+        "custom_rules": []
+      }
+    },
+    "NC": {
+      "state_name": "North Carolina",
+      "abbreviation": "NC",
+      "file_type": ".pdf text",
+      "deletions": "line numbers, headers, footers,",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": []
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": false,
+        "custom_rules": []
+      }
+    },
+    "ND": {
+      "state_name": "North Dakota",
+      "abbreviation": "ND",
+      "file_type": "Html, PDF",
+      "deletions": "line numbers, headers, footers,",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": []
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": false,
+        "custom_rules": []
+      }
+    },
+    "RI": {
+      "state_name": "Rhode Island",
+      "abbreviation": "RI",
+      "file_type": ".pdf text",
+      "deletions": "line numbers,",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": [
+          "-- do not mark 'introduced by:' or 'date introduced' as add"
+        ]
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": false,
+        "custom_rules": []
+      }
+    },
+    "SD": {
+      "state_name": "South Dakota",
+      "abbreviation": "SD",
+      "file_type": ".pdf",
+      "deletions": "line numbers, page numbers",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": []
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": false,
+        "custom_rules": []
+      }
+    },
+    "TX": {
+      "state_name": "Texas",
+      "abbreviation": "TX",
+      "file_type": ".pdf",
+      "deletions": "headers, footers, page numbers",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": []
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": false,
+        "custom_rules": []
+      }
+    },
+    "UT": {
+      "state_name": "Utah",
+      "abbreviation": "UT",
+      "file_type": ".pdf text",
+      "deletions": "page numbers, headers starting on page 2",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": []
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": true,
+        "custom_rules": []
+      }
+    },
+    "VT": {
+      "state_name": "Vermont",
+      "abbreviation": "VT",
+      "file_type": ".pdf-text",
+      "deletions": "explanation line, headers, footers, line numbers and page numbers, bracket",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": []
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": false,
+        "custom_rules": []
+      }
+    },
+    "WA": {
+      "state_name": "Washington",
+      "abbreviation": "WA",
+      "file_type": ".pdf-text",
+      "deletions": "explanation line, headers, footers, line numbers and page numbers",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": []
+      },
+      "delete_markup": {
+        "strike_out": false,
+        "brackets": true,
+        "custom_rules": [
+          "double bracketed within strike through"
+        ]
+      }
+    },
+    "MS": {
+      "state_name": "Mississippi",
+      "abbreviation": "MS",
+      "file_type": "html",
+      "deletions": "explanation line, headers, footers, line numbers and page numbers",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": []
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": false,
+        "custom_rules": []
+      }
+    },
+    "AZ": {
+      "state_name": "Arizona",
+      "abbreviation": "AZ",
+      "file_type": ".pdf, html",
+      "deletions": "explanation line, headers, footers, line numbers and page numbers",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": []
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": false,
+        "custom_rules": []
+      }
+    },
+    "SC": {
+      "state_name": "South Carolina",
+      "abbreviation": "SC",
+      "file_type": "html",
+      "deletions": "explanation line, headers, footers, line numbers and page numbers",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": []
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": false,
+        "custom_rules": []
+      }
+    },
+    "VA": {
+      "state_name": "Virginia",
+      "abbreviation": "VA",
+      "file_type": "Html, pdf",
+      "deletions": "explanation line, headers, footers, line numbers and page numbers, running numbers in PDF",
+      "add_markup": {
+        "underline": false,
+        "bold": false,
+        "italic": true,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": [
+          "italic words after Be it enacted section."
+        ]
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": false,
+        "custom_rules": []
+      }
+    },
+    "OH": {
+      "state_name": "Ohio",
+      "abbreviation": "OH",
+      "file_type": ".pdf",
+      "deletions": "page numbers, headers starting on page 2, line numbers,",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": []
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": false,
+        "custom_rules": []
+      }
+    },
+    "CT": {
+      "state_name": "Connecticut",
+      "abbreviation": "CT",
+      "file_type": ".pdf",
+      "deletions": "line numbers page numbers and footers, headers starting on page 2. KEEP the bracketed explanation line at the end (e.g., '[Proposed deletions are enclosed in brackets...]') and tag it with [D> tags since it is bracketed text",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": [
+          "For tables: preserve column alignment using spacing, do NOT add pipe characters or other delimiters",
+          "The bill identifier line at the very end of the document (e.g. 'S.B. 545', 'H.B. 1234') is content, NOT a footer — do NOT skip it. If it appears underlined, tag it with [A> tags."
+        ]
+      },
+      "delete_markup": {
+        "strike_out": false,
+        "brackets": true,
+        "custom_rules": [
+          "ALL bracketed text must be tagged with [D> tags, including the explanation line at the end of the document",
+          "DO NOT transcribe logos, seals, or state name graphics (e.g., 'STATE OF CONNECTICUT' logo at top)."
+        ]
+      }
+    },
+    "WV": {
+      "state_name": "West Virginia",
+      "abbreviation": "WV",
+      "file_type": "Html, PDF",
+      "deletions": "line numbers page numbers and footers, headers, line numbers",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": []
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": false,
+        "custom_rules": []
+      }
+    },
+    "ME": {
+      "state_name": "Maine",
+      "abbreviation": "ME",
+      "file_type": "Html,pdf",
+      "deletions": "explanation line, headers, footers, line numbers and page numbers",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": []
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": false,
+        "custom_rules": []
+      }
+    },
+    "NM": {
+      "state_name": "New Mexico",
+      "abbreviation": "NM",
+      "file_type": "Html, PDF",
+      "deletions": "line numbers, headers, footers,",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": false,
+        "all_caps": false,
+        "brackets": true,
+        "custom_rules": []
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": true,
+        "custom_rules": []
+      }
+    },
+    "OK": {
+      "state_name": "Oklahoma",
+      "abbreviation": "OK",
+      "file_type": "PDF",
+      "deletions": "Page numbers, footer",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": []
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": false,
+        "custom_rules": []
+      }
+    },
+    "GA": {
+      "state_name": "Georgia",
+      "abbreviation": "GA",
+      "file_type": "PDF",
+      "deletions": "Line numbers",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": []
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": false,
+        "custom_rules": []
+      }
+    },
+    "MA": {
+      "state_name": "Massachusetts",
+      "abbreviation": "MA",
+      "file_type": "Html, PDF",
+      "deletions": "Html -- none Pdf -- page numbers, line numbers",
+      "add_markup": {
+        "underline": true,
+        "bold": false,
+        "italic": false,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": []
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": false,
+        "custom_rules": []
+      }
+    },
+    "CA": {
+      "state_name": "California",
+      "abbreviation": "CA",
+      "file_type": "PDF",
+      "deletions": "Page numbers and footer",
+      "add_markup": {
+        "underline": false,
+        "bold": false,
+        "italic": true,
+        "all_caps": false,
+        "brackets": false,
+        "custom_rules": ["Preserve attestation block: keep lines with 'Attest:'  even if they appear in the footer.",
+    "Normalize 'Attest:' line: remove trailing spaces; if empty after 'Attest:' then render as 'Attest: ______________________________' (underscores), not whitespace."]
+      },
+      "delete_markup": {
+        "strike_out": true,
+        "brackets": false,
+        "custom_rules": []
+      }
+    }
+  }
+}
