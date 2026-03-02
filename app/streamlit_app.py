@@ -61,6 +61,8 @@ try:
         st.session_state.process_method = "vision"  # default: "vision" or "pdfplumber"
     if 'chunk_stats' not in st.session_state:
         st.session_state.chunk_stats = None
+    if 'processing_logs' not in st.session_state:
+        st.session_state.processing_logs = []
     
     # Batch processing state
     if 'batch_mode' not in st.session_state:
@@ -1127,6 +1129,9 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
     session_mgr = st.session_state.session_manager
     session_folders = session_mgr.get_session_folders(session_id)
 
+    # Clear previous logs
+    st.session_state.processing_logs = []
+
     # 5 steps to match the shared show_processing_steps() display
     steps_labels = [
         {"name": "Initialize Claude Opus",    "icon": "🤖"},
@@ -1137,12 +1142,19 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
     ]
     st.session_state.step_status = {i: "⏳" for i in range(5)}
 
+    def add_log(message, level="info"):
+        """Add log message to processing logs"""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        st.session_state.processing_logs.append({"time": timestamp, "message": message, "level": level})
+        logging.info(message)
+
     def update_progress():
         if progress_placeholder:
             with progress_placeholder.container():
                 show_processing_steps()
 
     session_mgr.start_processing(session_id)
+    add_log("Starting Claude Opus 4.6 processing...")
 
     try:
         # ── Load the Opus4.6 module via importlib (filename contains dots) ──────
@@ -1161,6 +1173,7 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
         st.session_state.current_step = 0
         st.session_state.step_status[0] = "🔄"
         update_progress()
+        add_log("🤖 Initializing Claude Opus 4.6 client...")
         if status_placeholder:
             status_placeholder.info("🤖 Initializing Claude Opus 4.6 client...")
 
@@ -1170,21 +1183,23 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
 
         st.session_state.step_status[0] = "✅"
         update_progress()
-        logging.info("✅ Claude Opus client initialized")
+        add_log("✅ Claude Opus client initialized")
 
         # ── Step 2: Detect State ──────────────────────────────────────────────────
         st.session_state.current_step = 1
         st.session_state.step_status[1] = "🔄"
         update_progress()
+        add_log("🔍 Detecting state from filename...")
         if status_placeholder:
             status_placeholder.info("🔍 Detecting state from filename...")
 
         # Try filename pattern first (fast, no API call)
         detected_state = opus.detect_state_from_filename(pdf_path)
         if detected_state:
-            logging.info(f"✅ State detected from filename: {detected_state}")
+            add_log(f"✅ State detected from filename: {detected_state}")
         else:
             # Fall back to Claude visual analysis of first page
+            add_log("🔍 Analyzing PDF content to identify state via AI...")
             if status_placeholder:
                 status_placeholder.info("🔍 Analyzing PDF content to identify state via AI...")
             detected_state = opus.detect_state_from_content(client, pdf_path)
@@ -1193,11 +1208,11 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
         st.session_state.detected_state = detected_state
         if detected_state:
             _state_name = opus.AVAILABLE_STATES.get(detected_state, detected_state)
-            logging.info(f"✅ Detected state: {detected_state} — {_state_name}")
+            add_log(f"✅ Detected state: {detected_state} — {_state_name}")
             if status_placeholder:
                 status_placeholder.success(f"🏛️ Detected State: **{detected_state} — {_state_name}**")
         else:
-            logging.warning("⚠️ Could not detect state — using default prompt")
+            add_log("⚠️ Could not detect state — using default prompt", "warning")
             if status_placeholder:
                 status_placeholder.warning("⚠️ Could not detect state — using default conversion prompt")
 
@@ -1208,6 +1223,7 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
         st.session_state.current_step = 2
         st.session_state.step_status[2] = "🔄"
         update_progress()
+        add_log("📋 Building state-specific conversion prompt...")
         if status_placeholder:
             status_placeholder.info("📋 Building state-specific conversion prompt...")
 
@@ -1216,12 +1232,13 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
 
         st.session_state.step_status[2] = "✅"
         update_progress()
-        logging.info(f"✅ Conversion prompt built ({len(prompt)} chars)")
+        add_log(f"✅ Conversion prompt built ({len(prompt)} chars)")
 
         # ── Step 4: Visual conversion via Claude Opus ────────────────────────────
         st.session_state.current_step = 3
         st.session_state.step_status[3] = "🔄"
         update_progress()
+        add_log("👁️ Running Claude Opus 4.6 visual conversion (this may take a few minutes)...")
         if status_placeholder:
             status_placeholder.info("👁️ Running Claude Opus 4.6 visual conversion (this may take a few minutes)...")
 
@@ -1231,12 +1248,13 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
 
         st.session_state.step_status[3] = "✅"
         update_progress()
-        logging.info(f"✅ Visual conversion complete: {len(converted_text)} characters")
+        add_log(f"✅ Visual conversion complete: {len(converted_text)} characters")
 
         # ── Step 5: Save output ──────────────────────────────────────────────────
         st.session_state.current_step = 4
         st.session_state.step_status[4] = "🔄"
         update_progress()
+        add_log("💾 Saving output...")
         if status_placeholder:
             status_placeholder.info("💾 Saving output...")
 
@@ -1249,7 +1267,7 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
 
         st.session_state.step_status[4] = "✅"
         update_progress()
-        logging.info(f"✅ Output saved: {output_path}")
+        add_log(f"✅ Output saved: {output_path}")
 
         # ── Wrap up ──────────────────────────────────────────────────────────────
         elapsed = time.time() - start_time
@@ -1257,10 +1275,11 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
         st.session_state.processing_time = f"{minutes}m {seconds}s"
 
         session_mgr.complete_processing(session_id, output_path)
-        logging.info(f"✅ Claude Opus processing complete in {st.session_state.processing_time}: {output_path}")
+        add_log(f"✅ Claude Opus processing complete in {st.session_state.processing_time}")
         return output_path
 
     except Exception as e:
+        add_log(f"❌ Claude Opus processing error: {str(e)}", "error")
         st.error(f"❌ Claude Opus processing error: {str(e)}")
         logging.error(f"Claude Opus processing error: {e}", exc_info=True)
         return None
@@ -1667,9 +1686,18 @@ def show_single_file_processing():
         # Create a placeholder for dynamic updates
         progress_placeholder = st.empty()
         status_placeholder = st.empty()
+        log_container = st.expander("📋 Processing Logs", expanded=True)
         
         with progress_placeholder.container():
             show_processing_steps()
+        
+        # Display processing logs
+        with log_container:
+            if st.session_state.processing_logs:
+                for log in st.session_state.processing_logs:
+                    level = log.get('level', 'info')
+                    icon = "ℹ️" if level == "info" else "⚠️" if level == "warning" else "❌"
+                    st.text(f"{icon} [{log['time']}] {log['message']}")
         
         # Choose processing method
         _state = st.session_state.get('detected_state', 'AUTO')
