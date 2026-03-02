@@ -24,7 +24,7 @@ quick_test.py
 setup_testing.py
 app/FL_analysis
 app/LLM as Judge
-
+ace_pipeline/
 # IDE
 .vscode/
 .idea/
