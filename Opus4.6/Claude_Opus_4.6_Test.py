@@ -715,15 +715,37 @@ def convert_pdf_to_text(client, pdf_path, prompt, batch_size=None):
         # Call Claude API with streaming - ALL PAGES AT ONCE
         logging.info(f"🤖 Processing all {total_pages} pages in single API call...")
  
+        # Retry loop for transient overload / server errors
+        max_retries = 5
+        retry_delays = [10, 30, 60, 120, 180]  # seconds between retries
         converted_text = ""
-        with client.messages.stream(
-            model="claude-opus-4-6",
-            max_tokens=128000,
-            temperature=0,
-            messages=messages
-        ) as stream:
-            for text in stream.text_stream:
-                converted_text += text
+        for attempt in range(max_retries):
+            try:
+                converted_text = ""
+                with client.messages.stream(
+                    model="claude-opus-4-6",
+                    max_tokens=128000,
+                    temperature=0,
+                    messages=messages
+                ) as stream:
+                    for text in stream.text_stream:
+                        converted_text += text
+                break  # success — exit retry loop
+            except Exception as e:
+                err_str = str(e)
+                is_retryable = (
+                    "overloaded" in err_str.lower()
+                    or "529" in err_str
+                    or "500" in err_str
+                    or "503" in err_str
+                )
+                if is_retryable and attempt < max_retries - 1:
+                    delay = retry_delays[attempt]
+                    logging.warning(f"  ⚠️  API error (attempt {attempt+1}/{max_retries}): {err_str[:120]}. Retrying in {delay}s...")
+                    print(f"  ⚠️  API error — retrying in {delay}s (attempt {attempt+1}/{max_retries})...")
+                    time.sleep(delay)
+                else:
+                    raise  # non-retryable or out of retries
 
         # Log total runtime
         total_time = time.time() - start_time
