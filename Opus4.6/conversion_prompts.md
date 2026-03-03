@@ -123,13 +123,25 @@ This document contains reusable prompt templates for PDF-to-text conversion with
  
 ## 🎯 PRECISION GUIDANCE (Common to All Templates)
  
-🚨 **RULE #1: TRANSCRIBE EXACT CASE** - Copy UPPERCASE as UPPERCASE, lowercase as lowercase, Mixed as Mixed. Never "fix" capitalization. Example: PDF shows `FOR AN APPLICANT` → Output `FOR AN APPLICANT` (NOT `For an applicant`).
+TAG FORMAT: Two tag types only. Deleted or struck text uses [D>text<D] where [D> opens and <D] closes. Added or underlined text uses [A>text<A] where [A> opens and <A] closes. Never use markdown formatting such as **, *, or ~~. Every opening tag must have a matching closing tag.
  
-🚨 **RULE #2: GROUP CONTINUOUS FORMATTING** - If formatting (strikethrough/underline/bold/ALL CAPS) runs continuously across multiple lines, use ONE tag for entire span. Do NOT split tags per line or per word. Example: If "FOR AN APPLICANT WHO IS A PHYSICIAN" is all in ALL CAPS continuously → `[A>FOR AN APPLICANT WHO IS A PHYSICIAN<A]` (NOT separate tags per line).
+RULE 1 - LAYOUT FORMATTING: Apply consistent spacing across all documents. Use one blank line between major sections and paragraphs. Use no blank line between a subsection label such as (a), (b), or (c) and its body text. Preserve legislative headers such as Session, HOUSE BILL, and committee names. Format sections as "Section 1." followed by its text, then one blank line before the next section. Format subsections as "(a) Text here" with no extra blank line between the label and text.
  
-🚨 **RULE #3: CHECK EVERY WORD** - Examine each word individually for formatting. Don't assume entire paragraphs. Check short words like "A", "or", "the" carefully.
+RULE 2 - ZERO TEXT MODIFICATION: This is transcription, not editing. Do not add, remove, or change any words. Copy exactly character by character. Do not paraphrase, summarize, or improve text. Do not fix typos. Do not expand abbreviations. Treat yourself as a photocopier, not an editor. If the PDF shows a repeated word such as "Services Services", output "Services Services" — do not silently drop the duplicate. If the PDF shows a missing word or grammatical error, output it exactly as written. Your job is to reflect what is printed, not what should be printed.
  
-🚨 **RULE #4: SUBSECTION LABELS INDEPENDENT** - Labels like (a), (b), (c) can have DIFFERENT formatting than following text. Check each label separately.
+RULE 3 - TRANSCRIBE EXACT CASE: Copy UPPERCASE as UPPERCASE, lowercase as lowercase, and Mixed Case as Mixed Case. Never normalize capitalization. If the PDF shows "FOR AN APPLICANT", output "FOR AN APPLICANT", not "For an applicant".
+ 
+RULE 4 - GROUP CONTINUOUS FORMATTING: If the same formatting type (strikethrough, underline, bold, or ALL CAPS) runs continuously across multiple lines, use one tag for the entire span. Do not split tags per line or per word. Example: if "FOR AN APPLICANT WHO IS A PHYSICIAN" is all continuously ALL CAPS, output [A>FOR AN APPLICANT WHO IS A PHYSICIAN<A], not one tag per line.
+ 
+RULE 5 - CHECK EVERY WORD: Examine each word individually for formatting. Do not assume an entire paragraph shares the same formatting. Pay special attention to short words like "a", "or", and "the".
+ 
+RULE 6 - SUBSECTION LABELS INDEPENDENT: Labels like (a), (b), and (c) may have different formatting than the text that follows them. Check each label separately.
+ 
+RULE 7 - PRESERVE EXACT VISUAL SEQUENCE: Output every word in the exact left-to-right, top-to-bottom order it appears on the page. Never move, regroup, or reorder words to make the markup look cleaner. If a plain text word appears between a deletion and an addition on the page, keep it between them in the output. Tag each word at the position it occupies visually.
+ 
+RULE 8 - ADJACENT TAGS IN DOCUMENT ORDER: When two differently-formatted spans appear next to each other, tag each one separately in the exact order they appear in the document. Never absorb a character into an adjacent tag of a different type. Each character belongs to exactly one tag based solely on its own visual formatting.
+ 
+RULE 9 - RAW TEXT OUTPUT ONLY: Do NOT wrap your output in code fences, markdown blocks, or any container syntax. Do not start your response with ```plaintext, ```, or any similar marker. Do not end your response with ```. Output raw plain text directly — no wrappers of any kind.
  
 ---
  

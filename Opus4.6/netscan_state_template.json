@@ -58,14 +58,14 @@
         "custom_rules": [
           "Begin mark up at line numbered lines starting with number 1",
           "When an entire new subsection is added (the subsection label AND all its content are new), include the subsection label inside the [A> tag — this applies to ANY label form: numeric e.g. (1), (2.5), letter e.g. (a), (b), Roman numeral e.g. (I), (II), or combined e.g. (2)(c)(I). Example: [A>(a) ALL CAPS TEXT HERE<A] — NOT (a) [A>ALL CAPS TEXT HERE<A]",
-          "When ALL CAPS added text contains numbers, lowercase connectors, or subsection references within the same continuous replacement clause (e.g. 'PART 3, 4, 6, 7, 9, OR 19' or 'SUBSECTION (2.5)(b)(I)'), include them inside the same single [A> tag — do NOT split into separate tags per ALL CAPS word",
-          "Skip the state logo/seal image. If the bill begins with 'An Act' text at the top of the first page, include it as the first line of output."
+          "When ALL CAPS added text contains numbers, lowercase connectors, or subsection references within the same continuous replacement clause (e.g. 'PART 3, 4, 6, 7, 9, OR 19' or 'SUBSECTION (2.5)(b)(I)'), include them inside the same single [A> tag — do NOT split into separate tags per ALL CAPS word"
         ]
       },
       "delete_markup": {
         "strike_out": true,
         "brackets": false,
         "custom_rules": [
+          "Skip the state logo/seal image. If the bill begins with 'An Act' text at the top of the first page, include it as the first line of output.",
           "For signature blocks at the end: transcribe the signature line as '______________________________', then the printed name and title below it. Do NOT transcribe the actual handwritten signature image itself."
         ]
       }
@@ -124,8 +124,16 @@
         "brackets": false,
         "custom_rules": [
           "Do not apply add to 'Be it enacted by the Legislature of the State of Kansas:'",
-          "KS italic text indicates newly added legislative language. Always wrap italic text in [A>...<A] tags. NEVER render italic as markdown asterisks (*text*). Correct: [A>italic text<A]. Wrong: *italic text* or *[A>italic text<A]*.",
-          "NEVER put markdown asterisk characters (*) inside [A>...<A] or [D>...<D] tags. Content inside redline tags must be completely plain text with no asterisks, no underscores, no markdown of any kind."
+          "KS italic text indicates newly added legislative language. Always wrap italic text in [A>...<A] tags. NEVER render italic as markdown asterisks. WRONG: *Ninth* or *Eighth* or *text* — CORRECT: [A>Ninth<A] or [A>Eighth<A] or [A>text<A]. If you are about to write *word*, stop and write [A>word<A] instead. This applies to every italic word without exception, including short or capitalized words.",
+          "NEVER put markdown asterisk characters (*) inside or outside [A>...<A] or [D>...<D] tags. Content inside redline tags must be completely plain text with no asterisks, no underscores, no markdown of any kind. The asterisk character (*) must never appear anywhere in the output.",
+          "EXACT WORD-FOR-WORD TRANSCRIPTION — CRITICAL: Copy every single word exactly as printed. Small words such as 'a', 'the', 'or', 'and', 'of', 'in', 'to' are easy to accidentally drop — check that every one is present. WRONG: 'managed by the state, city, county' — CORRECT: 'managed by the state, a city, county' (the 'a' must not be dropped). WRONG: 'defined in subsection (l);' — CORRECT: 'defined in subsection (l); or' (the 'or' at the end must not be dropped).",
+          "DO NOT INVENT WORDS — CRITICAL: Output only words that are physically printed in the PDF. Do not add, insert, or repeat any word that is not there. WRONG: 'previously approved STAR bond project district within' if the PDF shows 'previously approved STAR bond project within' — do not insert 'district'. WRONG: 'child welfare case management provider' if the PDF shows 'child welfare management provider' — do not insert 'case'. If you are unsure whether a word is there, do not include it.",
+          "LINE BREAK FIDELITY: When a heading line such as 'is hereby amended to read as follows:' ends, and the next line starts with a statute section identifier, these must be output as two separate lines with a blank line between them — NEVER merged into one line. A statute identifier is any number or alphanumeric code that begins the next paragraph, such as '79-3603.', '38-2201a.', '38-2202.', '12-17,162.' or any similar pattern. WRONG: 'Sec. 2. K.S.A. 2024 Supp. 38-2201a is hereby amended to read as follows: 38-2201a. (a) This section...' — CORRECT: 'Sec. 2. K.S.A. 2024 Supp. 38-2201a is hereby amended to read as follows:\\n\\n38-2201a. (a) This section...'. WRONG: 'Section 1. K.S.A. 2024 Supp. 79-3603 is hereby amended to read as follows: 79-3603. For the privilege...' — CORRECT: 'Section 1. K.S.A. 2024 Supp. 79-3603 is hereby amended to read as follows:\\n\\n79-3603. For the privilege...'",
+          "SURGICAL INLINE TAGGING — CRITICAL: When a sentence or paragraph contains BOTH italic and non-italic text, you MUST tag ONLY the italic portions. NEVER wrap an entire sentence or paragraph in one [A>...<A] block just because it contains some italic text. Each italic span must get its own separate tag, and non-italic words between italic spans remain as plain text outside any tag. WRONG: '[A>(2) No tax shall be imposed pursuant to paragraph (1) upon the service of installing or applying tangible personal property in connection with:<A]' — CORRECT: '[A>(2)<A] No tax shall be imposed [A>pursuant to paragraph (1)<A] upon the service of installing or applying tangible personal property in connection with[A>:<A]'",
+          "RENUMBERED LABEL TAGGING — CRITICAL: When a paragraph is renumbered (e.g., old label '(1)' becomes new label '(A)'), ONLY the new label itself is italic and gets tagged. The paragraph body text that follows is existing statutory language and is NOT italic — do not tag it. WRONG: '[A>(A) The original construction, reconstruction, restoration, remodeling, renovation, repair or replacement of a building or facility;<A]' — CORRECT: '[A>(A)<A] The original construction[A>, reconstruction, restoration, remodeling, renovation, repair or replacement<A] of a building or facility[D>,<D][A>;<A]'. Similarly WRONG: '[A>(B) the original construction, reconstruction, restoration, remodeling, renovation, repair or replacement of a residence; or<A]' — CORRECT: '[A>(B)<A] the original construction, reconstruction, restoration, remodeling, renovation, repair or replacement of a residence[A>;<A] or'",
+          "DELETE TAG BOUNDARY — PUNCTUATION: When existing (non-struck) punctuation such as a semicolon or comma appears immediately before struck-through text, the punctuation stays as plain text OUTSIDE the delete tag. WRONG: 'thereto[D>; and<D]' if only the word 'and' has a strikethrough — CORRECT: 'thereto;[D> and<D]'. Only the characters that visually have a line drawn through them go inside [D>...<D].",
+          "NEVER INVENT DELETIONS: Only tag text as [D>...<D] if you can physically see a horizontal strikethrough line drawn through those characters in the PDF. Do not assume a period or other punctuation is deleted just because new text follows. WRONG: 'for six months or longer[D>.<D][A>; and<A]' if the period has no strikethrough — CORRECT: 'for six months or longer[A>; and<A]'. If you cannot see a line through a character, it is NOT deleted.",
+          "DELETE/ADD TAG BOUNDARY: When a deletion ends and a newly inserted character immediately follows (e.g., old comma deleted, new semicolon or period added), these must be two separate tags. WRONG: '[D>, except that.<D]' where the period is newly italic — CORRECT: '[D>, except that<D][A>.<A]'. The delete tag must contain ONLY the deleted text; any following italic character is a new separate [A>...<A] tag."
         ]
       },
       "delete_markup": {
@@ -441,23 +449,32 @@
       "state_name": "Iowa",
       "abbreviation": "IA",
       "file_type": ".pdf or html text",
-      "deletions": "1st page header, line numbers, all line with number zero explanation line.",
+      "deletions": "line numbers",
       "add_markup": {
         "underline": true,
         "bold": false,
         "italic": false,
         "all_caps": false,
         "brackets": false,
-        "custom_rules": ["Tag 'NEW SUBSECTION' as underlined even if in all caps",
-      "Do NOT add asterisks or any other markers around subsection labels",
-      "Do NOT tag subsection labels (a., b., c.) if they only appear in italic font"]
+        "custom_rules": [
+          "PRESERVE DOCUMENT HEADER LINE: The very first line of every Iowa bill PDF is a title header such as 'Senate File 173 - Introduced' or 'House File 456 - Enrolled'. This line MUST be preserved as the first line of your output exactly as it appears. Do NOT skip, omit, or move it.",
+          "Tag 'NEW SUBSECTION' as underlined even if in all caps",
+          "Do NOT add asterisks or any other markers around subsection labels",
+          "IOWA SUBSECTION LABEL PATTERN — AMENDED SECTIONS ONLY: In Iowa bills, when an EXISTING section is amended to restructure or add content, the subsection labels (a., b., etc.) that are newly added or relabeled will have a visible underline beneath them. ONLY in this case — amending an existing section — should you tag individual subsection labels. EXAMPLE of amended section: '24. [A>a.<A] To conduct a socioeconomic study...' where the a. label was inserted into existing text. Tag ONLY the label itself: CORRECT: '[A>a.<A] Upon the filing...' — WRONG: 'a. Upon the filing...' (missing tag).",
+          "NEW SECTION / NEW SUBSECTION BODIES — DO NOT TAG LABELS: When a section is introduced with 'NEW SECTION' or 'NEW SUBSECTION', the [A>NEW SECTION<A] or [A>NEW SUBSECTION<A] tag already marks the entire block as new. Inside that block, output all subsection labels (a., b., c., (1), (2), etc.) as PLAIN TEXT with NO tags. CORRECT: '[A>NEW SUBSECTION<A]. 10. a. The commission shall not...' then 'b. If the commission...' — WRONG: '[A>NEW SUBSECTION.<A] 10. [A>a.<A] The commission...' then '[A>b.<A] If the commission...'. Applying tags to individual labels inside a NEW SECTION or NEW SUBSECTION block is an error.",
+          "Do NOT tag subsection labels (a., b., c.) if they only appear in italic font with no visible underline beneath them.",
+          "LAYOUT: Place one blank line between each subsection block — between the a. paragraph and the b. paragraph, between b. and c., etc. Do NOT run subsections together without a blank line separating them.",
+          "CRITICAL: Do NOT tag blue-colored or hyperlink text as underlined. Blue text in Iowa bills is a hyperlink color only — it does NOT have a visible underline beneath it. Only tag text that has a physical underline line visually drawn beneath the characters. If text appears blue or colored but has no visible underline line beneath it, output it as plain text with NO tags.",
+          "INSERTION BEFORE EXISTING REFERENCE — CRITICAL: Iowa amendments frequently insert new text immediately before an existing code section number. In this pattern, the new text is underlined but the existing section number that follows is NOT underlined. EXAMPLE — the original law said 'section 614.8,' and the amendment inserts '614.1, subsections 11A and 12, and section' before it. The underline covers ONLY the inserted words: CORRECT: '[A>614.1, subsections 11A and 12, and section<A] 614.8,' — WRONG: '[A>614.1, subsections 11A and 12, and section 614.8,<A]'. The existing section number (e.g. 614.8) sits right next to the end of the underline but is itself NOT underlined — do NOT let the tag bleed into it."
+        ]
       },
       "delete_markup": {
         "strike_out": true,
         "brackets": false,
-        "custom_rules": ["Do NOT tag italic text when italic is false",
-      "Remove asterisks (*) if they appear around text",
-      "Do NOT add any markdown-style formatting markers"]
+        "custom_rules": [
+          "Tag strikethrough text as [D>...<D]. Output its content as plain text — no asterisks, no markdown, no style markers of any kind.",
+          "Italic-only text is NOT a deletion indicator in Iowa bills — do not tag it."
+        ]
       }
 
     },

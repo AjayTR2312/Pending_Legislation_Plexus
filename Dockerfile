@@ -36,6 +36,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app/ /app/app/
 COPY data/ /app/data/
 COPY config/ /app/config/
+COPY Opus4.6/ /app/Opus4.6/
 COPY README.md /app/
 
 # Copy Streamlit config to the working directory where it will be run

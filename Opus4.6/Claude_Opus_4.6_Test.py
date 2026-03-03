@@ -322,10 +322,10 @@ def get_conversion_prompt(state_config=None):
         str: Conversion prompt
     """
     prompts = load_prompts_from_markdown()
-    precision_guidance = prompts.get("Precision Guidance (Common to All Prompts)", "")
+    precision_guidance = prompts.get("🎯 PRECISION GUIDANCE (Common to All Templates)", "")
  
     if not state_config:
-        default_prompt = prompts.get("Default Visual Mode Prompt (No State Specified)", "")
+        default_prompt = prompts.get("📋 TEMPLATE 1: Default Visual Mode Prompt (No State Specified)", "")
         return default_prompt.replace("{PRECISION_GUIDANCE}", precision_guidance)
  
     # Build deletions instruction
@@ -718,13 +718,13 @@ def convert_pdf_to_text(client, pdf_path, prompt, batch_size=None):
         converted_text = ""
         with client.messages.stream(
             model="claude-opus-4-6",
-            max_tokens=32768,
+            max_tokens=128000,
             temperature=0,
             messages=messages
         ) as stream:
             for text in stream.text_stream:
                 converted_text += text
- 
+
         # Log total runtime
         total_time = time.time() - start_time
         minutes = int(total_time // 60)
@@ -779,14 +779,14 @@ def convert_pdf_document_mode(client, pdf_path, prompt):
         converted_text = ""
         with client.messages.stream(
             model="claude-opus-4-6",
-            max_tokens=32768,
+            max_tokens=128000,
             temperature=0,
             messages=messages
         ) as stream:
             for text in stream.text_stream:
                 converted_text += text
- 
-        logging.info(f"✅ Document mode complete: {len(converted_text)} characters")
+
+        logging.info(f"✅ Document mode complete:{len(converted_text)} characters")
         return converted_text
  
     except Exception as e:
@@ -838,14 +838,14 @@ def reconcile_outputs(client, visual_text, doc_text):
         reconciled = ""
         with client.messages.stream(
             model="claude-opus-4-6",
-            max_tokens=32768,
+            max_tokens=128000,
             temperature=0,
             messages=messages
         ) as stream:
             for text in stream.text_stream:
                 reconciled += text
  
-        logging.info(f"✅ Reconciliation complete: {len(reconciled)} characters")
+        logging.info(f"✅ Reconciliation complete:{len(reconciled)} characters")
         return reconciled
  
     except Exception as e:
