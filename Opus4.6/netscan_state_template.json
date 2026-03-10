@@ -29,6 +29,7 @@
       "abbreviation": "AR",
       "file_type": ".pdf-text",
       "deletions": "Remove line numbers, all footers, page numbers, headers starting on page 2. KEEP the first line explanation on page 1 (e.g., 'Stricken language would be deleted from and underlined language would be added to present law.')",
+      "header_order": "Output the page 1 header block in this exact order: (1) explanation line (e.g. 'Stricken language would be deleted from and underlined language would be added to present law.'), (2) bill number line (e.g. 'HOUSE BILL 1375' or 'SENATE BILL 123'), (3) 'A Bill', (4) 'State of Arkansas', (5) General Assembly line (e.g. '95th General Assembly'), (6) session line (e.g. 'Regular Session, 2025'), (7) By: sponsor lines, (8) 'For An Act To Be Entitled'. Do NOT reorder content after the header block — markup tagging rules still apply normally to all bill body text.",
       "add_markup": {
         "underline": true,
         "bold": false,
@@ -86,7 +87,7 @@
       "delete_markup": {
         "strike_out": true,
         "brackets": false,
-        "custom_rules": ["Do NOT add markup tags to text that is italicized."]
+        "custom_rules": ["Do NOT add markup tags to text that is italicized.", "NEVER use asterisks (*) anywhere in the output. Italic text must be output as plain text with NO markers — no *text*, no **text**, no markdown of any kind. If text is italic in the PDF, just output the plain words."]
       }
     },
     "IN": {
@@ -101,14 +102,20 @@
         "all_caps": false,
         "brackets": false,
         "custom_rules": [
-          "Do NOT tag these three specific bold labels: Citations Affected:, Synopsis:, Effective:. These are digest metadata — output them as plain text. Tag ALL other bold text everywhere else in the document, including bold text in the PRINTING CODE section.",
-          "NEVER use asterisks (*) anywhere in the output. Italic text must be output as plain text with NO markers — no *text*, no **text**, no markdown of any kind. If text is italic in the PDF, just output the plain words."
+          "CRITICAL: Output the content of every page in EXACT page order, page 1 first, page 2 second, and so on. NEVER move, reorder, or duplicate content from one page to another. If the DIGEST section appears on page 1, it must appear first in the output. The 'January 23, 2026', 'Second Regular Session', and 'PRINTING CODE' block only appears on the bill text page — do NOT copy or repeat it before the DIGEST section.",
+          "COMPLETELY REMOVE (do not include in the output at all) the bill reference footer line that appears at the bottom of each page. This line follows the pattern: [BILL TYPE] [NUMBER]—LS [NUMBER]/DI [NUMBER]. Examples: 'SB 85—LS 6422/DI 104', 'HB 1105—LS 6451/DI 87', 'SB 220—LS 6789/DI 55'. This line must NEVER appear anywhere in the output, even once.",
+          "COMPLETELY REMOVE (do not include in the output at all) any line that consists of ONLY a standalone page number — a line containing just a single number such as '2', '3', '4', '5', '6' with no other text on that line.",
+          "NEVER use asterisks (*) anywhere in the output. Italic text must be output as plain text with NO markers — no *text*, no **text**, no markdown of any kind. If text is italic in the PDF, just output the plain words.",
+          "Output ALL text content from every page including any digest, citations, and synopsis sections at the top of page 1. Only apply [A> tags to bold text that appears from 'SECTION 1' onwards. Do NOT tag any bold text before 'SECTION 1', but still output that text as plain text.",
+          "In each SECTION introductory clause, the word NEW is printed in bold (e.g., 'IS ADDED TO THE INDIANA CODE AS A NEW SECTION TO READ AS FOLLOWS'). This bold word NEW MUST always be tagged as [A>NEW<A] without exception, including in SECTION 1."
         ]
       },
       "delete_markup": {
         "strike_out": true,
         "brackets": false,
-        "custom_rules": []
+        "custom_rules": [
+          "Output ALL text content from every page. Only apply [D> tags to strikethrough text that appears from 'SECTION 1' onwards. Do NOT tag any strikethrough text before 'SECTION 1', but still output that text as plain text."
+        ]
       }
     },
     "KS": {
@@ -124,6 +131,7 @@
         "brackets": false,
         "custom_rules": [
           "Do not apply add to 'Be it enacted by the Legislature of the State of Kansas:'",
+          "NEW LAW BILLS — CRITICAL: If a Kansas bill introduces entirely new law (i.e., the sections do NOT contain phrases like 'is hereby amended to read as follows' or reference an existing 'K.S.A.' statute being amended), then ALL of the bill body text is plain unformatted text and MUST be output with NO [A> or [D> tags whatsoever. Only apply [A> or [D> tags when you can see a clear VISUAL DIFFERENCE in formatting (underline line beneath text, visually slanted italic, or visually heavier bold strokes) compared to the surrounding body text. If the entire section appears in the same uniform plain style with no formatting variation, output it as plain text with no tags.",
           "KS italic text indicates newly added legislative language. Always wrap italic text in [A>...<A] tags. NEVER render italic as markdown asterisks. WRONG: *Ninth* or *Eighth* or *text* — CORRECT: [A>Ninth<A] or [A>Eighth<A] or [A>text<A]. If you are about to write *word*, stop and write [A>word<A] instead. This applies to every italic word without exception, including short or capitalized words.",
           "NEVER put markdown asterisk characters (*) inside or outside [A>...<A] or [D>...<D] tags. Content inside redline tags must be completely plain text with no asterisks, no underscores, no markdown of any kind. The asterisk character (*) must never appear anywhere in the output.",
           "EXACT WORD-FOR-WORD TRANSCRIPTION — CRITICAL: Copy every single word exactly as printed. Small words such as 'a', 'the', 'or', 'and', 'of', 'in', 'to' are easy to accidentally drop — check that every one is present. WRONG: 'managed by the state, city, county' — CORRECT: 'managed by the state, a city, county' (the 'a' must not be dropped). WRONG: 'defined in subsection (l);' — CORRECT: 'defined in subsection (l); or' (the 'or' at the end must not be dropped).",
@@ -359,7 +367,13 @@
         "italic": false,
         "all_caps": false,
         "brackets": false,
-        "custom_rules": []
+        "custom_rules": [
+          "COMPLETELY REMOVE all line numbers from the output. Delaware bills have a number at the start of every line (e.g., '1 Section 1.', '2 insertions as shown', '48 [A>§ 8345.'). Strip the leading number and any whitespace after it — output only the text content of each line, never the line number itself.",
+          "NEVER use asterisks (*) anywhere in the output. Italic text must be output as plain text with NO markers — no *text*, no **text**, no markdown of any kind. If text is italic in the PDF, just output the plain words as plain text with NO [A> or [D> tags either.",
+          "SPONSOR LINE: Transcribe the sponsor/author header line(s) character-for-character exactly as printed. The '&' symbol only appears between names if it is literally printed in the PDF at that exact spot. If two names are separated only by a line break or a semicolon in the PDF, do NOT insert a '&' between them.",
+          "SYNOPSIS: The SYNOPSIS section at the end of the document is part of the PDF. Copy it word-for-word exactly as it is printed — do not paraphrase, summarize, shorten, or add any words not on the page.",
+          "CRITICAL: Every single word, symbol, and character in the output must be directly readable from the PDF page. Do NOT invent, infer, or add anything — not a single word, connector, or punctuation mark — that is not literally printed on the page."
+        ]
       },
       "delete_markup": {
         "strike_out": true,
@@ -458,7 +472,7 @@
         "brackets": false,
         "custom_rules": [
           "PRESERVE DOCUMENT HEADER LINE: The very first line of every Iowa bill PDF is a title header such as 'Senate File 173 - Introduced' or 'House File 456 - Enrolled'. This line MUST be preserved as the first line of your output exactly as it appears. Do NOT skip, omit, or move it.",
-          "Tag 'NEW SUBSECTION' as underlined even if in all caps",
+          "Tag 'NEW SECTION', 'NEW SUBSECTION', and 'NEW SUBPARAGRAPH' as underlined even if in all caps — these Iowa bill markers for newly added content MUST always be wrapped in [A>...<A] tags regardless of whether you can see a visible underline beneath them.",
           "Do NOT add asterisks or any other markers around subsection labels",
           "IOWA SUBSECTION LABEL PATTERN — AMENDED SECTIONS ONLY: In Iowa bills, when an EXISTING section is amended to restructure or add content, the subsection labels (a., b., etc.) that are newly added or relabeled will have a visible underline beneath them. ONLY in this case — amending an existing section — should you tag individual subsection labels. EXAMPLE of amended section: '24. [A>a.<A] To conduct a socioeconomic study...' where the a. label was inserted into existing text. Tag ONLY the label itself: CORRECT: '[A>a.<A] Upon the filing...' — WRONG: 'a. Upon the filing...' (missing tag).",
           "NEW SECTION / NEW SUBSECTION BODIES — DO NOT TAG LABELS: When a section is introduced with 'NEW SECTION' or 'NEW SUBSECTION', the [A>NEW SECTION<A] or [A>NEW SUBSECTION<A] tag already marks the entire block as new. Inside that block, output all subsection labels (a., b., c., (1), (2), etc.) as PLAIN TEXT with NO tags. CORRECT: '[A>NEW SUBSECTION<A]. 10. a. The commission shall not...' then 'b. If the commission...' — WRONG: '[A>NEW SUBSECTION.<A] 10. [A>a.<A] The commission...' then '[A>b.<A] If the commission...'. Applying tags to individual labels inside a NEW SECTION or NEW SUBSECTION block is an error.",
@@ -473,7 +487,8 @@
         "brackets": false,
         "custom_rules": [
           "Tag strikethrough text as [D>...<D]. Output its content as plain text — no asterisks, no markdown, no style markers of any kind.",
-          "Italic-only text is NOT a deletion indicator in Iowa bills — do not tag it."
+          "Italic-only text is NOT a deletion indicator in Iowa bills — do not tag it.",
+          "NEVER use asterisks (*) anywhere in the output. Italic text must be output as plain text with NO markers — no *text*, no **text**, no markdown of any kind. If text is italic in the PDF, just output the plain words."
         ]
       }
 

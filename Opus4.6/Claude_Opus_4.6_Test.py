@@ -456,10 +456,17 @@ def get_conversion_prompt(state_config=None):
             "If it looks the same as the body text, do NOT tag it. "
             f"{formatting_guidance} "
         )
- 
+    
     state_name = state_config.get("state_name", "")
+    abbreviation = state_config.get("abbreviation", "")
+
+    # Build header order instruction — AR only
+    header_order = state_config.get("header_order", "")
+    header_order_instruction = f"HEADER ORDER: {header_order} " if (header_order and abbreviation == "AR") else ""
+
     prompt = (
         f"Convert these PDF page images of a {state_name} legislative bill to text. "
+        f"{header_order_instruction}"
         f"{delete_instruction} "
         f"{delete_markup_instruction}"
         f"{add_markup_instruction}"
@@ -587,8 +594,13 @@ def get_document_mode_prompt(state_config=None):
             "Do NOT infer or guess formatting. Do NOT tag formatting types not explicitly listed. "
         )
  
+    # Build header order instruction — AR only
+
+    header_order = state_config.get("header_order", "")
+    header_order_instruction = f"HEADER ORDER: {header_order} " if (header_order and state_config.get("abbreviation", "") == "AR") else ""
     prompt = (
         f"Convert this {state_name} legislative bill PDF to text. "
+        f"{header_order_instruction}"
         f"{delete_instruction} "
         f"{delete_markup_instruction}"
         f"{add_markup_instruction}"
