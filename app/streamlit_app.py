@@ -1790,8 +1790,14 @@ def show_single_file_processing():
         
         st.rerun()
     
-    # Results section
-    if st.session_state.processed_file_path and os.path.exists(st.session_state.processed_file_path):
+    # Results section — show if we have a path OR cached bytes.
+    # Do NOT gate on os.path.exists() because on multi-pod Kubernetes deployments
+    # the file lives on whichever pod did the processing; subsequent requests may
+    # be routed to a different pod where the file does not exist on disk.
+    if st.session_state.processed_file_path and (
+        st.session_state.get('processed_file_data') is not None
+        or os.path.exists(st.session_state.processed_file_path)
+    ):
         show_results_section()
 
 def show_batch_processing_interface():
