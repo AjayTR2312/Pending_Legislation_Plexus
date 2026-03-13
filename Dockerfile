@@ -61,4 +61,5 @@ CMD ["streamlit", "run", "streamlit_app.py", \
      "--server.address=0.0.0.0", \
      "--server.headless=true", \
      "--server.enableWebsocketCompression=false", \
+     "--server.enableXsrfProtection=false", \
      "--browser.serverAddress=localhost"]

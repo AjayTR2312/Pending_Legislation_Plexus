@@ -51,6 +51,8 @@ try:
         st.session_state.step_status = {}
     if 'processed_file_path' not in st.session_state:
         st.session_state.processed_file_path = None
+    if 'processed_file_data' not in st.session_state:
+        st.session_state.processed_file_data = None  # cached bytes — survives pod rerouting
     if 'client' not in st.session_state:
         st.session_state.client = None
     if 'temp_pdf_path' not in st.session_state:
@@ -1420,6 +1422,7 @@ def show_simple_ui():
                 try:
                     # Clear all previous run state so the new file starts fresh
                     st.session_state.processed_file_path = None
+                    st.session_state.processed_file_data = None
                     st.session_state.processing = False
                     st.session_state.current_step = 0
                     st.session_state.step_status = {}
@@ -1542,9 +1545,19 @@ def show_processing_steps():
 def show_results_section():
     """Show results and download options"""
     st.header("🎉 Processing Complete!")
-    
+
     file_name = Path(st.session_state.processed_file_path).name
-    file_size = os.path.getsize(st.session_state.processed_file_path)
+
+    # os.path.getsize crashes when the file lives on a different Kubernetes pod.
+    # Use cached bytes length instead — it is always available.
+    cached_data = st.session_state.get('processed_file_data')
+    if cached_data is not None:
+        file_size = len(cached_data)
+    else:
+        try:
+            file_size = os.path.getsize(st.session_state.processed_file_path)
+        except Exception:
+            file_size = 0
     
     # Show success message with processing time
     success_msg = "✅ Your document has been successfully processed with AI verification and legislative tagging!"
@@ -1567,13 +1580,27 @@ def show_results_section():
         st.subheader("📄 Final Output Preview")
         
         try:
-            with open(st.session_state.processed_file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-            
-            # Show highlighted version
-            highlighted_content = highlight_legislative_tags(content)
+            # Prefer cached bytes so preview works across pods
+            cached = st.session_state.get('processed_file_data')
+            if cached is not None:
+                content = cached.decode('utf-8', errors='replace')
+            else:
+                with open(st.session_state.processed_file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+
+            # Cap preview at 50 KB to avoid sending a massive HTML blob over
+            # the WebSocket, which causes the rerun to fail on large bills and
+            # makes the download button unreachable.
+            PREVIEW_CHAR_LIMIT = 50_000
+            truncated = len(content) > PREVIEW_CHAR_LIMIT
+            preview_content = content[:PREVIEW_CHAR_LIMIT] if truncated else content
+            highlighted_content = highlight_legislative_tags(preview_content)
             st.markdown(highlighted_content, unsafe_allow_html=True)
-            
+            if truncated:
+                st.caption(
+                    f"⚠️ Preview truncated to {PREVIEW_CHAR_LIMIT:,} characters. "
+                    f"Full file ({len(content):,} chars) available via download below."
+                )
         except Exception as e:
             st.error(f"Error loading file: {e}")
     
@@ -1597,11 +1624,17 @@ def show_results_section():
             st.metric("Chunks Processed", f"{chunk_info['chunks_processed']}/{chunk_info['total_chunks']}")
             st.metric("Character Count", f"{chunk_info['character_count']:,}")
         
-        # Download button
+        # Download button — use in-memory cached bytes so download works
+        # even if the session folder was cleaned up or the request is routed
+        # to a different Kubernetes pod that has no local copy of the file.
         try:
-            with open(st.session_state.processed_file_path, 'rb') as f:
-                file_data = f.read()
-            
+            file_data = st.session_state.get('processed_file_data')
+            if file_data is None:
+                # Fallback: try reading from disk
+                with open(st.session_state.processed_file_path, 'rb') as f:
+                    file_data = f.read()
+                st.session_state.processed_file_data = file_data  # cache for next rerun
+
             st.download_button(
                 label="📥 Download Final Output",
                 data=file_data,
@@ -1738,6 +1771,15 @@ def show_single_file_processing():
         if result:
             st.session_state.processed_file_path = result
             st.session_state.processing = False
+            # Cache file bytes immediately into session_state so the download
+            # button works even if a subsequent request is routed to a different
+            # Kubernetes pod (which has no local copy of the file).
+            try:
+                with open(result, 'rb') as _f:
+                    st.session_state.processed_file_data = _f.read()
+            except Exception as _read_err:
+                logging.warning(f"Could not cache output file bytes: {_read_err}")
+                st.session_state.processed_file_data = None
             success_msg = "🎉 Processing completed successfully!"
             if st.session_state.processing_time:
                 success_msg += f" ⏱️ Total time: {st.session_state.processing_time}"
