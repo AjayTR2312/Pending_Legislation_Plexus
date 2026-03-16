@@ -265,7 +265,7 @@ def reset_batch_processing():
     st.session_state.uploaded_files = []
 
 # Simple processing functions
-def process_single_pdf_simple(pdf_path, state_code, session_id, progress_placeholder=None, status_placeholder=None):
+def process_single_pdf_simple(pdf_path, state_code, session_id, progress_placeholder=None, status_placeholder=None, log_placeholder=None):
     """Process a single PDF through all 5 steps with session management and UI updates"""
     # Start timing
     start_time = time.time()
@@ -1123,7 +1123,7 @@ def process_with_tag_then_clean_pipeline(pdf_path, state_code, session_id, progr
         logging.error(f"Tag-Then-Clean processing error: {e}", exc_info=True)
         return None
 
-def process_with_claude_opus(pdf_path, state_code, session_id, progress_placeholder=None, status_placeholder=None):
+def process_with_claude_opus(pdf_path, state_code, session_id, progress_placeholder=None, status_placeholder=None, log_placeholder=None):
     """Process PDF using Claude Opus 4.6 visual conversion (image-based, page by page)"""
     import importlib.util
 
@@ -1145,10 +1145,17 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
     st.session_state.step_status = {i: "⏳" for i in range(5)}
 
     def add_log(message, level="info"):
-        """Add log message to processing logs"""
+        """Add log message to processing logs and update live display"""
         timestamp = datetime.now().strftime("%H:%M:%S")
         st.session_state.processing_logs.append({"time": timestamp, "message": message, "level": level})
         logging.info(message)
+        # Live-update the log placeholder so user sees progress in real time
+        if log_placeholder is not None:
+            with log_placeholder.container():
+                for log in st.session_state.processing_logs:
+                    _level = log.get('level', 'info')
+                    _icon = "ℹ️" if _level == "info" else "⚠️" if _level == "warning" else "❌"
+                    st.text(f"{_icon} [{log['time']}] {log['message']}")
 
     def update_progress():
         if progress_placeholder:
@@ -1624,24 +1631,26 @@ def show_results_section():
             st.metric("Chunks Processed", f"{chunk_info['chunks_processed']}/{chunk_info['total_chunks']}")
             st.metric("Character Count", f"{chunk_info['character_count']:,}")
         
-        # Download button — use in-memory cached bytes so download works
-        # even if the session folder was cleaned up or the request is routed
-        # to a different Kubernetes pod that has no local copy of the file.
+        # Client-side download via data URI — the file is embedded directly in
+        # the HTML page as a base64 string. When the user clicks the link, the
+        # browser downloads it locally with zero server requests, so pod routing
+        # is completely irrelevant. This fixes the multi-pod / multi-user issue.
         try:
             file_data = st.session_state.get('processed_file_data')
             if file_data is None:
-                # Fallback: try reading from disk
                 with open(st.session_state.processed_file_path, 'rb') as f:
                     file_data = f.read()
-                st.session_state.processed_file_data = file_data  # cache for next rerun
+                st.session_state.processed_file_data = file_data
 
-            st.download_button(
-                label="📥 Download Final Output",
-                data=file_data,
-                file_name=file_name,
-                mime="text/plain",
-                use_container_width=True
+            import base64
+            b64 = base64.b64encode(file_data).decode()
+            download_link = (
+                f'<a href="data:text/plain;base64,{b64}" download="{file_name}" '
+                f'style="display:inline-block;width:100%;padding:10px 0;text-align:center;'
+                f'background-color:#ff4b4b;color:white;border-radius:6px;font-weight:600;'
+                f'text-decoration:none;font-size:15px;">📥 Download Final Output</a>'
             )
+            st.markdown(download_link, unsafe_allow_html=True)
         except Exception as e:
             st.error(f"Download error: {e}")
 
@@ -1720,12 +1729,13 @@ def show_single_file_processing():
         progress_placeholder = st.empty()
         status_placeholder = st.empty()
         log_container = st.expander("📋 Processing Logs", expanded=True)
+        log_placeholder = log_container.empty()  # live-updating slot inside the expander
         
         with progress_placeholder.container():
             show_processing_steps()
         
-        # Display processing logs
-        with log_container:
+        # Display any logs already collected (e.g. from a previous partial run)
+        with log_placeholder.container():
             if st.session_state.processing_logs:
                 for log in st.session_state.processing_logs:
                     level = log.get('level', 'info')
@@ -1756,7 +1766,8 @@ def show_single_file_processing():
                 _state,
                 st.session_state.session_id,
                 progress_placeholder,
-                status_placeholder
+                status_placeholder,
+                log_placeholder
             )
         else:
             # Default vision processing
@@ -1765,7 +1776,8 @@ def show_single_file_processing():
                 _state,
                 st.session_state.session_id,
                 progress_placeholder,
-                status_placeholder
+                status_placeholder,
+                log_placeholder
             )
         
         if result:

@@ -1066,7 +1066,7 @@
       "delete_markup": {
         "strike_out": true,
         "brackets": false,
-        "custom_rules": []
+        "custom_rules": ["CRITICAL: Do NOT add any character, letter, symbol, or text after the last line of the bill. The output must end exactly where the bill text ends. Do NOT append 'O', 'O.', or any other trailing character."]
       }
     }
   }
