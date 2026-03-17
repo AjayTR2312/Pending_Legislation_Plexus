@@ -1054,6 +1054,12 @@
       "abbreviation": "CA",
       "file_type": "PDF",
       "deletions": "Page numbers and footer",
+      "no_tag_clauses": [
+        "The people of the State of California do enact as follows:",
+        "Resolved by the Assembly of the State of California, the Senate thereof concurring,",
+        "Resolved by the Senate of the State of California, the Assembly thereof concurring,",
+        "Resolved,"
+      ],
       "add_markup": {
         "underline": false,
         "bold": false,

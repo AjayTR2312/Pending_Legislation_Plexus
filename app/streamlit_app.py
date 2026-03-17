@@ -12,17 +12,40 @@ import logging
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # Import our processing functions
-from pdf_to_text_llm import (
-    get_anthropic_client, load_conversion_prompt, load_example_pairs,
-    process_pdf_with_claude, save_to_text_file, remove_unwanted_tags, 
-    AVAILABLE_STATES, read_file_content, verify_text_with_llm,
-    save_verified_file, create_verification_report
-)
-from pdf_docx_analysis_pipeline import PDFToDocxAnalysisPipeline
+try:
+    from pdf_to_text_llm import (
+        get_anthropic_client, load_conversion_prompt, load_example_pairs,
+        process_pdf_with_claude, save_to_text_file, remove_unwanted_tags, 
+        AVAILABLE_STATES, read_file_content, verify_text_with_llm,
+        save_verified_file, create_verification_report
+    )
+except ImportError:
+    get_anthropic_client = load_conversion_prompt = load_example_pairs = None
+    process_pdf_with_claude = save_to_text_file = remove_unwanted_tags = None
+    AVAILABLE_STATES = {}
+    read_file_content = verify_text_with_llm = save_verified_file = create_verification_report = None
+    logging.warning("⚠️ pdf_to_text_llm module not found — legacy pipeline disabled")
+try:
+    from pdf_docx_analysis_pipeline import PDFToDocxAnalysisPipeline
+except ImportError:
+    PDFToDocxAnalysisPipeline = None
+    logging.warning("⚠️ pdf_docx_analysis_pipeline module not found — DOCX analysis disabled")
 from session_manager import get_session_manager
-from pdf_plumber_extractor import extract_pdf_with_pdfplumber
-from text_to_clean_prompt import convert_pdfplumber_to_clean
-from tag_then_clean_pipeline import tag_then_clean_pipeline
+try:
+    from pdf_plumber_extractor import extract_pdf_with_pdfplumber
+except ImportError:
+    extract_pdf_with_pdfplumber = None
+    logging.warning("⚠️ pdf_plumber_extractor module not found — pdfplumber extraction disabled")
+try:
+    from text_to_clean_prompt import convert_pdfplumber_to_clean
+except ImportError:
+    convert_pdfplumber_to_clean = None
+    logging.warning("⚠️ text_to_clean_prompt module not found — pdfplumber clean pipeline disabled")
+try:
+    from tag_then_clean_pipeline import tag_then_clean_pipeline
+except ImportError:
+    tag_then_clean_pipeline = None
+    logging.warning("⚠️ tag_then_clean_pipeline module not found — tag-then-clean pipeline disabled")
 
 # Configure Streamlit page
 st.set_page_config(
@@ -911,7 +934,10 @@ def process_with_tag_then_clean_pipeline(pdf_path, state_code, session_id, progr
             print("\n🔄 Tag-Then-Clean chunked pipeline...")
             
             # Get client using helper function (matching other workflows)
-            from tag_then_clean_pipeline import tag_then_clean_with_pdfplumber_chunks, get_anthropic_client
+            try:
+                from tag_then_clean_pipeline import tag_then_clean_with_pdfplumber_chunks, get_anthropic_client
+            except ImportError:
+                raise Exception("tag_then_clean_pipeline module not found — this pipeline is not available")
             
             try:
                 # Get fresh client
@@ -1258,6 +1284,11 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
         st.session_state.step_status[3] = "✅"
         update_progress()
         add_log(f"✅ Visual conversion complete: {len(converted_text)} characters")
+
+        # ── Step 4b: Post-process — strip tags from protected clauses ────────────
+        if state_config:
+            converted_text = opus.post_process_output(converted_text, state_config)
+            add_log("🔧 Post-processing: stripped tags from protected clauses (if any)")
 
         # ── Step 5: Save output ──────────────────────────────────────────────────
         st.session_state.current_step = 4

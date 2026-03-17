@@ -28,6 +28,7 @@ import requests
 import json
 import ssl
 import os
+import re
 import time
 import sys
 import base64
@@ -886,6 +887,59 @@ def reconcile_outputs(client, visual_text, doc_text):
         logging.error(f"❌ Error during reconciliation: {e}")
         return visual_text  # Fall back to visual output on error
  
+def post_process_output(text, state_config):
+    """
+    Apply deterministic post-processing fixes to converted text based on state rules.
+    Strips [A>...<A] tags from specific clauses that should never be tagged.
+
+    Args:
+        text (str): Converted text from Claude
+        state_config (dict): State config from netscan_state_template.json, or None
+
+    Returns:
+        str: Cleaned text with tags removed from protected clauses
+    """
+    if not text or not state_config:
+        return text
+
+    no_tag_clauses = state_config.get("no_tag_clauses", [])
+    if not no_tag_clauses:
+        return text
+
+    state_name = state_config.get('state_name', 'Unknown')
+    fix_count = 0
+
+    for clause in no_tag_clauses:
+        # Build a regex that matches the clause text even if it has [A> or <A] tags
+        # scattered within it. E.g. "[A>The people of the State<A] of California..."
+        # Strategy: escape the clause, then allow optional [A> and <A] around/between words
+        escaped = re.escape(clause)
+        # Allow [A> and <A] tags (with optional whitespace) between any characters
+        pattern = escaped.replace(r'\ ', r'\s*(?:\[A>|<A\])?\s*')
+        # Also allow tags at the very start and end of the clause
+        full_pattern = r'(?:\[A>\s*)?' + pattern + r'(?:\s*<A\])?'
+
+        def strip_tags(match):
+            """Remove all [A> and <A] tags from the matched text."""
+            matched = match.group(0)
+            cleaned = matched.replace('[A>', '').replace('<A]', '')
+            return cleaned
+
+        new_text = re.sub(full_pattern, strip_tags, text, flags=re.IGNORECASE)
+        if new_text != text:
+            occurrences = len(re.findall(full_pattern, text, flags=re.IGNORECASE))
+            fix_count += occurrences
+            logging.info(f"🔧 Stripped [A> tags from '{clause}' ({occurrences} occurrence(s))")
+            text = new_text
+
+    if fix_count > 0:
+        logging.info(f"🔧 Post-processing for {state_name}: stripped tags from {fix_count} protected clause(s)")
+    else:
+        logging.info(f"✅ Post-processing for {state_name}: no tag cleanup needed")
+
+    return text
+
+
 def save_text_file(text, output_path):
     """
     Save text to file.
@@ -1018,6 +1072,10 @@ def main():
         else:
             print("⚠️ Document mode failed, using visual output only")
  
+    # Post-process: strip tags from protected clauses (deterministic cleanup)
+    if state_config:
+        converted_text = post_process_output(converted_text, state_config)
+
     # Save output
     print(f"💾 Saving output...")
     if save_text_file(converted_text, output_path):
