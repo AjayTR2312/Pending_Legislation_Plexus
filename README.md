@@ -1,45 +1,39 @@
 # PDF-to-Text Conversion Application - Deployment Guide
 
 ## Overview
-This is a comprehensive PDF-to-Text conversion application with multi-state support, featuring Claude Opus 4 LLM integration, DOCX analysis, and automated tag verification.
+A PDF-to-Text conversion application that converts legislative bill PDFs from U.S. states into clean, markup-tagged plain text files for the NetScan data ingestion system. Powered by Claude Opus 4.6 visual interpretation — each PDF page is rendered as a high-resolution image and the AI visually reads the page for superior accuracy in detecting strikethrough, underline, bold, italic, and mixed formatting.
 
 ## Features
-- **Multi-State Support**: 28 states with state-specific processing rules
-- **LLM Integration**: Claude Opus 4 for intelligent PDF conversion
-- **DOCX Analysis**: Adobe PDF Services for format analysis
-- **Tag Verification**: Automated verification with state-specific prompts
-- **Docker Support**: Complete containerization for easy deployment
-- **Example-Based Learning**: Few-shot learning with state examples
-- **Web Interface**: Streamlit-based GUI for easy file management and processing
-- **Real-time Monitoring**: Live processing logs and progress tracking
+- **Vision-First Conversion**: PDF pages rendered as 400 DPI images — Claude Opus 4.6 visually reads each page for formatting detection
+- **Auto State Detection**: Filename-pattern matching (instant) with AI content analysis fallback (~5–10s)
+- **Single-Pass Processing**: All pages sent in one API call for cross-page consistency (128K max output tokens)
+- **State-Specific Prompt Engineering**: Dynamic prompt construction from template library + per-state rules
+- **Web Interface**: Streamlit-based GUI with live progress tracking, session management, and file download
+- **CLI Support**: Standalone script for command-line batch processing
+- **In-Memory Processing**: PDF rendering and image encoding without temp files on disk
 
 ## Folder Structure
 
 ```
-Temp/
-├── app/                          # Application code
-│   ├── pdf_to_text_llm.py       # Main application
-│   ├── pdf_docx_analysis_pipeline.py
-│   ├── llm_tag_verifier.py
-│   └── geanai.py
-├── config/                       # Configuration files
-│   ├── requirements.txt
-│   └── pdfservices-api-credentials.json.template
-├── prompts/                      # State-specific prompts
-│   ├── conversion/              # PDF conversion prompts
-│   └── verification/            # Tag verification prompts
-├── data/                        # Data directories (volume mounted)
-│   ├── input/                   # Input PDF files by state
-│   ├── output/                  # Output text files by state
-│   ├── examples/                # Example files for few-shot learning
-│   └── logs/                    # Application logs
-├── docker/                      # Docker configuration
-│   ├── Dockerfile
-│   ├── docker-compose.yml
-│   ├── .dockerignore
-│   └── docker-manage.bat        # Management script
-└── docs/                        # Documentation
-    └── README.md               # This file
+Pending_Legislation/
+├── app/                              # Streamlit Web Application
+│   ├── streamlit_app.py              # UI + orchestration (calls process_with_claude_opus)
+│   └── session_manager.py            # Session lifecycle (UUID folders, cleanup)
+│
+├── Opus4.6/                          # Conversion Engine
+│   ├── Claude_Opus_4.6_Test.py       # Main conversion engine (imported by Streamlit app)
+│   ├── conversion_prompts.md         # Prompt template library (2 templates + components)
+│   ├── netscan_state_template.json   # State-specific configuration (45+ states)
+│   └── logs/                         # Timestamped execution logs
+│
+├── tmp/sessions/{uuid}/              # Runtime Session Folders
+│   ├── input/                        # Uploaded PDF files
+│   ├── output/                       # Converted .txt files
+│   └── logs/                         # Per-session execution logs
+│
+├── requirements.txt                  # Python dependencies
+├── Dockerfile                        # Container configuration
+└── README.md                         # This file
 ```
 
 ## Supported States (28 Total)
@@ -54,33 +48,30 @@ Temp/
 ## Quick Start
 
 ### Prerequisites
-- Docker Desktop installed and running
-- Adobe PDF Services credentials
-- Access to Thomson Reuters Anthropic API
+- Python 3.11+
+- Access to Thomson Reuters Anthropic AI Platform
+- Network access to `aiplatform.gcs.int.thomsonreuters.com`
 
 ### Setup Instructions
 
-1. **Clone/Copy this Temp folder to your deployment location**
-
-2. **Configure Adobe PDF Services**:
+1. **Clone the repository and create virtual environment**:
    ```bash
-   cd config
-   cp pdfservices-api-credentials.json.template pdfservices-api-credentials.json
-   # Edit the file with your actual Adobe credentials
+   cd Pending_Legislation
+   python -m venv .venv
+   .venv\Scripts\Activate.ps1       # Windows PowerShell
+   pip install -r requirements.txt
    ```
 
-3. **Build and Start the Application**:
+2. **Launch the Web Application**:
    ```bash
-   cd docker
-   docker-manage.bat build
-   docker-manage.bat start
+   cd app
+   streamlit run streamlit_app.py
    ```
 
-4. **Access the Application**:
+3. **Access the Application**:
    - **Web Interface**: Open your browser to `http://localhost:8501`
-   - **Command Line**: Use `docker exec -it pdf-to-text-converter python pdf_to_text_llm.py`
-   - Place PDF files in `data/input/[STATE]/` folders
-   - Results will appear in `data/output/[STATE]/` folders
+   - Upload a PDF, the system auto-detects the state and processes it
+   - Preview and download the tagged text output
 
 ### Web Interface Features
 
@@ -92,191 +83,65 @@ The Streamlit web interface provides:
 - **Session Logs**: Real-time activity monitoring
 - **Tag Visualization**: Highlighted legislative tags in verified files
 
-### Docker Management
-
-Use the provided management script for easy Docker operations:
+### CLI Usage (Standalone)
 
 ```bash
-# Build the Docker image
-docker-manage.bat build
+cd Opus4.6
 
-# Start the application
-docker-manage.bat start
+# Auto-detect state from filename or content
+python Claude_Opus_4.6_Test.py document.pdf
 
-# Check application status
-docker-manage.bat status
+# Specify state explicitly
+python Claude_Opus_4.6_Test.py document.pdf FL
 
-# View logs
-docker-manage.bat logs
-
-# Stop the application
-docker-manage.bat stop
-
-# Restart the application
-docker-manage.bat restart
-
-# Clean up (remove containers and images)
-docker-manage.bat cleanup
-
-# Show help
-docker-manage.bat help
+# Specify state and output path
+python Claude_Opus_4.6_Test.py document.pdf FL output.txt
 ```
 
-## Configuration
+## Processing Pipeline
 
-### Adobe PDF Services
-Edit `config/pdfservices-api-credentials.json` with your credentials:
+### Production Flow (5 Steps)
+
+```
+User Uploads PDF  →  Connect to AI  →  Detect State  →  Build Prompt  →  Visual Conversion  →  Output
+```
+
+| Step | Action | Result |
+|------|--------|--------|
+| **1** | Authenticate with TR AI Platform | Claude Opus 4.6 client ready |
+| **2** | Detect state from filename or AI content analysis | State code identified (e.g., FL) |
+| **3** | Load state rules from JSON + build prompt from template library | State-specific prompt assembled (~4000–7000 chars) |
+| **4** | Render all pages at 400 DPI → send images + prompt to Claude Opus 4.6 | Raw text with `[A>...<A]` and `[D>...<D]` tags |
+| **5** | Post-process (strip protected clauses) → save tagged text | Conversion complete |
+
+### Markup Tag System
+
+| Tag | Opening | Closing | Meaning | Example |
+|-----|---------|---------|---------|---------|
+| **Add** | `[A>` | `<A]` | Added/new text | `[A>new language<A]` |
+| **Delete** | `[D>` | `<D]` | Struck/deleted text | `[D>old provision<D]` |
+
+**Forbidden Formats:** Markdown (`**`, `*`, `~~`, `__`) is strictly prohibited in output.
+
+## State-Specific Configuration
+
+All state rules are defined in `Opus4.6/netscan_state_template.json`. Each state entry specifies:
+
 ```json
 {
-  "client_credentials": {
-    "client_id": "your_client_id",
-    "client_secret": "your_client_secret"
+  "state_name": "California",
+  "abbreviation": "CA",
+  "file_type": "PDF",
+  "deletions": "Page numbers and footer",
+  "no_tag_clauses": ["The people of the State of California do enact as follows:"],
+  "add_markup": {
+    "underline": false, "bold": false, "italic": true,
+    "all_caps": false, "brackets": false,
+    "custom_rules": ["State-specific add rules"]
+  },
+  "delete_markup": {
+    "strike_out": true, "brackets": false,
+    "custom_rules": ["State-specific delete rules"]
   }
 }
 ```
-
-### State-Specific Processing
-- **Conversion Prompts**: Located in `prompts/conversion/`
-- **Verification Prompts**: Located in `prompts/verification/`
-- **Examples**: Place in `data/examples/[STATE]/` for few-shot learning
-
-## Data Persistence
-
-The following directories are volume-mounted for data persistence:
-- `data/input/` - Input PDF files
-- `data/output/` - Output text files
-- `data/examples/` - Example files for training
-- `data/logs/` - Application logs
-
-Data persists even when containers are stopped/removed.
-
-## Processing Workflow
-
-### Web Interface (Recommended)
-1. **Access**: Open `http://localhost:8501` in your browser
-2. **State Selection**: Choose your state from the sidebar
-3. **File Upload**: Upload PDF files using the web interface
-4. **Processing**: Click "Start Processing" and monitor real-time progress
-5. **Review**: Browse generated files with the built-in viewer
-6. **Download**: Get results directly through the web interface
-
-### Command Line Interface
-1. **PDF Conversion**: Claude Opus 4 converts PDF to text using state-specific prompts
-2. **DOCX Analysis**: Adobe PDF Services creates DOCX for format analysis
-3. **Tag Verification**: LLM verifies and corrects formatting tags
-4. **Output Generation**: Produces verified text files with reports
-
-## State-Specific Features
-
-### Connecticut (CT)
-- Underlined text → `[A>text<A]`
-- Bracketed text → `[D>text<D]`
-
-### Indiana (IN)
-- Bold text starting from "SECTION 1" → `[A>text<A]`
-
-### Kansas (KS)
-- Multi-format tagging (underlined/bold/italic → `[A>text<A]`)
-- Strikethrough → `[D>text<D]`
-- Excludes lines 2-3 from processing
-
-### Florida (FL)
-- Underlined text → `[A>text<A]`
-- Strikethrough → `[D>text<D]`
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Docker not running**:
-   ```
-   Error: Docker is not running
-   Solution: Start Docker Desktop
-   ```
-
-2. **Port 8501 already in use**:
-   ```
-   Solution: Stop other Streamlit applications or change port in docker-compose.yml
-   ```
-
-3. **Adobe credentials not found**:
-   ```
-   Solution: Ensure pdfservices-api-credentials.json is properly configured
-   ```
-
-### Logs
-Check application logs for detailed error information:
-```bash
-docker-manage.bat logs
-```
-
-### Volume Issues
-If you encounter volume mounting issues:
-```bash
-docker-manage.bat cleanup
-docker-manage.bat build
-docker-manage.bat start
-```
-
-## Development
-
-### Adding New States
-1. Add state to `AVAILABLE_STATES` in `pdf_to_text_llm.py`
-2. Create state-specific prompts in `prompts/conversion/` and `prompts/verification/`
-3. Add example files to `data/examples/[STATE]/`
-4. Update directory creation in Dockerfile
-
-### Custom Prompts
-- Conversion prompts: Use `{DOCUMENT_CONTENT}` placeholder
-- Verification prompts: Use `{SUMMARY_CONTENT}` and `{OUTPUT_TEXT_CONTENT}` placeholders
-
-## Performance
-
-### Resource Requirements
-- **Memory**: 2GB minimum, 4GB recommended
-- **CPU**: 2 cores minimum
-- **Disk**: 10GB for application + space for your documents
-
-### Scaling
-- For high-volume processing, consider increasing Docker memory limits
-- Use external databases for metadata storage in production
-- Implement queue systems for batch processing
-
-## Security
-
-### API Keys
-- Adobe PDF Services credentials stored in `config/` (not in Docker image)
-- Thomson Reuters workspace ID configured in application code
-- All credentials volume-mounted as read-only
-
-### Network
-- Application runs on localhost:8501 by default
-- For production, use reverse proxy with SSL termination
-
-## Support
-
-### Logs Location
-- Container logs: `docker-manage.bat logs`
-- Application logs: `data/logs/`
-
-### Health Checks
-- Built-in Docker health checks
-- Endpoint monitoring on port 8501
-
-## Deployment Notes
-
-This deployment structure provides:
-- ✅ Clean separation of code, config, and data
-- ✅ Easy Docker management
-- ✅ Data persistence
-- ✅ State-specific processing
-- ✅ Comprehensive logging
-- ✅ Volume-mounted configuration
-- ✅ Production-ready structure
-
-For production deployment, consider:
-- Adding SSL/TLS termination
-- Implementing proper logging aggregation
-- Adding monitoring and alerting
-- Using external storage for large files
-- Implementing backup strategies for persistent data
