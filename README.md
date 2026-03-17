@@ -145,3 +145,25 @@ All state rules are defined in `Opus4.6/netscan_state_template.json`. Each state
   }
 }
 ```
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Streamlit won't start**:
+   ```
+   Ensure virtual environment is activated: .venv\Scripts\Activate.ps1
+   Then: cd app && streamlit run streamlit_app.py
+   ```
+
+2. **API authentication failure**:
+   ```
+   Verify network access to aiplatform.gcs.int.thomsonreuters.com
+   Check workspace ID in Claude_Opus_4.6_Test.py
+   ```
+
+3. **Large PDF timeout**:
+   ```
+   PDFs with 50+ pages at 400 DPI may hit API payload limits
+   Workaround: Split large PDFs before processing
+   ```
