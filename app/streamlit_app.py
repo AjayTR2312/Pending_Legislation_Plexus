@@ -46,6 +46,11 @@ try:
 except ImportError:
     tag_then_clean_pipeline = None
     logging.warning("⚠️ tag_then_clean_pipeline module not found — tag-then-clean pipeline disabled")
+try:
+    from validation_ui import display_validation_results
+except ImportError:
+    display_validation_results = None
+    logging.warning("⚠️ validation_ui module not found — validation display disabled")
 
 # Configure Streamlit page
 st.set_page_config(
@@ -88,6 +93,8 @@ try:
         st.session_state.chunk_stats = None
     if 'processing_logs' not in st.session_state:
         st.session_state.processing_logs = []
+    if 'validation_result' not in st.session_state:
+        st.session_state.validation_result = None
     
     # Batch processing state
     if 'batch_mode' not in st.session_state:
@@ -1160,15 +1167,16 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
     # Clear previous logs
     st.session_state.processing_logs = []
 
-    # 5 steps to match the shared show_processing_steps() display
+    # 6 steps to match the shared show_processing_steps() display
     steps_labels = [
         {"name": "Initialize Claude Opus",    "icon": "🤖"},
         {"name": "Detect State",              "icon": "🔍"},
         {"name": "Build Conversion Prompt",   "icon": "📋"},
         {"name": "Visual Conversion",         "icon": "👁️"},
         {"name": "Save Output",               "icon": "💾"},
+        {"name": "LLM Validation (GPT)",      "icon": "🔍"},
     ]
-    st.session_state.step_status = {i: "⏳" for i in range(5)}
+    st.session_state.step_status = {i: "⏳" for i in range(6)}
 
     def add_log(message, level="info"):
         """Add log message to processing logs and update live display"""
@@ -1277,7 +1285,13 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
         if status_placeholder:
             status_placeholder.info("👁️ Running Claude Opus 4.6 visual conversion (this may take a few minutes)...")
 
-        converted_text = opus.convert_pdf_to_text(client, pdf_path, prompt)
+        result_data = opus.convert_pdf_to_text(client, pdf_path, prompt)
+        # Handle both tuple (text, images) and plain text return
+        if isinstance(result_data, tuple):
+            converted_text, cached_page_images = result_data
+        else:
+            converted_text = result_data
+            cached_page_images = None
         if not converted_text:
             raise Exception("Claude Opus visual conversion returned an empty result")
 
@@ -1308,6 +1322,43 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
         st.session_state.step_status[4] = "✅"
         update_progress()
         add_log(f"✅ Output saved: {output_path}")
+
+        # ── Step 6: LLM-as-Judge Validation ──────────────────────────────────────
+        st.session_state.current_step = 5
+        st.session_state.step_status[5] = "🔄"
+        update_progress()
+        add_log("🔍 Running LLM-as-Judge validation with GPT...")
+        if status_placeholder:
+            status_placeholder.info("🔍 Running LLM-as-Judge validation (GPT judge reviewing conversion)...")
+
+        st.session_state.validation_result = None
+        try:
+            # Import Validation module
+            val_module_path = os.path.normpath(
+                os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             '..', 'Opus4.6', 'Validation.py')
+            )
+            import importlib.util as ilu
+            val_spec = ilu.spec_from_file_location("validation_module", val_module_path)
+            val_mod = ilu.module_from_spec(val_spec)
+            val_spec.loader.exec_module(val_mod)
+
+            val_result = val_mod.validate(
+                pdf_path=pdf_path,
+                converted_text=converted_text,
+                state_code=detected_state or "XX",
+                judge="gpt",
+                gpt_model="gpt-4.1",
+                page_images=cached_page_images,
+            )
+            st.session_state.validation_result = val_result
+            add_log(f"✅ Validation complete — Grade: {val_result.grade()} ({val_result.overall_score_pct:.1f}%), Issues: {val_result.total_issues()}")
+            st.session_state.step_status[5] = "✅"
+        except Exception as val_err:
+            add_log(f"⚠️ Validation failed: {val_err}", "warning")
+            logging.error(f"Validation error: {val_err}", exc_info=True)
+            st.session_state.step_status[5] = "⚠️"
+        update_progress()
 
         # ── Wrap up ──────────────────────────────────────────────────────────────
         elapsed = time.time() - start_time
@@ -1371,6 +1422,7 @@ def show_simple_ui():
             st.session_state.processing_time = None
             st.session_state.chunk_stats = None
             st.session_state.last_uploaded_file_id = None  # Reset upload tracking
+            st.session_state.validation_result = None  # Reset validation
             
             # Reset batch processing state
             st.session_state.batch_mode = False
@@ -1467,6 +1519,7 @@ def show_simple_ui():
                     st.session_state.processing_time = None
                     st.session_state.chunk_stats = None
                     st.session_state.detected_state = None
+                    st.session_state.validation_result = None
 
                     # Upload file using session manager
                     session_mgr = st.session_state.session_manager
@@ -1526,6 +1579,7 @@ def show_processing_steps():
             {"name": "Build Conversion Prompt", "icon": "📋"},
             {"name": "Visual Conversion",       "icon": "👁️"},
             {"name": "Save Output",             "icon": "💾"},
+            {"name": "LLM Validation (GPT)",    "icon": "🔍"},
         ]
     else:
         steps = [
@@ -1684,6 +1738,10 @@ def show_results_section():
             st.markdown(download_link, unsafe_allow_html=True)
         except Exception as e:
             st.error(f"Download error: {e}")
+
+    # ── Validation Results Dashboard ─────────────────────────────────────────
+    if st.session_state.get('validation_result') and display_validation_results:
+        display_validation_results(st.session_state.validation_result)
 
 def show_single_file_processing():
     """Show single file processing interface"""

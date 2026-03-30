@@ -9,11 +9,13 @@ which provides more accurate detection of strikethrough formatting.
 Uses pypdfium2 (Google PDFium) for PDF-to-image rendering.
  
 Usage:
-    python simple_pdf_to_text.py <pdf_file> [state_code] [output_file] [--reconcile]
+    python simple_pdf_to_text.py <pdf_file> [state_code] [output_file] [--reconcile] [--self-correct]
  
 Options:
-    --reconcile    Enable 3-pass reconciliation (visual + document + merge).
-                   Disabled by default for faster runtime.
+    --reconcile      Enable 3-pass reconciliation (visual + document + merge).
+                     Disabled by default for faster runtime.
+    --self-correct   Enable self-correction pass that re-examines images vs output
+                     to catch missed/false tags. Adds one extra API call.
  
 Examples:
     python simple_pdf_to_text.py document.pdf
@@ -21,6 +23,8 @@ Examples:
     python simple_pdf_to_text.py document.pdf FL output.txt
     python simple_pdf_to_text.py document.pdf FL output.txt --reconcile
     python simple_pdf_to_text.py document.pdf FL --reconcile
+    python simple_pdf_to_text.py document.pdf FL --self-correct
+    python simple_pdf_to_text.py document.pdf FL output.txt --self-correct --reconcile
 """
  
 import anthropic
@@ -46,6 +50,27 @@ if sys.platform == 'win32':
     sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer, 'strict')
     sys.stderr = codecs.getwriter('utf-8')(sys.stderr.buffer, 'strict')
  
+# GPT 5.4 intelligent tag comparison
+try:
+    from gpt_compare import gpt_compare_tags
+    _HAS_GPT_COMPARE = True
+except ImportError:
+    _HAS_GPT_COMPARE = False
+
+# PyMuPDF extractor — lives in app/ directory
+try:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "app"))
+    from pymupdf_extractor import (
+        extract_pdf_json_report, extract_pdf_with_pymupdf,
+        highlight_pdf_formatting, clean_extracted_text,
+        consolidate_adjacent_tags,
+    )
+    _HAS_PYMUPDF = True
+except ImportError:
+    _HAS_PYMUPDF = False
+
+# (compare_tags and Validation.py removed — replaced by gpt_compare.py)
+
 # Disable SSL warnings
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -156,6 +181,51 @@ def get_anthropic_client():
         logging.error(f"❌ Failed to initialize Anthropic client: {e}")
         return None
  
+def _pymupdf_flags_from_state(state_config):
+    """
+    Derive PyMuPDF extractor flags from a netscan_state_template config.
+
+    Mapping logic:
+      add_markup.underline   → mark_underline   (default True)
+      add_markup.italic      → mark_italic      (default False)
+      add_markup.bold        → mark_bold         (default False)
+      delete_markup.strike_out → mark_strikethrough (default True)
+      deletions contains "line number" → strip_line_numbers True
+
+    Returns:
+        dict with keys matching extract_pdf_json_report / extract_pdf_with_pymupdf kwargs
+    """
+    flags = {
+        "mark_underline": True,
+        "mark_strikethrough": True,
+        "mark_italic": False,
+        "mark_bold": False,
+        "mark_brackets": False,
+        "strip_line_numbers": False,
+    }
+    if not state_config:
+        return flags
+
+    add = state_config.get("add_markup", {})
+    delete = state_config.get("delete_markup", {})
+
+    # Additions: only mark what the template says
+    flags["mark_underline"] = bool(add.get("underline", False))
+    flags["mark_italic"]    = bool(add.get("italic", False))
+    flags["mark_bold"]      = bool(add.get("bold", False))
+
+    # Deletions
+    flags["mark_strikethrough"] = bool(delete.get("strike_out", True))
+    flags["mark_brackets"]     = bool(delete.get("brackets", False))
+
+    # Line-number stripping: if the template says to remove line numbers
+    deletions_text = (state_config.get("deletions", "") or "").lower()
+    if "line number" in deletions_text:
+        flags["strip_line_numbers"] = True
+
+    return flags
+
+
 def load_state_template(state_code=None):
     """
     Load state-specific rules from netscan_state_template.json.
@@ -639,29 +709,49 @@ def trim_image_borders(image, border_percent=2):
     logging.debug(f"  Trimmed borders: {width}x{height} → {cropped.size[0]}x{cropped.size[1]}")
     return cropped
  
-def pdf_pages_to_images(pdf_path, dpi=400, trim_borders=True, border_percent=5):
+def pdf_pages_to_images(pdf_path, dpi=400, trim_borders=True, border_percent=5, adaptive_dpi=True):
     """
     Convert each PDF page to a base64-encoded PNG image using pypdfium2.
- 
+    
+    With adaptive_dpi=True, pages whose default render is too small
+    (indicating small text or low-density content) are automatically
+    re-rendered at a higher DPI for better formatting detection.
+
     Args:
         pdf_path (str): Path to PDF file
-        dpi (int): Resolution for rendering (default 400 DPI)
- 
+        dpi (int): Base resolution for rendering (default 400 DPI)
+        trim_borders (bool): Whether to trim page borders
+        border_percent (int): Border trim percentage
+        adaptive_dpi (bool): Auto-increase DPI for small/dense pages (default True)
+
     Returns:
         list: List of base64-encoded PNG strings, or None if failed
     """
+    # Adaptive thresholds
+    MIN_WIDTH_PX = 2000    # If page renders narrower than this, bump DPI
+    MAX_DPI = 600          # Safety cap to avoid huge images
+    
     try:
         pdf = pdfium.PdfDocument(pdf_path)
         num_pages = len(pdf)
-        logging.info(f"📄 PDF loaded: {num_pages} pages, rendering at {dpi} DPI")
+        logging.info(f"📄 PDF loaded: {num_pages} pages, base DPI={dpi}, adaptive={adaptive_dpi}")
 
         images = []
-        scale = dpi / 72  # pypdfium2 default is 72 DPI
 
         for i in range(num_pages):
             page = pdf[i]
+            page_dpi = dpi
+            scale = page_dpi / 72  # pypdfium2 default is 72 DPI
             bitmap = page.render(scale=scale)
             pil_image = bitmap.to_pil()
+            
+            # Adaptive DPI: if rendered image is too small, re-render at higher DPI
+            if adaptive_dpi and pil_image.width < MIN_WIDTH_PX and page_dpi < MAX_DPI:
+                page_dpi = min(MAX_DPI, int(page_dpi * MIN_WIDTH_PX / pil_image.width) + 50)
+                scale = page_dpi / 72
+                bitmap = page.render(scale=scale)
+                pil_image = bitmap.to_pil()
+                logging.info(f"  Page {i+1}: adaptive DPI bumped to {page_dpi} (width was {pil_image.width}px)")
 
             # Convert to PNG bytes entirely in-memory — no disk writes needed
             buf = io.BytesIO()
@@ -670,7 +760,7 @@ def pdf_pages_to_images(pdf_path, dpi=400, trim_borders=True, border_percent=5):
             b64_data = base64.b64encode(png_bytes).decode('utf-8')
 
             images.append(b64_data)
-            logging.info(f"  Page {i+1}/{num_pages}: {len(png_bytes)/1024:.0f} KB rendered in-memory")
+            logging.info(f"  Page {i+1}/{num_pages}: {len(png_bytes)/1024:.0f} KB @ {page_dpi} DPI ({pil_image.width}x{pil_image.height})")
 
         pdf.close()
         logging.info(f"📄 All {num_pages} pages rendered to images (in-memory, no temp files)")
@@ -692,7 +782,8 @@ def convert_pdf_to_text(client, pdf_path, prompt, batch_size=None):
         batch_size (int): Ignored - kept for backward compatibility
  
     Returns:
-        str: Converted text or None if failed
+        tuple: (converted_text, page_images) where page_images is list of
+               base64-encoded PNGs, or (None, None) if failed
     """
     try:
         start_time = time.time()
@@ -701,7 +792,7 @@ def convert_pdf_to_text(client, pdf_path, prompt, batch_size=None):
         # Render PDF pages to images
         page_images = pdf_pages_to_images(pdf_path)
         if not page_images:
-            return None
+            return None, None
  
         total_pages = len(page_images)
        
@@ -766,11 +857,11 @@ def convert_pdf_to_text(client, pdf_path, prompt, batch_size=None):
         seconds = int(total_time % 60)
         logging.info(f"✅ Conversion complete: {len(converted_text)} characters (single pass)")
         logging.info(f"⏱️  Total runtime: {minutes}m {seconds}s ({total_time:.1f} seconds)")
-        return converted_text
+        return converted_text, page_images
  
     except Exception as e:
         logging.error(f"❌ Error converting PDF: {e}")
-        return None
+        return None, None
  
 def convert_pdf_document_mode(client, pdf_path, prompt):
     """
@@ -886,7 +977,294 @@ def reconcile_outputs(client, visual_text, doc_text):
     except Exception as e:
         logging.error(f"❌ Error during reconciliation: {e}")
         return visual_text  # Fall back to visual output on error
- 
+
+
+def self_correction_pass(client, converted_text, page_images, state_config=None):
+    """
+    Lightweight self-correction pass: send the original page images PLUS
+    the first-pass output back to Claude and ask it to fix ONLY tagging
+    errors it can spot — without re-transcribing the entire document.
+
+    This catches the most common intermittent errors:
+      - Missed tags on formatted text
+      - False tags on unformatted text
+      - Markdown asterisks that slipped through
+      - Dropped words near tag boundaries
+
+    Args:
+        client: Anthropic client instance
+        converted_text (str): First-pass converted text
+        page_images (list): Base64-encoded PNG page images
+        state_config (dict): State config, or None
+
+    Returns:
+        str: Corrected text (or original if self-correction fails)
+    """
+    try:
+        logging.info("🔍 Running self-correction pass...")
+        
+        # Build state-aware correction hints
+        state_hints = ""
+        if state_config:
+            add_markup = state_config.get("add_markup", {})
+            del_markup = state_config.get("delete_markup", {})
+            add_types = []
+            if add_markup.get("underline"): add_types.append("underlined")
+            if add_markup.get("bold"): add_types.append("bold")
+            if add_markup.get("italic"): add_types.append("italic")
+            if add_markup.get("all_caps"): add_types.append("ALL CAPS")
+            del_types = []
+            if del_markup.get("strike_out"): del_types.append("strikethrough")
+            if del_markup.get("brackets"): del_types.append("bracketed")
+            
+            state_hints = (
+                f"State: {state_config.get('state_name', '')}. "
+                f"[A>] tags should mark: {', '.join(add_types) if add_types else 'underlined'} text. "
+                f"[D>] tags should mark: {', '.join(del_types) if del_types else 'strikethrough'} text. "
+            )
+
+        correction_prompt = (
+            "You are reviewing a PREVIOUS conversion of these PDF page images. "
+            "The conversion is shown below. Your job is to FIX any errors — "
+            "do NOT re-transcribe from scratch.\n\n"
+            f"{state_hints}\n"
+            "REVIEW CHECKLIST — scan each page image and check the output for:\n"
+            "1. MISSED TAGS: text that is clearly formatted (strikethrough, underline, bold, italic, ALL CAPS) "
+            "in the PDF but appears as plain text in the output → add the correct [A> or [D> tag\n"
+            "2. FALSE TAGS: text tagged with [A> or [D> but NOT formatted in the PDF → remove the tag\n"
+            "3. MARKDOWN: any *text* or **text** → replace with [A>text<A] or remove asterisks\n"
+            "4. DROPPED WORDS: words visible in the PDF that are missing from the output → add them back\n"
+            "5. TAG BOUNDARIES: tags that start too early/late or end too early/late → adjust\n"
+            "6. PRESERVE everything that IS correct — only change what's wrong\n\n"
+            "RULES:\n"
+            "- Output the COMPLETE corrected text (not a diff or list of changes)\n"
+            "- Do NOT change text content, capitalization, or word order\n"
+            "- Do NOT add explanations — output ONLY the corrected conversion\n"
+            "- Use [A>...<A] and [D>...<D] tags exclusively (no markdown)\n"
+            "- Use regular quotes, not smart quotes\n\n"
+            "PREVIOUS CONVERSION TO REVIEW AND FIX:\n"
+            "───────────────────────────────────────\n"
+            f"{converted_text}\n"
+            "───────────────────────────────────────\n\n"
+            "Output the corrected version now."
+        )
+
+        # Build content: images first, then the correction prompt
+        content = []
+        for img_b64 in page_images:
+            content.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": img_b64,
+                },
+            })
+        content.append({"type": "text", "text": correction_prompt})
+
+        corrected = ""
+        with client.messages.stream(
+            model="claude-opus-4-6",
+            max_tokens=128000,
+            temperature=0,
+            messages=[{"role": "user", "content": content}]
+        ) as stream:
+            for text in stream.text_stream:
+                corrected += text
+
+        if corrected and len(corrected) > len(converted_text) * 0.5:
+            # Sanity check: corrected output should be roughly similar in length
+            len_diff = abs(len(corrected) - len(converted_text)) / len(converted_text)
+            if len_diff > 0.3:
+                logging.warning(f"⚠️  Self-correction changed length by {len_diff:.0%}, using original")
+                return converted_text
+            logging.info(f"✅ Self-correction complete: {len(corrected)} chars (was {len(converted_text)})")
+            return corrected
+        else:
+            logging.warning("⚠️  Self-correction returned empty/short result, using original")
+            return converted_text
+
+    except Exception as e:
+        logging.error(f"⚠️  Self-correction pass failed: {e}")
+        return converted_text  # Fall back to original
+
+
+def deterministic_cleanup(text):
+    """
+    Apply deterministic fixes for common Claude output inconsistencies.
+    These are formatting errors that Claude makes intermittently regardless
+    of the prompt — catching them here ensures 100% consistency.
+
+    Fixes applied:
+      1. Strip markdown code fences (```plaintext ... ```)
+      2. Remove markdown bold/italic asterisks that slip through
+      3. Fix malformed tag variants ([D>text<D>, [A>text<A>, etc.)
+      4. Fix empty tags ([A><A], [D><D])
+      5. Fix nested/overlapping tags
+      6. Fix smart quotes → regular quotes
+      7. Normalize whitespace inside tags (leading/trailing spaces)
+      8. Fix mismatched tag pairs (orphaned openers/closers)
+
+    Args:
+        text (str): Raw converted text from Claude
+
+    Returns:
+        str: Cleaned text with deterministic fixes applied
+    """
+    if not text:
+        return text
+
+    original = text
+    fix_log = []
+
+    # ── Fix 1: Strip markdown code fences ─────────────────────────
+    # Claude sometimes wraps output in ```plaintext ... ``` despite instructions
+    if text.strip().startswith('```'):
+        lines = text.strip().split('\n')
+        # Remove first line if it's a code fence
+        if lines[0].strip().startswith('```'):
+            lines = lines[1:]
+        # Remove last line if it's a code fence
+        if lines and lines[-1].strip() == '```':
+            lines = lines[:-1]
+        text = '\n'.join(lines)
+        if text != original:
+            fix_log.append("Stripped markdown code fences")
+
+    # ── Fix 2: Remove markdown asterisk formatting ────────────────
+    # Claude sometimes outputs *italic* or **bold** instead of [A>...<A]
+    # Only fix asterisks that are NOT inside existing tags
+    
+    # First, protect existing tags by replacing them with placeholders
+    tag_placeholder_map = {}
+    tag_counter = [0]
+    def _protect_tag(m):
+        key = f"__TAG_PLACEHOLDER_{tag_counter[0]}__"
+        tag_placeholder_map[key] = m.group(0)
+        tag_counter[0] += 1
+        return key
+    
+    protected = re.sub(r'\[A>.*?<A\]|\[D>.*?<D\]', _protect_tag, text, flags=re.DOTALL)
+    
+    # Fix **bold** markdown → plain text (remove the asterisks)
+    bold_count = len(re.findall(r'\*\*[^*]+\*\*', protected))
+    if bold_count > 0:
+        protected = re.sub(r'\*\*([^*]+)\*\*', r'\1', protected)
+        fix_log.append(f"Removed {bold_count} markdown bold (**) instances")
+    
+    # Fix *italic* markdown → plain text (remove the asterisks)
+    italic_count = len(re.findall(r'(?<!\*)\*(?!\*)([^*]+)(?<!\*)\*(?!\*)', protected))
+    if italic_count > 0:
+        protected = re.sub(r'(?<!\*)\*(?!\*)([^*]+)(?<!\*)\*(?!\*)', r'\1', protected)
+        fix_log.append(f"Removed {italic_count} markdown italic (*) instances")
+    
+    # Restore tags from placeholders
+    for key, value in tag_placeholder_map.items():
+        protected = protected.replace(key, value)
+    text = protected
+
+    # ── Fix 3: Fix malformed tag variants ─────────────────────────
+    # [D>text<D>  → [D>text<D]  (wrong closing bracket)
+    malformed_d_close = len(re.findall(r'<D>', text))
+    if malformed_d_close > 0:
+        text = text.replace('<D>', '<D]')
+        fix_log.append(f"Fixed {malformed_d_close} malformed <D> → <D]")
+    
+    # [A>text<A>  → [A>text<A]  (wrong closing bracket)
+    malformed_a_close = len(re.findall(r'<A>', text))
+    if malformed_a_close > 0:
+        text = text.replace('<A>', '<A]')
+        fix_log.append(f"Fixed {malformed_a_close} malformed <A> → <A]")
+
+    # <D>text[D>  → mirrored tags (very rare but happens)
+    # [D]text<D>  → [D>text<D]
+    text = re.sub(r'\[D\]', '[D>', text)
+    text = re.sub(r'\[A\]', '[A>', text)
+
+    # ── Fix 4: Remove empty tags ──────────────────────────────────
+    empty_a = len(re.findall(r'\[A>\s*<A\]', text))
+    empty_d = len(re.findall(r'\[D>\s*<D\]', text))
+    if empty_a > 0:
+        text = re.sub(r'\[A>\s*<A\]', '', text)
+        fix_log.append(f"Removed {empty_a} empty [A><A] tags")
+    if empty_d > 0:
+        text = re.sub(r'\[D>\s*<D\]', '', text)
+        fix_log.append(f"Removed {empty_d} empty [D><D] tags")
+
+    # ── Fix 5: Fix smart quotes → regular quotes ─────────────────
+    smart_quote_count = len(re.findall(r'[\u201c\u201d\u2018\u2019\u2032\u2033]', text))
+    if smart_quote_count > 0:
+        text = text.replace('\u201c', '"').replace('\u201d', '"')   # " "
+        text = text.replace('\u2018', "'").replace('\u2019', "'")   # ' '
+        text = text.replace('\u2032', "'").replace('\u2033', '"')   # ′ ″
+        fix_log.append(f"Fixed {smart_quote_count} smart quotes → regular quotes")
+
+    # ── Fix 6: Normalize whitespace inside tags ───────────────────
+    # [A> text <A] → [A>text<A]  (trim leading/trailing spaces inside tags)
+    text = re.sub(r'\[A>\s+', '[A>', text)
+    text = re.sub(r'\s+<A\]', '<A]', text)
+    text = re.sub(r'\[D>\s+', '[D>', text)
+    text = re.sub(r'\s+<D\]', '<D]', text)
+
+    # ── Fix 7: Merge adjacent same-type tags ──────────────────────
+    # [A>text1<A] [A>text2<A] → [A>text1 text2<A]  (if only whitespace between)
+    merge_a = len(re.findall(r'<A\]\s*\[A>', text))
+    merge_d = len(re.findall(r'<D\]\s*\[D>', text))
+    if merge_a > 0:
+        text = re.sub(r'<A\]\s*\[A>', ' ', text)
+        fix_log.append(f"Merged {merge_a} adjacent [A>...<A] tag pairs")
+    if merge_d > 0:
+        text = re.sub(r'<D\]\s*\[D>', ' ', text)
+        fix_log.append(f"Merged {merge_d} adjacent [D>...<D] tag pairs")
+
+    # ── Fix 8: Fix orphaned/mismatched tags ───────────────────────
+    # Count openers vs closers
+    open_a = len(re.findall(r'\[A>', text))
+    close_a = len(re.findall(r'<A\]', text))
+    open_d = len(re.findall(r'\[D>', text))
+    close_d = len(re.findall(r'<D\]', text))
+
+    if open_a != close_a:
+        fix_log.append(f"⚠️  Mismatched [A> tags: {open_a} openers vs {close_a} closers")
+        # Remove orphaned closers (no preceding opener)
+        if close_a > open_a:
+            # Find closers without openers and remove them
+            diff = close_a - open_a
+            for _ in range(diff):
+                # Find first <A] that doesn't have a matching [A> before it
+                text = re.sub(r'^([^\[]*?)<A\]', r'\1', text, count=1)
+            fix_log.append(f"  Removed {diff} orphaned <A] closer(s)")
+        elif open_a > close_a:
+            diff = open_a - close_a
+            # Remove orphaned openers from the end
+            for _ in range(diff):
+                text = re.sub(r'\[A>([^<]*?)$', r'\1', text, count=1)
+            fix_log.append(f"  Removed {diff} orphaned [A> opener(s)")
+
+    if open_d != close_d:
+        fix_log.append(f"⚠️  Mismatched [D> tags: {open_d} openers vs {close_d} closers")
+        if close_d > open_d:
+            diff = close_d - open_d
+            for _ in range(diff):
+                text = re.sub(r'^([^\[]*?)<D\]', r'\1', text, count=1)
+            fix_log.append(f"  Removed {diff} orphaned <D] closer(s)")
+        elif open_d > close_d:
+            diff = open_d - close_d
+            for _ in range(diff):
+                text = re.sub(r'\[D>([^<]*?)$', r'\1', text, count=1)
+            fix_log.append(f"  Removed {diff} orphaned [D> opener(s)")
+
+    # Log summary
+    if fix_log:
+        logging.info(f"🔧 Deterministic cleanup applied {len(fix_log)} fix(es):")
+        for msg in fix_log:
+            logging.info(f"   • {msg}")
+    else:
+        logging.info("✅ Deterministic cleanup: no fixes needed")
+
+    return text
+
+
 def post_process_output(text, state_config):
     """
     Apply deterministic post-processing fixes to converted text based on state rules.
@@ -991,9 +1369,10 @@ def main():
         print_usage()
         sys.exit(1)
  
-    # Check for --reconcile flag
-    args = [a for a in sys.argv[1:] if a != '--reconcile']
+    # Check for --reconcile and --self-correct flags
+    args = [a for a in sys.argv[1:] if a not in ('--reconcile', '--self-correct')]
     reconcile = '--reconcile' in sys.argv
+    self_correct = '--self-correct' in sys.argv
  
     pdf_path = args[0] if len(args) > 0 else None
     state_code = args[1].upper() if len(args) > 1 else None
@@ -1039,7 +1418,8 @@ def main():
     else:
         print(f"🏛️  State:        None (using default prompt)")
     print(f"💾 Output:       {output_path}")
-    print(f"🔄 Reconcile:   {'Enabled' if reconcile else 'Disabled'}")
+    print(f"🔄 Reconcile:    {'Enabled' if reconcile else 'Disabled'}")
+    print(f"🔧 Self-correct: {'Enabled' if self_correct else 'Disabled'}")
     print()
    
     # Load state template and build prompt
@@ -1052,7 +1432,7 @@ def main():
    
     # Pass 1: Visual mode conversion (images)
     print(f"🔄 Visual mode conversion...")
-    visual_text = convert_pdf_to_text(client, pdf_path, prompt)
+    visual_text, cached_page_images = convert_pdf_to_text(client, pdf_path, prompt)
  
     if not visual_text:
         print("❌ Visual mode conversion failed")
@@ -1071,8 +1451,17 @@ def main():
             converted_text = reconcile_outputs(client, visual_text, doc_text)
         else:
             print("⚠️ Document mode failed, using visual output only")
- 
-    # Post-process: strip tags from protected clauses (deterministic cleanup)
+
+    # Self-correction pass: re-examine images vs output to catch tagging errors
+    if self_correct and cached_page_images:
+        print(f"🔍 Self-correction pass (reviewing output against images)...")
+        converted_text = self_correction_pass(client, converted_text, cached_page_images, state_config)
+
+    # Post-process: deterministic cleanup of common Claude inconsistencies
+    print(f"🔧 Running deterministic cleanup...")
+    converted_text = deterministic_cleanup(converted_text)
+
+    # Post-process: strip tags from protected clauses (state-specific cleanup)
     if state_config:
         converted_text = post_process_output(converted_text, state_config)
 
@@ -1085,7 +1474,148 @@ def main():
     else:
         print("❌ Failed to save output file")
         sys.exit(1)
-   
+
+    # ── PyMuPDF Extraction ─────────────────────────────────────────────
+    print("\n" + "="*70)
+    print("📐 PyMuPDF EXTRACTION — Formatting Detection Report")
+    print("="*70)
+
+    if not _HAS_PYMUPDF:
+        print("⚠️  PyMuPDF extractor not available (app/pymupdf_extractor.py not found)")
+    else:
+        try:
+            pymupdf_start = time.time()
+            flags = _pymupdf_flags_from_state(state_config)
+
+            # Log which formats will be detected
+            active_formats = []
+            if flags["mark_underline"]:      active_formats.append("underline")
+            if flags["mark_strikethrough"]:  active_formats.append("strikethrough")
+            if flags["mark_italic"]:          active_formats.append("italic")
+            if flags["mark_bold"]:            active_formats.append("bold")
+            if flags["mark_brackets"]:        active_formats.append("brackets [→D]")
+            state_label = state_config['state_name'] if state_config else 'Default'
+            print(f"   State rules: {state_label}")
+            print(f"   Detecting:   {', '.join(active_formats) if active_formats else 'none'}")
+            print(f"   Strip line#: {'Yes' if flags['strip_line_numbers'] else 'No'}")
+            print()
+
+            # --- JSON report ---
+            print("🔄 Generating PyMuPDF JSON report...")
+            report = extract_pdf_json_report(pdf_path, **flags)
+            pymupdf_json_path = output_path.replace(".txt", "_pymupdf_report.json")
+            import json as json_mod2
+            with open(pymupdf_json_path, "w", encoding="utf-8") as f:
+                json_mod2.dump(report, f, indent=2, ensure_ascii=False)
+            summary = report.get("summary", {})
+            print(f"   ✅ JSON report saved to: {pymupdf_json_path}")
+            span_summary = (
+                f"UL={summary.get('underline_spans', 0)}, "
+                f"SO={summary.get('strikethrough_spans', 0)}, "
+                f"IT={summary.get('italic_spans', 0)}, "
+                f"BD={summary.get('bold_spans', 0)}"
+            )
+            if summary.get('bracket_spans', 0):
+                span_summary += f", BK={summary['bracket_spans']}"
+            print(f"   📊 {summary.get('total_formatted_spans', 0)} formatted spans "
+                  f"({span_summary})")
+
+            # --- Tagged text ---
+            print("🔄 Generating PyMuPDF tagged text...")
+            pymupdf_text = extract_pdf_with_pymupdf(
+                pdf_path,
+                join_pages=True,
+                **flags,
+            )
+            pymupdf_txt_path = output_path.replace(".txt", "_pymupdf.txt")
+            with open(pymupdf_txt_path, "w", encoding="utf-8") as f:
+                f.write(pymupdf_text)
+            print(f"   ✅ Tagged text saved to: {pymupdf_txt_path}")
+            print(f"   📊 {len(pymupdf_text):,} characters")
+
+            # --- Highlighted images ---
+            print("� Generating highlighted page images...")
+            highlight_dir = Path(output_path).parent / f"{Path(pdf_path).stem}_highlighted"
+            imgs = highlight_pdf_formatting(
+                pdf_path, report=report, output_dir=highlight_dir, **flags,
+            )
+            print(f"   ✅ {len(imgs)} highlighted pages → {highlight_dir}")
+            print(f"   🎨 Legend: {highlight_dir / 'legend.png'}")
+
+            # --- LLM Clean + GPT 5.4 Intelligent Tag Comparison ---
+            print()
+            print("🧹 LLM-cleaning PyMuPDF text with Claude Opus 4.6 (removing headers/footers/line numbers)...")
+            try:
+                pymupdf_clean_text = clean_extracted_text(
+                    pymupdf_text,
+                    state_code=state_code,
+                    anthropic_client=client,   # reuse the Claude client from conversion
+                )
+                pymupdf_clean_text = consolidate_adjacent_tags(pymupdf_clean_text)
+                pymupdf_clean_path = output_path.replace(".txt", "_pymupdf_clean.txt")
+                with open(pymupdf_clean_path, "w", encoding="utf-8") as f:
+                    f.write(pymupdf_clean_text)
+                print(f"   ✅ Clean text saved to: {pymupdf_clean_path}")
+                print(f"   📊 {len(pymupdf_text):,} → {len(pymupdf_clean_text):,} chars")
+
+                # --- GPT 5.4 Intelligent Tag Comparison ---
+                if _HAS_GPT_COMPARE:
+                    print()
+                    print("🤖 GPT 5.4 Intelligent Tag Comparison...")
+                    # Load highlighted images as base64
+                    import base64 as _b64
+                    hi_images_b64 = []
+                    for img_file in sorted(highlight_dir.glob("page_*.png")):
+                        hi_images_b64.append(_b64.b64encode(img_file.read_bytes()).decode())
+                    print(f"   📷 Loaded {len(hi_images_b64)} highlighted page images")
+
+                    gpt_xlsx = output_path.replace(".txt", "_gpt_comparison.xlsx")
+                    # Build state rules description
+                    sr_parts = []
+                    if state_config:
+                        sr_parts.append(f"State: {state_config.get('state_name', state_code)}")
+                        sr_parts.append(f"Underline={state_config.get('underline', False)}")
+                        sr_parts.append(f"Strikethrough={state_config.get('strikethrough', False)}")
+                        sr_parts.append(f"Italic={state_config.get('italic', False)}")
+                        sr_parts.append(f"Bold={state_config.get('bold', False)}")
+                    state_rules_str = ", ".join(sr_parts) if sr_parts else f"State: {state_code}"
+
+                    gpt_cmp = gpt_compare_tags(
+                        highlighted_images_b64=hi_images_b64,
+                        pymupdf_clean_text=pymupdf_clean_text,
+                        claude_converted_text=converted_text,
+                        state_code=state_code,
+                        state_rules=state_rules_str,
+                        output_xlsx=gpt_xlsx,
+                        pymupdf_report=report,
+                    )
+                    print(f"   ✅ GPT audit Excel saved to: {gpt_xlsx}")
+                    print(f"   📋 Checklist: {gpt_cmp['total_checklist']} items")
+                    print(f"   ✅ Pass: {gpt_cmp['passes']}  |  "
+                          f"⚠️ Warnings: {gpt_cmp['warnings']}  |  "
+                          f"❌ Errors: {gpt_cmp['errors']}")
+                    print(f"      Matches: {gpt_cmp['matches']}  |  "
+                          f"Partial: {gpt_cmp['partial_matches']}  |  "
+                          f"Headers: {gpt_cmp['headers']}  |  "
+                          f"Table: {gpt_cmp['table_content']}")
+                    if gpt_cmp['content_dropped'] or gpt_cmp['real_misses']:
+                        print(f"   ❌ Content dropped: {gpt_cmp['content_dropped']}  |  "
+                              f"Real misses: {gpt_cmp['real_misses']}")
+                    if gpt_cmp['additional_findings']:
+                        print(f"   🔍 Additional findings: {gpt_cmp['additional_findings']}")
+                else:
+                    print("   ⚠️  gpt_compare module not available, skipping intelligent tag comparison")
+            except Exception as clean_err:
+                print(f"   ⚠️  LLM clean / tag comparison failed: {clean_err}")
+                logging.error(f"LLM clean error: {clean_err}", exc_info=True)
+
+            pymupdf_time = time.time() - pymupdf_start
+            print(f"\n⏱️  PyMuPDF extraction took: {int(pymupdf_time//60)}m {int(pymupdf_time%60)}s")
+
+        except Exception as e:
+            print(f"⚠️  PyMuPDF extraction failed: {e}")
+            logging.error(f"PyMuPDF extraction error: {e}", exc_info=True)
+
     print("\n" + "="*70)
  
 if __name__ == "__main__":

@@ -1,0 +1,1019 @@
+{
+  "filename": "2025_2025_7_3_2_001193_0_4_1_20250130_0.pdf",
+  "total_pages": 7,
+  "formatted_spans": [
+    {
+      "text": "General Assembly ",
+      "format_types": [
+        "underline"
+      ],
+      "page": 1,
+      "bill_line": null,
+      "bbox": [
+        119.05999755859375,
+        149.54107666015625,
+        236.36000061035156,
+        166.4592742919922
+      ],
+      "context": ">>>General Assembly<<<"
+    },
+    {
+      "text": "Raised Bill No. 1193  ",
+      "format_types": [
+        "underline"
+      ],
+      "page": 1,
+      "bill_line": null,
+      "bbox": [
+        316.8500061035156,
+        149.73619079589844,
+        477.9368896484375,
+        167.53158569335938
+      ],
+      "context": ">>>Raised Bill No. 1193<<<"
+    },
+    {
+      "text": "three utility commissioners,",
+      "format_types": [
+        "underline"
+      ],
+      "page": 1,
+      "bill_line": 5,
+      "bbox": [
+        354.9100036621094,
+        503.31402587890625,
+        504.1000061035156,
+        517.7739868164062
+      ],
+      "context": "…shall consist of [five electors of this state,] >>>three utility commissioners,<<<"
+    },
+    {
+      "text": "each of whom shall be an elector of the state and",
+      "format_types": [
+        "underline"
+      ],
+      "page": 1,
+      "bill_line": 6,
+      "bbox": [
+        126.0199966430664,
+        521.1940307617188,
+        404.1199645996094,
+        535.6539916992188
+      ],
+      "context": ">>>each of whom shall be an elector of the state and<<< appointed by the…"
+    },
+    {
+      "text": "two utility commissioners",
+      "format_types": [
+        "underline"
+      ],
+      "page": 1,
+      "bill_line": 8,
+      "bbox": [
+        353.7099914550781,
+        557.0740356445312,
+        490.8580322265625,
+        571.5339965820312
+      ],
+      "context": "…Assembly. Not more than [three members] >>>two utility commissioners<<< of…"
+    },
+    {
+      "text": "Raised Bill No. ",
+      "format_types": [
+        "underline"
+      ],
+      "page": 2,
+      "bill_line": null,
+      "bbox": [
+        393.19000244140625,
+        74.98619842529297,
+        466.03887939453125,
+        86.09159851074219
+      ],
+      "context": ">>>Raised Bill No.<<<"
+    },
+    {
+      "text": " 1193 ",
+      "format_types": [
+        "underline"
+      ],
+      "page": 2,
+      "bill_line": null,
+      "bbox": [
+        474.70001220703125,
+        74.98619842529297,
+        502.54888916015625,
+        86.09159851074219
+      ],
+      "context": ">>>1193<<<"
+    },
+    {
+      "text": "Between",
+      "format_types": [
+        "underline"
+      ],
+      "page": 2,
+      "bill_line": 27,
+      "bbox": [
+        385.3900146484375,
+        306.614013671875,
+        430.85797119140625,
+        321.0740051269531
+      ],
+      "context": "…(b) [Not later than June 30, 2023, and between] >>>Between<<< June first and…"
+    },
+    {
+      "text": ",",
+      "format_types": [
+        "underline"
+      ],
+      "page": 2,
+      "bill_line": 28,
+      "bbox": [
+        355.8699951171875,
+        324.4940185546875,
+        358.8699951171875,
+        338.9540100097656
+      ],
+      "context": "…June thirtieth in each odd-numbered year >>>,<<< [thereafter,] the Governor…"
+    },
+    {
+      "text": "one",
+      "format_types": [
+        "underline"
+      ],
+      "page": 2,
+      "bill_line": 37,
+      "bbox": [
+        310.9700012207031,
+        497.55401611328125,
+        330.2900085449219,
+        512.0139770507812
+      ],
+      "context": "…chairperson to [a panel of three] >>>one<<< or more utility commissioners.…"
+    },
+    {
+      "text": "any",
+      "format_types": [
+        "underline"
+      ],
+      "page": 2,
+      "bill_line": 38,
+      "bbox": [
+        484.5400085449219,
+        515.4340209960938,
+        504.1960144042969,
+        529.8939819335938
+      ],
+      "context": "…se provided by statute or regulation, [the panel] >>>any<<<"
+    },
+    {
+      "text": "such utility commissioner",
+      "format_types": [
+        "underline"
+      ],
+      "page": 2,
+      "bill_line": 39,
+      "bbox": [
+        126.0199966430664,
+        533.3140258789062,
+        267.95599365234375,
+        547.7739868164062
+      ],
+      "context": ">>>such utility commissioner<<< shall determine whether a public hearing…"
+    },
+    {
+      "text": "two utility commissioners",
+      "format_types": [
+        "underline"
+      ],
+      "page": 2,
+      "bill_line": 41,
+      "bbox": [
+        183.5,
+        569.1940307617188,
+        324.4400329589844,
+        583.6539916992188
+      ],
+      "context": "…members] >>>two utility commissioners<<< to conduct such hearing or may…"
+    },
+    {
+      "text": "designated commissioner or commissioners",
+      "format_types": [
+        "underline"
+      ],
+      "page": 2,
+      "bill_line": 43,
+      "bbox": [
+        165.74000549316406,
+        604.9840087890625,
+        396.1760559082031,
+        619.4439697265625
+      ],
+      "context": "…[panel] >>>designated commissioner or commissioners<<< . The decision of [the…"
+    },
+    {
+      "text": "any such designated utility commissioner or commissioners, as",
+      "format_types": [
+        "underline"
+      ],
+      "page": 2,
+      "bill_line": 44,
+      "bbox": [
+        163.22000122070312,
+        622.864013671875,
+        503.9300842285156,
+        637.323974609375
+      ],
+      "context": "…panel] >>>any such designated utility commissioner or commissioners, as<<<"
+    },
+    {
+      "text": "applicable",
+      "format_types": [
+        "underline"
+      ],
+      "page": 2,
+      "bill_line": 45,
+      "bbox": [
+        126.0199966430664,
+        640.7440185546875,
+        180.50003051757812,
+        655.2039794921875
+      ],
+      "context": ">>>applicable<<< , if unanimous, shall be the decision of the autho…"
+    },
+    {
+      "text": "all of",
+      "format_types": [
+        "underline"
+      ],
+      "page": 2,
+      "bill_line": 47,
+      "bbox": [
+        238.72999572753906,
+        676.5040283203125,
+        265.2619934082031,
+        690.9639892578125
+      ],
+      "context": "…by a majority vote of >>>all of<<< the utility commissioners.…"
+    },
+    {
+      "text": "Raised Bill No. ",
+      "format_types": [
+        "underline"
+      ],
+      "page": 3,
+      "bill_line": null,
+      "bbox": [
+        393.19000244140625,
+        74.98619842529297,
+        466.03887939453125,
+        86.09159851074219
+      ],
+      "context": ">>>Raised Bill No.<<<"
+    },
+    {
+      "text": " 1193 ",
+      "format_types": [
+        "underline"
+      ],
+      "page": 3,
+      "bill_line": null,
+      "bbox": [
+        474.70001220703125,
+        74.98619842529297,
+        502.54888916015625,
+        86.09159851074219
+      ],
+      "context": ">>>1193<<<"
+    },
+    {
+      "text": "Raised Bill No. ",
+      "format_types": [
+        "underline"
+      ],
+      "page": 4,
+      "bill_line": null,
+      "bbox": [
+        393.19000244140625,
+        74.98619842529297,
+        466.03887939453125,
+        86.09159851074219
+      ],
+      "context": ">>>Raised Bill No.<<<"
+    },
+    {
+      "text": " 1193 ",
+      "format_types": [
+        "underline"
+      ],
+      "page": 4,
+      "bill_line": null,
+      "bbox": [
+        474.70001220703125,
+        74.98619842529297,
+        502.54888916015625,
+        86.09159851074219
+      ],
+      "context": ">>>1193<<<"
+    },
+    {
+      "text": "utility commissioners",
+      "format_types": [
+        "underline"
+      ],
+      "page": 4,
+      "bill_line": 85,
+      "bbox": [
+        207.41000366210938,
+        187.1840057373047,
+        324.50604248046875,
+        201.64401245117188
+      ],
+      "context": "…the authority] >>>utility commissioners<<< ; (C) enter into such contractual…"
+    },
+    {
+      "text": "Raised Bill No. ",
+      "format_types": [
+        "underline"
+      ],
+      "page": 5,
+      "bill_line": null,
+      "bbox": [
+        393.19000244140625,
+        74.98619842529297,
+        466.03887939453125,
+        86.09159851074219
+      ],
+      "context": ">>>Raised Bill No.<<<"
+    },
+    {
+      "text": " 1193 ",
+      "format_types": [
+        "underline"
+      ],
+      "page": 5,
+      "bill_line": null,
+      "bbox": [
+        474.70001220703125,
+        74.98619842529297,
+        502.54888916015625,
+        86.09159851074219
+      ],
+      "context": ">>>1193<<<"
+    },
+    {
+      "text": "Raised Bill No. ",
+      "format_types": [
+        "underline"
+      ],
+      "page": 6,
+      "bill_line": null,
+      "bbox": [
+        393.19000244140625,
+        74.98619842529297,
+        466.03887939453125,
+        86.09159851074219
+      ],
+      "context": ">>>Raised Bill No.<<<"
+    },
+    {
+      "text": " 1193 ",
+      "format_types": [
+        "underline"
+      ],
+      "page": 6,
+      "bill_line": null,
+      "bbox": [
+        474.70001220703125,
+        74.98619842529297,
+        502.54888916015625,
+        86.09159851074219
+      ],
+      "context": ">>>1193<<<"
+    },
+    {
+      "text": "assigned a matter",
+      "format_types": [
+        "underline"
+      ],
+      "page": 6,
+      "bill_line": 162,
+      "bbox": [
+        192.6199951171875,
+        438.03399658203125,
+        286.303955078125,
+        452.4939880371094
+      ],
+      "context": "…established] >>>assigned a matter<<< pursuant to subsection (c) of this section…"
+    },
+    {
+      "text": "commissioners",
+      "format_types": [
+        "underline"
+      ],
+      "page": 6,
+      "bill_line": 164,
+      "bbox": [
+        126.0199966430664,
+        473.79400634765625,
+        205.33998107910156,
+        488.2539978027344
+      ],
+      "context": ">>>commissioners<<< . Any such conference or communication that does n…"
+    },
+    {
+      "text": "the",
+      "format_types": [
+        "underline"
+      ],
+      "page": 6,
+      "bill_line": 169,
+      "bbox": [
+        487.5400085449219,
+        587.1940307617188,
+        504.2200012207031,
+        601.6539916992188
+      ],
+      "context": "…c Utilities Regulatory Authority shall keep [its] >>>the<<<"
+    },
+    {
+      "text": "authority's",
+      "format_types": [
+        "underline"
+      ],
+      "page": 6,
+      "bill_line": 170,
+      "bbox": [
+        126.0199966430664,
+        605.2239990234375,
+        183.1280059814453,
+        619.6839599609375
+      ],
+      "context": ">>>authority's<<< office open during [the usual] normal business ho…"
+    },
+    {
+      "text": "normal",
+      "format_types": [
+        "underline"
+      ],
+      "page": 6,
+      "bill_line": 170,
+      "bbox": [
+        355.8699951171875,
+        605.2239990234375,
+        394.2699890136719,
+        619.6839599609375
+      ],
+      "context": "…authority's office open during [the usual] >>>normal<<< business hours and…"
+    },
+    {
+      "text": "the authority's",
+      "format_types": [
+        "underline"
+      ],
+      "page": 6,
+      "bill_line": 171,
+      "bbox": [
+        234.2899932861328,
+        623.10400390625,
+        311.0419616699219,
+        637.56396484375
+      ],
+      "context": "…shall keep all of [its] >>>the authority's<<< records in such office. The authority…"
+    },
+    {
+      "text": "the authority, the utility",
+      "format_types": [
+        "underline"
+      ],
+      "page": 6,
+      "bill_line": 173,
+      "bbox": [
+        358.3900146484375,
+        658.864013671875,
+        504.033935546875,
+        673.323974609375
+      ],
+      "context": "…its members or employees, officially,] >>>the authority, the utility<<<"
+    },
+    {
+      "text": "commissioners and any employee of the authority acting in such",
+      "format_types": [
+        "underline"
+      ],
+      "page": 6,
+      "bill_line": 174,
+      "bbox": [
+        126.0199966430664,
+        676.7440185546875,
+        504.0039978027344,
+        691.2039794921875
+      ],
+      "context": ">>>commissioners and any employee of the authority acting in such<<<"
+    },
+    {
+      "text": "employee's official capacity,",
+      "format_types": [
+        "underline"
+      ],
+      "page": 6,
+      "bill_line": 175,
+      "bbox": [
+        126.0199966430664,
+        694.6199951171875,
+        278.2099914550781,
+        709.0799560546875
+      ],
+      "context": ">>>employee's official capacity,<<< of all [its and their] the official acts and…"
+    },
+    {
+      "text": "the",
+      "format_types": [
+        "underline"
+      ],
+      "page": 6,
+      "bill_line": 175,
+      "bbox": [
+        396.19000244140625,
+        694.6199951171875,
+        412.8699951171875,
+        709.0799560546875
+      ],
+      "context": "…loyee's official capacity, of all [its and their] >>>the<<< official acts and…"
+    },
+    {
+      "text": "Raised Bill No. ",
+      "format_types": [
+        "underline"
+      ],
+      "page": 7,
+      "bill_line": null,
+      "bbox": [
+        393.19000244140625,
+        74.98619842529297,
+        466.03887939453125,
+        86.09159851074219
+      ],
+      "context": ">>>Raised Bill No.<<<"
+    },
+    {
+      "text": " 1193 ",
+      "format_types": [
+        "underline"
+      ],
+      "page": 7,
+      "bill_line": null,
+      "bbox": [
+        474.70001220703125,
+        74.98619842529297,
+        502.54888916015625,
+        86.09159851074219
+      ],
+      "context": ">>>1193<<<"
+    },
+    {
+      "text": "of the authority, the utility commissioners and any",
+      "format_types": [
+        "underline"
+      ],
+      "page": 7,
+      "bill_line": 176,
+      "bbox": [
+        199.1300048828125,
+        97.78398132324219,
+        503.81005859375,
+        112.24398803710938
+      ],
+      "context": "…proceedings >>>of the authority, the utility commissioners and any<<<"
+    },
+    {
+      "text": "employee of the authority",
+      "format_types": [
+        "underline"
+      ],
+      "page": 7,
+      "bill_line": 177,
+      "bbox": [
+        126.0199966430664,
+        115.66398620605469,
+        269.38397216796875,
+        130.12399291992188
+      ],
+      "context": ">>>employee of the authority<<< and of all facts learned in relation to any…"
+    },
+    {
+      "text": "Section 1 ",
+      "format_types": [
+        "underline"
+      ],
+      "page": 7,
+      "bill_line": null,
+      "bbox": [
+        131.66000366210938,
+        227.0239715576172,
+        181.94000244140625,
+        241.48397827148438
+      ],
+      "context": ">>>Section 1<<<"
+    },
+    {
+      "text": "October 1, 2025 ",
+      "format_types": [
+        "underline"
+      ],
+      "page": 7,
+      "bill_line": null,
+      "bbox": [
+        203.69000244140625,
+        226.6639862060547,
+        284.0899963378906,
+        241.09999084472656
+      ],
+      "context": ">>>October 1, 2025<<<"
+    },
+    {
+      "text": "16-2 ",
+      "format_types": [
+        "underline"
+      ],
+      "page": 7,
+      "bill_line": null,
+      "bbox": [
+        347.7099914550781,
+        227.0239715576172,
+        372.6700134277344,
+        241.48397827148438
+      ],
+      "context": ">>>16-2<<<"
+    },
+    {
+      "text": "Sec. 2 ",
+      "format_types": [
+        "underline"
+      ],
+      "page": 7,
+      "bill_line": null,
+      "bbox": [
+        131.66000366210938,
+        242.50401306152344,
+        164.05999755859375,
+        256.9640197753906
+      ],
+      "context": ">>>Sec. 2<<<"
+    },
+    {
+      "text": "October 1, 2025 ",
+      "format_types": [
+        "underline"
+      ],
+      "page": 7,
+      "bill_line": null,
+      "bbox": [
+        203.69000244140625,
+        242.0239715576172,
+        284.0899963378906,
+        256.4599609375
+      ],
+      "context": ">>>October 1, 2025<<<"
+    },
+    {
+      "text": "16-6 ",
+      "format_types": [
+        "underline"
+      ],
+      "page": 7,
+      "bill_line": null,
+      "bbox": [
+        347.7099914550781,
+        242.50401306152344,
+        372.6700134277344,
+        256.9640197753906
+      ],
+      "context": ">>>16-6<<<"
+    },
+    {
+      "text": "[five electors of this state,]",
+      "format_types": [
+        "brackets"
+      ],
+      "page": 1,
+      "bill_line": null,
+      "bbox": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "context": "…ironmental Protection, which \n4 \nshall consist of >>>[five electors of this state,]<<< three utility commissioners, \n5 \neach of whom sha…"
+    },
+    {
+      "text": "[three members]",
+      "format_types": [
+        "brackets"
+      ],
+      "page": 1,
+      "bill_line": null,
+      "bbox": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "context": "…houses of the General \n7 \nAssembly. Not more than >>>[three members]<<< two utility commissioners of \n8 \nsaid authority i…"
+    },
+    {
+      "text": "[The Governor shall appoint five members to the \n10 \nauthority.]",
+      "format_types": [
+        "brackets"
+      ],
+      "page": 1,
+      "bill_line": null,
+      "bbox": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "context": "…shall be members of any one \n9 \npolitical party. >>>[The Governor shall appoint five members to the \n10 \nauthority.]<<< The procedure prescribed in section 4-7 shall app…"
+    },
+    {
+      "text": "[Any utility commissioner appointed by the Governor \n17 \nand confirmed by both houses of the General Assembly between \n18 \nFebruary 1, 2018, and June 1, 2018, shall serve a term expiring on March \n19 \n1, 2022. Between July 1, 2019, and May 1, 2020, the Governor shall \n20 \nappoint three utility commissioners, provided one such commissioner \n21 \nshall serve a term expiring on March 1, 2021, and two such \n22 \ncommissioners shall serve terms expiring on March 1, 2023.]",
+      "format_types": [
+        "brackets"
+      ],
+      "page": 2,
+      "bill_line": null,
+      "bbox": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "context": "…hall serve a term expiring \n16 \non March 1, 2024. >>>[Any utility commissioner appointed by the Governor \n17 \nand confirmed by both houses of the General Assembly between \n18 \nFebruary 1, 2018, and June 1, 2018, shall serve a term expiring on March \n19 \n1, 2022. Between July 1, 2019, and May 1, 2020, the Governor shall \n20 \nappoint three utility commissioners, provided one such commissioner \n21 \nshall serve a term expiring on March 1, 2021, and two such \n22 \ncommissioners shall serve terms expiring on March 1, 2023.]<<< Any utility \n23 \ncommissioner appointed on or aft…"
+    },
+    {
+      "text": "[Not later than June 30, 2023, and between]",
+      "format_types": [
+        "brackets"
+      ],
+      "page": 2,
+      "bill_line": null,
+      "bbox": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "context": "…ithful \n25 \nperformance of their duties. \n26 \n(b) >>>[Not later than June 30, 2023, and between]<<< Between June first and \n27 \nJune thirtieth in eac…"
+    },
+    {
+      "text": "[thereafter,]",
+      "format_types": [
+        "brackets"
+      ],
+      "page": 2,
+      "bill_line": null,
+      "bbox": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "context": "…nd \n27 \nJune thirtieth in each odd-numbered year, >>>[thereafter,]<<< the Governor \n28 \nshall select the chairperson of…"
+    },
+    {
+      "text": "[a panel of three]",
+      "format_types": [
+        "brackets"
+      ],
+      "page": 2,
+      "bill_line": null,
+      "bbox": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "context": "…hority may be assigned by the \n36 \nchairperson to >>>[a panel of three]<<< one or more utility commissioners. \n37 \nExcept as…"
+    },
+    {
+      "text": "[the panel]",
+      "format_types": [
+        "brackets"
+      ],
+      "page": 2,
+      "bill_line": null,
+      "bbox": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "context": "…t as otherwise provided by statute or regulation, >>>[the panel]<<< any \n38 \nsuch utility commissioner shall determin…"
+    },
+    {
+      "text": "[more of its \n40 \nmembers]",
+      "format_types": [
+        "brackets"
+      ],
+      "page": 2,
+      "bill_line": null,
+      "bbox": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "context": "…l be held on the matter, and may designate one or >>>[more of its \n40 \nmembers]<<< two utility commissioners to conduct such hearing…"
+    },
+    {
+      "text": "[panel]",
+      "format_types": [
+        "brackets"
+      ],
+      "page": 2,
+      "bill_line": null,
+      "bbox": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "context": "…scertain the facts and report thereon to the \n42 >>>[panel]<<< designated commissioner or commissioners. The dec…"
+    },
+    {
+      "text": "[the \n43 \npanel]",
+      "format_types": [
+        "brackets"
+      ],
+      "page": 2,
+      "bill_line": null,
+      "bbox": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "context": "…ed commissioner or commissioners. The decision of >>>[the \n43 \npanel]<<< any such designated utility commissioner or commi…"
+    },
+    {
+      "text": "[of the panel]",
+      "format_types": [
+        "brackets"
+      ],
+      "page": 2,
+      "bill_line": null,
+      "bbox": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "context": "…e decision of the authority. If the \n45 \ndecision >>>[of the panel]<<< is not unanimous, the matter shall be approved \n4…"
+    },
+    {
+      "text": "[members of \n84 \nthe authority]",
+      "format_types": [
+        "brackets"
+      ],
+      "page": 4,
+      "bill_line": null,
+      "bbox": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "context": "…pate in the proceedings and which shall serve the >>>[members of \n84 \nthe authority]<<< utility commissioners; (C) enter into such contra…"
+    },
+    {
+      "text": "[serving on a panel \n161 \nestablished]",
+      "format_types": [
+        "brackets"
+      ],
+      "page": 6,
+      "bill_line": null,
+      "bbox": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "context": "…cies. \n160 \n(n) Two or more utility commissioners >>>[serving on a panel \n161 \nestablished]<<< assigned a matter pursuant to subsection (c) of t…"
+    },
+    {
+      "text": "[panel]",
+      "format_types": [
+        "brackets"
+      ],
+      "page": 6,
+      "bill_line": null,
+      "bbox": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "context": "…r or communicate regarding the matter before such >>>[panel]<<< 163 \ncommissioners. Any such conference or commu…"
+    },
+    {
+      "text": "[its]",
+      "format_types": [
+        "brackets"
+      ],
+      "page": 6,
+      "bill_line": null,
+      "bbox": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "context": "…Public Utilities Regulatory Authority shall keep >>>[its]<<< the \n169 \nauthority's office open during [the usu…"
+    },
+    {
+      "text": "[the usual]",
+      "format_types": [
+        "brackets"
+      ],
+      "page": 6,
+      "bill_line": null,
+      "bbox": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "context": "…ep [its] the \n169 \nauthority's office open during >>>[the usual]<<< normal business hours and \n170 \nshall keep all of…"
+    },
+    {
+      "text": "[its]",
+      "format_types": [
+        "brackets"
+      ],
+      "page": 6,
+      "bill_line": null,
+      "bbox": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "context": "…normal business hours and \n170 \nshall keep all of >>>[its]<<< the authority's records in such office. The autho…"
+    },
+    {
+      "text": "[it, or to any of \n172 \nits members or employees, officially,]",
+      "format_types": [
+        "brackets"
+      ],
+      "page": 6,
+      "bill_line": null,
+      "bbox": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "context": "…keep a record of all communications addressed to >>>[it, or to any of \n172 \nits members or employees, officially,]<<< the authority, the utility \n173 \ncommissioners an…"
+    },
+    {
+      "text": "[its and their]",
+      "format_types": [
+        "brackets"
+      ],
+      "page": 6,
+      "bill_line": null,
+      "bbox": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "context": "…n such \n174 \nemployee's official capacity, of all >>>[its and their]<<< the official acts and \n175…"
+    },
+    {
+      "text": "[Proposed deletions are enclosed in brackets. Proposed additions are indicated by underline, except \nthat when the entire text of a bill or resolution or a section of a bill or resolution is new, it is not \nunderlined.]",
+      "format_types": [
+        "brackets"
+      ],
+      "page": 7,
+      "bill_line": null,
+      "bbox": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "context": "…lities \nRegulatory Authority from five to three. >>>[Proposed deletions are enclosed in brackets. Proposed additions are indicated by underline, except \nthat when the entire text of a bill or resolution or a section of a bill or resolution is new, it is not \nunderlined.]<<<"
+    }
+  ],
+  "summary": {
+    "total_formatted_spans": 67,
+    "underline_spans": 46,
+    "strikethrough_spans": 0,
+    "italic_spans": 0,
+    "bold_spans": 0,
+    "bracket_spans": 21
+  }
+}
