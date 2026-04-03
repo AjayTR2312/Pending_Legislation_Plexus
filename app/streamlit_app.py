@@ -47,16 +47,30 @@ except ImportError:
     tag_then_clean_pipeline = None
     logging.warning("⚠️ tag_then_clean_pipeline module not found — tag-then-clean pipeline disabled")
 try:
-    from validation_ui import display_validation_results
+    from validation_review_inline import render_inline_validation_review
 except ImportError:
-    display_validation_results = None
-    logging.warning("⚠️ validation_ui module not found — validation display disabled")
+    render_inline_validation_review = None
+    logging.warning("⚠️ validation_review_inline module not found — validation review disabled")
+try:
+    # Ensure Opus4.6 dir is on path for compare_files
+    _opus46 = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'Opus4.6'))
+    if _opus46 not in sys.path:
+        sys.path.insert(0, _opus46)
+    from compare_files import compare_texts
+except ImportError:
+    compare_texts = None
+    logging.warning("⚠️ compare_files module not found — content accuracy check disabled")
+try:
+    from pdf_type_detector import detect_pdf_type
+except ImportError:
+    detect_pdf_type = None
+    logging.warning("⚠️ pdf_type_detector module not found — scanned PDF detection disabled")
 
 # Configure Streamlit page
 st.set_page_config(
     page_title="Pending Legislation Processor",
     page_icon="🤖",
-    layout="centered",
+    layout="wide",
     initial_sidebar_state="collapsed"
 )
 
@@ -87,14 +101,22 @@ try:
         st.session_state.temp_pdf_path = None
     if 'processing_time' not in st.session_state:
         st.session_state.processing_time = None
+    if 'conversion_time' not in st.session_state:
+        st.session_state.conversion_time = None
     if 'process_method' not in st.session_state:
         st.session_state.process_method = "vision"  # default: "vision" or "pdfplumber"
     if 'chunk_stats' not in st.session_state:
         st.session_state.chunk_stats = None
     if 'processing_logs' not in st.session_state:
         st.session_state.processing_logs = []
-    if 'validation_result' not in st.session_state:
-        st.session_state.validation_result = None
+    if 'audit_excel_path' not in st.session_state:
+        st.session_state.audit_excel_path = None
+    if 'audit_highlighted_dir' not in st.session_state:
+        st.session_state.audit_highlighted_dir = None
+    if 'audit_json_report' not in st.session_state:
+        st.session_state.audit_json_report = None
+    if 'content_accuracy_report' not in st.session_state:
+        st.session_state.content_accuracy_report = None
     
     # Batch processing state
     if 'batch_mode' not in st.session_state:
@@ -190,15 +212,29 @@ def highlight_legislative_tags(content):
 
 # Batch processing functions
 def add_files_to_batch(uploaded_files, state_code, session_id):
-    """Add uploaded files to batch processing queue"""
+    """Add uploaded files to batch processing queue (skips scanned PDFs)"""
     session_mgr = st.session_state.session_manager
     added_count = 0
+    skipped_scanned = []
 
     for uploaded_file in uploaded_files:
         # Upload file using session manager
         temp_path = session_mgr.upload_file(session_id, uploaded_file, state_code)
 
         if temp_path:
+            # ── Scanned PDF gate ──────────────────────────────────
+            if detect_pdf_type is not None:
+                pdf_analysis = detect_pdf_type(temp_path)
+                if pdf_analysis and pdf_analysis['type'] == 'scanned':
+                    skipped_scanned.append(uploaded_file.name)
+                    logging.warning(f"Skipping scanned PDF in batch: {uploaded_file.name}")
+                    try:
+                        os.remove(temp_path)
+                    except Exception:
+                        pass
+                    continue
+            # ──────────────────────────────────────────────────────
+
             batch_item = {
                 'original_name': uploaded_file.name,
                 'temp_path': temp_path,
@@ -211,6 +247,14 @@ def add_files_to_batch(uploaded_files, state_code, session_id):
             }
             st.session_state.batch_queue.append(batch_item)
             added_count += 1
+
+    # Report any skipped scanned PDFs to the user
+    if skipped_scanned:
+        st.warning(
+            f"🚫 **{len(skipped_scanned)} scanned PDF(s) skipped** — "
+            f"only digital PDFs can be processed:\n\n"
+            + "\n".join(f"- {name}" for name in skipped_scanned)
+        )
 
     return added_count
 
@@ -1167,16 +1211,18 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
     # Clear previous logs
     st.session_state.processing_logs = []
 
-    # 6 steps to match the shared show_processing_steps() display
+    # 8 steps to match the shared show_processing_steps() display
     steps_labels = [
         {"name": "Initialize Claude Opus",    "icon": "🤖"},
         {"name": "Detect State",              "icon": "🔍"},
         {"name": "Build Conversion Prompt",   "icon": "📋"},
         {"name": "Visual Conversion",         "icon": "👁️"},
-        {"name": "Save Output",               "icon": "💾"},
-        {"name": "LLM Validation (GPT)",      "icon": "🔍"},
+        {"name": "Save Output",              "icon": "💾"},
+        {"name": "PyMuPDF Extraction",        "icon": "📄"},
+        {"name": "Claude LLM Clean",          "icon": "🧹"},
+        {"name": "GPT Audit",                 "icon": "🤖"},
     ]
-    st.session_state.step_status = {i: "⏳" for i in range(6)}
+    st.session_state.step_status = {i: "⏳" for i in range(8)}
 
     def add_log(message, level="info"):
         """Add log message to processing logs and update live display"""
@@ -1323,45 +1369,207 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
         update_progress()
         add_log(f"✅ Output saved: {output_path}")
 
-        # ── Step 6: LLM-as-Judge Validation ──────────────────────────────────────
+        # ── Conversion milestone — record time for Phase 1 ───────────────
+        conversion_elapsed = time.time() - start_time
+        st.session_state.conversion_elapsed_secs = conversion_elapsed
+        _cm, _cs = int(conversion_elapsed // 60), int(conversion_elapsed % 60)
+        st.session_state.conversion_time = f"{_cm}m {_cs}s" if _cm > 0 else f"{_cs}s"
+        add_log(f"🏁 PDF Conversion complete in {st.session_state.conversion_time}")
+        if status_placeholder:
+            status_placeholder.success(f"✅ Conversion complete ({st.session_state.conversion_time}) — now generating validation report…")
+
+        # ── Step 6: PyMuPDF Extraction ───────────────────────────────────────────
         st.session_state.current_step = 5
         st.session_state.step_status[5] = "🔄"
         update_progress()
-        add_log("🔍 Running LLM-as-Judge validation with GPT...")
+        add_log("📄 Running PyMuPDF extraction (JSON report + tagged text + highlighted images)...")
         if status_placeholder:
-            status_placeholder.info("🔍 Running LLM-as-Judge validation (GPT judge reviewing conversion)...")
+            status_placeholder.info("📄 Running PyMuPDF extraction...")
 
-        st.session_state.validation_result = None
+        # Reset audit data
+        st.session_state.audit_excel_path = None
+        st.session_state.audit_highlighted_dir = None
+        st.session_state.audit_json_report = None
+        st.session_state.content_accuracy_report = None
+
         try:
-            # Import Validation module
-            val_module_path = os.path.normpath(
-                os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                             '..', 'Opus4.6', 'Validation.py')
+            from pymupdf_extractor import (
+                extract_pdf_json_report,
+                extract_pdf_with_pymupdf,
+                highlight_pdf_formatting,
+                clean_extracted_text,
+                consolidate_adjacent_tags,
             )
-            import importlib.util as ilu
-            val_spec = ilu.spec_from_file_location("validation_module", val_module_path)
-            val_mod = ilu.module_from_spec(val_spec)
-            val_spec.loader.exec_module(val_mod)
 
-            val_result = val_mod.validate(
-                pdf_path=pdf_path,
-                converted_text=converted_text,
-                state_code=detected_state or "XX",
-                judge="gpt",
-                gpt_model="gpt-4.1",
-                page_images=cached_page_images,
-            )
-            st.session_state.validation_result = val_result
-            add_log(f"✅ Validation complete — Grade: {val_result.grade()} ({val_result.overall_score_pct:.1f}%), Issues: {val_result.total_issues()}")
+            # Determine state-specific marking flags
+            _mark_flags = {}
+            if state_config:
+                add_cfg = state_config.get("add_markup", {})
+                del_cfg = state_config.get("delete_markup", {})
+                _mark_flags["mark_underline"] = add_cfg.get("underline", True)
+                _mark_flags["mark_italic"] = add_cfg.get("italic", False) or del_cfg.get("italic", False)
+                _mark_flags["mark_bold"] = add_cfg.get("bold", False)
+                _mark_flags["mark_strikethrough"] = del_cfg.get("strike_out", True)
+                _mark_flags["mark_brackets"] = add_cfg.get("brackets", False) or del_cfg.get("brackets", False)
+
+            # 6a: JSON report
+            pymupdf_report = extract_pdf_json_report(pdf_path, **_mark_flags)
+            n_spans = len(pymupdf_report.get("formatted_spans", []))
+            add_log(f"📊 PyMuPDF JSON report: {n_spans} formatted spans detected")
+
+            # Save JSON report alongside output
+            pymupdf_json_path = output_path.replace(".txt", "_pymupdf_report.json") if isinstance(output_path, str) else str(output_path).replace(".txt", "_pymupdf_report.json")
+            import json as _json
+            with open(pymupdf_json_path, "w", encoding="utf-8") as jf:
+                _json.dump(pymupdf_report, jf, indent=2, ensure_ascii=False)
+            add_log(f"✅ JSON report saved: {pymupdf_json_path}")
+
+            # 6b: Tagged text
+            pymupdf_text = extract_pdf_with_pymupdf(pdf_path, join_pages=True, **_mark_flags)
+            pymupdf_txt_path = output_path.replace(".txt", "_pymupdf.txt") if isinstance(output_path, str) else str(output_path).replace(".txt", "_pymupdf.txt")
+            with open(pymupdf_txt_path, "w", encoding="utf-8") as tf:
+                tf.write(pymupdf_text)
+            add_log(f"✅ PyMuPDF tagged text saved: {len(pymupdf_text):,} chars")
+
+            # 6c: Highlighted page images
+            highlight_dir = Path(output_path).parent / f"{Path(pdf_path).stem}_highlighted"
+            hi_imgs = highlight_pdf_formatting(pdf_path, report=pymupdf_report, output_dir=highlight_dir, **_mark_flags)
+            add_log(f"✅ {len(hi_imgs)} highlighted page images saved to {highlight_dir}")
+
+            st.session_state.audit_highlighted_dir = str(highlight_dir)
+            st.session_state.audit_json_report = pymupdf_report
             st.session_state.step_status[5] = "✅"
-        except Exception as val_err:
-            add_log(f"⚠️ Validation failed: {val_err}", "warning")
-            logging.error(f"Validation error: {val_err}", exc_info=True)
+        except Exception as pmu_err:
+            add_log(f"⚠️ PyMuPDF extraction failed: {pmu_err}", "warning")
+            logging.error(f"PyMuPDF extraction error: {pmu_err}", exc_info=True)
             st.session_state.step_status[5] = "⚠️"
+            pymupdf_text = None
+            pymupdf_report = None
         update_progress()
+
+        # ── Step 7: Claude LLM Clean ─────────────────────────────────────────────
+        pymupdf_clean_text = None
+        if pymupdf_text:
+            st.session_state.current_step = 6
+            st.session_state.step_status[6] = "🔄"
+            update_progress()
+            add_log("🧹 Cleaning PyMuPDF text with Claude (removing headers/footers/line numbers)...")
+            if status_placeholder:
+                status_placeholder.info("🧹 Cleaning PyMuPDF text with Claude Opus...")
+
+            try:
+                pymupdf_clean_text = clean_extracted_text(
+                    pymupdf_text,
+                    state_code=detected_state,
+                    anthropic_client=client,
+                )
+                pymupdf_clean_text = consolidate_adjacent_tags(pymupdf_clean_text)
+                pymupdf_clean_path = output_path.replace(".txt", "_pymupdf_clean.txt") if isinstance(output_path, str) else str(output_path).replace(".txt", "_pymupdf_clean.txt")
+                with open(pymupdf_clean_path, "w", encoding="utf-8") as cf:
+                    cf.write(pymupdf_clean_text)
+                add_log(f"✅ Clean text saved: {len(pymupdf_text):,} → {len(pymupdf_clean_text):,} chars")
+                st.session_state.step_status[6] = "✅"
+            except Exception as clean_err:
+                add_log(f"⚠️ LLM clean failed: {clean_err}", "warning")
+                logging.error(f"LLM clean error: {clean_err}", exc_info=True)
+                st.session_state.step_status[6] = "⚠️"
+            update_progress()
+        else:
+            st.session_state.step_status[6] = "⚠️"
+            update_progress()
+
+        # ── Content Accuracy Check (between Step 7 and Step 8) ─────────────────
+        st.session_state.content_accuracy_report = None
+        if pymupdf_clean_text and converted_text and compare_texts:
+            try:
+                accuracy_report = compare_texts(pymupdf_clean_text, converted_text)
+                st.session_state.content_accuracy_report = accuracy_report
+                _acc = accuracy_report['accuracy']
+                _diffs = accuracy_report['real_diff_count']
+                _repos = accuracy_report['repositioned_count']
+                _icon = "✅" if _acc >= 99 else "⚠️" if _acc >= 95 else "❌"
+                add_log(
+                    f"{_icon} Content accuracy: {_acc:.1f}% "
+                    f"({accuracy_report['matching_words']:,}/{max(accuracy_report['pymupdf_word_count'], accuracy_report['converted_word_count']):,} words, "
+                    f"{_diffs} real diff(s), {_repos} repositioned)"
+                )
+            except Exception as acc_err:
+                add_log(f"⚠️ Content accuracy check failed: {acc_err}", "warning")
+                logging.error(f"Content accuracy error: {acc_err}", exc_info=True)
+
+        # ── Step 8: GPT Audit (comparison Excel) ─────────────────────────────────
+        if pymupdf_clean_text and highlight_dir and highlight_dir.exists():
+            st.session_state.current_step = 7
+            st.session_state.step_status[7] = "🔄"
+            update_progress()
+            add_log("🤖 Running GPT 5.4 checklist-driven audit...")
+            if status_placeholder:
+                status_placeholder.info("🤖 Running GPT 5.4 audit (comparing PyMuPDF vs Claude)...")
+
+            try:
+                # Import gpt_compare from Opus4.6
+                opus46_dir = os.path.normpath(
+                    os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'Opus4.6')
+                )
+                if opus46_dir not in sys.path:
+                    sys.path.insert(0, opus46_dir)
+                from gpt_compare import gpt_compare_tags
+
+                # Load highlighted images as base64
+                import base64 as _b64
+                hi_images_b64 = []
+                for img_file in sorted(highlight_dir.glob("page_*.png")):
+                    hi_images_b64.append(_b64.b64encode(img_file.read_bytes()).decode())
+                add_log(f"📷 Loaded {len(hi_images_b64)} highlighted page images for GPT")
+
+                # Build state rules description
+                sr_parts = []
+                if state_config:
+                    sr_parts.append(f"State: {state_config.get('state_name', detected_state or 'unknown')}")
+                    a_cfg = state_config.get("add_markup", {})
+                    d_cfg = state_config.get("delete_markup", {})
+                    sr_parts.append(f"Underline={a_cfg.get('underline', False)}")
+                    sr_parts.append(f"Strikethrough={d_cfg.get('strike_out', False)}")
+                    sr_parts.append(f"Italic={a_cfg.get('italic', False)}")
+                    sr_parts.append(f"Bold={a_cfg.get('bold', False)}")
+                state_rules_str = ", ".join(sr_parts) if sr_parts else f"State: {detected_state or 'unknown'}"
+
+                gpt_xlsx = output_path.replace(".txt", "_gpt_comparison.xlsx") if isinstance(output_path, str) else str(output_path).replace(".txt", "_gpt_comparison.xlsx")
+                gpt_cmp = gpt_compare_tags(
+                    highlighted_images_b64=hi_images_b64,
+                    pymupdf_clean_text=pymupdf_clean_text,
+                    claude_converted_text=converted_text,
+                    state_code=detected_state or "XX",
+                    state_rules=state_rules_str,
+                    output_xlsx=gpt_xlsx,
+                    pymupdf_report=pymupdf_report,
+                )
+
+                st.session_state.audit_excel_path = gpt_xlsx
+                add_log(
+                    f"✅ GPT audit complete — "
+                    f"Checklist: {gpt_cmp['total_checklist']} items | "
+                    f"✅ Pass: {gpt_cmp['passes']} | "
+                    f"⚠️ Warnings: {gpt_cmp['warnings']} | "
+                    f"❌ Errors: {gpt_cmp['errors']}"
+                )
+                if gpt_cmp.get('additional_findings'):
+                    add_log(f"🔍 Additional findings: {gpt_cmp['additional_findings']}")
+                st.session_state.step_status[7] = "✅"
+            except Exception as gpt_err:
+                add_log(f"⚠️ GPT audit failed: {gpt_err}", "warning")
+                logging.error(f"GPT audit error: {gpt_err}", exc_info=True)
+                st.session_state.step_status[7] = "⚠️"
+            update_progress()
+        else:
+            st.session_state.step_status[7] = "⚠️"
+            if not pymupdf_clean_text:
+                add_log("⚠️ GPT audit skipped — PyMuPDF clean text not available", "warning")
+            update_progress()
 
         # ── Wrap up ──────────────────────────────────────────────────────────────
         elapsed = time.time() - start_time
+        st.session_state.total_elapsed_secs = elapsed
         minutes, seconds = int(elapsed // 60), int(elapsed % 60)
         st.session_state.processing_time = f"{minutes}m {seconds}s"
 
@@ -1420,9 +1628,13 @@ def show_simple_ui():
             st.session_state.client = None
             st.session_state.temp_pdf_path = None
             st.session_state.processing_time = None
+            st.session_state.conversion_time = None
             st.session_state.chunk_stats = None
             st.session_state.last_uploaded_file_id = None  # Reset upload tracking
-            st.session_state.validation_result = None  # Reset validation
+            st.session_state.audit_excel_path = None  # Reset audit data
+            st.session_state.audit_highlighted_dir = None
+            st.session_state.audit_json_report = None
+            st.session_state.content_accuracy_report = None
             
             # Reset batch processing state
             st.session_state.batch_mode = False
@@ -1436,28 +1648,16 @@ def show_simple_ui():
             
             st.success(f"✅ New session created: {new_session_id[:8]}...")
             st.rerun()
-    
-    # Processing mode toggle
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        st.header("🏛️ Step 1: Select Mode")
-    with col2:
+
+        # Batch mode toggle — tucked in sidebar
+        st.markdown("---")
         batch_mode = st.toggle("📦 Batch Mode", value=st.session_state.batch_mode, help="Process multiple files at once")
         if batch_mode != st.session_state.batch_mode:
             st.session_state.batch_mode = batch_mode
             st.rerun()
-    
-    # Auto-detection state display
-    if st.session_state.get('detected_state'):
-        _s = st.session_state.detected_state
-        _sval = AVAILABLE_STATES.get(_s, _s)
-        _sname = _sval.get('name', _s) if isinstance(_sval, dict) else _sval
-        st.success(f"🏛️ **Detected State:** {_s} — {_sname}")
-    else:
-        st.info("🔍 **State will be auto-detected** from your PDF using Claude Opus AI")
 
-    # File upload
-    st.header("📁 Step 2: Upload PDF File(s)")
+    # File upload — first thing the user sees after the title
+    st.header("📁 Upload PDF File(s)")
 
     # File uploader - multiple files in batch mode
     uploaded_file = st.file_uploader(
@@ -1517,9 +1717,12 @@ def show_simple_ui():
                     st.session_state.current_step = 0
                     st.session_state.step_status = {}
                     st.session_state.processing_time = None
+                    st.session_state.conversion_time = None
                     st.session_state.chunk_stats = None
                     st.session_state.detected_state = None
-                    st.session_state.validation_result = None
+                    st.session_state.audit_excel_path = None
+                    st.session_state.audit_highlighted_dir = None
+                    st.session_state.audit_json_report = None
 
                     # Upload file using session manager
                     session_mgr = st.session_state.session_manager
@@ -1532,6 +1735,31 @@ def show_simple_ui():
                         )
                     
                     if temp_path:
+                        # ── Scanned PDF gate ──────────────────────────────────
+                        if detect_pdf_type is not None:
+                            with st.spinner("🔍 Analyzing PDF type (scanned vs digital)..."):
+                                pdf_analysis = detect_pdf_type(temp_path)
+                            if pdf_analysis and pdf_analysis['type'] == 'scanned':
+                                st.error(
+                                    f"🚫 **Scanned PDF Detected — Cannot Process**\n\n"
+                                    f"The uploaded file **{uploaded_file.name}** appears to be a "
+                                    f"**scanned (image-based) PDF**.\n\n"
+                                    f"- **Pages:** {pdf_analysis['total_pages']}\n"
+                                    f"- **Image pages:** {pdf_analysis['image_pages']} "
+                                    f"({pdf_analysis['image_ratio']}%)\n"
+                                    f"- **Avg characters/page:** {pdf_analysis['average_chars_per_page']}\n\n"
+                                    f"This application only supports **digital (text-based) PDFs**. "
+                                    f"Please upload a digital PDF or run OCR on this file first."
+                                )
+                                # Clean up the temp file
+                                try:
+                                    os.remove(temp_path)
+                                except Exception:
+                                    pass
+                                st.session_state.temp_pdf_path = None
+                                st.session_state.last_uploaded_file_id = None
+                                st.stop()
+                        # ──────────────────────────────────────────────────────
                         st.session_state.temp_pdf_path = temp_path
                         st.session_state.last_uploaded_file_id = current_file_id
                         st.success(f"✅ Uploaded: {uploaded_file.name} ({format_file_size(uploaded_file.size)})")
@@ -1569,79 +1797,133 @@ def show_simple_ui():
         st.info("👆 Please upload a PDF file to begin processing")
 
 def show_processing_steps():
-    """Show processing steps with progress bar"""
-    st.subheader("📊 Processing Progress")
+    """Show processing steps with two-phase progress (Conversion + Validation)"""
 
-    if st.session_state.get('process_method') == 'claude_opus':
-        steps = [
-            {"name": "Initialize Claude Opus",  "icon": "🤖"},
-            {"name": "Detect State",            "icon": "🔍"},
-            {"name": "Build Conversion Prompt", "icon": "📋"},
-            {"name": "Visual Conversion",       "icon": "👁️"},
-            {"name": "Save Output",             "icon": "💾"},
-            {"name": "LLM Validation (GPT)",    "icon": "🔍"},
+    is_opus = st.session_state.get('process_method') == 'claude_opus'
+
+    if is_opus:
+        # ── Phase 1: PDF → Text Conversion (steps 0-4) ────────────────────
+        conversion_steps = [
+            {"name": "Initialize Claude Opus",  "icon": "🤖", "idx": 0},
+            {"name": "Detect State",            "icon": "🔍", "idx": 1},
+            {"name": "Build Conversion Prompt", "icon": "📋", "idx": 2},
+            {"name": "Visual Conversion",       "icon": "👁️", "idx": 3},
+            {"name": "Save Output",             "icon": "💾", "idx": 4},
+        ]
+        # ── Phase 2: Validation Report (steps 5-7) ────────────────────────
+        validation_steps = [
+            {"name": "PyMuPDF Extraction",  "icon": "📄", "idx": 5},
+            {"name": "Claude LLM Clean",    "icon": "🧹", "idx": 6},
+            {"name": "GPT Audit",           "icon": "🤖", "idx": 7},
         ]
     else:
-        steps = [
-            {"name": "PDF to Text", "icon": "📄"},
-            {"name": "PDF to DOCX", "icon": "📋"},
-            {"name": "DOCX Analysis", "icon": "🔍"},
-            {"name": "Summary Generation", "icon": "📊"},
-            {"name": "LLM Verification", "icon": "🤖"}
+        conversion_steps = [
+            {"name": "PDF to Text",        "icon": "📄", "idx": 0},
+            {"name": "PDF to DOCX",        "icon": "📋", "idx": 1},
+            {"name": "DOCX Analysis",      "icon": "🔍", "idx": 2},
+            {"name": "Summary Generation", "icon": "📊", "idx": 3},
+            {"name": "LLM Verification",   "icon": "🤖", "idx": 4},
         ]
-    
-    # Calculate progress
-    completed_steps = sum(1 for status in st.session_state.step_status.values() if status == "✅")
-    total_steps = len(steps)
-    progress_percentage = completed_steps / total_steps
-    
-    # Show progress bar
-    st.progress(progress_percentage, text=f"Completed {completed_steps} of {total_steps} steps")
+        validation_steps = []
 
-    # Show detected state banner as soon as it's known (Step 2 onwards)
-    if st.session_state.get('process_method') == 'claude_opus' and st.session_state.get('detected_state'):
+    # Show detected state pill (compact) as soon as it's known
+    if is_opus and st.session_state.get('detected_state'):
         _ds = st.session_state.detected_state
         _dsval = AVAILABLE_STATES.get(_ds, _ds)
         _dsname = _dsval.get('name', _ds) if isinstance(_dsval, dict) else _dsval
-        st.success(f"🏛️ Processing **{_ds}** state document — *{_dsname}*")
+        st.markdown(
+            f'<div style="display:inline-block; background:#dcfce7; color:#166534; '
+            f'padding:4px 14px; border-radius:20px; font-size:0.85rem; font-weight:600; margin-bottom:10px;">'
+            f'🏛️ {_ds} — {_dsname}</div>',
+            unsafe_allow_html=True,
+        )
 
-    # Show current step status
+    # ── PHASE 1 ────────────────────────────────────────────────────────────
+    conv_done = sum(1 for s in conversion_steps if st.session_state.step_status.get(s["idx"], "") == "✅")
+    conv_total = len(conversion_steps)
+    conv_pct = conv_done / conv_total if conv_total else 0
+    conv_complete = (conv_done == conv_total)
     current_step = st.session_state.current_step
-    if current_step < len(steps):
-        current_status = st.session_state.step_status.get(current_step, "⏳")
-        step_info = steps[current_step]
-        
-        if current_status == "🔄":
-            st.info(f"🔄 Currently processing: {step_info['icon']} {step_info['name']}")
-        elif current_status == "✅":
-            if completed_steps == total_steps:
-                st.success("🎉 All steps completed successfully!")
-            else:
-                st.success(f"✅ Completed: {step_info['icon']} {step_info['name']}")
-        elif current_status == "❌":
-            st.error(f"❌ Failed: {step_info['icon']} {step_info['name']}")
-    
-    # Show step list in a more compact format
-    with st.expander("  View Step Details", expanded=False):
-        for i, step in enumerate(steps):
-            status = st.session_state.step_status.get(i, "⏳")
-            if status == "✅":
-                st.markdown(f"✅ **{step['icon']} {step['name']}** - Completed")
+
+    if conv_complete:
+        # Conversion finished — styled milestone
+        st.markdown(
+            '<div style="background:#dcfce7; border-radius:10px; padding:12px 20px; '
+            'border-left:4px solid #16a34a; margin-bottom:12px;">'
+            '<strong style="color:#15803d;">✅ PDF Conversion Complete</strong>  '
+            '<span style="color:#166534; font-size:0.85rem;">  — All conversion steps finished successfully</span>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown("##### 📄 PDF Conversion")
+        st.progress(conv_pct, text=f"Step {conv_done}/{conv_total}")
+        # Current step message
+        if current_step < conv_total:
+            status = st.session_state.step_status.get(current_step, "⏳")
+            info = conversion_steps[current_step]
+            if status == "🔄":
+                st.info(f"🔄 {info['icon']} {info['name']}…")
             elif status == "❌":
-                st.markdown(f"❌ **{step['icon']} {step['name']}** - Failed")
+                st.error(f"❌ Failed: {info['icon']} {info['name']}")
+
+    # ── PHASE 2 (Opus only) ────────────────────────────────────────────────
+    if is_opus and validation_steps:
+        val_done = sum(1 for s in validation_steps if st.session_state.step_status.get(s["idx"], "") in ("✅", "⚠️"))
+        val_total = len(validation_steps)
+        val_pct = val_done / val_total if val_total else 0
+        val_started = any(
+            st.session_state.step_status.get(s["idx"], "") in ("🔄", "✅", "⚠️")
+            for s in validation_steps
+        )
+        val_complete = (val_done == val_total)
+
+        if val_complete:
+            st.markdown(
+                '<div style="background:#dbeafe; border-radius:10px; padding:12px 20px; '
+                'border-left:4px solid #2563eb; margin-bottom:12px;">'
+                '<strong style="color:#1e40af;">✅ Validation Report Ready</strong>  '
+                '<span style="color:#1e40af; font-size:0.85rem;">  — Scroll down to review the audit results</span>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+        elif val_started or conv_complete:
+            st.markdown("---")
+            st.markdown("##### 🔍 Generating Validation Report")
+            st.caption("Validating the Claude converted output against the original PDF — this may take a few minutes…")
+            st.progress(val_pct, text=f"Step {val_done}/{val_total}")
+            # Current step message
+            if current_step >= 5:
+                s_idx = current_step
+                status = st.session_state.step_status.get(s_idx, "⏳")
+                info = next((s for s in validation_steps if s["idx"] == s_idx), None)
+                if info:
+                    if status == "🔄":
+                        st.info(f"🔄 {info['icon']} {info['name']}…")
+                    elif status == "❌":
+                        st.error(f"❌ Failed: {info['icon']} {info['name']}")
+
+    # ── Detailed step list (collapsed) ────────────────────────────────────
+    all_steps = conversion_steps + validation_steps
+    with st.expander("View step details", expanded=False):
+        for s in all_steps:
+            status = st.session_state.step_status.get(s["idx"], "⏳")
+            if status == "✅":
+                st.markdown(f"✅ **{s['icon']} {s['name']}** — Completed")
+            elif status == "⚠️":
+                st.markdown(f"⚠️ **{s['icon']} {s['name']}** — Completed with warnings")
+            elif status == "❌":
+                st.markdown(f"❌ **{s['icon']} {s['name']}** — Failed")
             elif status == "🔄":
-                st.markdown(f"🔄 **{step['icon']} {step['name']}** - In Progress")
+                st.markdown(f"🔄 **{s['icon']} {s['name']}** — In progress…")
             else:
-                st.markdown(f"⏳ **{step['icon']} {step['name']}** - Pending")
+                st.markdown(f"⏳ {s['icon']} {s['name']}")
 
 def show_results_section():
-    """Show results and download options"""
-    st.header("🎉 Processing Complete!")
-
+    """Show results: compact summary bar + validation review"""
     file_name = Path(st.session_state.processed_file_path).name
 
-    # os.path.getsize crashes when the file lives on a different Kubernetes pod.
-    # Use cached bytes length instead — it is always available.
+    # File size (prefer cached bytes for multi-pod safety)
     cached_data = st.session_state.get('processed_file_data')
     if cached_data is not None:
         file_size = len(cached_data)
@@ -1650,107 +1932,124 @@ def show_results_section():
             file_size = os.path.getsize(st.session_state.processed_file_path)
         except Exception:
             file_size = 0
-    
-    # Show success message with processing time
-    success_msg = "✅ Your document has been successfully processed with AI verification and legislative tagging!"
-    if st.session_state.processing_time:
-        success_msg += f" ⏱️ Processing time: {st.session_state.processing_time}"
-    
-    st.success(success_msg)
-    
-    # Show chunk processing stats if available (for chunked documents)
-    if hasattr(st.session_state, 'chunk_stats') and st.session_state.chunk_stats:
-        chunk_info = st.session_state.chunk_stats
-        st.info(
-            f"📊 **Chunked Processing Details:** Processed {chunk_info['chunks_processed']}/{chunk_info['total_chunks']} chunks | "
-            f"Final output: {chunk_info['character_count']:,} characters"
+
+    # ── Conversion Complete — styled summary card ──────────────────────────────
+    _state_label = ""
+    if st.session_state.get('detected_state'):
+        _s = st.session_state.detected_state
+        _sval = AVAILABLE_STATES.get(_s, _s)
+        _sname = _sval.get('name', _s) if isinstance(_sval, dict) else _sval
+        _state_label = f"{_s} — {_sname}"
+
+    _conv_time = st.session_state.get('conversion_time') or "—"
+    _total_time = st.session_state.processing_time or "—"
+    _size_label = format_file_size(file_size)
+    _has_audit = bool(st.session_state.get('audit_excel_path'))
+
+    # Compute validation-only time from raw seconds
+    _val_time = "—"
+    _total_secs = st.session_state.get('total_elapsed_secs', 0)
+    _conv_secs = st.session_state.get('conversion_elapsed_secs', 0)
+    if _total_secs and _conv_secs and _has_audit:
+        _val_secs = max(0, _total_secs - _conv_secs)
+        _vm, _vs = int(_val_secs // 60), int(_val_secs % 60)
+        _val_time = f"{_vm}m {_vs}s" if _vm > 0 else f"{_vs}s"
+
+    # Build state pill
+    _state_pill = (
+        f'<span style="background:#e0e7ff; color:#3730a3; padding:3px 12px; '
+        f'border-radius:16px; font-size:0.82rem; font-weight:600;">'
+        f'🏛️ {_state_label}</span>'
+    ) if _state_label else ""
+
+    # Build time chips
+    _chip = (
+        'display:inline-flex; align-items:center; gap:6px; '
+        'padding:8px 16px; border-radius:10px; font-size:0.85rem; font-weight:600;'
+    )
+    _conv_chip = (
+        f'<div style="{_chip} background:#f0fdf4; color:#166534; border:1px solid #bbf7d0;">'
+        f'<span style="font-size:1rem;">📝</span> Conversion '
+        f'<span style="font-weight:800;">{_conv_time}</span></div>'
+    )
+    _val_chip = (
+        f'<div style="{_chip} background:#eff6ff; color:#1e40af; border:1px solid #bfdbfe;">'
+        f'<span style="font-size:1rem;">🔍</span> Validation '
+        f'<span style="font-weight:800;">{_val_time}</span></div>'
+    ) if _has_audit else ""
+    _size_chip = (
+        f'<div style="{_chip} background:#f5f3ff; color:#5b21b6; border:1px solid #ddd6fe;">'
+        f'<span style="font-size:1rem;">📄</span> Output '
+        f'<span style="font-weight:800;">{_size_label}</span></div>'
+    )
+
+    # Content accuracy chip
+    _acc_chip = ""
+    _acc_report = st.session_state.get('content_accuracy_report')
+    if _acc_report:
+        _acc_val = _acc_report['accuracy']
+        if _acc_val >= 99:
+            _acc_bg, _acc_fg, _acc_bdr = '#f0fdf4', '#166534', '#bbf7d0'
+        elif _acc_val >= 95:
+            _acc_bg, _acc_fg, _acc_bdr = '#fefce8', '#854d0e', '#fde68a'
+        else:
+            _acc_bg, _acc_fg, _acc_bdr = '#fef2f2', '#991b1b', '#fecaca'
+        _acc_chip = (
+            f'<div style="{_chip} background:{_acc_bg}; color:{_acc_fg}; border:1px solid {_acc_bdr};">'
+            f'<span style="font-size:1rem;">📊</span> Accuracy '
+            f'<span style="font-weight:800;">{_acc_val:.1f}%</span></div>'
         )
-    
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        st.subheader("📄 Final Output Preview")
-        
-        try:
-            # Prefer cached bytes so preview works across pods
-            cached = st.session_state.get('processed_file_data')
-            if cached is not None:
-                content = cached.decode('utf-8', errors='replace')
-            else:
-                with open(st.session_state.processed_file_path, 'r', encoding='utf-8') as f:
-                    content = f.read()
 
-            # Cap preview at 50 KB to avoid sending a massive HTML blob over
-            # the WebSocket, which causes the rerun to fail on large bills and
-            # makes the download button unreachable.
-            PREVIEW_CHAR_LIMIT = 50_000
-            truncated = len(content) > PREVIEW_CHAR_LIMIT
-            preview_content = content[:PREVIEW_CHAR_LIMIT] if truncated else content
-            highlighted_content = highlight_legislative_tags(preview_content)
-            st.markdown(highlighted_content, unsafe_allow_html=True)
-            if truncated:
-                st.caption(
-                    f"⚠️ Preview truncated to {PREVIEW_CHAR_LIMIT:,} characters. "
-                    f"Full file ({len(content):,} chars) available via download below."
-                )
-        except Exception as e:
-            st.error(f"Error loading file: {e}")
-    
-    with col2:
-        st.subheader("📥 Download")
+    st.markdown(f"""
+    <div style="background:#ffffff; border-radius:14px; padding:24px 28px; margin:8px 0 20px;
+                border:1px solid #e2e8f0; box-shadow:0 2px 12px rgba(0,0,0,.05);">
+        <!-- Header row -->
+        <div style="display:flex; align-items:center; gap:12px; margin-bottom:16px; flex-wrap:wrap;">
+            <span style="font-size:1.5rem;">✅</span>
+            <span style="font-size:1.2rem; font-weight:700; color:#15803d;">Processing Complete</span>
+            {_state_pill}
+        </div>
+        <!-- Time & size chips -->
+        <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px;">
+            {_conv_chip}
+            {_val_chip}
+            {_size_chip}
+            {_acc_chip}
+        </div>
+        <!-- Total bar -->
+        <div style="background:#f8fafc; border-radius:8px; padding:8px 16px;
+                    display:flex; align-items:center; justify-content:space-between;
+                    border:1px solid #e2e8f0;">
+            <span style="font-size:0.84rem; color:#475569;">⏱️ Total processing time</span>
+            <span style="font-size:1rem; font-weight:800; color:#0f172a;">{_total_time}</span>
+        </div>
+        <p style="margin:12px 0 0; font-size:0.82rem; color:#64748b;">
+            Your PDF has been converted to tagged legislative text with Claude Opus 4.6.
+            {"The validation report below compares the converted output against the original PDF." if _has_audit else ""}
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
 
-        # Show detected state
-        if st.session_state.get('detected_state'):
-            _s = st.session_state.detected_state
-            _sval = AVAILABLE_STATES.get(_s, _s)
-            _sname = _sval.get('name', _s) if isinstance(_sval, dict) else _sval
-            st.metric("🏛️ Detected State", f"{_s} — {_sname}")
+    # ── Processing Logs (collapsed) ────────────────────────────────────────────
+    if st.session_state.get('processing_logs'):
+        with st.expander("📋 Processing Logs", expanded=False):
+            for log in st.session_state.processing_logs:
+                level = log.get('level', 'info')
+                icon = "ℹ️" if level == "info" else "⚠️" if level == "warning" else "❌"
+                st.text(f"{icon} [{log['time']}] {log['message']}")
 
-        st.metric("File Size", format_file_size(file_size))
-        if st.session_state.processing_time:
-            st.metric("Processing Time", st.session_state.processing_time)
-        
-        # Show chunk stats in metrics if available
-        if hasattr(st.session_state, 'chunk_stats') and st.session_state.chunk_stats:
-            chunk_info = st.session_state.chunk_stats
-            st.metric("Chunks Processed", f"{chunk_info['chunks_processed']}/{chunk_info['total_chunks']}")
-            st.metric("Character Count", f"{chunk_info['character_count']:,}")
-        
-        # Client-side download via data URI — the file is embedded directly in
-        # the HTML page as a base64 string. When the user clicks the link, the
-        # browser downloads it locally with zero server requests, so pod routing
-        # is completely irrelevant. This fixes the multi-pod / multi-user issue.
-        try:
-            file_data = st.session_state.get('processed_file_data')
-            if file_data is None:
-                with open(st.session_state.processed_file_path, 'rb') as f:
-                    file_data = f.read()
-                st.session_state.processed_file_data = file_data
-
-            import base64
-            b64 = base64.b64encode(file_data).decode()
-            download_link = (
-                f'<a href="data:text/plain;base64,{b64}" download="{file_name}" '
-                f'style="display:inline-block;width:100%;padding:10px 0;text-align:center;'
-                f'background-color:#ff4b4b;color:white;border-radius:6px;font-weight:600;'
-                f'text-decoration:none;font-size:15px;">📥 Download Final Output</a>'
-            )
-            st.markdown(download_link, unsafe_allow_html=True)
-        except Exception as e:
-            st.error(f"Download error: {e}")
-
-    # ── Validation Results Dashboard ─────────────────────────────────────────
-    if st.session_state.get('validation_result') and display_validation_results:
-        display_validation_results(st.session_state.validation_result)
+    # ── Validation Review — GPT Audit Results ──────────────────────────────────
+    if st.session_state.get('audit_excel_path') and render_inline_validation_review:
+        render_inline_validation_review(
+            excel_path=st.session_state.audit_excel_path,
+            converted_txt_path=st.session_state.processed_file_path,
+            highlighted_dir=st.session_state.get('audit_highlighted_dir'),
+            json_report=st.session_state.get('audit_json_report'),
+            accuracy_report=st.session_state.get('content_accuracy_report'),
+        )
 
 def show_single_file_processing():
     """Show single file processing interface"""
-    st.header("🔄 Step 3: Process File")
-    
-    # Add some spacing
-    st.write("")
-    st.write("")
-    
     # Center the button with columns - wider button in middle
     col1, col2, col3 = st.columns([1, 2, 1])
     
@@ -2118,7 +2417,7 @@ def main():
     """Enterprise main application with session management"""
     # Setup logging
     setup_simple_logging()
-    
+
     # Show the enterprise UI with session management
     show_simple_ui()
 

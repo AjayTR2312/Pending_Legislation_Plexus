@@ -44,11 +44,14 @@ from datetime import datetime
 import pypdfium2 as pdfium
 from PIL import Image
  
-# Fix encoding for Windows console
+# Fix encoding for Windows console (skip when stdout is already wrapped, e.g. Streamlit)
 if sys.platform == 'win32':
     import codecs
-    sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer, 'strict')
-    sys.stderr = codecs.getwriter('utf-8')(sys.stderr.buffer, 'strict')
+    try:
+        sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer, 'strict')
+        sys.stderr = codecs.getwriter('utf-8')(sys.stderr.buffer, 'strict')
+    except Exception:
+        pass
  
 # GPT 5.4 intelligent tag comparison
 try:
