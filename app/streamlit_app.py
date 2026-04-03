@@ -109,6 +109,8 @@ try:
         st.session_state.chunk_stats = None
     if 'processing_logs' not in st.session_state:
         st.session_state.processing_logs = []
+    if 'step_timings' not in st.session_state:
+        st.session_state.step_timings = {}
     if 'audit_excel_path' not in st.session_state:
         st.session_state.audit_excel_path = None
     if 'audit_highlighted_dir' not in st.session_state:
@@ -1227,15 +1229,15 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
     def add_log(message, level="info"):
         """Add log message to processing logs and update live display"""
         timestamp = datetime.now().strftime("%H:%M:%S")
-        st.session_state.processing_logs.append({"time": timestamp, "message": message, "level": level})
+        step_idx = st.session_state.get('current_step', 0)
+        st.session_state.processing_logs.append(
+            {"time": timestamp, "message": message, "level": level, "step": step_idx}
+        )
         logging.info(message)
-        # Live-update the log placeholder so user sees progress in real time
+        # Live-update the log placeholder with styled activity feed
         if log_placeholder is not None:
             with log_placeholder.container():
-                for log in st.session_state.processing_logs:
-                    _level = log.get('level', 'info')
-                    _icon = "ℹ️" if _level == "info" else "⚠️" if _level == "warning" else "❌"
-                    st.text(f"{_icon} [{log['time']}] {log['message']}")
+                st.markdown(_build_activity_feed_html(st.session_state.processing_logs), unsafe_allow_html=True)
 
     def update_progress():
         if progress_placeholder:
@@ -1487,11 +1489,20 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
                 _acc = accuracy_report['accuracy']
                 _diffs = accuracy_report['real_diff_count']
                 _repos = accuracy_report['repositioned_count']
+                _n_trans = accuracy_report.get('transposed_count', 0)
+                _n_punct = accuracy_report.get('punctuation_count', 0)
+                _n_word = accuracy_report.get('word_diff_count', _diffs)
                 _icon = "✅" if _acc >= 99 else "⚠️" if _acc >= 95 else "❌"
+                # Build compact breakdown
+                _parts = []
+                if _n_word:  _parts.append(f"{_n_word} word")
+                if _n_trans: _parts.append(f"{_n_trans} transposed")
+                if _n_punct: _parts.append(f"{_n_punct} punctuation")
+                _brkdn = ", ".join(_parts) if _parts else f"{_diffs} diff(s)"
                 add_log(
                     f"{_icon} Content accuracy: {_acc:.1f}% "
-                    f"({accuracy_report['matching_words']:,}/{max(accuracy_report['pymupdf_word_count'], accuracy_report['converted_word_count']):,} words, "
-                    f"{_diffs} real diff(s), {_repos} repositioned)"
+                    f"({accuracy_report['matching_words']:,}/{max(accuracy_report['pymupdf_word_count'], accuracy_report['converted_word_count']):,} words — "
+                    f"{_brkdn}, {_repos} repositioned)"
                 )
             except Exception as acc_err:
                 add_log(f"⚠️ Content accuracy check failed: {acc_err}", "warning")
@@ -1796,6 +1807,149 @@ def show_simple_ui():
     else:
         st.info("👆 Please upload a PDF file to begin processing")
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  UI Helper: Styled Activity Feed & Pipeline Tracker
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _build_activity_feed_html(logs: list[dict]) -> str:
+    """Build a modern styled activity-feed HTML for processing logs.
+
+    Each log entry is rendered as a timeline row with a colored dot,
+    monospace timestamp badge, and the message text.
+    """
+    if not logs:
+        return ""
+
+    _css = """
+    <style>
+    .af-wrap{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+             padding:4px 0;}
+    .af-row{display:flex;align-items:flex-start;gap:10px;padding:5px 0 5px 4px;
+            border-left:2px solid #e2e8f0;margin-left:6px;position:relative;}
+    .af-row:last-child{border-left-color:transparent;}
+    .af-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0;margin-top:5px;
+            position:relative;left:-10px;margin-right:-10px;}
+    .af-dot-info{background:#3b82f6;}
+    .af-dot-ok{background:#22c55e;}
+    .af-dot-warn{background:#f59e0b;}
+    .af-dot-err{background:#ef4444;}
+    .af-time{font-family:'SF Mono',SFMono-Regular,Consolas,'Liberation Mono',Menlo,monospace;
+             font-size:0.72rem;background:#f1f5f9;color:#64748b;padding:2px 7px;
+             border-radius:4px;white-space:nowrap;flex-shrink:0;}
+    .af-msg{font-size:0.82rem;color:#334155;line-height:1.4;word-break:break-word;}
+    .af-msg-warn{color:#92400e;}
+    .af-msg-err{color:#991b1b;font-weight:600;}
+    </style>"""
+
+    rows = []
+    for log in logs:
+        lvl = log.get("level", "info")
+        msg = log.get("message", "")
+        ts = log.get("time", "")
+
+        # Determine dot color and message class from content + level
+        if lvl == "error" or msg.startswith("❌"):
+            dot_cls, msg_cls = "af-dot-err", "af-msg-err"
+        elif lvl == "warning" or msg.startswith("⚠️"):
+            dot_cls, msg_cls = "af-dot-warn", "af-msg-warn"
+        elif "✅" in msg or "🏁" in msg:
+            dot_cls, msg_cls = "af-dot-ok", "af-msg"
+        else:
+            dot_cls, msg_cls = "af-dot-info", "af-msg"
+
+        rows.append(
+            f'<div class="af-row">'
+            f'  <span class="af-dot {dot_cls}"></span>'
+            f'  <span class="af-time">{ts}</span>'
+            f'  <span class="{msg_cls}">{msg}</span>'
+            f'</div>'
+        )
+
+    return _css + '<div class="af-wrap">' + "\n".join(rows) + '</div>'
+
+
+def _build_pipeline_tracker_html(conversion_steps: list[dict],
+                                  validation_steps: list[dict]) -> str:
+    """Build a modern pipeline tracker card grid showing each phase as
+    a group of step tiles with status indicators.
+    """
+    _css = """
+    <style>
+    .pt-phase{margin-bottom:18px;}
+    .pt-phase-hdr{display:flex;align-items:center;gap:8px;margin-bottom:10px;}
+    .pt-phase-badge{font-size:0.7rem;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;
+                    padding:3px 10px;border-radius:12px;}
+    .pt-phase-1{background:#dcfce7;color:#166534;}
+    .pt-phase-2{background:#dbeafe;color:#1e40af;}
+    .pt-phase-title{font-size:0.92rem;font-weight:700;color:#1e293b;}
+    .pt-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;}
+    .pt-card{background:#ffffff;border:1px solid #e2e8f0;border-radius:10px;padding:12px 14px;
+             display:flex;align-items:center;gap:10px;transition:box-shadow .15s,border-color .15s;}
+    .pt-card:hover{box-shadow:0 2px 8px rgba(0,0,0,.06);border-color:#cbd5e1;}
+    .pt-card-ok{border-left:3px solid #22c55e;}
+    .pt-card-warn{border-left:3px solid #f59e0b;}
+    .pt-card-fail{border-left:3px solid #ef4444;}
+    .pt-card-run{border-left:3px solid #3b82f6;background:#eff6ff;}
+    .pt-card-wait{border-left:3px solid #e2e8f0;opacity:0.6;}
+    .pt-icon{font-size:1.3rem;flex-shrink:0;}
+    .pt-info{display:flex;flex-direction:column;gap:1px;min-width:0;}
+    .pt-name{font-size:0.82rem;font-weight:600;color:#334155;white-space:nowrap;
+             overflow:hidden;text-overflow:ellipsis;}
+    .pt-status{font-size:0.7rem;font-weight:500;}
+    .pt-st-ok{color:#16a34a;}
+    .pt-st-warn{color:#d97706;}
+    .pt-st-fail{color:#dc2626;}
+    .pt-st-run{color:#2563eb;}
+    .pt-st-wait{color:#94a3b8;}
+    .pt-connector{width:100%;height:1px;background:linear-gradient(90deg,#e2e8f0 0%,transparent 100%);
+                  margin:4px 0 14px;}
+    </style>"""
+
+    def _render_phase(steps: list[dict], phase_label: str, badge_cls: str) -> str:
+        if not steps:
+            return ""
+        cards = []
+        for s in steps:
+            status = st.session_state.step_status.get(s["idx"], "⏳")
+            if status == "✅":
+                card_cls, st_cls, st_text = "pt-card-ok", "pt-st-ok", "✓ Completed"
+            elif status == "⚠️":
+                card_cls, st_cls, st_text = "pt-card-warn", "pt-st-warn", "⚠ Warnings"
+            elif status == "❌":
+                card_cls, st_cls, st_text = "pt-card-fail", "pt-st-fail", "✗ Failed"
+            elif status == "🔄":
+                card_cls, st_cls, st_text = "pt-card-run", "pt-st-run", "● Running…"
+            else:
+                card_cls, st_cls, st_text = "pt-card-wait", "pt-st-wait", "Pending"
+
+            cards.append(
+                f'<div class="pt-card {card_cls}">'
+                f'  <span class="pt-icon">{s["icon"]}</span>'
+                f'  <div class="pt-info">'
+                f'    <span class="pt-name">{s["name"]}</span>'
+                f'    <span class="pt-status {st_cls}">{st_text}</span>'
+                f'  </div>'
+                f'</div>'
+            )
+
+        return (
+            f'<div class="pt-phase">'
+            f'  <div class="pt-phase-hdr">'
+            f'    <span class="pt-phase-badge {badge_cls}">{phase_label}</span>'
+            f'  </div>'
+            f'  <div class="pt-grid">{"".join(cards)}</div>'
+            f'</div>'
+        )
+
+    html = _css
+    html += _render_phase(conversion_steps, "Phase 1 — Conversion", "pt-phase-1")
+    if validation_steps:
+        html += '<div class="pt-connector"></div>'
+        html += _render_phase(validation_steps, "Phase 2 — Validation", "pt-phase-2")
+    return html
+
+
 def show_processing_steps():
     """Show processing steps with two-phase progress (Conversion + Validation)"""
 
@@ -1903,21 +2057,10 @@ def show_processing_steps():
                     elif status == "❌":
                         st.error(f"❌ Failed: {info['icon']} {info['name']}")
 
-    # ── Detailed step list (collapsed) ────────────────────────────────────
+    # ── Detailed step list — modern pipeline tracker ─────────────────────
     all_steps = conversion_steps + validation_steps
-    with st.expander("View step details", expanded=False):
-        for s in all_steps:
-            status = st.session_state.step_status.get(s["idx"], "⏳")
-            if status == "✅":
-                st.markdown(f"✅ **{s['icon']} {s['name']}** — Completed")
-            elif status == "⚠️":
-                st.markdown(f"⚠️ **{s['icon']} {s['name']}** — Completed with warnings")
-            elif status == "❌":
-                st.markdown(f"❌ **{s['icon']} {s['name']}** — Failed")
-            elif status == "🔄":
-                st.markdown(f"🔄 **{s['icon']} {s['name']}** — In progress…")
-            else:
-                st.markdown(f"⏳ {s['icon']} {s['name']}")
+    with st.expander("🗂️ Pipeline Steps", expanded=False):
+        st.markdown(_build_pipeline_tracker_html(conversion_steps, validation_steps), unsafe_allow_html=True)
 
 def show_results_section():
     """Show results: compact summary bar + validation review"""
@@ -2030,13 +2173,10 @@ def show_results_section():
     </div>
     """, unsafe_allow_html=True)
 
-    # ── Processing Logs (collapsed) ────────────────────────────────────────────
+    # ── Processing Activity Log (collapsed) ────────────────────────────────────
     if st.session_state.get('processing_logs'):
-        with st.expander("📋 Processing Logs", expanded=False):
-            for log in st.session_state.processing_logs:
-                level = log.get('level', 'info')
-                icon = "ℹ️" if level == "info" else "⚠️" if level == "warning" else "❌"
-                st.text(f"{icon} [{log['time']}] {log['message']}")
+        with st.expander("📋 Activity Log", expanded=False):
+            st.markdown(_build_activity_feed_html(st.session_state.processing_logs), unsafe_allow_html=True)
 
     # ── Validation Review — GPT Audit Results ──────────────────────────────────
     if st.session_state.get('audit_excel_path') and render_inline_validation_review:
@@ -2116,7 +2256,7 @@ def show_single_file_processing():
         # Create a placeholder for dynamic updates
         progress_placeholder = st.empty()
         status_placeholder = st.empty()
-        log_container = st.expander("📋 Processing Logs", expanded=True)
+        log_container = st.expander("📋 Activity Log", expanded=True)
         log_placeholder = log_container.empty()  # live-updating slot inside the expander
         
         with progress_placeholder.container():
@@ -2125,10 +2265,7 @@ def show_single_file_processing():
         # Display any logs already collected (e.g. from a previous partial run)
         with log_placeholder.container():
             if st.session_state.processing_logs:
-                for log in st.session_state.processing_logs:
-                    level = log.get('level', 'info')
-                    icon = "ℹ️" if level == "info" else "⚠️" if level == "warning" else "❌"
-                    st.text(f"{icon} [{log['time']}] {log['message']}")
+                st.markdown(_build_activity_feed_html(st.session_state.processing_logs), unsafe_allow_html=True)
         
         # Choose processing method
         _state = st.session_state.get('detected_state', 'AUTO')

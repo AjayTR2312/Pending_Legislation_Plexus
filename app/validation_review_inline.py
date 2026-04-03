@@ -611,15 +611,25 @@ def _render_accuracy_expander(accuracy_report: dict | None):
     acc = accuracy_report["accuracy"]
     n_diffs = accuracy_report["real_diff_count"]
     n_repos = accuracy_report["repositioned_count"]
+    n_trans = accuracy_report.get("transposed_count", 0)
+    n_punct = accuracy_report.get("punctuation_count", 0)
+    n_word  = accuracy_report.get("word_diff_count", n_diffs)
     status = accuracy_report["status"]
 
     # If identical, no expander needed
     if status == "IDENTICAL" and n_diffs == 0 and n_repos == 0:
         return
 
+    # Build breakdown chips for the label
+    _chips = []
+    if n_word:  _chips.append(f"{n_word} word")
+    if n_trans: _chips.append(f"{n_trans} transposed")
+    if n_punct: _chips.append(f"{n_punct} punctuation")
+    _chip_str = ", ".join(_chips) if _chips else f"{n_diffs} difference{'s' if n_diffs != 1 else ''}"
+
     label = (
         f"📊 Content Accuracy Report — {acc:.1f}% "
-        f"({n_diffs} difference{'s' if n_diffs != 1 else ''}"
+        f"({_chip_str}"
         f"{f', {n_repos} repositioned' if n_repos else ''})"
     )
 
@@ -633,6 +643,26 @@ def _render_accuracy_expander(accuracy_report: dict | None):
         c2.metric("Claude Words", f"{accuracy_report['converted_word_count']:,}")
         c3.metric("Matching", f"{accuracy_report['matching_words']:,}")
 
+        # Sub-type breakdown pills
+        if n_diffs > 0 and (n_trans > 0 or n_punct > 0):
+            _pill = ('display:inline-block; padding:3px 10px; border-radius:12px; '
+                     'font-size:0.78rem; font-weight:600; margin:2px 4px;')
+            _pills_html = ""
+            if n_word:
+                _pills_html += (f'<span style="{_pill} background:#fef2f2; color:#991b1b;">'
+                                f'⚠️ {n_word} Word Diff{"s" if n_word != 1 else ""}</span>')
+            if n_trans:
+                _pills_html += (f'<span style="{_pill} background:#fefce8; color:#854d0e;">'
+                                f'🔀 {n_trans} Transposed</span>')
+            if n_punct:
+                _pills_html += (f'<span style="{_pill} background:#eff6ff; color:#1e40af;">'
+                                f'✂️ {n_punct} Punctuation</span>')
+            if n_repos:
+                _pills_html += (f'<span style="{_pill} background:#f0fdf4; color:#166534;">'
+                                f'↔️ {n_repos} Repositioned</span>')
+            st.markdown(f'<div style="margin:8px 0 12px;">{_pills_html}</div>',
+                        unsafe_allow_html=True)
+
         if status == "CONTENT_MATCH":
             st.success(
                 f"✅ All content present in both files. "
@@ -644,14 +674,61 @@ def _render_accuracy_expander(accuracy_report: dict | None):
             st.markdown("#### ⚠️ Real Differences")
             for idx, d in enumerate(accuracy_report["real_diffs"], 1):
                 dtype = d["type"]
+                sub = d.get("sub_type", "")
+
                 if dtype == "REPLACE":
+                    if sub == "TRANSPOSED":
+                        st.markdown(
+                            f"**#{idx} 🔀 Transposed Words**\n\n"
+                            f"- **Expected order:** {d['pymupdf_text']}\n"
+                            f"- **Got order:** {d['converted_text']}"
+                        )
+                        moved = d.get("moved_words", [])
+                        if moved:
+                            _rows = "".join(
+                                f"<tr><td style='padding:2px 8px;text-align:center;'>{m['position']}</td>"
+                                f"<td style='padding:2px 8px;'><code>{m['expected']}</code></td>"
+                                f"<td style='padding:2px 8px;'>→</td>"
+                                f"<td style='padding:2px 8px;'><code>{m['got']}</code></td></tr>"
+                                for m in moved
+                            )
+                            st.markdown(
+                                f"<table style='font-size:0.85rem;margin:4px 0 8px 20px;'>"
+                                f"<tr><th style='padding:2px 8px;'>Pos</th><th>Expected</th>"
+                                f"<th></th><th>Got</th></tr>{_rows}</table>",
+                                unsafe_allow_html=True,
+                            )
+                    elif sub == "PUNCTUATION":
+                        st.markdown(
+                            f"**#{idx} ✂️ Punctuation Difference**\n\n"
+                            f"- **Expected:** `{d['pymupdf_text']}`\n"
+                            f"- **Got:** `{d['converted_text']}`"
+                        )
+                        char_diffs = d.get("char_diffs", [])
+                        if char_diffs:
+                            for cd in char_diffs:
+                                kind = cd["kind"]
+                                ch = cd["char"]
+                                ctx = cd.get("context", "")
+                                if kind == "MISSING":
+                                    st.markdown(f"  - ❌ **Missing** {ch}  `…{ctx}…`")
+                                elif kind == "EXTRA":
+                                    st.markdown(f"  - ➕ **Extra** {ch}  `…{ctx}…`")
+                                elif kind == "CHANGED":
+                                    st.markdown(f"  - 🔄 **Changed** {ch}  `…{ctx}…`")
+                    else:
+                        st.markdown(
+                            f"**#{idx} REPLACE**\n\n"
+                            f"- **PyMuPDF:** {d['pymupdf_text']}\n"
+                            f"- **Claude:** {d['converted_text']}"
+                        )
+
+                    # Sentence context for all REPLACE sub-types
                     st.markdown(
-                        f"**#{idx} REPLACE**\n\n"
-                        f"- **PyMuPDF:** {d['pymupdf_text']}\n"
-                        f"- **Claude:** {d['converted_text']}\n\n"
                         f"> *PyMuPDF sentence:* {d['sentence_pymupdf']}\n\n"
                         f"> *Claude sentence:* {d['sentence_converted']}"
                     )
+
                 elif dtype == "MISSING_IN_CONVERTED":
                     st.markdown(
                         f"**#{idx} MISSING in Claude output**\n\n"
@@ -943,17 +1020,6 @@ def render_inline_validation_review(
                 w = sum(1 for r in on_page if str(r.get("Verdict", "")).startswith("⚠"))
                 st.caption(f"This page: {len(on_page)} items  •  ❌ {e} errors  •  ⚠️ {w} warnings")
 
-            # Zoomed crop of selected error
-            if selected_row and anns:
-                sel_ann = next((a for a in anns if a["cid"] == selected_id), None)
-                if sel_ann:
-                    cropped = _crop_error_region(page_images[img_idx], sel_ann["bbox"])
-                    if cropped:
-                        st.markdown(f"""
-                        <div class="vr-zoom-container">
-                            <div class="vr-zoom-header">🔍 Zoomed View — Item #{selected_id}</div>
-                        </div>""", unsafe_allow_html=True)
-                        st.image(cropped, use_container_width=True)
         else:
             st.info("No highlighted page images found.")
 
@@ -990,38 +1056,14 @@ def render_inline_validation_review(
         cid = int(selected_row.get("#", 0))
         verdict = _get_effective_verdict(selected_row, fixed_ids, ignored_ids)
 
-        if cid in fixed_ids:
-            dc, ic = "#dbeafe", "🔧"
-        elif cid in ignored_ids:
-            dc, ic = "#f0f9ff", "🔇"
-        elif verdict.startswith("✅"):
-            dc, ic = "#dcfce7", "✅"
-        elif verdict.startswith("⚠"):
-            dc, ic = "#fef9c3", "⚠️"
-        else:
-            dc, ic = "#fee2e2", "❌"
+        st.markdown(f"#### 📋 Review — Item #{cid}")
 
-        st.markdown(f"#### 🔎 Item #{cid} — Detail")
-
-        d1, d2 = st.columns(2)
-        with d1:
-            st.markdown(f"""
-            <div style="background:{dc}; border-radius:10px; padding:16px;">
-                <h4 style="margin:0 0 8px">{ic} {_html_escape(verdict)}</h4>
-                <p><strong>Page:</strong> {selected_row.get('Page', '')}</p>
-                <p><strong>Tag Type:</strong> {selected_row.get('Tag Type', '')}</p>
-                <p><strong>Classification:</strong> {selected_row.get('Classification', '')}</p>
-                <p><strong>In Image:</strong> {selected_row.get('In Image?', '')}</p>
-                <p><strong>In Claude:</strong> {selected_row.get('In Claude?', '')}</p>
-            </div>
-            """, unsafe_allow_html=True)
-        with d2:
-            st.markdown("**Expected text (from PDF):**")
-            st.code(str(selected_row.get("PyMuPDF Text", "")), language=None)
-            ctx = str(selected_row.get("Context", ""))
-            if ctx:
-                st.markdown("**Surrounding context:**")
-                st.code(ctx, language=None)
+        st.markdown("**Expected text (from PDF):**")
+        st.code(str(selected_row.get("PyMuPDF Text", "")), language=None)
+        ctx = str(selected_row.get("Context", ""))
+        if ctx:
+            st.markdown("**Surrounding context:**")
+            st.code(ctx, language=None)
 
         # ── Inline edit for errors ──────────────────────────────────
         orig_verdict = str(selected_row.get("Verdict", ""))
@@ -1050,7 +1092,7 @@ def render_inline_validation_review(
                     st.rerun()
 
         elif is_error:
-            st.markdown(f"#### ✏️ Fix Item #{cid}")
+            st.markdown(f"#### 🛠️ Apply Correction — Item #{cid}")
 
             claude_text = str(selected_row.get("Claude Text", "") or "")
             pymupdf_text = str(selected_row.get("PyMuPDF Text", ""))
