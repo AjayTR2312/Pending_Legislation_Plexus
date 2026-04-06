@@ -912,6 +912,12 @@ def render_inline_validation_review(
                 '<p style="font-size:0.92rem;font-weight:700;margin:0 0 6px;">📝 Claude Converted Text</p>',
                 unsafe_allow_html=True,
             )
+            # Spacer to vertically align with the image (left col has nav bar above image)
+            if total_pages > 1:
+                st.markdown(
+                    '<div style="height:58px;"></div>',
+                    unsafe_allow_html=True,
+                )
             html = _render_text_html(text, checklist, selected_id, filter_mode, fixed_ids | ignored_ids)
             st.markdown(
                 f'<div class="vr-text-viewer">{html}</div>',
