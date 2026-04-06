@@ -163,6 +163,38 @@ def detect_pdf_type(pdf_path, min_text_threshold=50):
                 except:
                     pass
             
+            # Also check for inline images in the content stream.
+            # Some scanned PDFs embed page images directly using the BI/EI
+            # (Begin Inline Image / End Inline Image) operators rather than
+            # referencing them via /XObject.  PyPDF2 doesn't expose these,
+            # but we can do a quick byte-level scan of the raw stream.
+            if not has_images:
+                try:
+                    if hasattr(page, '/Contents'):
+                        contents = page['/Contents']
+                        if contents is not None:
+                            # contents may be an array of streams or a single stream
+                            raw_streams = []
+                            try:
+                                obj = contents.get_object()
+                                if isinstance(obj, list):
+                                    for s in obj:
+                                        raw_streams.append(s.get_object().get_data())
+                                else:
+                                    raw_streams.append(obj.get_data())
+                            except Exception:
+                                pass
+                            for raw in raw_streams:
+                                if b' BI ' in raw or b'\nBI ' in raw or b'\nBI\n' in raw:
+                                    has_images = True
+                                    has_embedded_images = True
+                                    image_count += 1
+                                    large_images += 1  # inline images in scans are full-page
+                                    logging.info(f"  Page {page_num}: Inline image (BI/EI) detected in content stream")
+                                    break
+                except Exception:
+                    pass
+
             if has_images:
                 pages_with_images += 1
                 total_images += image_count
@@ -351,6 +383,18 @@ def detect_pdf_type(pdf_path, min_text_threshold=50):
             # Document has text but contains multiple small images (likely signatures)
             pdf_type = "hybrid"
             logging.info(f"Hybrid detection (text + signatures): text_ratio={text_ratio:.1%}, small_images={total_small_images}")
+        
+        # PRIORITY 5b: Zero fonts = scanned PDF with OCR text layer
+        # Real digital PDFs ALWAYS have embedded fonts in /Resources/Font.
+        # If we extracted text but found ZERO fonts, the text came from an
+        # invisible OCR layer sitting on top of scanned page images.
+        elif avg_fonts_per_page == 0 and avg_chars > 50:
+            pdf_type = "scanned"
+            logging.info(
+                f"Scanned detection (zero fonts + OCR text): "
+                f"avg_fonts={avg_fonts_per_page:.1f}, avg_chars={avg_chars:.1f}, "
+                f"text_quality={avg_text_quality:.1f}"
+            )
         
         # PRIORITY 6: Check for mostly text pages (digital PDF)
         elif text_ratio >= 0.8:

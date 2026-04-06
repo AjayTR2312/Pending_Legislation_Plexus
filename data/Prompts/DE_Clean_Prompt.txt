@@ -548,52 +548,195 @@ WHEREAS, Delaware seeks to establish standards; now, therefore
 ^ Keep blank line after each WHEREAS clause
 
 ===================================================================
-TAG PRESERVATION (ABSOLUTE RULES)
+🔒 TAG PRESERVATION — ZERO-TOLERANCE POLICY (HIGHEST PRIORITY)
 ===================================================================
 
-DELAWARE TAGS - NEVER MODIFY:
-- [A>text<A] = Added/underlined text (Delaware additions)
-- [D>text<D] = Deleted/strikethrough text (Delaware deletions)
+YOUR #1 RESPONSIBILITY: Every tag in the input MUST appear in the output.
+Tags are the entire reason this document exists. Losing or breaking a
+single tag is a CRITICAL FAILURE — worse than leaving every artifact in.
 
-⚠️ TAG PRESERVATION RULES:
-1. NEVER remove tags while cleaning
-2. NEVER modify text inside tags
-3. NEVER break tags across lines
-4. NEVER merge multiple tags into one
-5. Keep tag markers exactly as they are
+-------------------------------------------------------------------
+DELAWARE FORMATTING RULES (from state configuration)
+-------------------------------------------------------------------
 
-CLEANING AROUND TAGS (How to handle):
+Delaware marks legislative changes with exactly TWO tag types:
 
-Correct: Remove line break, keep tag intact
-WRONG:
+  [A>text<A]  =  ADDITION  (underlined text in the PDF)
+  [D>text<D]  =  DELETION  (strikethrough text in the PDF)
+
+Delaware does NOT use bold, italic, all-caps, or bracket-based markup
+for additions or deletions. If you see text that is bold, italic, or
+in ALL CAPS but has NO tag around it, leave it as plain text — do NOT
+invent a tag for it.
+
+WHAT GETS TAGGED (and what does NOT):
+  ✅ Underlined text  → already wrapped in [A>...<A] in the input
+  ✅ Strikethrough text → already wrapped in [D>...<D] in the input
+  🚫 Section headings like "SYNOPSIS", "Statement of Purpose" → NO tag
+  🚫 Headers, footers, page numbers → NO tag (and you remove these)
+  🚫 Italic text → plain text, NO tag, NO asterisks
+  🚫 Bold text → plain text, NO tag
+
+GOLDEN RULE: You are a CLEANER, not a TAGGER.
+  • NEVER add a tag that is not already in the input.
+  • NEVER remove a tag that IS in the input.
+  • NEVER move text into or out of an existing tag.
+  • NEVER split one tag into two tags.
+  • NEVER merge two tags into one tag.
+
+-------------------------------------------------------------------
+TAG COUNTING GATE (Mandatory — perform BEFORE and AFTER cleaning)
+-------------------------------------------------------------------
+
+BEFORE you begin cleaning, count:
+  • Total [A> openers  (call this A_IN)
+  • Total <A] closers   (call this A_CLOSE_IN)
+  • Total [D> openers  (call this D_IN)
+  • Total <D] closers   (call this D_CLOSE_IN)
+
+AFTER you finish cleaning, count again:
+  • Total [A> openers  (must equal A_IN)
+  • Total <A] closers   (must equal A_CLOSE_IN)
+  • Total [D> openers  (must equal D_IN)
+  • Total <D] closers   (must equal D_CLOSE_IN)
+
+⚠️ IF ANY COUNT DIFFERS → STOP. Find the missing/extra tag and fix it
+   before outputting. Do NOT output until counts match exactly.
+
+-------------------------------------------------------------------
+CLEANING AROUND TAGS — SAFE OPERATIONS
+-------------------------------------------------------------------
+
+✅ SAFE: Remove a line break INSIDE a tag (the tag stays intact)
+BEFORE:
 ```
-means a [A>qualified
-individual<A] who has
+[A>qualified
+individual<A]
 ```
+AFTER:
+```
+[A>qualified individual<A]
+```
+^ Tag is still one [A>...<A] pair — just the internal newline is gone.
 
-CORRECT:
-```
-means a [A>qualified individual<A] who has
-```
-
-Correct: Join text with tags preserved
-WRONG:
+✅ SAFE: Remove a line break BETWEEN tagged and untagged text
+BEFORE:
 ```
 The [A>Alderman's Court<A]
-of the [A>City of Newark<A] and
-the Court
+of the City of Newark
+```
+AFTER:
+```
+The [A>Alderman's Court<A] of the City of Newark
+```
+^ Tag boundaries [A> and <A] are untouched.
+
+✅ SAFE: Remove a line number or header that appears OUTSIDE any tag
+BEFORE:
+```
+ 5       (a) There shall be [A>a new fund<A] established
+```
+AFTER:
+```
+(a) There shall be [A>a new fund<A] established
+```
+^ Line number "5" removed, tag untouched.
+
+-------------------------------------------------------------------
+CLEANING AROUND TAGS — DANGEROUS OPERATIONS (NEVER DO THESE)
+-------------------------------------------------------------------
+
+🚫 NEVER move text OUT of a tag boundary
+WRONG:
+```
+INPUT:  [A>arising under this section. SYNOPSIS<A]
+OUTPUT: [A>arising under this section.<A] SYNOPSIS
+```
+^ You moved "SYNOPSIS" outside the [A> tag — this CHANGES the tagged
+  content. Even if SYNOPSIS "shouldn't" be underlined, it IS tagged in
+  the input, so it MUST stay tagged in the output. Your job is to clean
+  artifacts, NOT to fix tagging decisions.
+
+🚫 NEVER move text INTO a tag boundary
+WRONG:
+```
+INPUT:  [A>new provision<A] of this title
+OUTPUT: [A>new provision of this title<A]
+```
+^ You moved "of this title" inside the tag — this changes meaning.
+
+🚫 NEVER split a single tag into two
+WRONG:
+```
+INPUT:  [A>Alderman's Court of Newark<A]
+OUTPUT: [A>Alderman's Court<A] [A>of Newark<A]
 ```
 
+🚫 NEVER merge two separate tags into one
+WRONG:
+```
+INPUT:  [A>old text<A] and [A>new text<A]
+OUTPUT: [A>old text and new text<A]
+```
+
+🚫 NEVER drop a tag when removing an artifact near it
+WRONG:
+```
+INPUT:  Page 2 of 5\n[A>Section 2. Amend § 9042C<A]
+OUTPUT: Section 2. Amend § 9042C
+```
+^ You removed the footer AND the [A> tag — the tag must survive.
 CORRECT:
 ```
-The [A>Alderman's Court<A> of the [A>City of Newark<A> and the Court
+OUTPUT: [A>Section 2. Amend § 9042C<A]
 ```
 
-Correct: Keep multiple tags separate (even on same line)
+-------------------------------------------------------------------
+TAG-ADJACENT ARTIFACT REMOVAL — STEP-BY-STEP SAFE PROCESS
+-------------------------------------------------------------------
+
+When an artifact (header, line number, page marker) appears directly
+next to or within a few characters of a tag:
+
+STEP 1: Mark the EXACT characters of the tag: [A> ... <A] or [D> ... <D]
+STEP 2: Mark the EXACT characters of the artifact to remove
+STEP 3: Verify there is ZERO overlap between steps 1 and 2
+STEP 4: Remove ONLY the artifact characters from step 2
+STEP 5: Verify the tag from step 1 is still present and unchanged
+
+Example:
 ```
-[D>old text<D] [A>new text<A]
+INPUT:  <<<PAGE_2_START>>>\n[A>Section 2. Amend § 6052<A], Title 29
 ```
-^ Do NOT merge into one tag, keep both separate
+STEP 1: Tag = [A>Section 2. Amend § 6052<A]
+STEP 2: Artifact = <<<PAGE_2_START>>>\n
+STEP 3: No overlap ✓
+STEP 4: Remove "<<<PAGE_2_START>>>\n"
+STEP 5: Result = [A>Section 2. Amend § 6052<A], Title 29  ✓ Tag intact
+
+-------------------------------------------------------------------
+DELETION-ADDITION PAIRS (Common Delaware pattern)
+-------------------------------------------------------------------
+
+Delaware amendments frequently show old→new substitutions as adjacent
+[D>...<D] and [A>...<A] tags. These MUST remain as separate, adjacent tags.
+
+CORRECT (preserve both, keep separate):
+```
+[D>old provision<D] [A>new provision<A]
+```
+
+WRONG (merged):
+```
+[A>new provision<A]
+```
+^ The [D> tag was dropped — CRITICAL FAILURE.
+
+WRONG (merged into one):
+```
+[D>old provision [A>new provision<A]<D]
+```
+^ Tags must never nest or overlap.
 
 ===================================================================
 ===================================================================
@@ -970,11 +1113,15 @@ DELAWARE-SPECIFIC PRESERVATION:
 □ WHEREAS clauses: Each on own line with blank after?
 □ All quotation marks for definitions preserved?
 
-TAG PRESERVATION:
-□ All [A>...<A] tags preserved (count input vs output)?
-□ All [D>...<D] tags preserved (count input vs output)?
+TAG PRESERVATION (run the Tag Counting Gate again):
+□ Count of [A> in output == count of [A> in input?
+□ Count of <A] in output == count of <A] in input?
+□ Count of [D> in output == count of [D> in input?
+□ Count of <D] in output == count of <D] in input?
+□ No text was moved INTO or OUT OF any tag boundary?
+□ No two tags were merged into one?
+□ No single tag was split into two?
 □ No tags broken across lines?
-□ No tags modified or merged?
 
 CLEANING COMPLETENESS:
 □ Page markers removed from ALL pages (<<<PAGE_X_START>>> and <<<PAGE_X_END>>>)?
