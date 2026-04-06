@@ -25,18 +25,26 @@ from pathlib import Path
 from typing import Optional
 
 import streamlit as st
+import streamlit.components.v1 as components
 import openpyxl
-from PIL import Image, ImageDraw, ImageFont
-
-# ── Constants ───────────────────────────────────────────────────────
-PDF_PTS_PER_PAGE = (612.0, 792.0)  # standard US Letter in points
-
 
 # ═══════════════════════════════════════════════════════════════════
 # CUSTOM CSS
 # ═══════════════════════════════════════════════════════════════════
 _CSS = """
 <style>
+/* ── Equal-height two-column layout (PDF page ↔ Claude text) ── */
+.st-key-vri_twocol [data-testid="stHorizontalBlock"] {
+    align-items: stretch !important;
+}
+
+/* ── Compact page-nav buttons ── */
+.st-key-vri_twocol button[kind="secondary"] {
+    padding: 0.25rem 0.7rem !important;
+    min-height: 2rem !important;
+    font-size: 1rem !important;
+}
+
 /* --- summary cards --- */
 .vr-metric-row { display:flex; gap:12px; margin-bottom:16px; flex-wrap:wrap; }
 .vr-metric-card {
@@ -61,9 +69,38 @@ _CSS = """
     border: 2px solid #f59e0b;
     border-radius: 12px; padding: 12px 24px; margin: 12px 0 16px;
     box-shadow: 0 2px 8px rgba(245,158,11,.2);
+    flex-wrap: wrap;
 }
-.vr-error-nav-bar .nav-label { font-weight: 700; font-size: 1.05rem; color: #92400e; }
-.vr-error-nav-bar .nav-page  { font-size: 0.85rem; color: #78350f; opacity:0.8; }
+.vr-error-nav-bar .nav-label { font-weight: 700; font-size: 1.05rem; color: #92400e; white-space:nowrap; }
+.vr-error-nav-bar .nav-page  { font-size: 0.85rem; color: #78350f; opacity:0.8; white-space:nowrap; }
+
+/* ── Responsive: small screens ─────────────────────────────── */
+@media (max-width: 900px) {
+    /* Stack the two-column PDF/Claude layout vertically */
+    .st-key-vri_twocol [data-testid="stHorizontalBlock"] {
+        flex-direction: column !important;
+    }
+    .st-key-vri_twocol .stColumn {
+        width: 100% !important;
+        flex: none !important;
+    }
+    .vr-text-viewer {
+        font-size: 0.78rem;
+        line-height: 1.5;
+    }
+    /* Metric cards: allow 2-per-row */
+    .vr-metric-card {
+        min-width: 80px;
+        padding: 10px 12px;
+    }
+    .vr-metric-card h2 { font-size: 1.5rem; }
+    /* Error nav bar */
+    .vr-error-nav-bar {
+        padding: 8px 12px;
+        gap: 8px;
+    }
+    .vr-error-nav-bar .nav-label { font-size: 0.9rem; }
+}
 
 /* checklist table */
 .vr-cl-table { width:100%; border-collapse:collapse; font-size:0.82rem; }
@@ -88,14 +125,16 @@ _CSS = """
 .vr-badge-err   { background:#fecaca; color:#991b1b; }
 .vr-badge-fixed { background:#93c5fd; color:#1e3a8a; }
 
-/* text viewer */
+/* text viewer — scrollable, capped height; JS refines to match the PDF image */
 .vr-text-viewer {
     font-family: 'Cascadia Code','Consolas', monospace;
     font-size: 0.82rem; line-height: 1.65;
     white-space: pre-wrap; word-break: break-word;
     background: #fafafa; border: 1px solid #e2e8f0;
     border-radius: 8px; padding: 16px;
-    max-height: 620px; overflow-y: auto;
+    overflow-y: auto;
+    min-height: 400px;
+    max-height: 80vh;   /* fallback cap — JS will refine to exact image height */
 }
 .vr-tag-add { background:#bbf7d0; color:#166534; padding:1px 2px; border-radius:3px; }
 .vr-tag-del { background:#fecaca; color:#991b1b; padding:1px 2px; border-radius:3px; text-decoration:line-through; }
@@ -193,173 +232,6 @@ def _get_page_images(highlighted_dir: Path) -> list[Path]:
         return []
     return sorted(highlighted_dir.glob("page_*.png"))
 
-
-# ═══════════════════════════════════════════════════════════════════
-# IMAGE ANNOTATION — YELLOW error highlights on page images
-# ═══════════════════════════════════════════════════════════════════
-
-def _norm_ws(s: str) -> str:
-    return re.sub(r"\s+", " ", s.strip().lower())
-
-
-def _build_page_annotations(checklist: list[dict], json_report: dict,
-                            fixed_ids: set[int],
-                            ignored_ids: set[int] | None = None) -> dict[int, list[dict]]:
-    spans = json_report.get("formatted_spans", [])
-    annotations: dict[int, list[dict]] = {}
-    ignored_ids = ignored_ids or set()
-
-    for row in checklist:
-        cid = int(row.get("#", 0))
-        verdict = str(row.get("Verdict", ""))
-        try:
-            page = int(row.get("Page", 0))
-        except (ValueError, TypeError):
-            continue
-        pymupdf_text = _norm_ws(str(row.get("PyMuPDF Text", "")))
-
-        if cid in fixed_ids or cid in ignored_ids:
-            vtype = "fixed"
-        elif verdict.startswith("✅"):
-            vtype = "pass"
-        elif verdict.startswith("⚠"):
-            vtype = "warn"
-        else:
-            vtype = "err"
-
-        if vtype == "pass":
-            continue
-
-        best_bbox = None
-        for sp in spans:
-            if sp.get("page") != page:
-                continue
-            sp_text = _norm_ws(sp.get("text", ""))
-            if sp_text == pymupdf_text or pymupdf_text in sp_text or sp_text in pymupdf_text:
-                best_bbox = sp.get("bbox")
-                break
-
-        if best_bbox and page > 0:
-            annotations.setdefault(page, []).append({
-                "bbox": best_bbox, "vtype": vtype,
-                "cid": cid,
-                "text": str(row.get("PyMuPDF Text", ""))[:60],
-            })
-
-    return annotations
-
-
-def _annotate_page_image(img_path: Path, annotations: list[dict],
-                         selected_id: int | None) -> Image.Image:
-    img = Image.open(img_path).convert("RGBA")
-    if not annotations:
-        return img.convert("RGB")
-
-    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
-    draw = ImageDraw.Draw(overlay)
-
-    iw, ih = img.size
-    scale_x = iw / PDF_PTS_PER_PAGE[0]
-    scale_y = ih / PDF_PTS_PER_PAGE[1]
-
-    COLORS = {
-        "err":   ((184, 134, 11),  (255, 255, 0, 80),   (255, 249, 196)),
-        "warn":  ((234, 138, 0),   (255, 165, 0, 50),   (255, 237, 200)),
-        "pass":  ((22, 163, 74),   (22, 163, 74, 20),   (200, 247, 220)),
-        "fixed": ((37, 99, 235),   (37, 99, 235, 30),   (200, 220, 253)),
-    }
-
-    try:
-        font_sm = ImageFont.truetype("arial.ttf", 16)
-        font_lg = ImageFont.truetype("arialbd.ttf", 18)
-    except OSError:
-        font_sm = ImageFont.load_default()
-        font_lg = font_sm
-
-    for ann in annotations:
-        bbox = ann["bbox"]
-        vtype = ann["vtype"]
-        cid = ann["cid"]
-        is_selected = (cid == selected_id)
-
-        x0 = int(bbox[0] * scale_x) - 6
-        y0 = int(bbox[1] * scale_y) - 6
-        x1 = int(bbox[2] * scale_x) + 6
-        y1 = int(bbox[3] * scale_y) + 6
-
-        outline, fill, label_bg = COLORS.get(vtype, COLORS["err"])
-        width = 4 if is_selected else 3
-
-        draw.rectangle([x0, y0, x1, y1], fill=fill, outline=outline, width=width)
-
-        if vtype == "err":
-            label = f"#{cid} ❌ ERROR"
-        elif vtype == "warn":
-            label = f"#{cid} ⚠ WARNING"
-        elif vtype == "fixed":
-            label = f"#{cid} ✅ FIXED"
-        else:
-            label = f"#{cid}"
-
-        lbl_w = len(label) * 10 + 16
-        lbl_h = 24
-        lbl_x = x0
-        lbl_y = max(0, y0 - lbl_h - 3)
-
-        if vtype == "err":
-            draw.rectangle([lbl_x, lbl_y, lbl_x + lbl_w, lbl_y + lbl_h],
-                           fill=(245, 158, 11, 240))
-            draw.text((lbl_x + 6, lbl_y + 3), label, fill=(255, 255, 255), font=font_lg)
-        elif vtype == "warn":
-            draw.rectangle([lbl_x, lbl_y, lbl_x + lbl_w, lbl_y + lbl_h],
-                           fill=(251, 146, 60, 220))
-            draw.text((lbl_x + 6, lbl_y + 3), label, fill=(255, 255, 255), font=font_sm)
-        else:
-            draw.rectangle([lbl_x, lbl_y, lbl_x + lbl_w, lbl_y + lbl_h],
-                           fill=(*label_bg, 230))
-            draw.text((lbl_x + 6, lbl_y + 3), label, fill=outline, font=font_sm)
-
-        if is_selected:
-            for offset in range(1, 5):
-                draw.rectangle(
-                    [x0 - offset, y0 - offset, x1 + offset, y1 + offset],
-                    outline=(59, 130, 246, 180 - offset * 30), width=2,
-                )
-
-    return Image.alpha_composite(img, overlay).convert("RGB")
-
-
-# ═══════════════════════════════════════════════════════════════════
-# ZOOMED CROP
-# ═══════════════════════════════════════════════════════════════════
-
-def _crop_error_region(img_path: Path, bbox: list, margin: int = 60) -> Image.Image | None:
-    try:
-        img = Image.open(img_path).convert("RGB")
-    except Exception:
-        return None
-
-    iw, ih = img.size
-    scale_x = iw / PDF_PTS_PER_PAGE[0]
-    scale_y = ih / PDF_PTS_PER_PAGE[1]
-
-    x0 = max(0, int(bbox[0] * scale_x) - margin)
-    y0 = max(0, int(bbox[1] * scale_y) - margin)
-    x1 = min(iw, int(bbox[2] * scale_x) + margin)
-    y1 = min(ih, int(bbox[3] * scale_y) + margin)
-
-    if (x1 - x0) < 100 or (y1 - y0) < 40:
-        return None
-
-    cropped = img.crop((x0, y0, x1, y1))
-    draw = ImageDraw.Draw(cropped)
-    inner_x0 = int(bbox[0] * scale_x) - x0 - 3
-    inner_y0 = int(bbox[1] * scale_y) - y0 - 3
-    inner_x1 = int(bbox[2] * scale_x) - x0 + 3
-    inner_y1 = int(bbox[3] * scale_y) - y0 + 3
-    draw.rectangle([inner_x0, inner_y0, inner_x1, inner_y1],
-                   outline=(245, 158, 11), width=3)
-    return cropped
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -600,7 +472,7 @@ def _build_accuracy_card_html(accuracy_report: dict | None) -> str:
         cls = "vr-mc-acc-lo"
     return (
         f"<div class='vr-metric-card {cls}'>"
-        f"<h2>{acc:.1f}%</h2><p>📊 Content Accuracy</p></div>"
+        f"<h2>{acc:.1f}%</h2><p>📊 Text Accuracy</p></div>"
     )
 
 
@@ -628,7 +500,7 @@ def _render_accuracy_expander(accuracy_report: dict | None):
     _chip_str = ", ".join(_chips) if _chips else f"{n_diffs} difference{'s' if n_diffs != 1 else ''}"
 
     label = (
-        f"📊 Content Accuracy Report — {acc:.1f}% "
+        f"📊 Text Accuracy Report — {acc:.1f}% "
         f"({_chip_str}"
         f"{f', {n_repos} repositioned' if n_repos else ''})"
     )
@@ -919,9 +791,6 @@ def render_inline_validation_review(
         st.session_state.vri_current_page = sel_item_page
         st.session_state["vri_last_sel"] = selected_id
 
-    # ── Build annotations ───────────────────────────────────────────
-    page_anns = _build_page_annotations(checklist, json_rep, fixed_ids, ignored_ids)
-
     # ══════════════════════════════════════════════════════════════
     # ERROR NAVIGATION BAR
     # ══════════════════════════════════════════════════════════════
@@ -929,15 +798,15 @@ def render_inline_validation_review(
     err_pos, err_total = _get_error_position(error_ids, selected_id)
 
     if error_ids:
-        nav_c1, nav_c2, nav_c3, nav_c4, nav_c5 = st.columns([2, 1, 3, 1, 2])
-        with nav_c2:
+        nav_c1, nav_c2, nav_c3 = st.columns([1, 3, 1])
+        with nav_c1:
             if st.button("◀ Prev Error", key="vri_prev_err", use_container_width=True):
                 if err_pos > 1:
                     st.session_state.vri_selected_item = error_ids[err_pos - 2]
                 else:
                     st.session_state.vri_selected_item = error_ids[-1]
                 st.rerun()
-        with nav_c3:
+        with nav_c2:
             if err_pos > 0:
                 st.markdown(f"""
                 <div class="vr-error-nav-bar">
@@ -952,7 +821,7 @@ def render_inline_validation_review(
                     <span class="nav-page">Page {sel_item_page}  •  {err_total} errors remaining</span>
                 </div>
                 """, unsafe_allow_html=True)
-        with nav_c4:
+        with nav_c3:
             if st.button("Next Error ▶", key="vri_next_err", use_container_width=True):
                 if err_pos > 0 and err_pos < err_total:
                     st.session_state.vri_selected_item = error_ids[err_pos]
@@ -975,78 +844,125 @@ def render_inline_validation_review(
     # TWO-COLUMN LAYOUT: PDF Page | Claude Text
     # ══════════════════════════════════════════════════════════════
     st.markdown("---")
-    col_left, col_right = st.columns([1, 1], gap="medium")
 
-    # ──────── LEFT: PDF Page with Yellow Highlights ─────────────
-    with col_left:
-        st.markdown("#### 📄 PDF Page — Yellow = Errors to Review")
+    with st.container(key="vri_twocol"):
+        col_left, col_right = st.columns([1, 1], gap="medium")
 
-        if total_pages > 0:
-            cur = st.session_state.vri_current_page
-            cur = max(1, min(cur, total_pages))
+        # ──────── LEFT: PDF Page (reference) ────────────────────────
+        with col_left:
+            st.markdown(
+                '<p style="font-size:0.92rem;font-weight:700;margin:0 0 6px;">'
+                '📄 PDF Page — Original Reference</p>',
+                unsafe_allow_html=True,
+            )
 
-            nc1, nc2, nc3 = st.columns([1, 6, 1])
-            with nc1:
-                if st.button("◀", key="vri_pg_prev"):
-                    st.session_state.vri_current_page = max(1, cur - 1)
-                    st.rerun()
-            with nc3:
-                if st.button("▶", key="vri_pg_next"):
-                    st.session_state.vri_current_page = min(total_pages, cur + 1)
-                    st.rerun()
-            with nc2:
-                new_pg = st.slider(
-                    "Page", 1, total_pages, cur,
-                    key="vri_pg_slider", label_visibility="collapsed",
-                )
-                if new_pg != cur:
-                    st.session_state.vri_current_page = new_pg
+            if total_pages > 0:
+                cur = st.session_state.vri_current_page
+                cur = max(1, min(cur, total_pages))
 
-            cur = st.session_state.vri_current_page
-            st.caption(f"📄 Page **{cur}** / {total_pages}")
+                if total_pages > 1:
+                    nc1, nc2, nc3, nc4 = st.columns([1, 5, 1, 3])
+                    with nc1:
+                        if st.button("◀", key="vri_pg_prev"):
+                            st.session_state.vri_current_page = max(1, cur - 1)
+                            st.rerun()
+                    with nc3:
+                        if st.button("▶", key="vri_pg_next"):
+                            st.session_state.vri_current_page = min(total_pages, cur + 1)
+                            st.rerun()
+                    with nc2:
+                        new_pg = st.slider(
+                            "Page", 1, total_pages, cur,
+                            key="vri_pg_slider", label_visibility="collapsed",
+                        )
+                        if new_pg != cur:
+                            st.session_state.vri_current_page = new_pg
+                    with nc4:
+                        st.markdown(
+                            f'<p style="font-size:0.82rem;color:#64748b;margin:8px 0 0;text-align:right;">'
+                            f'Page <b>{cur}</b> / {total_pages}</p>',
+                            unsafe_allow_html=True,
+                        )
+                else:
+                    st.markdown(
+                        '<p style="font-size:0.82rem;color:#64748b;margin:4px 0;">Page <b>1</b> / 1</p>',
+                        unsafe_allow_html=True,
+                    )
 
-            img_idx = cur - 1
-            if 0 <= img_idx < len(page_images):
-                anns = page_anns.get(cur, [])
-                annotated = _annotate_page_image(page_images[img_idx], anns, selected_id)
-                st.image(annotated, use_container_width=True)
+                cur = st.session_state.vri_current_page
+                img_idx = cur - 1
+                if 0 <= img_idx < len(page_images):
+                    st.image(str(page_images[img_idx]), use_container_width=True)
 
-            # Page summary
-            on_page = [r for r in checklist if _safe_int(r.get("Page", 0)) == cur]
-            if on_page:
-                e = sum(1 for r in on_page
-                        if str(r.get("Verdict", "")).startswith("❌")
-                        and int(r.get("#", 0)) not in fixed_ids)
-                w = sum(1 for r in on_page if str(r.get("Verdict", "")).startswith("⚠"))
-                st.caption(f"This page: {len(on_page)} items  •  ❌ {e} errors  •  ⚠️ {w} warnings")
+                # Page summary
+                on_page = [r for r in checklist if _safe_int(r.get("Page", 0)) == cur]
+                if on_page:
+                    e = sum(1 for r in on_page
+                            if str(r.get("Verdict", "")).startswith("❌")
+                            and int(r.get("#", 0)) not in fixed_ids)
+                    w = sum(1 for r in on_page if str(r.get("Verdict", "")).startswith("⚠"))
+                    st.caption(f"This page: {len(on_page)} items  •  ❌ {e} errors  •  ⚠️ {w} warnings")
 
-        else:
-            st.info("No highlighted page images found.")
+            else:
+                st.info("No highlighted page images found.")
 
-    # ──────── RIGHT: Converted Text ─────────────────────────────
-    with col_right:
-        st.markdown("#### 📝 Claude Converted Text")
-        html = _render_text_html(text, checklist, selected_id, filter_mode, fixed_ids | ignored_ids)
-        st.markdown(f'<div class="vr-text-viewer">{html}</div>', unsafe_allow_html=True)
+        # ──────── RIGHT: Converted Text ─────────────────────────────
+        with col_right:
+            st.markdown(
+                '<p style="font-size:0.92rem;font-weight:700;margin:0 0 6px;">📝 Claude Converted Text</p>',
+                unsafe_allow_html=True,
+            )
+            html = _render_text_html(text, checklist, selected_id, filter_mode, fixed_ids | ignored_ids)
+            st.markdown(
+                f'<div class="vr-text-viewer">{html}</div>',
+                unsafe_allow_html=True,
+            )
 
-        # Download converted text file
-        if converted_txt_path.exists():
-            try:
-                _dl_bytes = converted_txt_path.read_bytes()
-                _dl_name = converted_txt_path.name
-                _dl_b64 = base64.b64encode(_dl_bytes).decode()
-                _dl_size = len(_dl_bytes)
-                _dl_label = f"{_dl_size / 1024:.1f} KB" if _dl_size < 1024 * 1024 else f"{_dl_size / (1024*1024):.1f} MB"
-                st.markdown(
-                    f'<a href="data:text/plain;base64,{_dl_b64}" download="{_dl_name}" '
-                    f'style="display:inline-block; margin-top:8px; font-size:0.84rem; '
-                    f'color:#1e40af; text-decoration:none; background:#eff6ff; '
-                    f'padding:6px 14px; border-radius:6px; border:1px solid #bfdbfe;">'
-                    f'📥 Download converted text ({_dl_label})</a>',
-                    unsafe_allow_html=True,
-                )
-            except Exception:
-                pass
+    # JS: sync text-viewer height to the PDF image height (runs client-side)
+    # st.components.v1.html() creates an iframe that CAN execute JS;
+    # we reach into window.parent.document to find the actual elements.
+    components.html("""
+    <script>
+    (function syncHeight() {
+        const doc = window.parent.document;
+        const container = doc.querySelector('.st-key-vri_twocol');
+        if (!container) return;
+        const img = container.querySelector('img');
+        const viewer = container.querySelector('.vr-text-viewer');
+        if (!img || !viewer) return;
+        function adjust() {
+            const h = img.clientHeight;
+            if (h > 100) { viewer.style.maxHeight = h + 'px'; }
+        }
+        if (img.complete && img.clientHeight > 0) {
+            adjust();
+        } else {
+            img.addEventListener('load', adjust);
+        }
+        new ResizeObserver(adjust).observe(img);
+    })();
+    </script>
+    """, height=0)
+
+    # ── Download button — centered below both columns ──────────────
+    if converted_txt_path.exists():
+        try:
+            _dl_bytes = converted_txt_path.read_bytes()
+            _dl_name = converted_txt_path.name
+            _dl_b64 = base64.b64encode(_dl_bytes).decode()
+            _dl_size = len(_dl_bytes)
+            _dl_label = f"{_dl_size / 1024:.1f} KB" if _dl_size < 1024 * 1024 else f"{_dl_size / (1024*1024):.1f} MB"
+            st.markdown(
+                f'<div style="text-align:center; margin:12px 0 4px;">'
+                f'<a href="data:text/plain;base64,{_dl_b64}" download="{_dl_name}" '
+                f'style="display:inline-block; font-size:0.84rem; '
+                f'color:#1e40af; text-decoration:none; background:#eff6ff; '
+                f'padding:8px 20px; border-radius:8px; border:1px solid #bfdbfe;">'
+                f'📥 Download converted text ({_dl_label})</a></div>',
+                unsafe_allow_html=True,
+            )
+        except Exception:
+            pass
 
     # ══════════════════════════════════════════════════════════════
     # ITEM DETAIL + INLINE FIX
@@ -1145,6 +1061,10 @@ def render_inline_validation_review(
                                 st.rerun()
                             elif new_text == original_context:
                                 st.warning("No changes made.")
+                        if st.button("🔇 Ignore", key=f"vri_ignore_nochange_{cid}",
+                                     help="Mark this item as a false positive — no edit needed"):
+                            _mark_ignored(cid)
+                            st.rerun()
                     else:
                         affected_preview = _find_affected_items(
                             checklist, fixed_ids,
@@ -1287,8 +1207,6 @@ def render_inline_validation_review(
         nc = st.columns([2, 1, 1, 1, 2])
 
         id_opts = [int(r.get("#", 0)) for r in display_cl]
-        if "vri_jump_to" in st.session_state and selected_id in id_opts:
-            st.session_state["vri_jump_to"] = selected_id
 
         with nc[1]:
             if st.button("⬆️ Prev Item", key="vri_prev_item_btn"):

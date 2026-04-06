@@ -96,6 +96,14 @@ def phrase_exists_in(phrase_words, all_words):
             return True
     return False
 
+# ─── Underscore / separator helper ──────────────────────────────────
+def _is_underscore_fill(words: list[str]) -> bool:
+    """Return True if every word consists solely of underscores.
+
+    Catches separator lines like '___________________________________'
+    that may differ in length between files.
+    """
+    return bool(words) and all(w.strip() and set(w) <= {'_'} for w in words)
 
 # ─── Punctuation / transposition helpers ────────────────────────────
 _PUNCT_CHARS = set('.,;:!?\'\"()[]{}\u2014\u2013-\u2026/\\@#$%^&*+=<>~`')
@@ -293,8 +301,10 @@ def compare_texts(pymupdf_clean_text: str, converted_text: str) -> dict:
         real_diff_count       – int
         repositioned_count    – int
     """
-    pymupdf_words = extract_words(pymupdf_clean_text)
-    converted_words = extract_words(converted_text)
+    pymupdf_words = [w for w in extract_words(pymupdf_clean_text)
+                      if not _is_underscore_fill([w])]
+    converted_words = [w for w in extract_words(converted_text)
+                       if not _is_underscore_fill([w])]
 
     matcher = difflib.SequenceMatcher(None, pymupdf_words, converted_words)
     matching_words = sum(

@@ -30,7 +30,11 @@ try:
 except ImportError:
     PDFToDocxAnalysisPipeline = None
     logging.warning("⚠️ pdf_docx_analysis_pipeline module not found — DOCX analysis disabled")
-from session_manager import get_session_manager
+try:
+    from session_manager import get_session_manager
+except ImportError:
+    get_session_manager = None
+    logging.critical("❌ session_manager module not found — app cannot function")
 try:
     from pdf_plumber_extractor import extract_pdf_with_pdfplumber
 except ImportError:
@@ -61,10 +65,32 @@ except ImportError:
     compare_texts = None
     logging.warning("⚠️ compare_files module not found — content accuracy check disabled")
 try:
+    from protected_clauses import strip_protected_tags
+except ImportError:
+    strip_protected_tags = None
+    logging.warning("⚠️ protected_clauses module not found — protected clause stripping disabled")
+try:
     from pdf_type_detector import detect_pdf_type
 except ImportError:
     detect_pdf_type = None
     logging.warning("⚠️ pdf_type_detector module not found — scanned PDF detection disabled")
+
+# Full state name lookup for display
+US_STATE_NAMES = {
+    "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas",
+    "CA": "California", "CO": "Colorado", "CT": "Connecticut", "DE": "Delaware",
+    "DC": "District of Columbia", "FL": "Florida", "GA": "Georgia", "HI": "Hawaii",
+    "ID": "Idaho", "IL": "Illinois", "IN": "Indiana", "IA": "Iowa",
+    "KS": "Kansas", "KY": "Kentucky", "LA": "Louisiana", "ME": "Maine",
+    "MD": "Maryland", "MA": "Massachusetts", "MI": "Michigan", "MN": "Minnesota",
+    "MS": "Mississippi", "MO": "Missouri", "MT": "Montana", "NE": "Nebraska",
+    "NV": "Nevada", "NH": "New Hampshire", "NJ": "New Jersey", "NM": "New Mexico",
+    "NY": "New York", "NC": "North Carolina", "ND": "North Dakota", "OH": "Ohio",
+    "OK": "Oklahoma", "OR": "Oregon", "PA": "Pennsylvania", "RI": "Rhode Island",
+    "SC": "South Carolina", "SD": "South Dakota", "TN": "Tennessee", "TX": "Texas",
+    "UT": "Utah", "VT": "Vermont", "VA": "Virginia", "WA": "Washington",
+    "WV": "West Virginia", "WI": "Wisconsin", "WY": "Wyoming",
+}
 
 # Configure Streamlit page
 st.set_page_config(
@@ -119,24 +145,6 @@ try:
         st.session_state.audit_json_report = None
     if 'content_accuracy_report' not in st.session_state:
         st.session_state.content_accuracy_report = None
-    
-    # Batch processing state
-    if 'batch_mode' not in st.session_state:
-        st.session_state.batch_mode = False
-    if 'batch_queue' not in st.session_state:
-        st.session_state.batch_queue = []
-    if 'batch_processing' not in st.session_state:
-        st.session_state.batch_processing = False
-    if 'batch_current_file' not in st.session_state:
-        st.session_state.batch_current_file = None
-    if 'batch_results' not in st.session_state:
-        st.session_state.batch_results = []
-    if 'batch_progress' not in st.session_state:
-        st.session_state.batch_progress = 0
-    if 'batch_paused' not in st.session_state:
-        st.session_state.batch_paused = False
-    if 'uploaded_files' not in st.session_state:
-        st.session_state.uploaded_files = []
     if 'last_uploaded_file_id' not in st.session_state:
         st.session_state.last_uploaded_file_id = None
 
@@ -211,134 +219,6 @@ def highlight_legislative_tags(content):
     )
     
     return f'<div style="font-family:Consolas,monospace; white-space:pre-wrap; line-height:1.6; background:#f8f9fa; padding:16px; border-radius:8px; border-left:4px solid #2196f3; max-height:400px; overflow-y:auto;">{content}</div>'
-
-# Batch processing functions
-def add_files_to_batch(uploaded_files, state_code, session_id):
-    """Add uploaded files to batch processing queue (skips scanned PDFs)"""
-    session_mgr = st.session_state.session_manager
-    added_count = 0
-    skipped_scanned = []
-
-    for uploaded_file in uploaded_files:
-        # Upload file using session manager
-        temp_path = session_mgr.upload_file(session_id, uploaded_file, state_code)
-
-        if temp_path:
-            # ── Scanned PDF gate ──────────────────────────────────
-            if detect_pdf_type is not None:
-                pdf_analysis = detect_pdf_type(temp_path)
-                if pdf_analysis and pdf_analysis['type'] == 'scanned':
-                    skipped_scanned.append(uploaded_file.name)
-                    logging.warning(f"Skipping scanned PDF in batch: {uploaded_file.name}")
-                    try:
-                        os.remove(temp_path)
-                    except Exception:
-                        pass
-                    continue
-            # ──────────────────────────────────────────────────────
-
-            batch_item = {
-                'original_name': uploaded_file.name,
-                'temp_path': temp_path,
-                'state_code': state_code,
-                'status': 'pending',
-                'result_path': None,
-                'error': None,
-                'processing_time': None,
-                'uploaded_at': datetime.now()
-            }
-            st.session_state.batch_queue.append(batch_item)
-            added_count += 1
-
-    # Report any skipped scanned PDFs to the user
-    if skipped_scanned:
-        st.warning(
-            f"🚫 **{len(skipped_scanned)} scanned PDF(s) skipped** — "
-            f"only digital PDFs can be processed:\n\n"
-            + "\n".join(f"- {name}" for name in skipped_scanned)
-        )
-
-    return added_count
-
-def process_batch_sequentially():
-    """Process all files in batch queue sequentially"""
-    if not st.session_state.batch_queue:
-        return
-    
-    st.session_state.batch_processing = True
-    st.session_state.batch_results = []
-    
-    total_files = len(st.session_state.batch_queue)
-    
-    for index, batch_item in enumerate(st.session_state.batch_queue):
-        if st.session_state.batch_paused:
-            break
-            
-        st.session_state.batch_current_file = batch_item['original_name']
-        st.session_state.batch_progress = index / total_files
-        
-        # Update status
-        batch_item['status'] = 'processing'
-        
-        try:
-            # Process the file
-            start_time = time.time()
-            
-            result = process_single_pdf_simple(
-                batch_item['temp_path'],
-                batch_item['state_code'],
-                st.session_state.session_id
-            )
-            
-            end_time = time.time()
-            processing_time = end_time - start_time
-            minutes = int(processing_time // 60)
-            seconds = int(processing_time % 60)
-            time_str = f"{minutes}m {seconds}s" if minutes > 0 else f"{seconds}s"
-            
-            if result:
-                batch_item['status'] = 'completed'
-                batch_item['result_path'] = result
-                batch_item['processing_time'] = time_str
-            else:
-                batch_item['status'] = 'failed'
-                batch_item['error'] = 'Processing failed'
-                
-        except Exception as e:
-            batch_item['status'] = 'failed'
-            batch_item['error'] = str(e)
-            logging.error(f"Batch processing error for {batch_item['original_name']}: {e}")
-        
-        # Add to results
-        st.session_state.batch_results.append(batch_item.copy())
-        
-        # Reset individual processing state
-        st.session_state.processing = False
-        st.session_state.current_step = 0
-        st.session_state.step_status = {}
-    
-    # Final progress update
-    st.session_state.batch_progress = 1.0
-    st.session_state.batch_processing = False
-    st.session_state.batch_current_file = None
-
-def reset_batch_processing():
-    """Reset all batch processing state"""
-    # Clean up temp files
-    for batch_item in st.session_state.batch_queue:
-        if batch_item['temp_path'] and os.path.exists(batch_item['temp_path']):
-            try:
-                os.remove(batch_item['temp_path'])
-            except:
-                pass
-    
-    st.session_state.batch_queue = []
-    st.session_state.batch_processing = False
-    st.session_state.batch_current_file = None
-    st.session_state.batch_results = []
-    st.session_state.batch_progress = 0
-    st.session_state.batch_paused = False
-    st.session_state.uploaded_files = []
 
 # Simple processing functions
 def process_single_pdf_simple(pdf_path, state_code, session_id, progress_placeholder=None, status_placeholder=None, log_placeholder=None):
@@ -1298,7 +1178,7 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
         # Store and display the detected state
         st.session_state.detected_state = detected_state
         if detected_state:
-            _state_name = opus.AVAILABLE_STATES.get(detected_state, detected_state)
+            _state_name = US_STATE_NAMES.get(detected_state, detected_state)
             add_log(f"✅ Detected state: {detected_state} — {_state_name}")
             if status_placeholder:
                 status_placeholder.success(f"🏛️ Detected State: **{detected_state} — {_state_name}**")
@@ -1394,6 +1274,11 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
         st.session_state.audit_json_report = None
         st.session_state.content_accuracy_report = None
 
+        # Reset validation review fixed/ignored state from any previous run
+        for _vri_key in ("vri_fixed_ids", "vri_ignored_ids", "vri_undo_history",
+                         "vri_selected_item", "vri_current_page", "vri_filter_mode"):
+            st.session_state.pop(_vri_key, None)
+
         try:
             from pymupdf_extractor import (
                 extract_pdf_json_report,
@@ -1466,6 +1351,14 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
                     anthropic_client=client,
                 )
                 pymupdf_clean_text = consolidate_adjacent_tags(pymupdf_clean_text)
+
+                # ── Post-process: strip tags from state-specific protected clauses ──
+                if strip_protected_tags and detected_state:
+                    _before_strip = pymupdf_clean_text
+                    pymupdf_clean_text = strip_protected_tags(pymupdf_clean_text, detected_state)
+                    if pymupdf_clean_text != _before_strip:
+                        add_log(f"🛡️ Stripped tags from protected clauses for state {detected_state}")
+
                 pymupdf_clean_path = output_path.replace(".txt", "_pymupdf_clean.txt") if isinstance(output_path, str) else str(output_path).replace(".txt", "_pymupdf_clean.txt")
                 with open(pymupdf_clean_path, "w", encoding="utf-8") as cf:
                     cf.write(pymupdf_clean_text)
@@ -1500,7 +1393,7 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
                 if _n_punct: _parts.append(f"{_n_punct} punctuation")
                 _brkdn = ", ".join(_parts) if _parts else f"{_diffs} diff(s)"
                 add_log(
-                    f"{_icon} Content accuracy: {_acc:.1f}% "
+                    f"{_icon} Text accuracy: {_acc:.1f}% "
                     f"({accuracy_report['matching_words']:,}/{max(accuracy_report['pymupdf_word_count'], accuracy_report['converted_word_count']):,} words — "
                     f"{_brkdn}, {_repos} repositioned)"
                 )
@@ -1596,8 +1489,249 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
 
 def show_simple_ui():
     """Simple UI for single file processing with session management"""
-    st.title("📄 Pending Legislative PDF to Text Processor")
-    st.markdown("*Convert legislative PDFs with AI-powered text extraction and verification*")
+    
+    # Determine if results are showing (need wider layout for validation review)
+    _has_results = (
+        st.session_state.get('processed_file_path') and
+        (st.session_state.get('processed_file_data') is not None
+         or (st.session_state.get('processed_file_path') and os.path.exists(st.session_state.processed_file_path)))
+    )
+    _max_width = '95%' if _has_results else '1200px'
+
+    # Dynamic container width (must be f-string for variable)
+    st.markdown(f"""
+    <style>
+        .block-container {{
+            padding-top: 2rem !important;
+            padding-bottom: 2rem !important;
+            max-width: {_max_width} !important;
+        }}
+    </style>
+    """, unsafe_allow_html=True)
+
+    # Professional CSS styling (static — no f-string needed)
+    st.markdown("""
+    <style>
+        /* Professional color scheme */
+        .stApp {
+            background-color: #F5F5F0;
+        }
+        
+        /* Header styling */
+        h1 {
+            color: #2C3E50 !important;
+            font-weight: 600 !important;
+            font-size: 2.5rem !important;
+            margin-bottom: 0.5rem !important;
+        }
+        
+        h2 {
+            color: #34495E !important;
+            font-weight: 500 !important;
+            font-size: 1.5rem !important;
+            margin-top: 2rem !important;
+            margin-bottom: 1rem !important;
+        }
+        
+        h3 {
+            color: #34495E !important;
+            font-weight: 500 !important;
+            font-size: 1.2rem !important;
+        }
+        
+        /* Card-style containers */
+        .stAlert, div[data-testid="stMetricValue"], div[data-testid="stExpander"] {
+            background-color: white !important;
+            border: 1px solid #E0E0E0 !important;
+            border-radius: 8px !important;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05) !important;
+        }
+        
+        /* Success/Info/Warning boxes */
+        .stAlert {
+            padding: 1rem !important;
+        }
+        
+        /* File uploader styling */
+        div[data-testid="stFileUploader"] {
+            background-color: white;
+            border: 2px dashed #BDC3C7;
+            border-radius: 8px;
+            padding: 2rem;
+        }
+        
+        /* Button styling */
+        .stButton > button {
+            background-color: #27AE60 !important;
+            color: white !important;
+            border: none !important;
+            border-radius: 6px !important;
+            padding: 0.6rem 1.5rem !important;
+            font-weight: 500 !important;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1) !important;
+            transition: all 0.3s ease !important;
+        }
+        
+        .stButton > button:hover {
+            background-color: #229954 !important;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.15) !important;
+        }
+        
+        /* Download button */
+        .stDownloadButton > button {
+            background-color: #3498DB !important;
+            color: white !important;
+            border-radius: 6px !important;
+            font-weight: 500 !important;
+        }
+        
+        .stDownloadButton > button:hover {
+            background-color: #2980B9 !important;
+        }
+        
+        /* Metrics styling */
+        div[data-testid="stMetricValue"] {
+            font-size: 1.8rem !important;
+            font-weight: 600 !important;
+            color: #2C3E50 !important;
+        }
+        
+        div[data-testid="stMetricLabel"] {
+            color: #7F8C8D !important;
+            font-size: 0.9rem !important;
+            font-weight: 500 !important;
+        }
+        
+        /* Progress bar styling */
+        .stProgress > div > div > div {
+            background-color: #27AE60 !important;
+        }
+        
+        /* Sidebar styling */
+        section[data-testid="stSidebar"] {
+            background-color: #2C3E50 !important;
+        }
+        
+        section[data-testid="stSidebar"] h2,
+        section[data-testid="stSidebar"] h3,
+        section[data-testid="stSidebar"] p,
+        section[data-testid="stSidebar"] span,
+        section[data-testid="stSidebar"] div[class*="stText"] {
+            color: #ECF0F1 !important;
+        }
+        
+        /* Sidebar button styling */
+        section[data-testid="stSidebar"] .stButton button {
+            background-color: #229954 !important;
+            color: white !important;
+            border: none !important;
+            border-radius: 6px !important;
+            padding: 0.6rem 1.5rem !important;
+            font-weight: 500 !important;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1) !important;
+        }
+        
+        section[data-testid="stSidebar"] .stButton button:hover {
+            background-color: #1E8449 !important;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.15) !important;
+        }
+        
+        /* Text area styling */
+        .stTextArea textarea {
+            background-color: white !important;
+            border: 1px solid #E0E0E0 !important;
+            border-radius: 6px !important;
+        }
+        
+        /* Expander styling */
+        div[data-testid="stExpander"] {
+            background-color: white !important;
+            border: 1px solid #E0E0E0 !important;
+        }
+        
+        /* Radio buttons */
+        div[role="radiogroup"] {
+            background-color: white;
+            padding: 0.5rem;
+            border-radius: 6px;
+            border: 1px solid #E0E0E0;
+        }
+        
+        /* Subtle subtitle */
+        .subtitle {
+            color: #7F8C8D;
+            font-size: 1.1rem;
+            margin-bottom: 2rem;
+        }
+        
+        /* Card wrapper */
+        .card {
+            background-color: white;
+            padding: 1.5rem;
+            border-radius: 8px;
+            border: 1px solid #E0E0E0;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            margin-bottom: 1rem;
+        }
+        
+        /* Metrics card styling */
+        .metrics-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 2rem;
+            border-radius: 12px;
+            color: white;
+            margin-bottom: 2rem;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+        
+        .metric-box {
+            background-color: rgba(255, 255, 255, 0.95);
+            padding: 1.2rem;
+            border-radius: 8px;
+            text-align: center;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        
+        .metric-value {
+            font-size: 2rem;
+            font-weight: 700;
+            color: #2C3E50;
+            margin: 0.5rem 0;
+        }
+        
+        .metric-label {
+            font-size: 0.85rem;
+            color: #7F8C8D;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        /* Tab styling */
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 8px;
+            background-color: #f8fafc;
+            padding: 6px 8px;
+            border-radius: 10px;
+            border: 1px solid #e2e8f0;
+        }
+        .stTabs [data-baseweb="tab"] {
+            border-radius: 8px;
+            padding: 8px 20px;
+            font-weight: 600;
+            font-size: 0.9rem;
+        }
+        .stTabs [aria-selected="true"] {
+            background-color: #ffffff !important;
+            box-shadow: 0 1px 4px rgba(0,0,0,.08);
+            border-radius: 8px;
+        }
+        }}
+    </style>
+    """, unsafe_allow_html=True)
+    
+    st.markdown('<h1 style="text-align: center;">📄 Pending Legislative Processor</h1>', unsafe_allow_html=True)
+    st.markdown('<p class="subtitle" style="text-align: center;">AI-powered text extraction and verification for legislative documents</p>', unsafe_allow_html=True)
     
     # Session info sidebar
     with st.sidebar:
@@ -1642,167 +1776,186 @@ def show_simple_ui():
             st.session_state.conversion_time = None
             st.session_state.chunk_stats = None
             st.session_state.last_uploaded_file_id = None  # Reset upload tracking
+            st.session_state.processed_file_data = None  # Clear cached bytes (multi-pod safety)
+            st.session_state.processing_logs = []  # Clear activity logs
+            st.session_state.step_timings = {}  # Clear step timings
+            st.session_state.total_elapsed_secs = 0
+            st.session_state.conversion_elapsed_secs = 0
             st.session_state.audit_excel_path = None  # Reset audit data
             st.session_state.audit_highlighted_dir = None
             st.session_state.audit_json_report = None
             st.session_state.content_accuracy_report = None
             
-            # Reset batch processing state
-            st.session_state.batch_mode = False
-            st.session_state.batch_queue = []
-            st.session_state.batch_processing = False
-            st.session_state.batch_current_file = None
-            st.session_state.batch_results = []
-            st.session_state.batch_progress = 0
-            st.session_state.batch_paused = False
-            st.session_state.uploaded_files = []
-            
+            # Reset validation review state (fixed/ignored/undo/selection)
+            st.session_state.pop("vri_fixed_ids", None)
+            st.session_state.pop("vri_ignored_ids", None)
+            st.session_state.pop("vri_undo_history", None)
+            st.session_state.pop("vri_selected_item", None)
+            st.session_state.pop("vri_current_page", None)
+            st.session_state.pop("vri_filter_mode", None)
+
             st.success(f"✅ New session created: {new_session_id[:8]}...")
             st.rerun()
 
-        # Batch mode toggle — tucked in sidebar
-        st.markdown("---")
-        batch_mode = st.toggle("📦 Batch Mode", value=st.session_state.batch_mode, help="Process multiple files at once")
-        if batch_mode != st.session_state.batch_mode:
-            st.session_state.batch_mode = batch_mode
-            st.rerun()
-
-    # File upload — first thing the user sees after the title
-    st.header("📁 Upload PDF File(s)")
-
-    # File uploader - multiple files in batch mode
-    uploaded_file = st.file_uploader(
-        "Choose PDF file(s) to process",
-        type=['pdf'],
-        accept_multiple_files=st.session_state.batch_mode,
-        key="pdf_uploader",
-        help="Upload one or more PDF files"
-    )
+    # File upload section — collapse to compact bar when results are showing
+    if _has_results and st.session_state.get('temp_pdf_path'):
+        # Compact file info bar — shows current file, state, status
+        _fname = st.session_state.get('last_uploaded_file_id', '').rsplit('_', 1)[0] or Path(st.session_state.temp_pdf_path).name
+        _state_code = st.session_state.get('detected_state', '')
+        _state_name = US_STATE_NAMES.get(_state_code, '') if _state_code else ''
+        _state_badge = (
+            f'<span style="background:#e0e7ff; color:#3730a3; padding:2px 10px; '
+            f'border-radius:12px; font-size:0.78rem; font-weight:600; margin-left:8px;">'
+            f'🏛️ {_state_code} — {_state_name}</span>'
+        ) if _state_code else ''
+        st.markdown(
+            f'<div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; '
+            f'padding:12px 20px; display:flex; align-items:center; gap:12px; margin-bottom:8px; '
+            f'box-shadow:0 1px 4px rgba(0,0,0,.04);">'
+            f'<span style="font-size:1.2rem;">📄</span>'
+            f'<span style="font-weight:600; color:#1e293b;">{_fname}</span>'
+            f'{_state_badge}'
+            f'<span style="margin-left:auto; color:#16a34a; font-weight:600; font-size:0.85rem;">✅ Processed</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        # File uploader — always visible, no collapsible wrapper
+        st.markdown(
+            '<p style="font-size:0.88rem; font-weight:600; color:#475569; margin:12px 0 4px;">'
+            '📁 Upload a different file</p>',
+            unsafe_allow_html=True,
+        )
+        uploaded_file = st.file_uploader(
+            "Choose a PDF file to process",
+            type=['pdf'],
+            accept_multiple_files=False,
+            key="pdf_uploader",
+            help="Upload a PDF file",
+            label_visibility="collapsed",
+        )
+    else:
+        # Full upload section — before processing
+        st.header("📁 Upload PDF File")
+        uploaded_file = st.file_uploader(
+            "Choose a PDF file to process",
+            type=['pdf'],
+            accept_multiple_files=False,
+            key="pdf_uploader",
+            help="Upload a PDF file"
+        )
     
     if uploaded_file is not None:
-        # Batch mode - handle multiple files
-        if st.session_state.batch_mode:
-            if isinstance(uploaded_file, list) and len(uploaded_file) > 0:
-                col1, col2 = st.columns([3, 1])
-                with col1:
-                    st.success(f"✅ {len(uploaded_file)} file(s) selected")
-                with col2:
-                    if st.button("➕ Add to Queue", type="primary", use_container_width=True):
-                        with st.spinner("Adding files to batch queue..."):
-                            added = add_files_to_batch(
-                                uploaded_file,
-                                "AUTO",
-                                st.session_state.session_id
-                            )
-                        if added > 0:
-                            st.success(f"✅ Added {added} file(s) to batch queue")
-                        st.rerun()
-                
-                # Show batch processing interface
-                show_batch_processing_interface()
-            else:
-                st.info("👆 Please select files to add to batch queue")
+        # Check file size (500 MB limit)
+        MAX_FILE_SIZE = 500 * 1024 * 1024  # 500 MB in bytes
+            
+        if uploaded_file.size > MAX_FILE_SIZE:
+            st.error(f"❌ **File too large!** ({format_file_size(uploaded_file.size)})")
+            st.error(f"Maximum allowed size is {format_file_size(MAX_FILE_SIZE)}")
+            st.stop()
         
-        # Single file mode - handle one file
-        else:
-            # Check file size (500 MB limit)
-            MAX_FILE_SIZE = 500 * 1024 * 1024  # 500 MB in bytes
-            
-            if uploaded_file.size > MAX_FILE_SIZE:
-                st.error(f"❌ **File too large!** ({format_file_size(uploaded_file.size)})")
-                st.error(f"Maximum allowed size is {format_file_size(MAX_FILE_SIZE)}")
-                st.stop()
-            
-            # Check if this is a new file (prevent re-uploading on every render)
-            current_file_id = f"{uploaded_file.name}_{uploaded_file.size}"
-            
-            if 'last_uploaded_file_id' not in st.session_state:
-                st.session_state.last_uploaded_file_id = None
-            
-            if st.session_state.last_uploaded_file_id != current_file_id:
-                try:
-                    # Clear all previous run state so the new file starts fresh
-                    st.session_state.processed_file_path = None
-                    st.session_state.processed_file_data = None
-                    st.session_state.processing = False
-                    st.session_state.current_step = 0
-                    st.session_state.step_status = {}
-                    st.session_state.processing_time = None
-                    st.session_state.conversion_time = None
-                    st.session_state.chunk_stats = None
-                    st.session_state.detected_state = None
-                    st.session_state.audit_excel_path = None
-                    st.session_state.audit_highlighted_dir = None
-                    st.session_state.audit_json_report = None
+        # Check if this is a new file (prevent re-uploading on every render)
+        current_file_id = f"{uploaded_file.name}_{uploaded_file.size}"
 
-                    # Upload file using session manager
-                    session_mgr = st.session_state.session_manager
-                    
-                    with st.spinner(f"Uploading {uploaded_file.name}..."):
-                        temp_path = session_mgr.upload_file(
-                            st.session_state.session_id,
-                            uploaded_file,
-                            "AUTO"
-                        )
-                    
-                    if temp_path:
-                        # ── Scanned PDF gate ──────────────────────────────────
-                        if detect_pdf_type is not None:
-                            with st.spinner("🔍 Analyzing PDF type (scanned vs digital)..."):
-                                pdf_analysis = detect_pdf_type(temp_path)
-                            if pdf_analysis and pdf_analysis['type'] == 'scanned':
-                                st.error(
-                                    f"🚫 **Scanned PDF Detected — Cannot Process**\n\n"
-                                    f"The uploaded file **{uploaded_file.name}** appears to be a "
-                                    f"**scanned (image-based) PDF**.\n\n"
-                                    f"- **Pages:** {pdf_analysis['total_pages']}\n"
-                                    f"- **Image pages:** {pdf_analysis['image_pages']} "
-                                    f"({pdf_analysis['image_ratio']}%)\n"
-                                    f"- **Avg characters/page:** {pdf_analysis['average_chars_per_page']}\n\n"
-                                    f"This application only supports **digital (text-based) PDFs**. "
-                                    f"Please upload a digital PDF or run OCR on this file first."
-                                )
-                                # Clean up the temp file
-                                try:
-                                    os.remove(temp_path)
-                                except Exception:
-                                    pass
-                                st.session_state.temp_pdf_path = None
-                                st.session_state.last_uploaded_file_id = None
-                                st.stop()
-                        # ──────────────────────────────────────────────────────
-                        st.session_state.temp_pdf_path = temp_path
-                        st.session_state.last_uploaded_file_id = current_file_id
-                        st.success(f"✅ Uploaded: {uploaded_file.name} ({format_file_size(uploaded_file.size)})")
-                    else:
-                        st.error("❌ Failed to upload file - check logs for details")
-                except Exception as e:
-                    st.error(f"❌ **File Upload Failed**")
-                    st.error(f"Error: {str(e)}")
-                    import traceback
-                    with st.expander("Error Details"):
-                        st.code(traceback.format_exc())
-            else:
-                # File already uploaded
-                if st.session_state.temp_pdf_path:
-                    st.success(f"✅ File ready: {uploaded_file.name} ({format_file_size(uploaded_file.size)})")
-            
-            # Call the single file processing function (has both buttons)
-            # Show page count hint if PDF is large
+        if 'last_uploaded_file_id' not in st.session_state:
+            st.session_state.last_uploaded_file_id = None
+
+        if st.session_state.last_uploaded_file_id != current_file_id:
+            try:
+                # Clear all previous run state so the new file starts fresh
+                st.session_state.processed_file_path = None
+                st.session_state.processed_file_data = None
+                st.session_state.processing = False
+                st.session_state.current_step = 0
+                st.session_state.step_status = {}
+                st.session_state.processing_time = None
+                st.session_state.conversion_time = None
+                st.session_state.chunk_stats = None
+                st.session_state.detected_state = None
+                st.session_state.audit_excel_path = None
+                st.session_state.audit_highlighted_dir = None
+                st.session_state.audit_json_report = None
+                st.session_state.content_accuracy_report = None
+
+                # Reset validation review state (fixed/ignored from previous file)
+                st.session_state.pop("vri_fixed_ids", None)
+                st.session_state.pop("vri_ignored_ids", None)
+                st.session_state.pop("vri_undo_history", None)
+                st.session_state.pop("vri_selected_item", None)
+                st.session_state.pop("vri_current_page", None)
+                st.session_state.pop("vri_filter_mode", None)
+
+                # Upload file using session manager
+                session_mgr = st.session_state.session_manager
+
+                with st.spinner(f"Uploading {uploaded_file.name}..."):
+                    temp_path = session_mgr.upload_file(
+                        st.session_state.session_id,
+                        uploaded_file,
+                        "AUTO"
+                    )
+
+                if temp_path:
+                    # ── Scanned PDF gate ──────────────────────────────────
+                    if detect_pdf_type is not None:
+                        with st.spinner("🔍 Analyzing PDF type (scanned vs digital)..."):
+                            pdf_analysis = detect_pdf_type(temp_path)
+                        if pdf_analysis and pdf_analysis['type'] == 'scanned':
+                            st.error(
+                                f"🚫 **Scanned PDF Detected — Cannot Process**\n\n"
+                                f"The uploaded file **{uploaded_file.name}** appears to be a "
+                                f"**scanned (image-based) PDF**.\n\n"
+                                f"- **Pages:** {pdf_analysis['total_pages']}\n"
+                                f"- **Image pages:** {pdf_analysis['image_pages']} "
+                                f"({pdf_analysis['image_ratio']}%)\n"
+                                f"- **Avg characters/page:** {pdf_analysis['average_chars_per_page']}\n\n"
+                                f"This application only supports **digital (text-based) PDFs**. "
+                                f"Please upload a digital PDF or run OCR on this file first."
+                            )
+                            # Clean up the temp file
+                            try:
+                                os.remove(temp_path)
+                            except Exception:
+                                pass
+                            st.session_state.temp_pdf_path = None
+                            st.session_state.last_uploaded_file_id = None
+                            st.stop()
+                    # ──────────────────────────────────────────────────────
+                    st.session_state.temp_pdf_path = temp_path
+                    st.session_state.last_uploaded_file_id = current_file_id
+                    st.success(f"✅ Uploaded: {uploaded_file.name} ({format_file_size(uploaded_file.size)})")
+                else:
+                    st.error("❌ Failed to upload file - check logs for details")
+            except Exception as e:
+                st.error(f"❌ **File Upload Failed**")
+                st.error(f"Error: {str(e)}")
+                import traceback
+                with st.expander("Error Details"):
+                    st.code(traceback.format_exc())
+        else:
+            # File already uploaded
             if st.session_state.temp_pdf_path:
-                try:
-                    import pypdfium2 as pdfium
-                    _pdf = pdfium.PdfDocument(st.session_state.temp_pdf_path)
-                    _page_count = len(_pdf)
-                    _pdf.close()
-                    if _page_count > 15:
-                        st.warning(
-                            f"⏱️ **Large document detected ({_page_count} pages).** "
-                            f"Processing will take a while as each page is visually analyzed by Claude Opus. "
-                            f"Please keep this tab open and do not close the browser."
-                        )
-                except Exception:
-                    pass  # Don't block processing if page count fails
+                st.success(f"✅ File ready: {uploaded_file.name} ({format_file_size(uploaded_file.size)})")
+
+        # Call the single file processing function (has both buttons)
+        # Block processing if PDF exceeds 15 pages
+        _page_limit_exceeded = False
+        if st.session_state.temp_pdf_path:
+            try:
+                import pypdfium2 as pdfium
+                _pdf = pdfium.PdfDocument(st.session_state.temp_pdf_path)
+                _page_count = len(_pdf)
+                _pdf.close()
+                if _page_count > 15:
+                    _page_limit_exceeded = True
+                    st.error(
+                        f"🚫 **Document too large ({_page_count} pages).** "
+                        f"The maximum supported page count is **15 pages**. "
+                        f"Please upload a shorter document."
+                    )
+            except Exception:
+                pass  # Don't block processing if page count check fails
+
+        if not _page_limit_exceeded:
             show_single_file_processing()
     else:
         st.info("👆 Please upload a PDF file to begin processing")
@@ -1983,8 +2136,7 @@ def show_processing_steps():
     # Show detected state pill (compact) as soon as it's known
     if is_opus and st.session_state.get('detected_state'):
         _ds = st.session_state.detected_state
-        _dsval = AVAILABLE_STATES.get(_ds, _ds)
-        _dsname = _dsval.get('name', _ds) if isinstance(_dsval, dict) else _dsval
+        _dsname = US_STATE_NAMES.get(_ds, _ds)
         st.markdown(
             f'<div style="display:inline-block; background:#dcfce7; color:#166534; '
             f'padding:4px 14px; border-radius:20px; font-size:0.85rem; font-weight:600; margin-bottom:10px;">'
@@ -2063,7 +2215,7 @@ def show_processing_steps():
         st.markdown(_build_pipeline_tracker_html(conversion_steps, validation_steps), unsafe_allow_html=True)
 
 def show_results_section():
-    """Show results: compact summary bar + validation review"""
+    """Show results in a clean tabbed layout: Summary, Validation Review, Activity Log"""
     file_name = Path(st.session_state.processed_file_path).name
 
     # File size (prefer cached bytes for multi-pod safety)
@@ -2076,117 +2228,180 @@ def show_results_section():
         except Exception:
             file_size = 0
 
-    # ── Conversion Complete — styled summary card ──────────────────────────────
-    _state_label = ""
-    if st.session_state.get('detected_state'):
-        _s = st.session_state.detected_state
-        _sval = AVAILABLE_STATES.get(_s, _s)
-        _sname = _sval.get('name', _s) if isinstance(_sval, dict) else _sval
-        _state_label = f"{_s} — {_sname}"
-
-    _conv_time = st.session_state.get('conversion_time') or "—"
-    _total_time = st.session_state.processing_time or "—"
-    _size_label = format_file_size(file_size)
     _has_audit = bool(st.session_state.get('audit_excel_path'))
 
-    # Compute validation-only time from raw seconds
-    _val_time = "—"
-    _total_secs = st.session_state.get('total_elapsed_secs', 0)
-    _conv_secs = st.session_state.get('conversion_elapsed_secs', 0)
-    if _total_secs and _conv_secs and _has_audit:
-        _val_secs = max(0, _total_secs - _conv_secs)
-        _vm, _vs = int(_val_secs // 60), int(_val_secs % 60)
-        _val_time = f"{_vm}m {_vs}s" if _vm > 0 else f"{_vs}s"
-
-    # Build state pill
-    _state_pill = (
-        f'<span style="background:#e0e7ff; color:#3730a3; padding:3px 12px; '
-        f'border-radius:16px; font-size:0.82rem; font-weight:600;">'
-        f'🏛️ {_state_label}</span>'
-    ) if _state_label else ""
-
-    # Build time chips
-    _chip = (
-        'display:inline-flex; align-items:center; gap:6px; '
-        'padding:8px 16px; border-radius:10px; font-size:0.85rem; font-weight:600;'
-    )
-    _conv_chip = (
-        f'<div style="{_chip} background:#f0fdf4; color:#166534; border:1px solid #bbf7d0;">'
-        f'<span style="font-size:1rem;">📝</span> Conversion '
-        f'<span style="font-weight:800;">{_conv_time}</span></div>'
-    )
-    _val_chip = (
-        f'<div style="{_chip} background:#eff6ff; color:#1e40af; border:1px solid #bfdbfe;">'
-        f'<span style="font-size:1rem;">🔍</span> Validation '
-        f'<span style="font-weight:800;">{_val_time}</span></div>'
-    ) if _has_audit else ""
-    _size_chip = (
-        f'<div style="{_chip} background:#f5f3ff; color:#5b21b6; border:1px solid #ddd6fe;">'
-        f'<span style="font-size:1rem;">📄</span> Output '
-        f'<span style="font-weight:800;">{_size_label}</span></div>'
-    )
-
-    # Content accuracy chip
-    _acc_chip = ""
-    _acc_report = st.session_state.get('content_accuracy_report')
-    if _acc_report:
-        _acc_val = _acc_report['accuracy']
-        if _acc_val >= 99:
-            _acc_bg, _acc_fg, _acc_bdr = '#f0fdf4', '#166534', '#bbf7d0'
-        elif _acc_val >= 95:
-            _acc_bg, _acc_fg, _acc_bdr = '#fefce8', '#854d0e', '#fde68a'
-        else:
-            _acc_bg, _acc_fg, _acc_bdr = '#fef2f2', '#991b1b', '#fecaca'
-        _acc_chip = (
-            f'<div style="{_chip} background:{_acc_bg}; color:{_acc_fg}; border:1px solid {_acc_bdr};">'
-            f'<span style="font-size:1rem;">📊</span> Accuracy '
-            f'<span style="font-weight:800;">{_acc_val:.1f}%</span></div>'
-        )
-
-    st.markdown(f"""
-    <div style="background:#ffffff; border-radius:14px; padding:24px 28px; margin:8px 0 20px;
-                border:1px solid #e2e8f0; box-shadow:0 2px 12px rgba(0,0,0,.05);">
-        <!-- Header row -->
-        <div style="display:flex; align-items:center; gap:12px; margin-bottom:16px; flex-wrap:wrap;">
-            <span style="font-size:1.5rem;">✅</span>
-            <span style="font-size:1.2rem; font-weight:700; color:#15803d;">Processing Complete</span>
-            {_state_pill}
-        </div>
-        <!-- Time & size chips -->
-        <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px;">
-            {_conv_chip}
-            {_val_chip}
-            {_size_chip}
-            {_acc_chip}
-        </div>
-        <!-- Total bar -->
-        <div style="background:#f8fafc; border-radius:8px; padding:8px 16px;
-                    display:flex; align-items:center; justify-content:space-between;
-                    border:1px solid #e2e8f0;">
-            <span style="font-size:0.84rem; color:#475569;">⏱️ Total processing time</span>
-            <span style="font-size:1rem; font-weight:800; color:#0f172a;">{_total_time}</span>
-        </div>
-        <p style="margin:12px 0 0; font-size:0.82rem; color:#64748b;">
-            Your PDF has been converted to tagged legislative text with Claude Opus 4.6.
-            {"The validation report below compares the converted output against the original PDF." if _has_audit else ""}
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # ── Processing Activity Log (collapsed) ────────────────────────────────────
+    # ── Build tab list dynamically ─────────────────────────────────────────────
+    tab_labels = ["📊 Summary"]
+    if _has_audit and render_inline_validation_review:
+        tab_labels.append("🔍 Validation Review")
     if st.session_state.get('processing_logs'):
-        with st.expander("📋 Activity Log", expanded=False):
-            st.markdown(_build_activity_feed_html(st.session_state.processing_logs), unsafe_allow_html=True)
+        tab_labels.append("📋 Activity Log")
 
-    # ── Validation Review — GPT Audit Results ──────────────────────────────────
-    if st.session_state.get('audit_excel_path') and render_inline_validation_review:
-        render_inline_validation_review(
-            excel_path=st.session_state.audit_excel_path,
-            converted_txt_path=st.session_state.processed_file_path,
-            highlighted_dir=st.session_state.get('audit_highlighted_dir'),
-            json_report=st.session_state.get('audit_json_report'),
-            accuracy_report=st.session_state.get('content_accuracy_report'),
+    tabs = st.tabs(tab_labels)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # TAB 1 — Summary + Download
+    # ══════════════════════════════════════════════════════════════════════════
+    with tabs[0]:
+        # ── Summary data ───────────────────────────────────────────────────
+        _state_label = ""
+        if st.session_state.get('detected_state'):
+            _s = st.session_state.detected_state
+            _sname = US_STATE_NAMES.get(_s, _s)
+            _state_label = f"{_s} — {_sname}"
+
+        _conv_time = st.session_state.get('conversion_time') or "—"
+        _total_time = st.session_state.processing_time or "—"
+        _size_label = format_file_size(file_size)
+
+        # Compute validation-only time from raw seconds
+        _val_time = "—"
+        _total_secs = st.session_state.get('total_elapsed_secs', 0)
+        _conv_secs = st.session_state.get('conversion_elapsed_secs', 0)
+        if _total_secs and _conv_secs and _has_audit:
+            _val_secs = max(0, _total_secs - _conv_secs)
+            _vm, _vs = int(_val_secs // 60), int(_val_secs % 60)
+            _val_time = f"{_vm}m {_vs}s" if _vm > 0 else f"{_vs}s"
+
+        # Build state pill
+        _state_pill = (
+            f'<span style="background:#e0e7ff; color:#3730a3; padding:3px 12px; '
+            f'border-radius:16px; font-size:0.82rem; font-weight:600;">'
+            f'🏛️ {_state_label}</span>'
+        ) if _state_label else ""
+
+        # Build time chips
+        _chip = (
+            'display:inline-flex; align-items:center; gap:6px; '
+            'padding:8px 16px; border-radius:10px; font-size:0.85rem; font-weight:600;'
         )
+        _conv_chip = (
+            f'<div style="{_chip} background:#f0fdf4; color:#166534; border:1px solid #bbf7d0;">'
+            f'<span style="font-size:1rem;">📝</span> Conversion '
+            f'<span style="font-weight:800;">{_conv_time}</span></div>'
+        )
+        _val_chip = (
+            f'<div style="{_chip} background:#eff6ff; color:#1e40af; border:1px solid #bfdbfe;">'
+            f'<span style="font-size:1rem;">🔍</span> Validation '
+            f'<span style="font-weight:800;">{_val_time}</span></div>'
+        ) if _has_audit else ""
+        _size_chip = (
+            f'<div style="{_chip} background:#f5f3ff; color:#5b21b6; border:1px solid #ddd6fe;">'
+            f'<span style="font-size:1rem;">📄</span> Output '
+            f'<span style="font-weight:800;">{_size_label}</span></div>'
+        )
+
+        # Content accuracy chip
+        _acc_chip = ""
+        _acc_report = st.session_state.get('content_accuracy_report')
+        if _acc_report:
+            _acc_val = _acc_report['accuracy']
+            if _acc_val >= 99:
+                _acc_bg, _acc_fg, _acc_bdr = '#f0fdf4', '#166534', '#bbf7d0'
+            elif _acc_val >= 95:
+                _acc_bg, _acc_fg, _acc_bdr = '#fefce8', '#854d0e', '#fde68a'
+            else:
+                _acc_bg, _acc_fg, _acc_bdr = '#fef2f2', '#991b1b', '#fecaca'
+            _acc_chip = (
+                f'<div style="{_chip} background:{_acc_bg}; color:{_acc_fg}; border:1px solid {_acc_bdr};">'
+                f'<span style="font-size:1rem;">📊</span> Text Accuracy '
+                f'<span style="font-weight:800;">{_acc_val:.1f}%</span></div>'
+            )
+
+        st.markdown(f"""
+        <div style="background:#ffffff; border-radius:14px; padding:24px 28px; margin:8px 0 20px;
+                    border:1px solid #e2e8f0; box-shadow:0 2px 12px rgba(0,0,0,.05);">
+            <!-- Header row -->
+            <div style="display:flex; align-items:center; gap:12px; margin-bottom:16px; flex-wrap:wrap;">
+                <span style="font-size:1.5rem;">✅</span>
+                <span style="font-size:1.2rem; font-weight:700; color:#15803d;">Processing Complete</span>
+                {_state_pill}
+            </div>
+            <!-- Time & size chips -->
+            <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px;">
+                {_conv_chip}
+                {_val_chip}
+                {_size_chip}
+                {_acc_chip}
+            </div>
+            <!-- Total bar -->
+            <div style="background:#f8fafc; border-radius:8px; padding:8px 16px;
+                        display:flex; align-items:center; justify-content:space-between;
+                        border:1px solid #e2e8f0;">
+                <span style="font-size:0.84rem; color:#475569;">⏱️ Total processing time</span>
+                <span style="font-size:1rem; font-weight:800; color:#0f172a;">{_total_time}</span>
+            </div>
+            <p style="margin:12px 0 0; font-size:0.82rem; color:#64748b;">
+                Your PDF has been converted to tagged legislative text with Claude Opus 4.6.
+                {"Click the <b>Validation Review</b> tab to compare against the original PDF." if _has_audit else ""}
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # ── Audit metrics (Total Items / Pass / Warnings / Errors) ────────
+        if _has_audit:
+            try:
+                import openpyxl as _xl
+                _wb = _xl.load_workbook(str(st.session_state.audit_excel_path), read_only=True, data_only=True)
+                _ws = _wb["Checklist Audit"]
+                _rows = list(_ws.iter_rows(min_row=4, values_only=True))
+                _wb.close()
+                if _rows:
+                    _headers = [str(h).strip() if h else f"col{i}" for i, h in enumerate(_rows[0])]
+                    _cl = [dict(zip(_headers, r)) for r in _rows[1:] if r[0] is not None]
+                    _n_total = len(_cl)
+                    _n_pass  = sum(1 for r in _cl if str(r.get("Verdict", "")).startswith("\u2705"))
+                    _n_warn  = sum(1 for r in _cl if str(r.get("Verdict", "")).startswith("\u26a0"))
+                    _n_err   = sum(1 for r in _cl if str(r.get("Verdict", "")).startswith("\u274c"))
+
+                    _card = (
+                        'display:flex; flex-direction:column; align-items:center; '
+                        'padding:14px 10px; border-radius:10px; flex:1; min-width:100px;'
+                    )
+                    st.markdown(f"""
+                    <div style="display:flex; gap:12px; flex-wrap:wrap; margin:0 0 16px;">
+                        <div style="{_card} background:#f8fafc; border:1px solid #e2e8f0;">
+                            <span style="font-size:1.6rem; font-weight:800; color:#0f172a;">{_n_total}</span>
+                            <span style="font-size:0.78rem; color:#64748b; margin-top:2px;">Total Items</span>
+                        </div>
+                        <div style="{_card} background:#f0fdf4; border:1px solid #bbf7d0;">
+                            <span style="font-size:1.6rem; font-weight:800; color:#166534;">{_n_pass}</span>
+                            <span style="font-size:0.78rem; color:#166534; margin-top:2px;">✅ Pass</span>
+                        </div>
+                        <div style="{_card} background:#fefce8; border:1px solid #fde68a;">
+                            <span style="font-size:1.6rem; font-weight:800; color:#854d0e;">{_n_warn}</span>
+                            <span style="font-size:0.78rem; color:#854d0e; margin-top:2px;">⚠️ Warnings</span>
+                        </div>
+                        <div style="{_card} background:#fef2f2; border:1px solid #fecaca;">
+                            <span style="font-size:1.6rem; font-weight:800; color:#991b1b;">{_n_err}</span>
+                            <span style="font-size:0.78rem; color:#991b1b; margin-top:2px;">❌ Errors</span>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+            except Exception:
+                pass  # audit metrics are nice-to-have; don't break Summary tab
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # TAB 2 — Validation Review (only if audit data exists)
+    # ══════════════════════════════════════════════════════════════════════════
+    _tab_idx = 1
+    if _has_audit and render_inline_validation_review:
+        with tabs[_tab_idx]:
+            render_inline_validation_review(
+                excel_path=st.session_state.audit_excel_path,
+                converted_txt_path=st.session_state.processed_file_path,
+                highlighted_dir=st.session_state.get('audit_highlighted_dir'),
+                json_report=st.session_state.get('audit_json_report'),
+                accuracy_report=st.session_state.get('content_accuracy_report'),
+            )
+        _tab_idx += 1
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # TAB 3 — Activity Log
+    # ══════════════════════════════════════════════════════════════════════════
+    if st.session_state.get('processing_logs'):
+        with tabs[_tab_idx]:
+            st.markdown(_build_activity_feed_html(st.session_state.processing_logs), unsafe_allow_html=True)
 
 def show_single_file_processing():
     """Show single file processing interface"""
@@ -2336,218 +2551,6 @@ def show_single_file_processing():
         or os.path.exists(st.session_state.processed_file_path)
     ):
         show_results_section()
-
-def show_batch_processing_interface():
-    """Show batch processing interface with queue management"""
-    if not st.session_state.batch_queue:
-        st.info("📦 No files in batch queue. Upload files above to get started.")
-        return
-    
-    st.header("📦 Step 3: Batch Processing")
-    
-    # Queue overview
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Files in Queue", len(st.session_state.batch_queue))
-    with col2:
-        pending_count = len([f for f in st.session_state.batch_queue if f['status'] == 'pending'])
-        st.metric("Pending", pending_count)
-    with col3:
-        if st.session_state.batch_results:
-            completed_count = len([f for f in st.session_state.batch_results if f['status'] == 'completed'])
-            st.metric("Completed", completed_count)
-    
-    # Control buttons
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        if not st.session_state.batch_processing:
-            if st.button("🚀 Start Batch Processing", type="primary", use_container_width=True):
-                st.session_state.batch_processing = True
-                st.session_state.batch_paused = False
-                st.rerun()
-        else:
-            if not st.session_state.batch_paused:
-                if st.button("⏸️ Pause Processing", type="secondary", use_container_width=True):
-                    st.session_state.batch_paused = True
-                    st.rerun()
-            else:
-                if st.button("▶️ Resume Processing", type="primary", use_container_width=True):
-                    st.session_state.batch_paused = False
-                    st.rerun()
-    
-    with col2:
-        if st.session_state.batch_processing:
-            if st.button("⏹️ Stop Processing", type="secondary", use_container_width=True):
-                st.session_state.batch_processing = False
-                st.session_state.batch_paused = False
-                st.rerun()
-    
-    with col3:
-        if st.button("🗑️ Clear Queue", use_container_width=True):
-            if not st.session_state.batch_processing:
-                reset_batch_processing()
-                st.rerun()
-            else:
-                st.error("❌ Stop processing before clearing queue")
-    
-    with col4:
-        if st.session_state.batch_results:
-            if st.button("📥 Download All Results", use_container_width=True):
-                show_batch_download_options()
-    
-    # Processing status
-    if st.session_state.batch_processing:
-        if st.session_state.batch_current_file:
-            st.info(f"🔄 Currently processing: {st.session_state.batch_current_file}")
-        
-        # Progress bar
-        if st.session_state.batch_progress > 0:
-            progress_text = f"Progress: {int(st.session_state.batch_progress * 100)}%"
-            st.progress(st.session_state.batch_progress, text=progress_text)
-        
-        # Auto-process batch
-        process_batch_sequentially()
-        st.rerun()
-    
-    # Show queue details
-    show_batch_queue_details()
-    
-    # Show results if any
-    if st.session_state.batch_results:
-        show_batch_results()
-
-def show_batch_queue_details():
-    """Show detailed batch queue with individual file status"""
-    with st.expander(f"📋 Queue Details ({len(st.session_state.batch_queue)} files)", expanded=True):
-        for i, batch_item in enumerate(st.session_state.batch_queue):
-            col1, col2, col3, col4 = st.columns([3, 2, 2, 1])
-            
-            with col1:
-                st.text(f"{i+1:2d}. {batch_item['original_name']}")
-            
-            with col2:
-                status_icons = {
-                    'pending': '⏳ Pending',
-                    'processing': '🔄 Processing',
-                    'completed': '✅ Completed', 
-                    'failed': '❌ Failed'
-                }
-                st.text(status_icons.get(batch_item['status'], batch_item['status']))
-            
-            with col3:
-                if batch_item['processing_time']:
-                    st.text(f"⏱️ {batch_item['processing_time']}")
-                elif batch_item['status'] == 'failed' and batch_item['error']:
-                    st.text(f"💥 Error")
-            
-            with col4:
-                if batch_item['status'] == 'pending' and not st.session_state.batch_processing:
-                    if st.button(f"🗑️", key=f"remove_{i}", help="Remove from queue"):
-                        if batch_item['temp_path'] and os.path.exists(batch_item['temp_path']):
-                            os.remove(batch_item['temp_path'])
-                        st.session_state.batch_queue.pop(i)
-                        st.rerun()
-
-def show_batch_results():
-    """Show batch processing results summary"""
-    st.header("📊 Batch Processing Results")
-    
-    completed_files = [f for f in st.session_state.batch_results if f['status'] == 'completed']
-    failed_files = [f for f in st.session_state.batch_results if f['status'] == 'failed']
-    
-    # Summary metrics
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Total Processed", len(st.session_state.batch_results))
-    with col2:
-        st.metric("Successful", len(completed_files), delta=len(completed_files))
-    with col3:
-        st.metric("Failed", len(failed_files), delta=-len(failed_files) if failed_files else 0)
-    with col4:
-        if completed_files:
-            avg_time = sum(float(f['processing_time'].replace('m', '*60+').replace('s', '')) for f in completed_files if f.get('processing_time')) / len(completed_files)
-            avg_minutes = int(avg_time // 60)
-            avg_seconds = int(avg_time % 60)
-            avg_time_str = f"{avg_minutes}m {avg_seconds}s" if avg_minutes > 0 else f"{avg_seconds}s"
-            st.metric("Avg Time", avg_time_str)
-    
-    # Results table
-    with st.expander("📋 Detailed Results", expanded=True):
-        for i, result in enumerate(st.session_state.batch_results):
-            col1, col2, col3, col4 = st.columns([3, 1, 2, 1])
-            
-            with col1:
-                st.text(f"{i+1:2d}. {result['original_name']}")
-            
-            with col2:
-                if result['status'] == 'completed':
-                    st.text("✅ Success")
-                else:
-                    st.text("❌ Failed")
-            
-            with col3:
-                if result['processing_time']:
-                    st.text(f"⏱️ {result['processing_time']}")
-                elif result['error']:
-                    st.text(f"💥 {result['error'][:30]}...")
-            
-            with col4:
-                if result['status'] == 'completed' and result['result_path']:
-                    if os.path.exists(result['result_path']):
-                        with open(result['result_path'], 'rb') as f:
-                            file_data = f.read()
-                        
-                        download_name = Path(result['original_name']).stem + "_processed.txt"
-                        st.download_button(
-                            label="📥",
-                            data=file_data,
-                            file_name=download_name,
-                            mime="text/plain",
-                            key=f"download_{i}",
-                            help="Download processed file"
-                        )
-
-def show_batch_download_options():
-    """Show options to download all batch results"""
-    completed_files = [f for f in st.session_state.batch_results if f['status'] == 'completed' and f.get('result_path')]
-    
-    if not completed_files:
-        st.warning("⚠️ No completed files to download")
-        return
-    
-    st.subheader("📥 Batch Download Options")
-    
-    # Option 1: Download all as ZIP
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        if st.button("📦 Download All as ZIP", use_container_width=True):
-            import zipfile
-            import io
-            
-            zip_buffer = io.BytesIO()
-            
-            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-                for result in completed_files:
-                    if os.path.exists(result['result_path']):
-                        file_name = Path(result['original_name']).stem + "_processed.txt"
-                        zip_file.write(result['result_path'], file_name)
-            
-            zip_buffer.seek(0)
-            
-            st.download_button(
-                label=f"📦 Download ZIP ({len(completed_files)} files)",
-                data=zip_buffer.getvalue(),
-                file_name=f"batch_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
-                mime="application/zip",
-                use_container_width=True
-            )
-    
-    with col2:
-        st.metric("Files Ready", len(completed_files))
-        total_size = sum(os.path.getsize(f['result_path']) for f in completed_files if os.path.exists(f['result_path']))
-        st.metric("Total Size", format_file_size(total_size))
 
 # Main app
 def main():
