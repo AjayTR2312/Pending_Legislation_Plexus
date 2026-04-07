@@ -2234,10 +2234,11 @@ def show_results_section():
             file_size = 0
 
     _has_audit = bool(st.session_state.get('audit_excel_path'))
+    _has_accuracy = bool(st.session_state.get('content_accuracy_report'))
 
     # ── Build tab list dynamically ─────────────────────────────────────────────
     tab_labels = ["📊 Summary"]
-    if _has_audit and render_inline_validation_review:
+    if (_has_audit or _has_accuracy) and render_inline_validation_review:
         tab_labels.append("🔍 Validation Review")
     if st.session_state.get('processing_logs'):
         tab_labels.append("📋 Activity Log")
@@ -2384,10 +2385,10 @@ def show_results_section():
     # TAB 2 — Validation Review (only if audit data exists)
     # ══════════════════════════════════════════════════════════════════════════
     _tab_idx = 1
-    if _has_audit and render_inline_validation_review:
+    if (_has_audit or _has_accuracy) and render_inline_validation_review:
         with tabs[_tab_idx]:
             render_inline_validation_review(
-                excel_path=st.session_state.audit_excel_path,
+                excel_path=st.session_state.get('audit_excel_path') or "",
                 converted_txt_path=st.session_state.processed_file_path,
                 highlighted_dir=st.session_state.get('audit_highlighted_dir'),
                 json_report=st.session_state.get('audit_json_report'),

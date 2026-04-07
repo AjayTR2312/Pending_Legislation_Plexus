@@ -49,7 +49,8 @@ RUN touch /.dockerenv
 EXPOSE 8501
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+# start-period must be long enough for Streamlit to boot with heavy imports
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=5 \
     CMD curl --fail http://localhost:8501/_stcore/health || exit 1
 
 # Set working directory to app folder

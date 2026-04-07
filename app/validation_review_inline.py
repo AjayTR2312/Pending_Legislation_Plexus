@@ -627,6 +627,132 @@ def _render_accuracy_expander(accuracy_report: dict | None):
 
 
 # ═══════════════════════════════════════════════════════════════════
+# REUSABLE TWO-COLUMN VIEW — PDF page ↔ Claude text
+# ═══════════════════════════════════════════════════════════════════
+
+def _render_twocol_view(
+    page_images: list[Path],
+    total_pages: int,
+    text: str,
+    checklist: list[dict],
+    selected_id: int | None,
+    filter_mode: str,
+    fixed_ids: set[int],
+    ignored_ids: set[int],
+):
+    """Render the side-by-side PDF page + Claude converted text columns."""
+
+    with st.container(key="vri_twocol"):
+        col_left, col_right = st.columns([1, 1], gap="medium")
+
+        # ──────── LEFT: PDF Page (reference) ────────────────────────
+        with col_left:
+            st.markdown(
+                '<p style="font-size:0.92rem;font-weight:700;margin:0 0 6px;">'
+                '📄 PDF Page — Original Reference</p>',
+                unsafe_allow_html=True,
+            )
+
+            if total_pages > 0:
+                cur = st.session_state.vri_current_page
+                cur = max(1, min(cur, total_pages))
+
+                _nav_bar_style = (
+                    'display:flex; align-items:center; gap:8px; '
+                    'padding:6px 14px; margin-bottom:8px; min-height:42px; '
+                    'background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px;'
+                )
+                if total_pages > 1:
+                    nc1, nc2, nc3, nc4 = st.columns([1, 5, 1, 3])
+                    with nc1:
+                        if st.button("◀", key="vri_pg_prev"):
+                            st.session_state.vri_current_page = max(1, cur - 1)
+                            st.rerun()
+                    with nc3:
+                        if st.button("▶", key="vri_pg_next"):
+                            st.session_state.vri_current_page = min(total_pages, cur + 1)
+                            st.rerun()
+                    with nc2:
+                        new_pg = st.slider(
+                            "Page", 1, total_pages, cur,
+                            key="vri_pg_slider", label_visibility="collapsed",
+                        )
+                        if new_pg != cur:
+                            st.session_state.vri_current_page = new_pg
+                    with nc4:
+                        st.markdown(
+                            f'<p style="font-size:0.82rem;color:#64748b;margin:8px 0 0;text-align:right;">'
+                            f'Page <b>{cur}</b> / {total_pages}</p>',
+                            unsafe_allow_html=True,
+                        )
+                else:
+                    st.markdown(
+                        f'<div style="{_nav_bar_style} justify-content:center;">'
+                        '<span style="font-size:0.82rem;color:#64748b;">'
+                        'Page <b>1</b> / 1</span></div>',
+                        unsafe_allow_html=True,
+                    )
+
+                cur = st.session_state.vri_current_page
+                img_idx = cur - 1
+                if 0 <= img_idx < len(page_images):
+                    st.image(str(page_images[img_idx]), use_container_width=True)
+
+                # Page summary (only when checklist data is available)
+                on_page = [r for r in checklist if _safe_int(r.get("Page", 0)) == cur]
+                if on_page:
+                    e = sum(1 for r in on_page
+                            if str(r.get("Verdict", "")).startswith("❌")
+                            and int(r.get("#", 0)) not in fixed_ids)
+                    w = sum(1 for r in on_page if str(r.get("Verdict", "")).startswith("⚠"))
+                    st.caption(f"This page: {len(on_page)} items  •  ❌ {e} errors  •  ⚠️ {w} warnings")
+
+            else:
+                st.info("No highlighted page images found.")
+
+        # ──────── RIGHT: Converted Text ─────────────────────────────
+        with col_right:
+            st.markdown(
+                '<p style="font-size:0.92rem;font-weight:700;margin:0 0 6px;">📝 Claude Converted Text</p>',
+                unsafe_allow_html=True,
+            )
+            if total_pages > 0:
+                st.markdown(
+                    '<div style="height:58px;"></div>',
+                    unsafe_allow_html=True,
+                )
+            html = _render_text_html(text, checklist, selected_id, filter_mode, fixed_ids | ignored_ids)
+            st.markdown(
+                f'<div class="vr-text-viewer">{html}</div>',
+                unsafe_allow_html=True,
+            )
+
+    # JS: sync text-viewer height to the PDF image height
+    components.html("""
+    <script>
+    (function syncHeight() {
+        const doc = window.parent.document;
+        const container = doc.querySelector('.st-key-vri_twocol');
+        if (!container) return;
+        const img = container.querySelector('img');
+        const viewer = container.querySelector('.vr-text-viewer');
+        if (!img || !viewer) return;
+        function adjust() {
+            const h = img.clientHeight;
+            if (h > 100) { viewer.style.maxHeight = h + 'px'; }
+        }
+        if (img.complete && img.clientHeight > 0) {
+            adjust();
+        } else {
+            img.addEventListener('load', adjust);
+        }
+        new ResizeObserver(adjust).observe(img);
+    })();
+    </script>
+    """, height=0)
+
+
+# ═══════════════════════════════════════════════════════════════════
 # MAIN ENTRY POINT — call this from streamlit_app.py
 # ═══════════════════════════════════════════════════════════════════
 
@@ -653,21 +779,55 @@ def render_inline_validation_review(
     accuracy_report : dict, optional
         Structured dict from ``compare_texts()`` with content accuracy data.
     """
-    excel_path = Path(excel_path)
+    excel_path = Path(str(excel_path)) if excel_path else Path("")
     converted_txt_path = Path(converted_txt_path)
     highlighted_dir = Path(highlighted_dir) if highlighted_dir else None
-
-    if not excel_path.exists():
-        st.warning("⚠️ GPT comparison Excel not found. Validation review unavailable.")
-        return
 
     # Inject CSS
     st.markdown(_CSS, unsafe_allow_html=True)
 
     # ── Load data ───────────────────────────────────────────────────
-    checklist, findings, summary = _load_excel(excel_path)
+    checklist, findings, summary = [], [], {}
+    if excel_path.exists():
+        checklist, findings, summary = _load_excel(excel_path)
+
     if not checklist:
-        st.info("No checklist items found in the audit Excel.")
+        # Even without a GPT checklist, show accuracy details if available
+        if accuracy_report:
+            st.markdown("---")
+            st.markdown("## 🔍 Validation Review — Text Accuracy")
+            if excel_path.exists():
+                st.info("No checklist items found in the GPT audit Excel, "
+                        "but text accuracy details are available below.")
+            else:
+                st.info("GPT checklist audit was not available for this file, "
+                        "but text accuracy details are available below.")
+            _render_accuracy_expander(accuracy_report)
+        else:
+            st.warning("⚠️ No audit data or accuracy report available for this file.")
+
+        # ── Still show the side-by-side PDF ↔ Claude text view ──────
+        page_images = _get_page_images(highlighted_dir)
+        total_pages = len(page_images)
+        text = ""
+        if converted_txt_path.exists():
+            text = converted_txt_path.read_text(encoding="utf-8")
+
+        if page_images or text:
+            if "vri_current_page" not in st.session_state:
+                st.session_state.vri_current_page = 1
+            st.markdown("---")
+            st.markdown("### 📑 Side-by-Side Comparison")
+            _render_twocol_view(
+                page_images=page_images,
+                total_pages=total_pages,
+                text=text,
+                checklist=[],
+                selected_id=None,
+                filter_mode="all",
+                fixed_ids=set(),
+                ignored_ids=set(),
+            )
         return
 
     text = ""
@@ -845,118 +1005,16 @@ def render_inline_validation_review(
     # ══════════════════════════════════════════════════════════════
     st.markdown("---")
 
-    with st.container(key="vri_twocol"):
-        col_left, col_right = st.columns([1, 1], gap="medium")
-
-        # ──────── LEFT: PDF Page (reference) ────────────────────────
-        with col_left:
-            st.markdown(
-                '<p style="font-size:0.92rem;font-weight:700;margin:0 0 6px;">'
-                '📄 PDF Page — Original Reference</p>',
-                unsafe_allow_html=True,
-            )
-
-            if total_pages > 0:
-                cur = st.session_state.vri_current_page
-                cur = max(1, min(cur, total_pages))
-
-                # ── Page navigation bar (consistent layout for 1-page and multi-page) ──
-                _nav_bar_style = (
-                    'display:flex; align-items:center; gap:8px; '
-                    'padding:6px 14px; margin-bottom:8px; min-height:42px; '
-                    'background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px;'
-                )
-                if total_pages > 1:
-                    nc1, nc2, nc3, nc4 = st.columns([1, 5, 1, 3])
-                    with nc1:
-                        if st.button("◀", key="vri_pg_prev"):
-                            st.session_state.vri_current_page = max(1, cur - 1)
-                            st.rerun()
-                    with nc3:
-                        if st.button("▶", key="vri_pg_next"):
-                            st.session_state.vri_current_page = min(total_pages, cur + 1)
-                            st.rerun()
-                    with nc2:
-                        new_pg = st.slider(
-                            "Page", 1, total_pages, cur,
-                            key="vri_pg_slider", label_visibility="collapsed",
-                        )
-                        if new_pg != cur:
-                            st.session_state.vri_current_page = new_pg
-                    with nc4:
-                        st.markdown(
-                            f'<p style="font-size:0.82rem;color:#64748b;margin:8px 0 0;text-align:right;">'
-                            f'Page <b>{cur}</b> / {total_pages}</p>',
-                            unsafe_allow_html=True,
-                        )
-                else:
-                    st.markdown(
-                        f'<div style="{_nav_bar_style} justify-content:center;">'
-                        '<span style="font-size:0.82rem;color:#64748b;">'
-                        'Page <b>1</b> / 1</span></div>',
-                        unsafe_allow_html=True,
-                    )
-
-                cur = st.session_state.vri_current_page
-                img_idx = cur - 1
-                if 0 <= img_idx < len(page_images):
-                    st.image(str(page_images[img_idx]), use_container_width=True)
-
-                # Page summary
-                on_page = [r for r in checklist if _safe_int(r.get("Page", 0)) == cur]
-                if on_page:
-                    e = sum(1 for r in on_page
-                            if str(r.get("Verdict", "")).startswith("❌")
-                            and int(r.get("#", 0)) not in fixed_ids)
-                    w = sum(1 for r in on_page if str(r.get("Verdict", "")).startswith("⚠"))
-                    st.caption(f"This page: {len(on_page)} items  •  ❌ {e} errors  •  ⚠️ {w} warnings")
-
-            else:
-                st.info("No highlighted page images found.")
-
-        # ──────── RIGHT: Converted Text ─────────────────────────────
-        with col_right:
-            st.markdown(
-                '<p style="font-size:0.92rem;font-weight:700;margin:0 0 6px;">📝 Claude Converted Text</p>',
-                unsafe_allow_html=True,
-            )
-            # Spacer to vertically align with the image (left col has nav bar above image)
-            if total_pages > 0:
-                st.markdown(
-                    '<div style="height:58px;"></div>',
-                    unsafe_allow_html=True,
-                )
-            html = _render_text_html(text, checklist, selected_id, filter_mode, fixed_ids | ignored_ids)
-            st.markdown(
-                f'<div class="vr-text-viewer">{html}</div>',
-                unsafe_allow_html=True,
-            )
-
-    # JS: sync text-viewer height to the PDF image height (runs client-side)
-    # st.components.v1.html() creates an iframe that CAN execute JS;
-    # we reach into window.parent.document to find the actual elements.
-    components.html("""
-    <script>
-    (function syncHeight() {
-        const doc = window.parent.document;
-        const container = doc.querySelector('.st-key-vri_twocol');
-        if (!container) return;
-        const img = container.querySelector('img');
-        const viewer = container.querySelector('.vr-text-viewer');
-        if (!img || !viewer) return;
-        function adjust() {
-            const h = img.clientHeight;
-            if (h > 100) { viewer.style.maxHeight = h + 'px'; }
-        }
-        if (img.complete && img.clientHeight > 0) {
-            adjust();
-        } else {
-            img.addEventListener('load', adjust);
-        }
-        new ResizeObserver(adjust).observe(img);
-    })();
-    </script>
-    """, height=0)
+    _render_twocol_view(
+        page_images=page_images,
+        total_pages=total_pages,
+        text=text,
+        checklist=checklist,
+        selected_id=selected_id,
+        filter_mode=filter_mode,
+        fixed_ids=fixed_ids,
+        ignored_ids=ignored_ids,
+    )
 
     # ── Download button — centered below both columns ──────────────
     if converted_txt_path.exists():
