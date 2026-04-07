@@ -860,6 +860,12 @@ def render_inline_validation_review(
                 cur = st.session_state.vri_current_page
                 cur = max(1, min(cur, total_pages))
 
+                # ── Page navigation bar (consistent layout for 1-page and multi-page) ──
+                _nav_bar_style = (
+                    'display:flex; align-items:center; gap:8px; '
+                    'padding:6px 14px; margin-bottom:8px; min-height:42px; '
+                    'background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px;'
+                )
                 if total_pages > 1:
                     nc1, nc2, nc3, nc4 = st.columns([1, 5, 1, 3])
                     with nc1:
@@ -885,7 +891,9 @@ def render_inline_validation_review(
                         )
                 else:
                     st.markdown(
-                        '<p style="font-size:0.82rem;color:#64748b;margin:4px 0;">Page <b>1</b> / 1</p>',
+                        f'<div style="{_nav_bar_style} justify-content:center;">'
+                        '<span style="font-size:0.82rem;color:#64748b;">'
+                        'Page <b>1</b> / 1</span></div>',
                         unsafe_allow_html=True,
                     )
 
@@ -913,7 +921,7 @@ def render_inline_validation_review(
                 unsafe_allow_html=True,
             )
             # Spacer to vertically align with the image (left col has nav bar above image)
-            if total_pages > 1:
+            if total_pages > 0:
                 st.markdown(
                     '<div style="height:58px;"></div>',
                     unsafe_allow_html=True,

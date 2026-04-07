@@ -1559,6 +1559,11 @@ def show_simple_ui():
             border-radius: 8px;
             padding: 2rem;
         }
+
+        /* Hide the '+' button — single-file upload only */
+        div[data-testid="stFileUploader"] button[data-testid="stBaseButton-minimal"] {
+            display: none !important;
+        }
         
         /* Button styling */
         .stButton > button {
@@ -2308,35 +2313,29 @@ def show_results_section():
                 f'<span style="font-weight:800;">{_acc_val:.1f}%</span></div>'
             )
 
-        st.markdown(f"""
-        <div style="background:#ffffff; border-radius:14px; padding:24px 28px; margin:8px 0 20px;
-                    border:1px solid #e2e8f0; box-shadow:0 2px 12px rgba(0,0,0,.05);">
-            <!-- Header row -->
-            <div style="display:flex; align-items:center; gap:12px; margin-bottom:16px; flex-wrap:wrap;">
-                <span style="font-size:1.5rem;">✅</span>
-                <span style="font-size:1.2rem; font-weight:700; color:#15803d;">Processing Complete</span>
-                {_state_pill}
-            </div>
-            <!-- Time & size chips -->
-            <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px;">
-                {_conv_chip}
-                {_val_chip}
-                {_size_chip}
-                {_acc_chip}
-            </div>
-            <!-- Total bar -->
-            <div style="background:#f8fafc; border-radius:8px; padding:8px 16px;
-                        display:flex; align-items:center; justify-content:space-between;
-                        border:1px solid #e2e8f0;">
-                <span style="font-size:0.84rem; color:#475569;">⏱️ Total processing time</span>
-                <span style="font-size:1rem; font-weight:800; color:#0f172a;">{_total_time}</span>
-            </div>
-            <p style="margin:12px 0 0; font-size:0.82rem; color:#64748b;">
-                Your PDF has been converted to tagged legislative text with Claude Opus 4.6.
-                {"Click the <b>Validation Review</b> tab to compare against the original PDF." if _has_audit else ""}
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
+        _summary_html = (
+            '<div style="background:#ffffff; border-radius:14px; padding:24px 28px; margin:8px 0 20px;'
+            ' border:1px solid #e2e8f0; box-shadow:0 2px 12px rgba(0,0,0,.05);">'
+            '<div style="display:flex; align-items:center; gap:12px; margin-bottom:16px; flex-wrap:wrap;">'
+            '<span style="font-size:1.5rem;">✅</span>'
+            '<span style="font-size:1.2rem; font-weight:700; color:#15803d;">Processing Complete</span>'
+            f'{_state_pill}'
+            '</div>'
+            '<div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px;">'
+            f'{_conv_chip}{_val_chip}{_size_chip}{_acc_chip}'
+            '</div>'
+            '<div style="background:#f8fafc; border-radius:8px; padding:8px 16px;'
+            ' display:flex; align-items:center; justify-content:space-between;'
+            ' border:1px solid #e2e8f0;">'
+            '<span style="font-size:0.84rem; color:#475569;">⏱️ Total processing time</span>'
+            f'<span style="font-size:1rem; font-weight:800; color:#0f172a;">{_total_time}</span>'
+            '</div>'
+            '<p style="margin:12px 0 0; font-size:0.82rem; color:#64748b;">'
+            'Your PDF has been converted to tagged legislative text with Claude Opus 4.6. '
+            f'{"Click the <b>Validation Review</b> tab to compare against the original PDF." if _has_audit else ""}'
+            '</p></div>'
+        )
+        st.markdown(_summary_html, unsafe_allow_html=True)
 
         # ── Audit metrics (Total Items / Pass / Warnings / Errors) ────────
         if _has_audit:
