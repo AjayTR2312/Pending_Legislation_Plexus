@@ -163,6 +163,8 @@ try:
         st.session_state.batch_selected_file = 0     # index for validation review
     if 'batch_upload_id' not in st.session_state:
         st.session_state.batch_upload_id = None
+    if 'uploader_key_counter' not in st.session_state:
+        st.session_state.uploader_key_counter = 0
 
     # Get session folders
     session_mgr = st.session_state.session_manager
@@ -1813,6 +1815,7 @@ def show_simple_ui():
             st.session_state.batch_file_names = []
             st.session_state.batch_selected_file = 0
             st.session_state.batch_upload_id = None
+            st.session_state.uploader_key_counter = st.session_state.get('uploader_key_counter', 0) + 1
             
             # Reset validation review state (fixed/ignored/undo/selection)
             st.session_state.pop("vri_fixed_ids", None)
@@ -1870,16 +1873,19 @@ def show_simple_ui():
                 unsafe_allow_html=True,
             )
         # File uploader — always visible for uploading new files
+        # Key is auto-bumped when batch completes, so uploader starts fresh
         st.markdown(
             '<p style="font-size:0.88rem; font-weight:600; color:#475569; margin:12px 0 4px;">'
             '📁 Upload new file(s)</p>',
             unsafe_allow_html=True,
         )
+
+        _uploader_key = f"pdf_uploader_{st.session_state.uploader_key_counter}"
         uploaded_files = st.file_uploader(
             "Choose PDF file(s) to process",
             type=['pdf'],
             accept_multiple_files=True,
-            key="pdf_uploader",
+            key=_uploader_key,
             help="Upload one or more PDF files (max 15 pages each)",
             label_visibility="collapsed",
         )
@@ -1887,11 +1893,12 @@ def show_simple_ui():
         # Full upload section — before processing
         st.header("📁 Upload PDF Files")
         st.caption("Upload one file for single processing, or multiple files (up to 10) for serial batch processing.")
+        _uploader_key = f"pdf_uploader_{st.session_state.uploader_key_counter}"
         uploaded_files = st.file_uploader(
             "Choose PDF file(s) to process",
             type=['pdf'],
             accept_multiple_files=True,
-            key="pdf_uploader",
+            key=_uploader_key,
             help="Upload one or more PDF files (max 15 pages each)"
         )
 
@@ -1925,6 +1932,40 @@ def show_simple_ui():
 
         # Build a unique ID for the current upload set
         current_upload_id = "|".join(sorted(f"{f.name}_{f.size}" for f in valid_files))
+
+        # ── Auto-clear old results only when a DIFFERENT set of files is uploaded ──
+        _prev_upload_id = st.session_state.get('batch_upload_id')
+        _prev_single_id = st.session_state.get('last_uploaded_file_id')
+        _has_old_results = bool(st.session_state.get('batch_results')) or bool(st.session_state.get('processed_file_path'))
+        _is_different_files = (
+            _has_old_results
+            and not st.session_state.get('batch_processing')  # don't clear mid-batch!
+            and _prev_upload_id != current_upload_id
+            and _prev_single_id != (f"{valid_files[0].name}_{valid_files[0].size}" if len(valid_files) == 1 else None)
+        )
+        if _is_different_files:
+            st.session_state.batch_results = []
+            st.session_state.batch_processing = False
+            st.session_state.batch_current_idx = 0
+            st.session_state.batch_pdf_paths = []
+            st.session_state.batch_file_names = []
+            st.session_state.batch_selected_file = 0
+            st.session_state.batch_upload_id = None
+            st.session_state.processed_file_path = None
+            st.session_state.processed_file_data = None
+            st.session_state.processing = False
+            st.session_state.temp_pdf_path = None
+            st.session_state.last_uploaded_file_id = None
+            st.session_state.processing_time = None
+            st.session_state.detected_state = None
+            st.session_state.processing_logs = []
+            st.session_state.audit_excel_path = None
+            st.session_state.audit_highlighted_dir = None
+            st.session_state.audit_json_report = None
+            st.session_state.content_accuracy_report = None
+            for _vri_key in ("vri_fixed_ids", "vri_ignored_ids", "vri_undo_history",
+                             "vri_selected_item", "vri_current_page", "vri_filter_mode"):
+                st.session_state.pop(_vri_key, None)
 
         if is_batch:
             # ══════════════════════════════════════════════════════════════
@@ -2121,7 +2162,15 @@ def show_simple_ui():
             if not _page_limit_exceeded:
                 show_single_file_processing()
     else:
-        st.info("👆 Please upload one or more PDF files to begin processing")
+        # No files in uploader — but check if we have batch results to show
+        if st.session_state.get('batch_results'):
+            n_files = len(st.session_state.batch_pdf_paths)
+            if len(st.session_state.batch_results) >= n_files and n_files > 0:
+                show_batch_results_section()
+            else:
+                st.info("👆 Please upload one or more PDF files to begin processing")
+        else:
+            st.info("👆 Please upload one or more PDF files to begin processing")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2719,6 +2768,8 @@ def show_batch_processing():
         else:
             # All done
             st.session_state.batch_processing = False
+            # Bump uploader key so the widget resets (old files won't linger)
+            st.session_state.uploader_key_counter += 1
             st.success(
                 f"🎉 **Batch complete!** {sum(1 for r in st.session_state.batch_results if r['status'] == 'success')}"
                 f"/{total} files processed successfully."
