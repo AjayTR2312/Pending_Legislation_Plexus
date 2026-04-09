@@ -2733,6 +2733,17 @@ def show_batch_results_section():
     n_ok = sum(1 for r in results if r['status'] == 'success')
     n_fail = len(results) - n_ok
 
+    # Compute aggregate stats
+    _total_time_secs = sum(r.get('total_elapsed_secs', 0) for r in results)
+    _total_conv_secs = sum(r.get('conversion_elapsed_secs', 0) for r in results)
+    _total_val_secs = max(0, _total_time_secs - _total_conv_secs)
+    _tm, _ts = int(_total_time_secs // 60), int(_total_time_secs % 60)
+    _total_time_str = f"{_tm}m {_ts}s" if _tm > 0 else f"{_ts}s"
+    _cm, _cs = int(_total_conv_secs // 60), int(_total_conv_secs % 60)
+    _total_conv_str = f"{_cm}m {_cs}s" if _cm > 0 else f"{_cs}s"
+    _vm, _vs = int(_total_val_secs // 60), int(_total_val_secs % 60)
+    _total_val_str = f"{_vm}m {_vs}s" if _vm > 0 else f"{_vs}s"
+
     # ── Tab layout ────────────────────────────────────────────────────
     tab_labels = ["📊 Batch Summary"]
     if any(r.get('audit_excel_path') or r.get('content_accuracy_report') for r in results):
@@ -2746,20 +2757,52 @@ def show_batch_results_section():
     # TAB 1 — Batch Summary
     # ══════════════════════════════════════════════════════════════════
     with tabs[0]:
+        # ── Summary card with chips (matches single-file style) ───────
+        _chip = (
+            'display:inline-flex; align-items:center; gap:6px; '
+            'padding:8px 16px; border-radius:10px; font-size:0.85rem; font-weight:600;'
+        )
+        _conv_chip = (
+            f'<div style="{_chip} background:#f0fdf4; color:#166534; border:1px solid #bbf7d0;">'
+            f'<span style="font-size:1rem;">📝</span> Conversion '
+            f'<span style="font-weight:800;">{_total_conv_str}</span></div>'
+        )
+        _val_chip = (
+            f'<div style="{_chip} background:#eff6ff; color:#1e40af; border:1px solid #bfdbfe;">'
+            f'<span style="font-size:1rem;">🔍</span> Validation '
+            f'<span style="font-weight:800;">{_total_val_str}</span></div>'
+        ) if _total_val_secs > 0 else ""
+        _files_chip = (
+            f'<div style="{_chip} background:#f5f3ff; color:#5b21b6; border:1px solid #ddd6fe;">'
+            f'<span style="font-size:1rem;">📦</span> Files '
+            f'<span style="font-weight:800;">{n_ok}/{len(results)}</span></div>'
+        )
+
         st.markdown(
             f'<div style="background:#ffffff; border-radius:14px; padding:24px 28px; margin:8px 0 20px;'
             f' border:1px solid #e2e8f0; box-shadow:0 2px 12px rgba(0,0,0,.05);">'
-            f'<div style="display:flex; align-items:center; gap:12px; margin-bottom:16px;">'
-            f'<span style="font-size:1.5rem;">📦</span>'
+            f'<div style="display:flex; align-items:center; gap:12px; margin-bottom:16px; flex-wrap:wrap;">'
+            f'<span style="font-size:1.5rem;">✅</span>'
             f'<span style="font-size:1.2rem; font-weight:700; color:#15803d;">Batch Processing Complete</span>'
-            f'<span style="background:#dcfce7; color:#166534; padding:3px 12px; border-radius:16px; '
-            f'font-size:0.82rem; font-weight:600;">{n_ok}/{len(results)} successful</span>'
             f'{"<span style=&quot;background:#fef2f2; color:#991b1b; padding:3px 12px; border-radius:16px; font-size:0.82rem; font-weight:600;&quot;>" + str(n_fail) + " failed</span>" if n_fail else ""}'
-            f'</div></div>',
+            f'</div>'
+            f'<div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px;">'
+            f'{_conv_chip}{_val_chip}{_files_chip}'
+            f'</div>'
+            f'<div style="background:#f8fafc; border-radius:8px; padding:8px 16px;'
+            f' display:flex; align-items:center; justify-content:space-between;'
+            f' border:1px solid #e2e8f0;">'
+            f'<span style="font-size:0.84rem; color:#475569;">⏱️ Total batch time (all files combined)</span>'
+            f'<span style="font-size:1rem; font-weight:800; color:#0f172a;">{_total_time_str}</span>'
+            f'</div>'
+            f'<p style="margin:12px 0 0; font-size:0.82rem; color:#64748b;">'
+            f'{n_ok} PDF(s) converted to tagged legislative text with Claude Opus 4.6. '
+            f'{"Click the <b>Validation Review</b> tab to inspect each file." if any(r.get("audit_excel_path") for r in results) else ""}'
+            f'</p></div>',
             unsafe_allow_html=True,
         )
 
-        # Results table
+        # ── Results table with Validation Time column ─────────────────
         _tbl = (
             '<table style="width:100%;border-collapse:collapse;font-size:0.85rem;">'
             '<thead><tr style="background:#1e293b;color:white;">'
@@ -2767,8 +2810,9 @@ def show_batch_results_section():
             '<th style="padding:10px;text-align:left;">File</th>'
             '<th style="padding:10px;text-align:center;">State</th>'
             '<th style="padding:10px;text-align:center;">Conv. Time</th>'
+            '<th style="padding:10px;text-align:center;">Valid. Time</th>'
             '<th style="padding:10px;text-align:center;">Total Time</th>'
-            '<th style="padding:10px;text-align:center;">Accuracy</th>'
+            '<th style="padding:10px;text-align:center;">Text Accuracy</th>'
             '<th style="padding:10px;text-align:center;">Status</th>'
             '</tr></thead><tbody>'
         )
@@ -2786,12 +2830,23 @@ def show_batch_results_section():
             if _acc_report:
                 _acc = f"{_acc_report['accuracy']:.1f}%"
 
+            # Compute per-file validation time
+            _r_total = r.get('total_elapsed_secs', 0)
+            _r_conv = r.get('conversion_elapsed_secs', 0)
+            if _r_total and _r_conv and r.get('audit_excel_path'):
+                _r_val = max(0, _r_total - _r_conv)
+                _rvm, _rvs = int(_r_val // 60), int(_r_val % 60)
+                _val_time_str = f"{_rvm}m {_rvs}s" if _rvm > 0 else f"{_rvs}s"
+            else:
+                _val_time_str = '—'
+
             _tbl += (
                 f'<tr style="background:{_bg};border-bottom:1px solid #e2e8f0;">'
                 f'<td style="padding:8px 10px;font-weight:600;">{i+1}</td>'
                 f'<td style="padding:8px 10px;">{r["file_name"]}</td>'
                 f'<td style="padding:8px 10px;text-align:center;">{_state_name}</td>'
                 f'<td style="padding:8px 10px;text-align:center;">{r.get("conversion_time", "—")}</td>'
+                f'<td style="padding:8px 10px;text-align:center;">{_val_time_str}</td>'
                 f'<td style="padding:8px 10px;text-align:center;">{r.get("processing_time", "—")}</td>'
                 f'<td style="padding:8px 10px;text-align:center;">{_acc}</td>'
                 f'<td style="padding:8px 10px;text-align:center;">{_status_badge}</td>'
