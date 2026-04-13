@@ -1915,6 +1915,8 @@ def show_simple_ui():
         MAX_PAGES = 15
         valid_files = []
         skipped_names = []
+        skipped_size_names = []
+        _running_size = 0
 
         for uf in uploaded_files:
             # Quick page-count check (read bytes in memory, no temp file needed)
@@ -1926,33 +1928,34 @@ def show_simple_ui():
                 _pc = len(_pdf)
                 _pdf.close()
                 if _pc > MAX_PAGES:
-                    st.error(f"🚫 **{uf.name}** has {_pc} pages (max {MAX_PAGES}) — skipped.")
-                    skipped_names.append(uf.name)
+                    skipped_names.append(f"{uf.name} ({_pc} pages)")
                     continue
             except Exception:
                 pass  # if we can't check, let it through — batch upload will catch it
 
+            # Check if adding this file would exceed the 2 MB total limit
+            if _running_size + uf.size > MAX_TOTAL_SIZE:
+                skipped_size_names.append(f"{uf.name} ({format_file_size(uf.size)})")
+                continue
+
+            _running_size += uf.size
             valid_files.append(uf)
 
         if skipped_names:
-            st.info(f"ℹ️ {len(skipped_names)} file(s) skipped: {', '.join(skipped_names)}")
+            st.info(f"ℹ️ {len(skipped_names)} file(s) skipped (page limit): {', '.join(skipped_names)}")
+
+        if skipped_size_names:
+            st.warning(
+                f"⚠️ {len(skipped_size_names)} file(s) auto-skipped to stay within "
+                f"**{format_file_size(MAX_TOTAL_SIZE)}** total limit: {', '.join(skipped_size_names)}"
+            )
 
         if not valid_files:
+            st.error("❌ No files to process — all files were skipped due to page or size limits.")
             st.stop()
 
         if len(valid_files) > MAX_BATCH:
             st.error(f"❌ **Too many valid files!** Maximum {MAX_BATCH} files per batch. You have {len(valid_files)} valid files.")
-            st.stop()
-
-        # Check combined size of all valid files
-        _total_upload_size = sum(uf.size for uf in valid_files)
-        if _total_upload_size > MAX_TOTAL_SIZE:
-            st.error(
-                f"❌ **Total upload size too large!** "
-                f"Combined size is **{format_file_size(_total_upload_size)}** "
-                f"but maximum allowed is **{format_file_size(MAX_TOTAL_SIZE)}**. "
-                f"Please remove some files."
-            )
             st.stop()
 
         # ── Detect single vs batch mode ───────────────────────────────────
