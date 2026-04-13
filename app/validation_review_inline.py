@@ -307,12 +307,14 @@ def _render_text_html(text: str, checklist: list[dict],
 # ERROR NAVIGATION HELPERS
 # ═══════════════════════════════════════════════════════════════════
 
-def _get_error_ids(checklist: list[dict], fixed_ids: set[int]) -> list[int]:
+def _get_error_ids(checklist: list[dict], fixed_ids: set[int],
+                   ignored_ids: set[int] | None = None) -> list[int]:
+    ignored_ids = ignored_ids or set()
     ids = []
     for r in checklist:
         verdict = str(r.get("Verdict", ""))
         cid = int(r.get("#", 0))
-        if cid in fixed_ids:
+        if cid in fixed_ids or cid in ignored_ids:
             continue
         if verdict.startswith("❌"):
             ids.append(cid)
@@ -459,25 +461,195 @@ def _find_affected_items(checklist: list[dict], fixed_ids: set[int],
 # CONTENT ACCURACY HELPERS
 # ═══════════════════════════════════════════════════════════════════
 
+def _get_acc_ignored_count() -> int:
+    """Count how many accuracy diffs have been ignored in the current session."""
+    return sum(
+        1 for k, v in st.session_state.items()
+        if k.startswith("vri_acc_ignored_") and v
+    )
+
+
+def _get_acc_fixed_count() -> int:
+    """Count how many accuracy diffs have been applied in the current session."""
+    return sum(
+        1 for k, v in st.session_state.items()
+        if k.startswith("vri_acc_fixed_") and v
+    )
+
+
 def _build_accuracy_card_html(accuracy_report: dict | None) -> str:
-    """Return HTML for the accuracy metric card (fits inside vr-metric-row)."""
+    """Return HTML for the accuracy metric card (fits inside vr-metric-row).
+
+    If diffs have been ignored or fixed the effective accuracy is bumped
+    upward to reflect fewer real differences.
+    """
     if not accuracy_report:
         return ""
-    acc = accuracy_report["accuracy"]
+    # Recalculate accuracy accounting for ignored/fixed diffs
+    n_ignored = _get_acc_ignored_count()
+    n_fixed = _get_acc_fixed_count()
+    n_resolved = n_ignored + n_fixed
+    total_diffs = accuracy_report.get("real_diff_count", 0)
+    if n_resolved > 0 and total_diffs > 0:
+        # Each resolved diff recovers some matching words
+        orig_matching = accuracy_report.get("matching_words", 0)
+        max_words = max(
+            accuracy_report.get("pymupdf_word_count", 0),
+            accuracy_report.get("converted_word_count", 0),
+        )
+        # Estimate: each diff ≈ equal share of the non-matching words
+        non_matching = max_words - orig_matching
+        words_per_diff = non_matching / total_diffs if total_diffs else 0
+        recovered = min(non_matching, words_per_diff * n_resolved)
+        acc = ((orig_matching + recovered) / max_words * 100) if max_words > 0 else 100.0
+    else:
+        acc = accuracy_report["accuracy"]
     if acc >= 99:
         cls = "vr-mc-acc-hi"
     elif acc >= 95:
         cls = "vr-mc-acc-md"
     else:
         cls = "vr-mc-acc-lo"
+    _suffix = ""
+    if n_resolved > 0:
+        _suffix = f" <span style='font-size:0.6em;opacity:0.7;'>({n_resolved} resolved)</span>"
     return (
         f"<div class='vr-metric-card {cls}'>"
-        f"<h2>{acc:.1f}%</h2><p>📊 Text Accuracy</p></div>"
+        f"<h2>{acc:.1f}%{_suffix}</h2><p>📊 Text Accuracy</p></div>"
     )
 
 
-def _render_accuracy_expander(accuracy_report: dict | None):
-    """Render a collapsible section with word-level diff details."""
+def _acc_render_inline_edit(
+    idx: int,
+    diff: dict,
+    dtype: str,
+    converted_txt_path: Path | None,
+    anchor_text: str,
+    got_text: str,
+    expected_text: str,
+):
+    """Render an inline Apply-Fix widget for a single accuracy diff.
+
+    *anchor_text* is the Claude sentence that contains the diff — used to
+    locate where in the file the replacement should happen.
+    *got_text* is what Claude currently has (may be empty for MISSING).
+    *expected_text* is what PyMuPDF says it should be (may be empty for EXTRA).
+    """
+    if not converted_txt_path or not converted_txt_path.exists():
+        return
+
+    text = converted_txt_path.read_text(encoding="utf-8")
+    fix_key = f"vri_acc_fix_{idx}"
+    fixed_key = f"vri_acc_fixed_{idx}"
+
+    ignored_key = f"vri_acc_ignored_{idx}"
+
+    # Already applied?
+    if st.session_state.get(fixed_key, False):
+        st.success(f"✅ Diff #{idx} has been applied!")
+        return
+
+    # Already ignored?
+    if st.session_state.get(ignored_key, False):
+        st.caption(f"🔇 Diff #{idx} ignored (false positive).")
+        if st.button("↩️ Undo Ignore", key=f"vri_acc_unignore_{idx}"):
+            st.session_state[ignored_key] = False
+            st.rerun()
+        return
+
+    # Find the anchor (Claude sentence) in the file
+    _anchor = anchor_text.strip()
+    if not _anchor or _anchor not in text:
+        # Try with the got_text directly
+        if got_text and got_text.strip() in text:
+            _anchor = _extract_edit_context(text, got_text.strip())
+        else:
+            st.caption(f"⚙️ Cannot auto-locate this text in the file — edit manually if needed.")
+            return
+
+    # Build the expected replacement
+    if dtype == "REPLACE":
+        # Replace got_text with expected_text inside the anchor
+        if got_text and got_text in _anchor:
+            new_anchor = _anchor.replace(got_text, expected_text, 1)
+        else:
+            # Fallback: show the full anchor for manual editing
+            new_anchor = _anchor
+    elif dtype == "MISSING_IN_CONVERTED":
+        # Nothing to auto-replace — the text is missing entirely
+        new_anchor = _anchor
+    elif dtype == "EXTRA_IN_CONVERTED":
+        # Remove the extra text from the anchor
+        if got_text and got_text in _anchor:
+            new_anchor = _anchor.replace(got_text, "", 1)
+        else:
+            new_anchor = _anchor
+    else:
+        new_anchor = _anchor
+
+    # Inline edit
+    with st.expander(f"✏️ Edit & Apply Fix #{idx}", expanded=False):
+        ea1, ea2 = st.columns([4, 1])
+        with ea1:
+            edited = st.text_area(
+                "Edit text", value=new_anchor, height=120,
+                key=f"vri_acc_edit_{idx}", label_visibility="collapsed",
+            )
+        with ea2:
+            st.markdown("")
+            pending_key = f"vri_acc_pending_{idx}"
+            is_pending = st.session_state.get(pending_key, False)
+
+            if not is_pending:
+                if st.button("✅ Apply Fix", type="primary", key=f"vri_acc_apply_{idx}"):
+                    if edited.strip() and edited != _anchor:
+                        st.session_state[pending_key] = True
+                        st.rerun()
+                    elif edited == _anchor:
+                        st.warning("No changes made.")
+                if st.button("🔇 Ignore", key=f"vri_acc_ignore_{idx}",
+                             help="Mark this diff as a false positive"):
+                    st.session_state[ignored_key] = True
+                    st.rerun()
+            else:
+                st.info("Confirm this change?")
+                cc1, cc2 = st.columns(2)
+                with cc1:
+                    if st.button("✅ Confirm", type="primary", key=f"vri_acc_confirm_{idx}"):
+                        current = converted_txt_path.read_text(encoding="utf-8")
+                        updated = current.replace(_anchor, edited, 1)
+                        if updated != current:
+                            converted_txt_path.write_text(updated, encoding="utf-8")
+                            st.session_state[fixed_key] = True
+                            st.session_state.pop(pending_key, None)
+                            st.success(f"✅ Diff #{idx} applied to file!")
+                            st.rerun()
+                        else:
+                            st.error("Original text not found in file — it may have been changed already.")
+                            st.session_state.pop(pending_key, None)
+                with cc2:
+                    if st.button("❌ Cancel", key=f"vri_acc_cancel_{idx}"):
+                        st.session_state.pop(pending_key, None)
+                        st.rerun()
+
+        # Preview
+        if edited != _anchor:
+            p1, p2 = st.columns(2)
+            with p1:
+                st.markdown("**Before:**")
+                st.code(_anchor, language=None)
+            with p2:
+                st.markdown("**After:**")
+                st.code(edited, language=None)
+
+
+def _render_accuracy_expander(accuracy_report: dict | None,
+                              converted_txt_path: Path | None = None):
+    """Render a collapsible section with word-level diff details.
+
+    If *converted_txt_path* is supplied the user gets an inline **Apply Fix**
+    button next to each diff so they can correct the converted text file.
+    """
     if not accuracy_report:
         return
     acc = accuracy_report["accuracy"]
@@ -600,6 +772,13 @@ def _render_accuracy_expander(accuracy_report: dict | None):
                         f"> *PyMuPDF sentence:* {d['sentence_pymupdf']}\n\n"
                         f"> *Claude sentence:* {d['sentence_converted']}"
                     )
+                    # ── Inline edit for REPLACE diffs ──────────────────
+                    _acc_render_inline_edit(
+                        idx, d, dtype, converted_txt_path,
+                        anchor_text=d.get('sentence_converted', ''),
+                        got_text=d.get('converted_text', ''),
+                        expected_text=d.get('pymupdf_text', ''),
+                    )
 
                 elif dtype == "MISSING_IN_CONVERTED":
                     st.markdown(
@@ -607,11 +786,23 @@ def _render_accuracy_expander(accuracy_report: dict | None):
                         f"- **Missing:** {d['missing_text']}\n\n"
                         f"> *Sentence:* {d['sentence']}"
                     )
+                    _acc_render_inline_edit(
+                        idx, d, dtype, converted_txt_path,
+                        anchor_text=d.get('sentence', ''),
+                        got_text='',
+                        expected_text=d.get('missing_text', ''),
+                    )
                 elif dtype == "EXTRA_IN_CONVERTED":
                     st.markdown(
                         f"**#{idx} EXTRA in Claude output**\n\n"
                         f"- **Extra:** {d['extra_text']}\n\n"
                         f"> *Sentence:* {d['sentence']}"
+                    )
+                    _acc_render_inline_edit(
+                        idx, d, dtype, converted_txt_path,
+                        anchor_text=d.get('sentence', ''),
+                        got_text=d.get('extra_text', ''),
+                        expected_text='',
                     )
                 if idx < len(accuracy_report["real_diffs"]):
                     st.divider()
@@ -802,7 +993,7 @@ def render_inline_validation_review(
             else:
                 st.info("GPT checklist audit was not available for this file, "
                         "but text accuracy details are available below.")
-            _render_accuracy_expander(accuracy_report)
+            _render_accuracy_expander(accuracy_report, converted_txt_path)
         else:
             st.warning("⚠️ No audit data or accuracy report available for this file.")
 
@@ -890,7 +1081,7 @@ def render_inline_validation_review(
     st.progress(eff_pass / total, text=f"Pass rate: {eff_pass/total:.0%}  ({eff_pass}/{total})")
 
     # ── Content Accuracy Report (collapsible) ─────────────────
-    _render_accuracy_expander(accuracy_report)
+    _render_accuracy_expander(accuracy_report, converted_txt_path)
 
     # ── Filter mode ─────────────────────────────────────────────────
     filter_mode = st.radio(
@@ -933,7 +1124,8 @@ def render_inline_validation_review(
     if filter_mode == "errors":
         display_cl = [r for r in checklist
                       if str(r.get("Verdict", "")).startswith("❌")
-                      and int(r.get("#", 0)) not in fixed_ids]
+                      and int(r.get("#", 0)) not in fixed_ids
+                      and int(r.get("#", 0)) not in ignored_ids]
     elif filter_mode == "warnings":
         display_cl = [r for r in checklist
                       if str(r.get("Verdict", "")).startswith("⚠")
@@ -958,7 +1150,7 @@ def render_inline_validation_review(
     # ══════════════════════════════════════════════════════════════
     # ERROR NAVIGATION BAR
     # ══════════════════════════════════════════════════════════════
-    error_ids = _get_error_ids(checklist, fixed_ids)
+    error_ids = _get_error_ids(checklist, fixed_ids, ignored_ids)
     err_pos, err_total = _get_error_position(error_ids, selected_id)
 
     if error_ids:
@@ -1113,14 +1305,34 @@ def render_inline_validation_review(
                 else:
                     st.caption("✏️ Edit the text below. Click **Apply Fix** to save your change.")
             else:
-                original_context = ""
-                prefill = f"{tag_open}{pymupdf_text}{tag_close}"
-                st.caption(
-                    "⚠️ This text is **missing** from the Claude output. "
-                    "It was found by PyMuPDF but not included in the conversion. "
-                    "Click **Mark as Fixed** if you've manually handled it, "
-                    "or **Ignore** if it's a false positive."
-                )
+                # Missing text — try to find a nearby anchor from Context column
+                _ctx_col = str(selected_row.get("Context", "") or "").strip()
+                _anchor_context = ""
+                if _ctx_col and _ctx_col in text:
+                    _anchor_context = _ctx_col
+                elif _ctx_col:
+                    # Try partial match — first 80 chars of context
+                    _partial = _ctx_col[:80].strip()
+                    if _partial and _partial in text:
+                        # Expand to full context around the partial match
+                        _anchor_context = _extract_edit_context(text, _partial)
+                original_context = _anchor_context
+                if _anchor_context:
+                    prefill = _anchor_context + "\n" + f"{tag_open}{pymupdf_text}{tag_close}"
+                    st.caption(
+                        "⚠️ This text is **missing** from the Claude output. "
+                        "Nearby context is shown above the tagged text. "
+                        "Edit below to place the missing content correctly, "
+                        "then click **Apply Fix** to insert it into the file."
+                    )
+                else:
+                    prefill = f"{tag_open}{pymupdf_text}{tag_close}"
+                    st.caption(
+                        "⚠️ This text is **missing** from the Claude output. "
+                        "It was found by PyMuPDF but not included in the conversion. "
+                        "Click **Mark as Fixed** if you've manually handled it, "
+                        "or **Ignore** if it's a false positive."
+                    )
 
             fc1, fc2 = st.columns([3, 1])
             with fc1:
@@ -1189,19 +1401,65 @@ def render_inline_validation_review(
                                 st.session_state.pop(pending_key, None)
                                 st.rerun()
                 else:
-                    if st.button("✅ Mark as Fixed", type="primary", key=f"vri_copy_{cid}",
-                                 help="Mark this missing-text item as manually resolved"):
-                        _mark_fixed(cid)
-                        _save_undo_history([cid], "", "", str(converted_txt_path))
-                        st.success(f"✅ Item #{cid} marked as fixed!")
-                        st.rerun()
-                    if st.button("🔇 Ignore", key=f"vri_ignore_missing_{cid}",
-                                 help="Mark this as a false positive — no action needed"):
-                        _mark_ignored(cid)
-                        st.rerun()
+                    # Missing text — use the same Apply Fix → Confirm flow
+                    # when we have an anchor context to locate the insertion point
+                    if original_context:
+                        pending_key = f"vri_pending_apply_{cid}"
+                        is_pending = st.session_state.get(pending_key, False)
 
-            # Preview diff
-            if claude_text and new_text != original_context:
+                        if not is_pending:
+                            if st.button("✅ Apply Fix", type="primary", key=f"vri_apply_{cid}"):
+                                if new_text.strip() and new_text != original_context:
+                                    st.session_state[pending_key] = True
+                                    st.rerun()
+                                elif new_text == original_context:
+                                    st.warning("No changes made — edit the text to include the missing content.")
+                            if st.button("🔇 Ignore", key=f"vri_ignore_missing_{cid}",
+                                         help="Mark this as a false positive — no action needed"):
+                                _mark_ignored(cid)
+                                st.rerun()
+                        else:
+                            st.info(
+                                f"⚡ **1 item** will be inserted & "
+                                f"marked fixed: #{cid}"
+                            )
+                            cc1, cc2 = st.columns(2)
+                            with cc1:
+                                if st.button("✅ Confirm", type="primary", key=f"vri_confirm_{cid}"):
+                                    updated = text.replace(original_context, new_text, 1)
+                                    if updated != text:
+                                        converted_txt_path.write_text(updated, encoding="utf-8")
+                                        _mark_fixed(cid)
+                                        _save_undo_history(
+                                            [cid], original_context,
+                                            new_text,
+                                            str(converted_txt_path),
+                                        )
+                                        st.session_state.pop(pending_key, None)
+                                        st.success(f"✅ Saved! Item #{cid} inserted & marked fixed!")
+                                        st.rerun()
+                                    else:
+                                        st.error("Anchor context not found in file — text may have changed.")
+                                        st.session_state.pop(pending_key, None)
+                            with cc2:
+                                if st.button("❌ Cancel", key=f"vri_cancel_{cid}"):
+                                    st.session_state.pop(pending_key, None)
+                                    st.rerun()
+                    else:
+                        # No anchor context — mark-only (manual handling)
+                        if st.button("✅ Mark as Fixed", type="primary", key=f"vri_copy_{cid}",
+                                     help="Mark this missing-text item as manually resolved"):
+                            _mark_fixed(cid)
+                            _save_undo_history([cid], "", "", str(converted_txt_path))
+                            st.success(f"✅ Item #{cid} marked as fixed!")
+                            st.rerun()
+                        if st.button("🔇 Ignore", key=f"vri_ignore_missing_{cid}",
+                                     help="Mark this as a false positive — no action needed"):
+                            _mark_ignored(cid)
+                            st.rerun()
+
+            # Preview diff — show for both existing-text edits and missing-text insertions
+            if original_context and new_text != original_context:
                 with st.expander("👁️ Preview change", expanded=True):
                     p1, p2 = st.columns(2)
                     with p1:

@@ -7,6 +7,8 @@ from datetime import datetime
 from pathlib import Path
 import time
 import logging
+import threading
+import copy
 
 # Add the current directory to the Python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -165,6 +167,8 @@ try:
         st.session_state.batch_upload_id = None
     if 'uploader_key_counter' not in st.session_state:
         st.session_state.uploader_key_counter = 0
+    if 'batch_worker' not in st.session_state:
+        st.session_state.batch_worker = None       # BatchWorker instance (background thread)
 
     # Get session folders
     session_mgr = st.session_state.session_manager
@@ -1816,6 +1820,7 @@ def show_simple_ui():
             st.session_state.batch_selected_file = 0
             st.session_state.batch_upload_id = None
             st.session_state.uploader_key_counter = st.session_state.get('uploader_key_counter', 0) + 1
+            st.session_state.batch_worker = None
             
             # Reset validation review state (fixed/ignored/undo/selection)
             st.session_state.pop("vri_fixed_ids", None)
@@ -1941,14 +1946,23 @@ def show_simple_ui():
             _running_size += uf.size
             valid_files.append(uf)
 
-        if skipped_names:
-            st.info(f"ℹ️ {len(skipped_names)} file(s) skipped (page limit): {', '.join(skipped_names)}")
+        # Only show skip messages BEFORE processing starts — hide during/after
+        _is_processing = (
+            st.session_state.get('batch_processing')
+            or st.session_state.get('processing')
+            or bool(st.session_state.get('batch_results'))
+            or bool(st.session_state.get('processed_file_path'))
+        )
 
-        if skipped_size_names:
-            st.warning(
-                f"⚠️ {len(skipped_size_names)} file(s) auto-skipped to stay within "
-                f"**{format_file_size(MAX_TOTAL_SIZE)}** total limit: {', '.join(skipped_size_names)}"
-            )
+        if not _is_processing:
+            if skipped_names:
+                st.info(f"ℹ️ {len(skipped_names)} file(s) skipped (page limit): {', '.join(skipped_names)}")
+
+            if skipped_size_names:
+                st.warning(
+                    f"⚠️ {len(skipped_size_names)} file(s) auto-skipped to stay within "
+                    f"**{format_file_size(MAX_TOTAL_SIZE)}** total limit: {', '.join(skipped_size_names)}"
+                )
 
         if not valid_files:
             st.error("❌ No files to process — all files were skipped due to page or size limits.")
@@ -1957,7 +1971,6 @@ def show_simple_ui():
         if len(valid_files) > MAX_BATCH:
             st.error(f"❌ **Too many valid files!** Maximum {MAX_BATCH} files per batch. You have {len(valid_files)} valid files.")
             st.stop()
-
         # ── Detect single vs batch mode ───────────────────────────────────
         is_batch = len(valid_files) > 1
 
@@ -1982,6 +1995,7 @@ def show_simple_ui():
             st.session_state.batch_file_names = []
             st.session_state.batch_selected_file = 0
             st.session_state.batch_upload_id = None
+            st.session_state.batch_worker = None
             st.session_state.processed_file_path = None
             st.session_state.processed_file_data = None
             st.session_state.processing = False
@@ -2010,6 +2024,7 @@ def show_simple_ui():
                 st.session_state.batch_pdf_paths = []
                 st.session_state.batch_file_names = []
                 st.session_state.batch_selected_file = 0
+                st.session_state.batch_worker = None
                 st.session_state.processed_file_path = None
                 st.session_state.processed_file_data = None
 
@@ -2032,7 +2047,7 @@ def show_simple_ui():
                     if detect_pdf_type is not None:
                         pdf_analysis = detect_pdf_type(temp_path)
                         if pdf_analysis and pdf_analysis['type'] == 'scanned':
-                            st.error(f"🚫 **{uf.name}** is a scanned PDF — skipping.")
+                            logging.info(f"Skipped scanned PDF: {uf.name}")
                             try:
                                 os.remove(temp_path)
                             except Exception:
@@ -2046,7 +2061,7 @@ def show_simple_ui():
                         _pc = len(_pdf)
                         _pdf.close()
                         if _pc > 15:
-                            st.error(f"🚫 **{uf.name}** has {_pc} pages (max 15) — skipping.")
+                            logging.info(f"Skipped {uf.name}: {_pc} pages (max 15)")
                             try:
                                 os.remove(temp_path)
                             except Exception:
@@ -2070,8 +2085,10 @@ def show_simple_ui():
                 # Same batch already uploaded
                 st.success(f"✅ {len(st.session_state.batch_file_names)} file(s) ready")
 
-            # Show file list
-            if st.session_state.batch_file_names and not st.session_state.batch_results:
+            # Show file list only before processing starts (not during or after)
+            if (st.session_state.batch_file_names
+                    and not st.session_state.batch_results
+                    and not st.session_state.batch_processing):
                 _file_list_html = '<div style="background:white;border:1px solid #e2e8f0;border-radius:8px;padding:12px 16px;margin:8px 0;">'
                 for i, fn in enumerate(st.session_state.batch_file_names):
                     _file_list_html += f'<div style="padding:4px 0;font-size:0.88rem;"><span style="color:#64748b;">#{i+1}</span> 📄 <strong>{fn}</strong></div>'
@@ -2193,13 +2210,17 @@ def show_simple_ui():
             if not _page_limit_exceeded:
                 show_single_file_processing()
     else:
-        # No files in uploader — but check if we have batch results to show
-        if st.session_state.get('batch_results'):
+        # No files in uploader — but check if we have batch results or active worker
+        if st.session_state.get('batch_processing') and st.session_state.get('batch_worker'):
+            # Worker still running (uploader was cleared by key bump) — show live UI
+            show_batch_processing()
+        elif st.session_state.get('batch_results'):
             n_files = len(st.session_state.batch_pdf_paths)
             if len(st.session_state.batch_results) >= n_files and n_files > 0:
                 show_batch_results_section()
             else:
-                st.info("👆 Please upload one or more PDF files to begin processing")
+                # Partial results exist but worker stopped — show what we have
+                show_batch_results_section()
         else:
             st.info("👆 Please upload one or more PDF files to begin processing")
 
@@ -2652,10 +2673,22 @@ def _swap_batch_vri_state(from_idx: int | None, to_idx: int | None):
         "vri_fixed_ids", "vri_ignored_ids", "vri_undo_history",
         "vri_selected_item", "vri_current_page", "vri_last_sel",
     )
+
+    # ── Accuracy fix/ignore state keys (vri_acc_fixed_*, vri_acc_ignored_*) ──
+    # These are per-diff boolean keys that must be saved/restored per file.
+    _acc_state_prefixes = ("vri_acc_fixed_", "vri_acc_ignored_")
+
     # Save current state under from_idx
     if from_idx is not None:
         for k in _vri_keys:
             st.session_state[f"{k}__batch_{from_idx}"] = st.session_state.pop(k, None)
+        # Save accuracy fix/ignore per-diff keys as a dict
+        _acc_state = {}
+        for k in list(st.session_state.keys()):
+            if any(k.startswith(p) for p in _acc_state_prefixes):
+                _acc_state[k] = st.session_state[k]
+        st.session_state[f"_batch_acc_state_{from_idx}"] = _acc_state
+
     # Load state for to_idx
     if to_idx is not None:
         for k in _vri_keys:
@@ -2673,10 +2706,14 @@ def _swap_batch_vri_state(from_idx: int | None, to_idx: int | None):
         "vri_confirm_", "vri_cancel_", "vri_copy_",
         "vri_ignore_nochange_", "vri_ignore_", "vri_unignore_",
         "vri_undo_",
+        "vri_acc_fix_", "vri_acc_fixed_", "vri_acc_ignored_",
+        "vri_acc_edit_", "vri_acc_apply_", "vri_acc_pending_",
+        "vri_acc_confirm_", "vri_acc_cancel_", "vri_acc_ignore_",
+        "vri_acc_unignore_",
     )
     # Static widget keys that must also be reset between files
     _static_widget_keys = {
-        "vri_filter_mode", "vri_pg_slider", "vri_pg_prev", "vri_pg_next",
+        "vri_pg_slider", "vri_pg_prev", "vri_pg_next",
         "vri_jump_to", "vri_prev_item_btn", "vri_next_item_btn",
         "vri_prev_err", "vri_next_err", "vri_twocol",
     }
@@ -2686,51 +2723,613 @@ def _swap_batch_vri_state(from_idx: int | None, to_idx: int | None):
     for k in stale_keys:
         del st.session_state[k]
 
+    # Restore accuracy fix/ignore state for the target file
+    if to_idx is not None:
+        _saved_acc = st.session_state.pop(f"_batch_acc_state_{to_idx}", {})
+        for k, v in _saved_acc.items():
+            st.session_state[k] = v
+
+    # Explicitly reset filter radio to "all" — deleting a Streamlit
+    # widget key doesn't clear the internal widget cache, so the radio
+    # would display the old selection while returning the default value.
+    st.session_state["vri_filter_mode"] = "all"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Background Batch Worker — processes files in a daemon thread
+# ══════════════════════════════════════════════════════════════════════════════
+
+class BatchWorker:
+    """Thread-safe batch processor that runs in the background.
+
+    Results are written to an internal list protected by a lock.
+    The Streamlit UI polls ``get_completed_results()`` on each rerun
+    (driven by st.fragment auto-refresh) to sync finished files into
+    ``st.session_state.batch_results`` without blocking the UI.
+    """
+
+    def __init__(self, pdf_paths: list[str], file_names: list[str],
+                 session_id: str, session_mgr, session_folders: dict):
+        self._pdf_paths = list(pdf_paths)
+        self._file_names = list(file_names)
+        self._session_id = session_id
+        self._session_mgr = session_mgr
+        self._session_folders = session_folders
+        self._lock = threading.Lock()
+        self._results: list[dict] = []          # completed file results
+        self._current_idx: int = 0              # file currently being processed
+        self._current_file: str = ""            # name of current file
+        self._current_logs: list[dict] = []     # live logs for current file
+        self._done: bool = False
+        self._thread: threading.Thread | None = None
+
+    # ── Public API (called from main Streamlit thread) ──────────────
+    @property
+    def total(self) -> int:
+        return len(self._pdf_paths)
+
+    def start(self):
+        """Launch the background processing thread."""
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def is_done(self) -> bool:
+        with self._lock:
+            return self._done
+
+    def get_completed_results(self) -> list[dict]:
+        """Return a snapshot of all completed file results (thread-safe copy)."""
+        with self._lock:
+            return list(self._results)
+
+    def get_progress(self) -> dict:
+        """Return a snapshot of current progress."""
+        with self._lock:
+            return {
+                "current_idx": self._current_idx,
+                "current_file": self._current_file,
+                "n_completed": len(self._results),
+                "total": self.total,
+                "done": self._done,
+                "current_logs": list(self._current_logs),
+            }
+
+    # ── Background thread entry point ───────────────────────────────
+    def _run(self):
+        """Process every file serially (runs in daemon thread)."""
+        import importlib.util
+
+        for idx, (pdf_path, file_name) in enumerate(
+            zip(self._pdf_paths, self._file_names)
+        ):
+            with self._lock:
+                self._current_idx = idx
+                self._current_file = file_name
+                self._current_logs = []
+
+            try:
+                file_result = self._process_one(pdf_path, file_name, idx)
+            except Exception as e:
+                logging.error(f"BatchWorker error on {file_name}: {e}", exc_info=True)
+
+                # Classify the error for user-friendly messaging
+                _err_str = str(e).lower()
+                _api_network_keywords = (
+                    "timed out", "timeout", "overloaded", "connection",
+                    "disconnected", "429", "500", "502", "503", "504", "529",
+                    "rate limit", "empty text", "api error", "request failed",
+                )
+                if any(kw in _err_str for kw in _api_network_keywords):
+                    _err_category = "api_network"
+                    _err_reason = (
+                        "API/Network interruption — the Claude API timed out or was "
+                        "temporarily unavailable. This is not a code issue; the file "
+                        "can be retried."
+                    )
+                else:
+                    _err_category = "processing"
+                    _err_reason = f"Processing error: {e}"
+
+                file_result = {
+                    "file_name": file_name,
+                    "pdf_path": pdf_path,
+                    "file_size": 0,
+                    "output_path": None,
+                    "status": "failed",
+                    "error_category": _err_category,
+                    "error_reason": _err_reason,
+                    "detected_state": "",
+                    "processing_time": "—",
+                    "conversion_time": "—",
+                    "total_elapsed_secs": 0,
+                    "conversion_elapsed_secs": 0,
+                    "audit_excel_path": None,
+                    "audit_highlighted_dir": None,
+                    "audit_json_report": None,
+                    "content_accuracy_report": None,
+                    "processing_logs": [{"time": datetime.now().strftime("%H:%M:%S"),
+                                         "message": f"❌ {e}", "level": "error", "step": 0}],
+                    "output_data": None,
+                }
+
+            with self._lock:
+                self._results.append(file_result)
+
+        with self._lock:
+            self._done = True
+
+    # ── Single-file processing (no st.session_state access) ─────────
+    def _process_one(self, pdf_path: str, file_name: str, idx: int) -> dict:
+        """Process one PDF entirely without touching Streamlit state."""
+        import importlib.util
+
+        start_time = time.time()
+        session_id = self._session_id
+        session_mgr = self._session_mgr
+        session_folders = self._session_folders
+        logs: list[dict] = []
+
+        def add_log(message, level="info"):
+            entry = {"time": datetime.now().strftime("%H:%M:%S"),
+                     "message": message, "level": level,
+                     "step": 0}
+            logs.append(entry)
+            with self._lock:
+                self._current_logs = list(logs)
+            logging.info(message)
+
+        add_log(f"Starting Claude Opus 4.6 processing for {file_name}...")
+
+        # ── Load Opus module ─────────────────────────────────────────
+        opus_module_path = os.path.normpath(
+            os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         '..', 'Opus4.6', 'Claude_Opus_4.6_Test.py')
+        )
+        spec = importlib.util.spec_from_file_location("claude_opus_converter", opus_module_path)
+        opus = importlib.util.module_from_spec(spec)
+        _orig_stdout, _orig_stderr = sys.stdout, sys.stderr
+        spec.loader.exec_module(opus)
+        sys.stdout, sys.stderr = _orig_stdout, _orig_stderr
+
+        # Step 1: Client
+        add_log("🤖 Initializing Claude Opus 4.6 client...")
+        client = opus.get_anthropic_client()
+        if not client:
+            raise RuntimeError("Failed to initialize Claude Opus client")
+        add_log("✅ Claude Opus client initialized")
+
+        # Step 2: Detect state
+        add_log("🔍 Detecting state from filename...")
+        detected_state = opus.detect_state_from_filename(pdf_path)
+        if detected_state:
+            _state_name = US_STATE_NAMES.get(detected_state, detected_state)
+            add_log(f"✅ State detected from filename: {detected_state} — {_state_name}")
+        else:
+            add_log("🔍 Analyzing PDF content to identify state via AI...")
+            detected_state = opus.detect_state_from_content(client, pdf_path)
+            if detected_state:
+                _state_name = US_STATE_NAMES.get(detected_state, detected_state)
+                add_log(f"✅ Detected state from content: {detected_state} — {_state_name}")
+            else:
+                add_log("⚠️ Could not detect state — using default prompt", "warning")
+
+        # Step 3: Build prompt
+        add_log("📋 Building state-specific conversion prompt...")
+        state_config = opus.load_state_template(detected_state) if detected_state else None
+        prompt = opus.get_conversion_prompt(state_config)
+        add_log(f"✅ Conversion prompt built ({len(prompt):,} chars)")
+
+        # Step 4: Visual conversion
+        add_log("👁️ Running Claude Opus 4.6 visual conversion (this may take a few minutes)...")
+        add_log("⏳ Sending PDF pages to Claude API, waiting for response...")
+
+        # Heartbeat: emit a log every 15s so the user knows it's still running
+        _heartbeat_stop = threading.Event()
+        _conv_start = time.time()
+
+        def _heartbeat():
+            while not _heartbeat_stop.is_set():
+                _heartbeat_stop.wait(15)
+                if _heartbeat_stop.is_set():
+                    break
+                _elapsed = int(time.time() - _conv_start)
+                _m, _s = divmod(_elapsed, 60)
+                add_log(f"⏳ Still waiting for Claude API response… ({_m}m {_s}s elapsed)")
+
+        _hb_thread = threading.Thread(target=_heartbeat, daemon=True)
+        _hb_thread.start()
+
+        try:
+            result_data = opus.convert_pdf_to_text(client, pdf_path, prompt)
+        finally:
+            _heartbeat_stop.set()
+            _hb_thread.join(timeout=2)
+
+        if isinstance(result_data, tuple):
+            converted_text = result_data[0]
+        else:
+            converted_text = result_data
+        if not converted_text:
+            raise RuntimeError("Visual conversion returned empty text")
+        add_log(f"✅ Visual conversion complete: {len(converted_text):,} characters")
+
+        # Step 4b: Strip protected clauses
+        if state_config:
+            try:
+                from protected_clauses import strip_protected_tags as _strip
+                if _strip:
+                    _before_strip = converted_text
+                    converted_text = _strip(converted_text, state_config)
+                    if converted_text != _before_strip:
+                        add_log(f"🛡️ Stripped tags from protected clauses for {detected_state}")
+            except Exception:
+                pass
+
+        # Step 5: Save output
+        conversion_elapsed = time.time() - start_time
+        _cm, _cs = int(conversion_elapsed // 60), int(conversion_elapsed % 60)
+        conversion_time_str = f"{_cm}m {_cs}s" if _cm > 0 else f"{_cs}s"
+        add_log(f"🏁 PDF Conversion complete in {conversion_time_str}")
+        add_log("💾 Saving converted output...")
+
+        output_filename = Path(pdf_path).stem + "_claude_opus.txt"
+        output_path = os.path.join(session_folders['output_folder'], output_filename)
+        os.makedirs(session_folders['output_folder'], exist_ok=True)
+        if not opus.save_text_file(converted_text, output_path):
+            raise RuntimeError(f"Failed to save output to {output_path}")
+        add_log(f"✅ Output saved — now generating validation report…")
+
+        # Step 6: PyMuPDF extraction
+        add_log("📄 Running PyMuPDF extraction...")
+        audit_excel_path = None
+        audit_highlighted_dir = None
+        audit_json_report = None
+        content_accuracy_report = None
+        pymupdf_text = None
+        pymupdf_report = None
+        highlight_dir = None
+
+        try:
+            from pymupdf_extractor import (
+                extract_pdf_json_report,
+                extract_pdf_with_pymupdf,
+                highlight_pdf_formatting,
+                clean_extracted_text,
+                consolidate_adjacent_tags,
+            )
+
+            # Determine state-specific marking flags
+            _mark_flags = {}
+            if state_config:
+                add_cfg = state_config.get("add_markup", {})
+                del_cfg = state_config.get("delete_markup", {})
+                _mark_flags["mark_underline"] = add_cfg.get("underline", True)
+                _mark_flags["mark_italic"] = add_cfg.get("italic", False) or del_cfg.get("italic", False)
+                _mark_flags["mark_bold"] = add_cfg.get("bold", False)
+                _mark_flags["mark_strikethrough"] = del_cfg.get("strike_out", True)
+                _mark_flags["mark_brackets"] = add_cfg.get("brackets", False) or del_cfg.get("brackets", False)
+
+            # 6a: JSON report
+            pymupdf_report = extract_pdf_json_report(pdf_path, **_mark_flags)
+            n_spans = len(pymupdf_report.get("formatted_spans", []))
+            add_log(f"📊 PyMuPDF JSON report: {n_spans} formatted spans detected")
+
+            # Save JSON report alongside output
+            pymupdf_json_path = output_path.replace(".txt", "_pymupdf_report.json")
+            import json as _json
+            with open(pymupdf_json_path, "w", encoding="utf-8") as jf:
+                _json.dump(pymupdf_report, jf, indent=2, ensure_ascii=False)
+            add_log(f"✅ JSON report saved")
+
+            # 6b: Tagged text
+            pymupdf_text = extract_pdf_with_pymupdf(pdf_path, join_pages=True, **_mark_flags)
+            pymupdf_txt_path = output_path.replace(".txt", "_pymupdf.txt")
+            with open(pymupdf_txt_path, "w", encoding="utf-8") as tf:
+                tf.write(pymupdf_text)
+            add_log(f"✅ PyMuPDF tagged text saved: {len(pymupdf_text):,} chars")
+
+            # 6c: Highlighted page images
+            highlight_dir = Path(output_path).parent / f"{Path(pdf_path).stem}_highlighted"
+            hi_imgs = highlight_pdf_formatting(pdf_path, report=pymupdf_report,
+                                               output_dir=highlight_dir, **_mark_flags)
+            add_log(f"✅ {len(hi_imgs)} highlighted page images saved")
+
+            audit_highlighted_dir = str(highlight_dir)
+            audit_json_report = pymupdf_report
+        except Exception as pmu_err:
+            add_log(f"⚠️ PyMuPDF extraction error: {pmu_err}", "warning")
+            logging.error(f"BatchWorker PyMuPDF error: {pmu_err}", exc_info=True)
+
+        # Step 7: Claude LLM Clean
+        pymupdf_clean_text = None
+        if pymupdf_text:
+            try:
+                add_log("🧹 Cleaning PyMuPDF text with Claude — removing headers/footers/line numbers...")
+                add_log("⏳ Sending text to Claude for cleanup, please wait...")
+                pymupdf_clean_text = clean_extracted_text(
+                    pymupdf_text,
+                    state_code=detected_state,
+                    anthropic_client=client,
+                )
+                pymupdf_clean_text = consolidate_adjacent_tags(pymupdf_clean_text)
+
+                # Strip tags from protected clauses
+                try:
+                    from protected_clauses import strip_protected_tags as _strip_prot
+                    if _strip_prot and detected_state:
+                        pymupdf_clean_text = _strip_prot(pymupdf_clean_text, detected_state)
+                except Exception:
+                    pass
+
+                pymupdf_clean_path = output_path.replace(".txt", "_pymupdf_clean.txt")
+                with open(pymupdf_clean_path, "w", encoding="utf-8") as cf:
+                    cf.write(pymupdf_clean_text)
+                add_log(f"✅ Clean text saved: {len(pymupdf_text):,} → {len(pymupdf_clean_text):,} chars")
+            except Exception as e:
+                add_log(f"⚠️ LLM clean error: {e}", "warning")
+                pymupdf_clean_text = pymupdf_text
+        else:
+            add_log("⏭️ Skipping LLM clean (no PyMuPDF text)")
+
+        # Content accuracy check
+        if pymupdf_clean_text and converted_text:
+            try:
+                _opus46 = os.path.normpath(os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)), '..', 'Opus4.6'))
+                if _opus46 not in sys.path:
+                    sys.path.insert(0, _opus46)
+                from compare_files import compare_texts as _cmp
+                if _cmp:
+                    content_accuracy_report = _cmp(pymupdf_clean_text, converted_text)
+                    _acc = content_accuracy_report.get('accuracy', 0)
+                    _diffs = content_accuracy_report.get('real_diff_count', 0)
+                    add_log(f"📊 Text accuracy: {_acc:.1f}% ({_diffs} diffs)")
+            except Exception as e:
+                add_log(f"⚠️ Content accuracy check error: {e}", "warning")
+
+        # Step 8: GPT Audit
+        if pymupdf_clean_text and highlight_dir and highlight_dir.exists():
+            try:
+                add_log("🤖 Running GPT audit comparison — this may take 1–2 minutes...")
+                _opus46 = os.path.normpath(os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)), '..', 'Opus4.6'))
+                if _opus46 not in sys.path:
+                    sys.path.insert(0, _opus46)
+                from gpt_compare import gpt_compare_tags
+
+                # Load highlighted images as base64
+                import base64 as _b64
+                hi_images_b64 = []
+                for img_file in sorted(highlight_dir.glob("page_*.png")):
+                    hi_images_b64.append(_b64.b64encode(img_file.read_bytes()).decode())
+                add_log(f"📷 Loaded {len(hi_images_b64)} highlighted page images for GPT")
+
+                # Build state rules
+                sr_parts = []
+                if state_config:
+                    sr_parts.append(f"State: {state_config.get('state_name', detected_state or 'unknown')}")
+                    a_cfg = state_config.get("add_markup", {})
+                    d_cfg = state_config.get("delete_markup", {})
+                    sr_parts.append(f"Underline={a_cfg.get('underline', False)}")
+                    sr_parts.append(f"Strikethrough={d_cfg.get('strike_out', False)}")
+                    sr_parts.append(f"Italic={a_cfg.get('italic', False)}")
+                    sr_parts.append(f"Bold={a_cfg.get('bold', False)}")
+                state_rules_str = ", ".join(sr_parts) if sr_parts else f"State: {detected_state or 'unknown'}"
+
+                gpt_xlsx = output_path.replace(".txt", "_gpt_comparison.xlsx")
+                gpt_cmp = gpt_compare_tags(
+                    highlighted_images_b64=hi_images_b64,
+                    pymupdf_clean_text=pymupdf_clean_text,
+                    claude_converted_text=converted_text,
+                    state_code=detected_state or "XX",
+                    state_rules=state_rules_str,
+                    output_xlsx=gpt_xlsx,
+                    pymupdf_report=pymupdf_report,
+                )
+
+                audit_excel_path = gpt_xlsx
+                add_log(
+                    f"✅ GPT audit complete — "
+                    f"Checklist: {gpt_cmp['total_checklist']} items | "
+                    f"✅ Pass: {gpt_cmp['passes']} | "
+                    f"⚠️ Warnings: {gpt_cmp['warnings']} | "
+                    f"❌ Errors: {gpt_cmp['errors']}"
+                )
+            except Exception as e:
+                add_log(f"⚠️ GPT audit error: {e}", "warning")
+                logging.error(f"BatchWorker GPT audit error: {e}", exc_info=True)
+        else:
+            add_log("⏭️ Skipping GPT audit (no PyMuPDF data)")
+
+        # Wrap up
+        elapsed = time.time() - start_time
+        minutes, seconds = int(elapsed // 60), int(elapsed % 60)
+        processing_time_str = f"{minutes}m {seconds}s" if minutes > 0 else f"{seconds}s"
+        add_log(f"✅ Processing complete in {processing_time_str}")
+
+        session_mgr.complete_processing(session_id, output_path)
+
+        # Read output bytes for download
+        output_data = None
+        try:
+            with open(output_path, 'rb') as f:
+                output_data = f.read()
+        except Exception:
+            pass
+
+        try:
+            _file_size_bytes = os.path.getsize(pdf_path)
+        except Exception:
+            _file_size_bytes = 0
+
+        return {
+            "file_name": file_name,
+            "pdf_path": pdf_path,
+            "file_size": _file_size_bytes,
+            "output_path": output_path,
+            "status": "success",
+            "detected_state": detected_state or "",
+            "processing_time": processing_time_str,
+            "conversion_time": conversion_time_str,
+            "total_elapsed_secs": elapsed,
+            "conversion_elapsed_secs": conversion_elapsed,
+            "audit_excel_path": audit_excel_path,
+            "audit_highlighted_dir": audit_highlighted_dir,
+            "audit_json_report": audit_json_report,
+            "content_accuracy_report": content_accuracy_report,
+            "processing_logs": logs,
+            "output_data": output_data,
+        }
+
 
 def show_batch_processing():
-    """Show batch processing UI: process button, progress, and results."""
+    """Show batch processing UI with background worker.
+
+    Files process in a background thread.  The UI auto-refreshes every
+    5 seconds so the user can review completed files while remaining
+    files are still being processed.
+    """
+    n_files = len(st.session_state.batch_pdf_paths)
+    worker: BatchWorker | None = st.session_state.get('batch_worker')
+
+    # ── Sync completed results from worker → session state ────────────
+    if worker is not None:
+        completed = worker.get_completed_results()
+        # Only append new results (worker list is append-only).
+        # batch_results_offset tracks how many results existed before
+        # this worker started (needed for retries that keep prior results).
+        _offset = st.session_state.get('batch_results_offset', 0)
+        n_from_worker = len(st.session_state.batch_results) - _offset
+        if len(completed) > n_from_worker:
+            for r in completed[n_from_worker:]:
+                st.session_state.batch_results.append(r)
+        # Check if done
+        if worker.is_done():
+            st.session_state.batch_processing = False
+            st.session_state.uploader_key_counter += 1
 
     batch_results = st.session_state.batch_results
-    n_files = len(st.session_state.batch_pdf_paths)
+    is_processing = st.session_state.batch_processing
 
-    # ── If batch is done, show results ────────────────────────────────
-    if batch_results and len(batch_results) == n_files:
+    # ── If batch is fully done, show final results ────────────────────
+    if not is_processing and batch_results and len(batch_results) == n_files:
         show_batch_results_section()
         return
 
-    # ── Process button ────────────────────────────────────────────────
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        if not st.session_state.batch_processing:
+    # ── Process button (before processing starts) ─────────────────────
+    if not is_processing and not batch_results:
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
             if st.button(
-                f"🚀 Process {n_files} Documents (Serial)",
+                f"🚀 Process {n_files} Documents",
                 type="primary",
                 use_container_width=True,
-                help="Process all uploaded PDFs one after another using Claude Opus 4.6",
+                help="Process all uploaded PDFs using Claude Opus 4.6. "
+                     "You can review completed files while others are still processing.",
             ):
+                session_mgr = st.session_state.session_manager
+                session_folders = session_mgr.get_session_folders(st.session_state.session_id)
+                session_mgr.start_processing(st.session_state.session_id)
+
+                worker = BatchWorker(
+                    pdf_paths=st.session_state.batch_pdf_paths,
+                    file_names=st.session_state.batch_file_names,
+                    session_id=st.session_state.session_id,
+                    session_mgr=session_mgr,
+                    session_folders=session_folders,
+                )
+                st.session_state.batch_worker = worker
                 st.session_state.batch_processing = True
                 st.session_state.batch_current_idx = 0
                 st.session_state.batch_results = []
+                st.session_state.batch_results_offset = 0
                 st.session_state.process_method = "claude_opus"
+                worker.start()
                 st.rerun()
+        return
+
+    # ── Processing in progress OR partially complete ──────────────────
+    progress_info = worker.get_progress() if worker else {
+        "current_idx": 0, "current_file": "", "n_completed": len(batch_results),
+        "total": n_files, "done": not is_processing, "current_logs": [],
+    }
+    n_completed = len(batch_results)
+    n_total = n_files
+
+    # ── Processing status banner (above tabs, always visible) ─────────
+    if is_processing:
+        _cur_file = progress_info["current_file"]
+        _cur_idx = progress_info["current_idx"]
+        _offset = st.session_state.get('batch_results_offset', 0)
+        _is_retry = _offset > 0
+        _worker_total = worker.total if worker else (n_total - _offset)
+        _worker_done = len(batch_results) - _offset
+
+        if _is_retry:
+            _header_text = (
+                f'<strong style="color:#1e40af;">🔄 Retrying file '
+                f'{_cur_idx + 1} of {_worker_total}</strong>'
+                f' — <span style="color:#1e40af;">{_cur_file}</span>'
+                f'<br><span style="font-size:0.85rem; color:#3b82f6;">'
+                f'{_worker_done} retried · {_offset} previously succeeded</span>'
+            )
         else:
+            _header_text = (
+                f'<strong style="color:#1e40af;">⏳ Processing file '
+                f'{_cur_idx + 1} of {n_total}</strong>'
+                f' — <span style="color:#1e40af;">{_cur_file}</span>'
+                f'<br><span style="font-size:0.85rem; color:#3b82f6;">'
+                f'{n_completed} completed · '
+                f'{n_total - n_completed - 1} remaining after current</span>'
+            )
+        st.markdown(
+            f'<div style="background:#eff6ff; border-radius:10px; padding:14px 20px; '
+            f'border-left:4px solid #3b82f6; margin-bottom:12px;">'
+            f'{_header_text}</div>',
+            unsafe_allow_html=True,
+        )
+        st.progress(n_completed / n_total,
+                    text=f"Completed {n_completed}/{n_total} files")
+    else:
+        _n_ok_live = sum(1 for r in batch_results if r['status'] == 'success')
+        _n_fail_live = n_total - _n_ok_live
+        if _n_fail_live:
             st.warning(
-                f"⏳ **Batch Processing...**\n\n"
-                f"File {st.session_state.batch_current_idx + 1} of {n_files}"
+                f"⚠️ **Batch complete** — "
+                f"{_n_ok_live}/{n_total} succeeded, "
+                f"{_n_fail_live} failed. "
+                f"Switch to the **Batch Summary** tab to retry failed files."
+            )
+        else:
+            st.success(
+                f"🎉 **Batch complete!** "
+                f"{_n_ok_live}/{n_total} files processed successfully."
             )
 
-    # ── Serial processing loop ────────────────────────────────────────
-    if st.session_state.batch_processing:
-        idx = st.session_state.batch_current_idx
-        total = n_files
+    # ── Tab layout (live) ─────────────────────────────────────────────
+    tab_labels = ["📦 Progress"]
+    has_review_files = any(
+        r.get('audit_excel_path') or r.get('content_accuracy_report')
+        for r in batch_results
+    )
+    if batch_results:
+        tab_labels.append("🔍 Validation Review")
+    if any(r.get('processing_logs') for r in batch_results):
+        tab_labels.append("📋 Activity Logs")
 
-        # Master progress bar
-        st.markdown("---")
-        st.markdown(f"### 📦 Batch Progress — File {idx + 1} of {total}")
-        st.progress(idx / total, text=f"Completed {idx}/{total} files")
+    tabs = st.tabs(tab_labels)
 
-        # Show results for already-completed files
+    # ══════════════════════════════════════════════════════════════════
+    # TAB 1 — Live Progress
+    # ══════════════════════════════════════════════════════════════════
+    with tabs[0]:
+        if is_processing:
+            # Auto-refreshing live log fragment (only refreshes this fragment, not the whole page)
+            _batch_live_log_fragment()
+
+        # Completed files mini-table
         if batch_results:
+            st.markdown("#### ✅ Completed Files")
             _completed_html = '<div style="margin-bottom:12px;">'
             for i, res in enumerate(batch_results):
                 _icon = "✅" if res['status'] == 'success' else "❌"
@@ -2745,92 +3344,124 @@ def show_batch_processing():
             _completed_html += '</div>'
             st.markdown(_completed_html, unsafe_allow_html=True)
 
-        # Process the current file
-        pdf_path = st.session_state.batch_pdf_paths[idx]
-        file_name = st.session_state.batch_file_names[idx]
+        # Pending files
+        if is_processing:
+            _pending_start = n_completed + 1  # skip current (shown above)
+            _pending_names = st.session_state.batch_file_names[_pending_start:]
+            if _pending_names:
+                with st.expander(f"⏳ Pending ({len(_pending_names)} files)", expanded=False):
+                    for i, fn in enumerate(_pending_names):
+                        st.markdown(f"<span style='font-size:0.85rem;color:#64748b;'>#{_pending_start + i + 1} — {fn}</span>",
+                                    unsafe_allow_html=True)
 
-        st.markdown(f"#### 🔄 Processing: **{file_name}**")
+    # ══════════════════════════════════════════════════════════════════
+    # TAB 2 — Validation Review (live, for completed files)
+    # ══════════════════════════════════════════════════════════════════
+    if batch_results and len(tabs) > 1:
+        with tabs[1]:
+            _success_results = [r for r in batch_results if r['status'] == 'success']
+            _success_indices = [i for i, r in enumerate(batch_results) if r['status'] == 'success']
 
-        progress_placeholder = st.empty()
-        status_placeholder = st.empty()
-        log_container = st.expander(f"📋 Activity Log — {file_name}", expanded=True)
-        log_placeholder = log_container.empty()
+            if not _success_results:
+                st.info("No successfully processed files available for review yet.")
+            else:
+                file_options = [
+                    f"#{i+1} — {r['file_name']} ({r.get('detected_state', '?')})"
+                    for i, r in zip(_success_indices, _success_results)
+                ]
 
-        # Reset per-file state
-        st.session_state.current_step = 0
-        st.session_state.step_status = {i: "⏳" for i in range(8)}
-        st.session_state.processing_logs = []
-        st.session_state.detected_state = None
-        st.session_state.audit_excel_path = None
-        st.session_state.audit_highlighted_dir = None
-        st.session_state.audit_json_report = None
-        st.session_state.content_accuracy_report = None
-        st.session_state.conversion_time = None
-        st.session_state.processing_time = None
-        st.session_state.total_elapsed_secs = 0
-        st.session_state.conversion_elapsed_secs = 0
+                prev_sel_idx = st.session_state.get('batch_selected_file', 0)
 
-        with progress_placeholder.container():
-            show_processing_steps()
+                selected_label = st.selectbox(
+                    "Select file to review:",
+                    file_options,
+                    index=min(prev_sel_idx, len(file_options) - 1) if file_options else 0,
+                    key="batch_file_selector_live",
+                )
+                new_sel_idx = file_options.index(selected_label) if selected_label in file_options else 0
 
-        # Run the actual processing
-        result = process_with_claude_opus(
-            pdf_path,
-            'AUTO',
-            st.session_state.session_id,
-            progress_placeholder,
-            status_placeholder,
-            log_placeholder,
-        )
+                # Swap vri_ state if selection changed
+                if new_sel_idx != prev_sel_idx:
+                    _swap_batch_vri_state(from_idx=prev_sel_idx, to_idx=new_sel_idx)
+                    st.session_state.batch_selected_file = new_sel_idx
 
-        # Collect result for this file
-        try:
-            _file_size_bytes = os.path.getsize(pdf_path)
-        except Exception:
-            _file_size_bytes = 0
-        file_result = {
-            'file_name': file_name,
-            'pdf_path': pdf_path,
-            'file_size': _file_size_bytes,
-            'output_path': result,
-            'status': 'success' if result else 'failed',
-            'detected_state': st.session_state.get('detected_state', ''),
-            'processing_time': st.session_state.get('processing_time', '—'),
-            'conversion_time': st.session_state.get('conversion_time', '—'),
-            'total_elapsed_secs': st.session_state.get('total_elapsed_secs', 0),
-            'conversion_elapsed_secs': st.session_state.get('conversion_elapsed_secs', 0),
-            'audit_excel_path': st.session_state.get('audit_excel_path'),
-            'audit_highlighted_dir': st.session_state.get('audit_highlighted_dir'),
-            'audit_json_report': st.session_state.get('audit_json_report'),
-            'content_accuracy_report': st.session_state.get('content_accuracy_report'),
-            'processing_logs': list(st.session_state.get('processing_logs', [])),
-            'output_data': None,
-        }
+                actual_result_idx = _success_indices[new_sel_idx]
+                r = batch_results[actual_result_idx]
 
-        # Cache output bytes
-        if result and os.path.exists(result):
-            try:
-                with open(result, 'rb') as f:
-                    file_result['output_data'] = f.read()
-            except Exception:
-                pass
+                if r.get('audit_excel_path') or r.get('content_accuracy_report'):
+                    _output_path = r.get('output_path', '')
+                    if render_inline_validation_review:
+                        render_inline_validation_review(
+                            excel_path=r.get('audit_excel_path') or "",
+                            converted_txt_path=_output_path,
+                            highlighted_dir=r.get('audit_highlighted_dir'),
+                            json_report=r.get('audit_json_report'),
+                            accuracy_report=r.get('content_accuracy_report'),
+                        )
+                    else:
+                        st.warning("Validation review module not available.")
+                else:
+                    st.info(f"No audit data available for **{r['file_name']}**.")
 
-        st.session_state.batch_results.append(file_result)
+                if is_processing:
+                    st.info("💡 More files will appear here as they complete processing.")
 
-        # Move to next file
-        next_idx = idx + 1
-        if next_idx < total:
-            st.session_state.batch_current_idx = next_idx
-        else:
-            # All done
-            st.session_state.batch_processing = False
-            # Bump uploader key so the widget resets (old files won't linger)
-            st.session_state.uploader_key_counter += 1
-            st.success(
-                f"🎉 **Batch complete!** {sum(1 for r in st.session_state.batch_results if r['status'] == 'success')}"
-                f"/{total} files processed successfully."
-            )
+    # ══════════════════════════════════════════════════════════════════
+    # TAB 3 — Activity Logs
+    # ══════════════════════════════════════════════════════════════════
+    if any(r.get('processing_logs') for r in batch_results) and len(tabs) > 2:
+        with tabs[2]:
+            for i, r in enumerate(batch_results):
+                if r.get('processing_logs'):
+                    with st.expander(f"📋 {r['file_name']}", expanded=(i == len(batch_results) - 1)):
+                        st.markdown(
+                            _build_activity_feed_html(r['processing_logs']),
+                            unsafe_allow_html=True,
+                        )
 
+    # ── Auto-refresh (polls worker every 5s for NEW RESULTS or DONE only) ──
+    # Log updates are handled by the fragment inside the Progress tab,
+    # so the Validation Review tab is not disrupted.
+    if is_processing:
+        _batch_result_refresh()
+
+
+@st.fragment(run_every=5)
+def _batch_live_log_fragment():
+    """Auto-refreshing fragment that shows the live log for the current file.
+
+    This runs inside the Progress tab only, so it does NOT disrupt the
+    Validation Review or Activity Logs tabs.
+    """
+    worker: BatchWorker | None = st.session_state.get('batch_worker')
+    if worker is None:
+        return
+    _progress = worker.get_progress()
+    _cur_file = _progress.get('current_file', '')
+    _cur_logs = _progress.get('current_logs', [])
+    if _cur_logs:
+        with st.expander(f"📋 Live Log — {_cur_file}", expanded=True):
+            st.markdown(_build_activity_feed_html(_cur_logs), unsafe_allow_html=True)
+    else:
+        st.caption("⏳ Waiting for log output…")
+
+
+@st.fragment(run_every=5)
+def _batch_result_refresh():
+    """Auto-refresh that triggers a full page rerun ONLY when a new file
+    result arrives or the worker finishes.  Log-only changes are ignored
+    here (handled by the in-tab fragment) so the Validation Review tab
+    is never disrupted."""
+    worker: BatchWorker | None = st.session_state.get('batch_worker')
+    if worker is None:
+        return
+
+    completed = worker.get_completed_results()
+    _offset = st.session_state.get('batch_results_offset', 0)
+    n_from_worker = len(st.session_state.batch_results) - _offset
+
+    # Only rerun for important events: new file completed or worker done
+    if len(completed) > n_from_worker or worker.is_done():
         st.rerun()
 
 
@@ -2932,11 +3563,16 @@ def show_batch_results_section():
         )
         for i, r in enumerate(results):
             _bg = '#f0fdf4' if r['status'] == 'success' else '#fef2f2'
-            _status_badge = (
-                '<span style="background:#bbf7d0;color:#166534;padding:2px 10px;border-radius:12px;font-weight:600;">✅ Done</span>'
-                if r['status'] == 'success' else
-                '<span style="background:#fecaca;color:#991b1b;padding:2px 10px;border-radius:12px;font-weight:600;">❌ Failed</span>'
-            )
+            if r['status'] == 'success':
+                _status_badge = '<span style="background:#bbf7d0;color:#166534;padding:2px 10px;border-radius:12px;font-weight:600;">✅ Done</span>'
+            elif r.get('error_category') == 'api_network':
+                _status_badge = (
+                    '<span style="background:#fef3c7;color:#92400e;padding:2px 10px;'
+                    'border-radius:12px;font-weight:600;" '
+                    'title="API/Network issue — can be retried">🔄 Retry Needed</span>'
+                )
+            else:
+                _status_badge = '<span style="background:#fecaca;color:#991b1b;padding:2px 10px;border-radius:12px;font-weight:600;">❌ Failed</span>'
             _state = r.get('detected_state', '')
             _state_name = US_STATE_NAMES.get(_state, _state) if _state else '—'
             _acc = '—'
@@ -2954,10 +3590,18 @@ def show_batch_results_section():
             else:
                 _val_time_str = '—'
 
+            # Build file name cell — add reason line for failures
+            _fname_cell = r["file_name"]
+            if r['status'] != 'success' and r.get('error_reason'):
+                _fname_cell += (
+                    f'<br><span style="font-size:0.78rem;color:#92400e;font-style:italic;">'
+                    f'{r["error_reason"]}</span>'
+                )
+
             _tbl += (
                 f'<tr style="background:{_bg};border-bottom:1px solid #e2e8f0;">'
                 f'<td style="padding:8px 10px;font-weight:600;">{i+1}</td>'
-                f'<td style="padding:8px 10px;">{r["file_name"]}</td>'
+                f'<td style="padding:8px 10px;">{_fname_cell}</td>'
                 f'<td style="padding:8px 10px;text-align:center;">{_state_name}</td>'
                 f'<td style="padding:8px 10px;text-align:center;">{r.get("conversion_time", "—")}</td>'
                 f'<td style="padding:8px 10px;text-align:center;">{_val_time_str}</td>'
@@ -2968,6 +3612,73 @@ def show_batch_results_section():
             )
         _tbl += '</tbody></table>'
         st.markdown(_tbl, unsafe_allow_html=True)
+
+        # ── Retry Failed Files button ─────────────────────────────────
+        _failed_results = [r for r in results if r['status'] != 'success']
+        if _failed_results:
+            # Show info callout explaining the failures
+            _n_api = sum(1 for r in _failed_results if r.get('error_category') == 'api_network')
+            _n_other = len(_failed_results) - _n_api
+            _parts = []
+            if _n_api:
+                _parts.append(
+                    f"**{_n_api}** file{'s' if _n_api > 1 else ''} failed due to "
+                    f"an **API / network interruption** (not a code issue)"
+                )
+            if _n_other:
+                _parts.append(
+                    f"**{_n_other}** file{'s' if _n_other > 1 else ''} had a "
+                    f"processing error"
+                )
+            st.info(
+                " · ".join(_parts)
+                + ". You can retry the failed files below.",
+                icon="ℹ️",
+            )
+
+            col_r1, col_r2, col_r3 = st.columns([1, 2, 1])
+            with col_r2:
+                if st.button(
+                    f"🔄 Retry {len(_failed_results)} Failed File{'s' if len(_failed_results) > 1 else ''}",
+                    type="primary",
+                    use_container_width=True,
+                    key="batch_retry_failed",
+                ):
+                    # Collect failed pdf_paths / file_names
+                    _retry_paths = [r['pdf_path'] for r in _failed_results]
+                    _retry_names = [r['file_name'] for r in _failed_results]
+
+                    # Keep only the successful results
+                    st.session_state.batch_results = [
+                        r for r in results if r['status'] == 'success'
+                    ]
+                    # Update file lists to only the retry set
+                    st.session_state.batch_pdf_paths = (
+                        [r['pdf_path'] for r in st.session_state.batch_results] + _retry_paths
+                    )
+                    st.session_state.batch_file_names = (
+                        [r['file_name'] for r in st.session_state.batch_results] + _retry_names
+                    )
+
+                    session_mgr = st.session_state.session_manager
+                    session_folders = session_mgr.get_session_folders(
+                        st.session_state.session_id
+                    )
+
+                    worker = BatchWorker(
+                        pdf_paths=_retry_paths,
+                        file_names=_retry_names,
+                        session_id=st.session_state.session_id,
+                        session_mgr=session_mgr,
+                        session_folders=session_folders,
+                    )
+                    st.session_state.batch_worker = worker
+                    st.session_state.batch_processing = True
+                    st.session_state.batch_results_offset = len(
+                        st.session_state.batch_results
+                    )
+                    worker.start()
+                    st.rerun()
 
     # ══════════════════════════════════════════════════════════════════
     # TAB 2 — Validation Review (per-file selector)
