@@ -1892,7 +1892,7 @@ def show_simple_ui():
     else:
         # Full upload section — before processing
         st.header("📁 Upload PDF Files")
-        st.caption("Upload one file for single processing, or multiple files (up to 10) for serial batch processing.")
+        st.caption("Upload one file for single processing, or multiple files (up to 20, max 2 MB total) for serial batch processing.")
         _uploader_key = f"pdf_uploader_{st.session_state.uploader_key_counter}"
         uploaded_files = st.file_uploader(
             "Choose PDF file(s) to process",
@@ -1910,21 +1910,49 @@ def show_simple_ui():
 
     if uploaded_files:
         # ── Validate all files ────────────────────────────────────────────
-        MAX_FILE_SIZE = 500 * 1024 * 1024  # 500 MB
-        MAX_BATCH = 10
+        MAX_TOTAL_SIZE = 2 * 1024 * 1024   # 2 MB total for all files combined
+        MAX_BATCH = 20
+        MAX_PAGES = 15
         valid_files = []
-
-        if len(uploaded_files) > MAX_BATCH:
-            st.error(f"❌ **Too many files!** Maximum {MAX_BATCH} files per batch. You uploaded {len(uploaded_files)}.")
-            st.stop()
+        skipped_names = []
 
         for uf in uploaded_files:
-            if uf.size > MAX_FILE_SIZE:
-                st.error(f"❌ **{uf.name}** is too large ({format_file_size(uf.size)}). Max: {format_file_size(MAX_FILE_SIZE)}")
-            else:
-                valid_files.append(uf)
+            # Quick page-count check (read bytes in memory, no temp file needed)
+            try:
+                import pypdfium2 as pdfium
+                _bytes = uf.read()
+                uf.seek(0)  # reset so downstream code can re-read
+                _pdf = pdfium.PdfDocument(_bytes)
+                _pc = len(_pdf)
+                _pdf.close()
+                if _pc > MAX_PAGES:
+                    st.error(f"🚫 **{uf.name}** has {_pc} pages (max {MAX_PAGES}) — skipped.")
+                    skipped_names.append(uf.name)
+                    continue
+            except Exception:
+                pass  # if we can't check, let it through — batch upload will catch it
+
+            valid_files.append(uf)
+
+        if skipped_names:
+            st.info(f"ℹ️ {len(skipped_names)} file(s) skipped: {', '.join(skipped_names)}")
 
         if not valid_files:
+            st.stop()
+
+        if len(valid_files) > MAX_BATCH:
+            st.error(f"❌ **Too many valid files!** Maximum {MAX_BATCH} files per batch. You have {len(valid_files)} valid files.")
+            st.stop()
+
+        # Check combined size of all valid files
+        _total_upload_size = sum(uf.size for uf in valid_files)
+        if _total_upload_size > MAX_TOTAL_SIZE:
+            st.error(
+                f"❌ **Total upload size too large!** "
+                f"Combined size is **{format_file_size(_total_upload_size)}** "
+                f"but maximum allowed is **{format_file_size(MAX_TOTAL_SIZE)}**. "
+                f"Please remove some files."
+            )
             st.stop()
 
         # ── Detect single vs batch mode ───────────────────────────────────
@@ -2619,8 +2647,7 @@ def _swap_batch_vri_state(from_idx: int | None, to_idx: int | None):
     """Save current vri_ keys under from_idx, load from to_idx."""
     _vri_keys = (
         "vri_fixed_ids", "vri_ignored_ids", "vri_undo_history",
-        "vri_selected_item", "vri_current_page", "vri_filter_mode",
-        "vri_last_sel",
+        "vri_selected_item", "vri_current_page", "vri_last_sel",
     )
     # Save current state under from_idx
     if from_idx is not None:
@@ -2634,6 +2661,27 @@ def _swap_batch_vri_state(from_idx: int | None, to_idx: int | None):
                 st.session_state[k] = stored
             else:
                 st.session_state.pop(k, None)
+
+    # Clear ALL vri_ widget keys so no stale values leak between files.
+    # This covers per-item keys (vri_edit_3, vri_pending_apply_5, …)
+    # and static widget keys (vri_pg_slider, vri_jump_to, vri_filter_mode, …).
+    _stale_prefixes = (
+        "vri_edit_", "vri_pending_apply_", "vri_apply_",
+        "vri_confirm_", "vri_cancel_", "vri_copy_",
+        "vri_ignore_nochange_", "vri_ignore_", "vri_unignore_",
+        "vri_undo_",
+    )
+    # Static widget keys that must also be reset between files
+    _static_widget_keys = {
+        "vri_filter_mode", "vri_pg_slider", "vri_pg_prev", "vri_pg_next",
+        "vri_jump_to", "vri_prev_item_btn", "vri_next_item_btn",
+        "vri_prev_err", "vri_next_err", "vri_twocol",
+    }
+    stale_keys = [k for k in list(st.session_state.keys())
+                  if any(k.startswith(p) for p in _stale_prefixes)
+                  or k in _static_widget_keys]
+    for k in stale_keys:
+        del st.session_state[k]
 
 
 def show_batch_processing():
@@ -2733,9 +2781,14 @@ def show_batch_processing():
         )
 
         # Collect result for this file
+        try:
+            _file_size_bytes = os.path.getsize(pdf_path)
+        except Exception:
+            _file_size_bytes = 0
         file_result = {
             'file_name': file_name,
             'pdf_path': pdf_path,
+            'file_size': _file_size_bytes,
             'output_path': result,
             'status': 'success' if result else 'failed',
             'detected_state': st.session_state.get('detected_state', ''),
@@ -2828,6 +2881,13 @@ def show_batch_results_section():
             f'<span style="font-size:1rem;">📦</span> Files '
             f'<span style="font-weight:800;">{n_ok}/{len(results)}</span></div>'
         )
+        _total_size_bytes = sum(r.get('file_size', 0) for r in results)
+        _total_size_str = format_file_size(_total_size_bytes) if _total_size_bytes > 0 else '—'
+        _size_chip = (
+            f'<div style="{_chip} background:#fefce8; color:#854d0e; border:1px solid #fde68a;">'
+            f'<span style="font-size:1rem;">💾</span> Total Size '
+            f'<span style="font-weight:800;">{_total_size_str}</span></div>'
+        )
 
         st.markdown(
             f'<div style="background:#ffffff; border-radius:14px; padding:24px 28px; margin:8px 0 20px;'
@@ -2838,7 +2898,7 @@ def show_batch_results_section():
             f'{"<span style=&quot;background:#fef2f2; color:#991b1b; padding:3px 12px; border-radius:16px; font-size:0.82rem; font-weight:600;&quot;>" + str(n_fail) + " failed</span>" if n_fail else ""}'
             f'</div>'
             f'<div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px;">'
-            f'{_conv_chip}{_val_chip}{_files_chip}'
+            f'{_conv_chip}{_val_chip}{_files_chip}{_size_chip}'
             f'</div>'
             f'<div style="background:#f8fafc; border-radius:8px; padding:8px 16px;'
             f' display:flex; align-items:center; justify-content:space-between;'
@@ -2905,41 +2965,6 @@ def show_batch_results_section():
             )
         _tbl += '</tbody></table>'
         st.markdown(_tbl, unsafe_allow_html=True)
-
-        # ── Download buttons ──────────────────────────────────────────
-        st.markdown("---")
-        st.markdown("#### 📥 Downloads")
-
-        # Individual download buttons in a row
-        dl_cols = st.columns(min(len(results), 4))
-        for i, r in enumerate(results):
-            col = dl_cols[i % len(dl_cols)]
-            with col:
-                if r.get('output_data'):
-                    st.download_button(
-                        label=f"📄 {Path(r['file_name']).stem}.txt",
-                        data=r['output_data'],
-                        file_name=Path(r['file_name']).stem + "_claude_opus.txt",
-                        mime="text/plain",
-                        key=f"batch_dl_{i}",
-                        use_container_width=True,
-                    )
-                elif r['status'] == 'failed':
-                    st.button(f"❌ {r['file_name']}", disabled=True, key=f"batch_dl_{i}",
-                              use_container_width=True)
-
-        # Download All as ZIP
-        st.markdown("")
-        _zip_data = _build_batch_zip(results)
-        if _zip_data:
-            st.download_button(
-                label="📦 Download All (ZIP)",
-                data=_zip_data,
-                file_name="batch_results.zip",
-                mime="application/zip",
-                key="batch_dl_zip",
-                use_container_width=True,
-            )
 
     # ══════════════════════════════════════════════════════════════════
     # TAB 2 — Validation Review (per-file selector)

@@ -846,13 +846,17 @@ def render_inline_validation_review(
 
     # ── Summary cards ───────────────────────────────────────────────
     n_fixed = sum(1 for r in checklist if int(r.get("#", 0)) in fixed_ids)
-    n_ignored = sum(1 for r in checklist
+    n_ignored_warn = sum(1 for r in checklist
                     if int(r.get("#", 0)) in ignored_ids
                     and str(r.get("Verdict", "")).startswith("⚠"))
+    n_ignored_err = sum(1 for r in checklist
+                    if int(r.get("#", 0)) in ignored_ids
+                    and str(r.get("Verdict", "")).startswith("❌"))
+    n_ignored = n_ignored_warn + n_ignored_err
     orig_err = summary.get("error", 0)
     orig_warn = summary.get("warn", 0)
-    eff_err = max(0, orig_err - n_fixed)
-    eff_warn = max(0, orig_warn - n_ignored)
+    eff_err = max(0, orig_err - n_fixed - n_ignored_err)
+    eff_warn = max(0, orig_warn - n_ignored_warn)
     eff_pass = summary.get("pass", 0) + n_fixed + n_ignored
 
     # Resolved count (fixed + ignored)
@@ -1111,7 +1115,12 @@ def render_inline_validation_review(
             else:
                 original_context = ""
                 prefill = f"{tag_open}{pymupdf_text}{tag_close}"
-                st.caption("⚠️ This text is **missing** from the output. Edit below and use **Copy & Mark Fixed** to handle manually.")
+                st.caption(
+                    "⚠️ This text is **missing** from the Claude output. "
+                    "It was found by PyMuPDF but not included in the conversion. "
+                    "Click **Mark as Fixed** if you've manually handled it, "
+                    "or **Ignore** if it's a false positive."
+                )
 
             fc1, fc2 = st.columns([3, 1])
             with fc1:
@@ -1180,10 +1189,15 @@ def render_inline_validation_review(
                                 st.session_state.pop(pending_key, None)
                                 st.rerun()
                 else:
-                    if st.button("📋 Copy & Mark Fixed", key=f"vri_copy_{cid}"):
+                    if st.button("✅ Mark as Fixed", type="primary", key=f"vri_copy_{cid}",
+                                 help="Mark this missing-text item as manually resolved"):
                         _mark_fixed(cid)
                         _save_undo_history([cid], "", "", str(converted_txt_path))
-                        st.success("Marked as fixed!")
+                        st.success(f"✅ Item #{cid} marked as fixed!")
+                        st.rerun()
+                    if st.button("🔇 Ignore", key=f"vri_ignore_missing_{cid}",
+                                 help="Mark this as a false positive — no action needed"):
+                        _mark_ignored(cid)
                         st.rerun()
 
             # Preview diff
@@ -1280,31 +1294,49 @@ def render_inline_validation_review(
 
         id_opts = [int(r.get("#", 0)) for r in display_cl]
 
+        # If current selection isn't in the filtered list, find the nearest valid item
+        if id_opts and selected_id not in id_opts:
+            # Pick the first item in the filtered list as a sane default
+            _nearest = id_opts[0]
+            for _oid in id_opts:
+                if _oid >= selected_id:
+                    _nearest = _oid
+                    break
+            st.session_state.vri_selected_item = _nearest
+            st.rerun()
+
         with nc[1]:
             if st.button("⬆️ Prev Item", key="vri_prev_item_btn"):
-                if selected_id in id_opts:
-                    ci = id_opts.index(selected_id)
-                    st.session_state.vri_selected_item = id_opts[max(0, ci - 1)]
-                elif id_opts:
-                    st.session_state.vri_selected_item = id_opts[0]
-                st.rerun()
+                if id_opts:
+                    if selected_id in id_opts:
+                        ci = id_opts.index(selected_id)
+                        st.session_state.vri_selected_item = id_opts[ci - 1] if ci > 0 else id_opts[-1]
+                    else:
+                        st.session_state.vri_selected_item = id_opts[-1]
+                    st.rerun()
         with nc[2]:
-            current_idx = id_opts.index(selected_id) if selected_id in id_opts else 0
-            jump = st.selectbox(
-                "Go to #", id_opts,
-                index=current_idx,
-                key="vri_jump_to", label_visibility="collapsed",
-            )
+            if id_opts:
+                current_idx = id_opts.index(selected_id) if selected_id in id_opts else 0
+                jump = st.selectbox(
+                    "Go to #", id_opts,
+                    index=current_idx,
+                    key="vri_jump_to", label_visibility="collapsed",
+                )
+            else:
+                jump = selected_id
+                st.selectbox("Go to #", [selected_id], index=0,
+                             key="vri_jump_to", label_visibility="collapsed", disabled=True)
         with nc[3]:
             if st.button("⬇️ Next Item", key="vri_next_item_btn"):
-                if selected_id in id_opts:
-                    ci = id_opts.index(selected_id)
-                    st.session_state.vri_selected_item = id_opts[min(len(id_opts) - 1, ci + 1)]
-                elif id_opts:
-                    st.session_state.vri_selected_item = id_opts[0]
-                st.rerun()
+                if id_opts:
+                    if selected_id in id_opts:
+                        ci = id_opts.index(selected_id)
+                        st.session_state.vri_selected_item = id_opts[ci + 1] if ci < len(id_opts) - 1 else id_opts[0]
+                    else:
+                        st.session_state.vri_selected_item = id_opts[0]
+                    st.rerun()
 
-        if jump != selected_id and jump in id_opts:
+        if id_opts and jump != selected_id and jump in id_opts:
             st.session_state.vri_selected_item = jump
             st.rerun()
 
