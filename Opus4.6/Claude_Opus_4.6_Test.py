@@ -839,12 +839,18 @@ def convert_pdf_to_text(client, pdf_path, prompt, batch_size=None):
                         converted_text += text
                 break  # success — exit retry loop
             except Exception as e:
-                err_str = str(e)
+                err_str = str(e).lower()
                 is_retryable = (
-                    "overloaded" in err_str.lower()
+                    "overloaded" in err_str
+                    or "timed out" in err_str
+                    or "timeout" in err_str
+                    or "connection" in err_str
+                    or "disconnected" in err_str
                     or "529" in err_str
                     or "500" in err_str
+                    or "502" in err_str
                     or "503" in err_str
+                    or "504" in err_str
                 )
                 if is_retryable and attempt < max_retries - 1:
                     delay = retry_delays[attempt]

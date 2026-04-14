@@ -307,12 +307,14 @@ def _render_text_html(text: str, checklist: list[dict],
 # ERROR NAVIGATION HELPERS
 # ═══════════════════════════════════════════════════════════════════
 
-def _get_error_ids(checklist: list[dict], fixed_ids: set[int]) -> list[int]:
+def _get_error_ids(checklist: list[dict], fixed_ids: set[int],
+                   ignored_ids: set[int] | None = None) -> list[int]:
+    ignored_ids = ignored_ids or set()
     ids = []
     for r in checklist:
         verdict = str(r.get("Verdict", ""))
         cid = int(r.get("#", 0))
-        if cid in fixed_ids:
+        if cid in fixed_ids or cid in ignored_ids:
             continue
         if verdict.startswith("❌"):
             ids.append(cid)
@@ -459,6 +461,7 @@ def _find_affected_items(checklist: list[dict], fixed_ids: set[int],
 # CONTENT ACCURACY HELPERS
 # ═══════════════════════════════════════════════════════════════════
 
+
 def _build_accuracy_card_html(accuracy_report: dict | None) -> str:
     """Return HTML for the accuracy metric card (fits inside vr-metric-row)."""
     if not accuracy_report:
@@ -476,8 +479,13 @@ def _build_accuracy_card_html(accuracy_report: dict | None) -> str:
     )
 
 
-def _render_accuracy_expander(accuracy_report: dict | None):
-    """Render a collapsible section with word-level diff details."""
+def _render_accuracy_expander(accuracy_report: dict | None,
+                              converted_txt_path: Path | None = None):
+    """Render a collapsible section with word-level diff details.
+
+    If *converted_txt_path* is supplied the user gets an inline **Apply Fix**
+    button next to each diff so they can correct the converted text file.
+    """
     if not accuracy_report:
         return
     acc = accuracy_report["accuracy"]
@@ -600,6 +608,7 @@ def _render_accuracy_expander(accuracy_report: dict | None):
                         f"> *PyMuPDF sentence:* {d['sentence_pymupdf']}\n\n"
                         f"> *Claude sentence:* {d['sentence_converted']}"
                     )
+
 
                 elif dtype == "MISSING_IN_CONVERTED":
                     st.markdown(
@@ -802,7 +811,7 @@ def render_inline_validation_review(
             else:
                 st.info("GPT checklist audit was not available for this file, "
                         "but text accuracy details are available below.")
-            _render_accuracy_expander(accuracy_report)
+            _render_accuracy_expander(accuracy_report, converted_txt_path)
         else:
             st.warning("⚠️ No audit data or accuracy report available for this file.")
 
@@ -846,13 +855,17 @@ def render_inline_validation_review(
 
     # ── Summary cards ───────────────────────────────────────────────
     n_fixed = sum(1 for r in checklist if int(r.get("#", 0)) in fixed_ids)
-    n_ignored = sum(1 for r in checklist
+    n_ignored_warn = sum(1 for r in checklist
                     if int(r.get("#", 0)) in ignored_ids
                     and str(r.get("Verdict", "")).startswith("⚠"))
+    n_ignored_err = sum(1 for r in checklist
+                    if int(r.get("#", 0)) in ignored_ids
+                    and str(r.get("Verdict", "")).startswith("❌"))
+    n_ignored = n_ignored_warn + n_ignored_err
     orig_err = summary.get("error", 0)
     orig_warn = summary.get("warn", 0)
-    eff_err = max(0, orig_err - n_fixed)
-    eff_warn = max(0, orig_warn - n_ignored)
+    eff_err = max(0, orig_err - n_fixed - n_ignored_err)
+    eff_warn = max(0, orig_warn - n_ignored_warn)
     eff_pass = summary.get("pass", 0) + n_fixed + n_ignored
 
     # Resolved count (fixed + ignored)
@@ -886,7 +899,7 @@ def render_inline_validation_review(
     st.progress(eff_pass / total, text=f"Pass rate: {eff_pass/total:.0%}  ({eff_pass}/{total})")
 
     # ── Content Accuracy Report (collapsible) ─────────────────
-    _render_accuracy_expander(accuracy_report)
+    _render_accuracy_expander(accuracy_report, converted_txt_path)
 
     # ── Filter mode ─────────────────────────────────────────────────
     filter_mode = st.radio(
@@ -929,7 +942,8 @@ def render_inline_validation_review(
     if filter_mode == "errors":
         display_cl = [r for r in checklist
                       if str(r.get("Verdict", "")).startswith("❌")
-                      and int(r.get("#", 0)) not in fixed_ids]
+                      and int(r.get("#", 0)) not in fixed_ids
+                      and int(r.get("#", 0)) not in ignored_ids]
     elif filter_mode == "warnings":
         display_cl = [r for r in checklist
                       if str(r.get("Verdict", "")).startswith("⚠")
@@ -954,7 +968,7 @@ def render_inline_validation_review(
     # ══════════════════════════════════════════════════════════════
     # ERROR NAVIGATION BAR
     # ══════════════════════════════════════════════════════════════
-    error_ids = _get_error_ids(checklist, fixed_ids)
+    error_ids = _get_error_ids(checklist, fixed_ids, ignored_ids)
     err_pos, err_total = _get_error_position(error_ids, selected_id)
 
     if error_ids:
@@ -1109,9 +1123,34 @@ def render_inline_validation_review(
                 else:
                     st.caption("✏️ Edit the text below. Click **Apply Fix** to save your change.")
             else:
-                original_context = ""
-                prefill = f"{tag_open}{pymupdf_text}{tag_close}"
-                st.caption("⚠️ This text is **missing** from the output. Edit below and use **Copy & Mark Fixed** to handle manually.")
+                # Missing text — try to find a nearby anchor from Context column
+                _ctx_col = str(selected_row.get("Context", "") or "").strip()
+                _anchor_context = ""
+                if _ctx_col and _ctx_col in text:
+                    _anchor_context = _ctx_col
+                elif _ctx_col:
+                    # Try partial match — first 80 chars of context
+                    _partial = _ctx_col[:80].strip()
+                    if _partial and _partial in text:
+                        # Expand to full context around the partial match
+                        _anchor_context = _extract_edit_context(text, _partial)
+                original_context = _anchor_context
+                if _anchor_context:
+                    prefill = _anchor_context + "\n" + f"{tag_open}{pymupdf_text}{tag_close}"
+                    st.caption(
+                        "⚠️ This text is **missing** from the Claude output. "
+                        "Nearby context is shown above the tagged text. "
+                        "Edit below to place the missing content correctly, "
+                        "then click **Apply Fix** to insert it into the file."
+                    )
+                else:
+                    prefill = f"{tag_open}{pymupdf_text}{tag_close}"
+                    st.caption(
+                        "⚠️ This text is **missing** from the Claude output. "
+                        "It was found by PyMuPDF but not included in the conversion. "
+                        "Click **Mark as Fixed** if you've manually handled it, "
+                        "or **Ignore** if it's a false positive."
+                    )
 
             fc1, fc2 = st.columns([3, 1])
             with fc1:
@@ -1180,14 +1219,65 @@ def render_inline_validation_review(
                                 st.session_state.pop(pending_key, None)
                                 st.rerun()
                 else:
-                    if st.button("📋 Copy & Mark Fixed", key=f"vri_copy_{cid}"):
-                        _mark_fixed(cid)
-                        _save_undo_history([cid], "", "", str(converted_txt_path))
-                        st.success("Marked as fixed!")
-                        st.rerun()
+                    # Missing text — use the same Apply Fix → Confirm flow
+                    # when we have an anchor context to locate the insertion point
+                    if original_context:
+                        pending_key = f"vri_pending_apply_{cid}"
+                        is_pending = st.session_state.get(pending_key, False)
 
-            # Preview diff
-            if claude_text and new_text != original_context:
+                        if not is_pending:
+                            if st.button("✅ Apply Fix", type="primary", key=f"vri_apply_{cid}"):
+                                if new_text.strip() and new_text != original_context:
+                                    st.session_state[pending_key] = True
+                                    st.rerun()
+                                elif new_text == original_context:
+                                    st.warning("No changes made — edit the text to include the missing content.")
+                            if st.button("🔇 Ignore", key=f"vri_ignore_missing_{cid}",
+                                         help="Mark this as a false positive — no action needed"):
+                                _mark_ignored(cid)
+                                st.rerun()
+                        else:
+                            st.info(
+                                f"⚡ **1 item** will be inserted & "
+                                f"marked fixed: #{cid}"
+                            )
+                            cc1, cc2 = st.columns(2)
+                            with cc1:
+                                if st.button("✅ Confirm", type="primary", key=f"vri_confirm_{cid}"):
+                                    updated = text.replace(original_context, new_text, 1)
+                                    if updated != text:
+                                        converted_txt_path.write_text(updated, encoding="utf-8")
+                                        _mark_fixed(cid)
+                                        _save_undo_history(
+                                            [cid], original_context,
+                                            new_text,
+                                            str(converted_txt_path),
+                                        )
+                                        st.session_state.pop(pending_key, None)
+                                        st.success(f"✅ Saved! Item #{cid} inserted & marked fixed!")
+                                        st.rerun()
+                                    else:
+                                        st.error("Anchor context not found in file — text may have changed.")
+                                        st.session_state.pop(pending_key, None)
+                            with cc2:
+                                if st.button("❌ Cancel", key=f"vri_cancel_{cid}"):
+                                    st.session_state.pop(pending_key, None)
+                                    st.rerun()
+                    else:
+                        # No anchor context — mark-only (manual handling)
+                        if st.button("✅ Mark as Fixed", type="primary", key=f"vri_copy_{cid}",
+                                     help="Mark this missing-text item as manually resolved"):
+                            _mark_fixed(cid)
+                            _save_undo_history([cid], "", "", str(converted_txt_path))
+                            st.success(f"✅ Item #{cid} marked as fixed!")
+                            st.rerun()
+                        if st.button("🔇 Ignore", key=f"vri_ignore_missing_{cid}",
+                                     help="Mark this as a false positive — no action needed"):
+                            _mark_ignored(cid)
+                            st.rerun()
+
+            # Preview diff — show for both existing-text edits and missing-text insertions
+            if original_context and new_text != original_context:
                 with st.expander("👁️ Preview change", expanded=True):
                     p1, p2 = st.columns(2)
                     with p1:
@@ -1280,31 +1370,49 @@ def render_inline_validation_review(
 
         id_opts = [int(r.get("#", 0)) for r in display_cl]
 
+        # If current selection isn't in the filtered list, find the nearest valid item
+        if id_opts and selected_id not in id_opts:
+            # Pick the first item in the filtered list as a sane default
+            _nearest = id_opts[0]
+            for _oid in id_opts:
+                if _oid >= selected_id:
+                    _nearest = _oid
+                    break
+            st.session_state.vri_selected_item = _nearest
+            st.rerun()
+
         with nc[1]:
             if st.button("⬆️ Prev Item", key="vri_prev_item_btn"):
-                if selected_id in id_opts:
-                    ci = id_opts.index(selected_id)
-                    st.session_state.vri_selected_item = id_opts[max(0, ci - 1)]
-                elif id_opts:
-                    st.session_state.vri_selected_item = id_opts[0]
-                st.rerun()
+                if id_opts:
+                    if selected_id in id_opts:
+                        ci = id_opts.index(selected_id)
+                        st.session_state.vri_selected_item = id_opts[ci - 1] if ci > 0 else id_opts[-1]
+                    else:
+                        st.session_state.vri_selected_item = id_opts[-1]
+                    st.rerun()
         with nc[2]:
-            current_idx = id_opts.index(selected_id) if selected_id in id_opts else 0
-            jump = st.selectbox(
-                "Go to #", id_opts,
-                index=current_idx,
-                key="vri_jump_to", label_visibility="collapsed",
-            )
+            if id_opts:
+                current_idx = id_opts.index(selected_id) if selected_id in id_opts else 0
+                jump = st.selectbox(
+                    "Go to #", id_opts,
+                    index=current_idx,
+                    key="vri_jump_to", label_visibility="collapsed",
+                )
+            else:
+                jump = selected_id
+                st.selectbox("Go to #", [selected_id], index=0,
+                             key="vri_jump_to", label_visibility="collapsed", disabled=True)
         with nc[3]:
             if st.button("⬇️ Next Item", key="vri_next_item_btn"):
-                if selected_id in id_opts:
-                    ci = id_opts.index(selected_id)
-                    st.session_state.vri_selected_item = id_opts[min(len(id_opts) - 1, ci + 1)]
-                elif id_opts:
-                    st.session_state.vri_selected_item = id_opts[0]
-                st.rerun()
+                if id_opts:
+                    if selected_id in id_opts:
+                        ci = id_opts.index(selected_id)
+                        st.session_state.vri_selected_item = id_opts[ci + 1] if ci < len(id_opts) - 1 else id_opts[0]
+                    else:
+                        st.session_state.vri_selected_item = id_opts[0]
+                    st.rerun()
 
-        if jump != selected_id and jump in id_opts:
+        if id_opts and jump != selected_id and jump in id_opts:
             st.session_state.vri_selected_item = jump
             st.rerun()
 
