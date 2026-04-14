@@ -42,6 +42,7 @@ watchdog>=6.0.0
 
 # Validation & Data Models
 pydantic>=2.12.4
+typing_inspection>=0.4.0
 jsonschema>=4.25.1
 
 # Utilities

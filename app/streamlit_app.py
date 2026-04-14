@@ -2674,20 +2674,10 @@ def _swap_batch_vri_state(from_idx: int | None, to_idx: int | None):
         "vri_selected_item", "vri_current_page", "vri_last_sel",
     )
 
-    # ── Accuracy fix/ignore state keys (vri_acc_fixed_*, vri_acc_ignored_*) ──
-    # These are per-diff boolean keys that must be saved/restored per file.
-    _acc_state_prefixes = ("vri_acc_fixed_", "vri_acc_ignored_")
-
     # Save current state under from_idx
     if from_idx is not None:
         for k in _vri_keys:
             st.session_state[f"{k}__batch_{from_idx}"] = st.session_state.pop(k, None)
-        # Save accuracy fix/ignore per-diff keys as a dict
-        _acc_state = {}
-        for k in list(st.session_state.keys()):
-            if any(k.startswith(p) for p in _acc_state_prefixes):
-                _acc_state[k] = st.session_state[k]
-        st.session_state[f"_batch_acc_state_{from_idx}"] = _acc_state
 
     # Load state for to_idx
     if to_idx is not None:
@@ -2699,17 +2689,11 @@ def _swap_batch_vri_state(from_idx: int | None, to_idx: int | None):
                 st.session_state.pop(k, None)
 
     # Clear ALL vri_ widget keys so no stale values leak between files.
-    # This covers per-item keys (vri_edit_3, vri_pending_apply_5, …)
-    # and static widget keys (vri_pg_slider, vri_jump_to, vri_filter_mode, …).
     _stale_prefixes = (
         "vri_edit_", "vri_pending_apply_", "vri_apply_",
         "vri_confirm_", "vri_cancel_", "vri_copy_",
         "vri_ignore_nochange_", "vri_ignore_", "vri_unignore_",
         "vri_undo_",
-        "vri_acc_fix_", "vri_acc_fixed_", "vri_acc_ignored_",
-        "vri_acc_edit_", "vri_acc_apply_", "vri_acc_pending_",
-        "vri_acc_confirm_", "vri_acc_cancel_", "vri_acc_ignore_",
-        "vri_acc_unignore_",
     )
     # Static widget keys that must also be reset between files
     _static_widget_keys = {
@@ -2723,15 +2707,7 @@ def _swap_batch_vri_state(from_idx: int | None, to_idx: int | None):
     for k in stale_keys:
         del st.session_state[k]
 
-    # Restore accuracy fix/ignore state for the target file
-    if to_idx is not None:
-        _saved_acc = st.session_state.pop(f"_batch_acc_state_{to_idx}", {})
-        for k, v in _saved_acc.items():
-            st.session_state[k] = v
-
-    # Explicitly reset filter radio to "all" — deleting a Streamlit
-    # widget key doesn't clear the internal widget cache, so the radio
-    # would display the old selection while returning the default value.
+    # Explicitly reset filter radio to "all"
     st.session_state["vri_filter_mode"] = "all"
 
 
@@ -2921,7 +2897,7 @@ class BatchWorker:
 
         # Step 4: Visual conversion
         add_log("👁️ Running Claude Opus 4.6 visual conversion (this may take a few minutes)...")
-        add_log("⏳ Sending PDF pages to Claude API, waiting for response...")
+        add_log("⏳ Sending PDF pages to Claude, waiting for output response...")
 
         # Heartbeat: emit a log every 15s so the user knows it's still running
         _heartbeat_stop = threading.Event()
@@ -2934,7 +2910,7 @@ class BatchWorker:
                     break
                 _elapsed = int(time.time() - _conv_start)
                 _m, _s = divmod(_elapsed, 60)
-                add_log(f"⏳ Still waiting for Claude API response… ({_m}m {_s}s elapsed)")
+                add_log(f"⏳ Still waiting for output response from Claude… ({_m}m {_s}s elapsed)")
 
         _hb_thread = threading.Thread(target=_heartbeat, daemon=True)
         _hb_thread.start()

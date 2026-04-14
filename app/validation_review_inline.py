@@ -461,186 +461,22 @@ def _find_affected_items(checklist: list[dict], fixed_ids: set[int],
 # CONTENT ACCURACY HELPERS
 # ═══════════════════════════════════════════════════════════════════
 
-def _get_acc_ignored_count() -> int:
-    """Count how many accuracy diffs have been ignored in the current session."""
-    return sum(
-        1 for k, v in st.session_state.items()
-        if k.startswith("vri_acc_ignored_") and v
-    )
-
-
-def _get_acc_fixed_count() -> int:
-    """Count how many accuracy diffs have been applied in the current session."""
-    return sum(
-        1 for k, v in st.session_state.items()
-        if k.startswith("vri_acc_fixed_") and v
-    )
-
 
 def _build_accuracy_card_html(accuracy_report: dict | None) -> str:
-    """Return HTML for the accuracy metric card (fits inside vr-metric-row).
-
-    If diffs have been ignored or fixed the effective accuracy is bumped
-    upward to reflect fewer real differences.
-    """
+    """Return HTML for the accuracy metric card (fits inside vr-metric-row)."""
     if not accuracy_report:
         return ""
-    # Recalculate accuracy accounting for ignored/fixed diffs
-    n_ignored = _get_acc_ignored_count()
-    n_fixed = _get_acc_fixed_count()
-    n_resolved = n_ignored + n_fixed
-    total_diffs = accuracy_report.get("real_diff_count", 0)
-    if n_resolved > 0 and total_diffs > 0:
-        # Each resolved diff recovers some matching words
-        orig_matching = accuracy_report.get("matching_words", 0)
-        max_words = max(
-            accuracy_report.get("pymupdf_word_count", 0),
-            accuracy_report.get("converted_word_count", 0),
-        )
-        # Estimate: each diff ≈ equal share of the non-matching words
-        non_matching = max_words - orig_matching
-        words_per_diff = non_matching / total_diffs if total_diffs else 0
-        recovered = min(non_matching, words_per_diff * n_resolved)
-        acc = ((orig_matching + recovered) / max_words * 100) if max_words > 0 else 100.0
-    else:
-        acc = accuracy_report["accuracy"]
+    acc = accuracy_report["accuracy"]
     if acc >= 99:
         cls = "vr-mc-acc-hi"
     elif acc >= 95:
         cls = "vr-mc-acc-md"
     else:
         cls = "vr-mc-acc-lo"
-    _suffix = ""
-    if n_resolved > 0:
-        _suffix = f" <span style='font-size:0.6em;opacity:0.7;'>({n_resolved} resolved)</span>"
     return (
         f"<div class='vr-metric-card {cls}'>"
-        f"<h2>{acc:.1f}%{_suffix}</h2><p>📊 Text Accuracy</p></div>"
+        f"<h2>{acc:.1f}%</h2><p>📊 Text Accuracy</p></div>"
     )
-
-
-def _acc_render_inline_edit(
-    idx: int,
-    diff: dict,
-    dtype: str,
-    converted_txt_path: Path | None,
-    anchor_text: str,
-    got_text: str,
-    expected_text: str,
-):
-    """Render an inline Apply-Fix widget for a single accuracy diff.
-
-    *anchor_text* is the Claude sentence that contains the diff — used to
-    locate where in the file the replacement should happen.
-    *got_text* is what Claude currently has (may be empty for MISSING).
-    *expected_text* is what PyMuPDF says it should be (may be empty for EXTRA).
-    """
-    if not converted_txt_path or not converted_txt_path.exists():
-        return
-
-    text = converted_txt_path.read_text(encoding="utf-8")
-    fix_key = f"vri_acc_fix_{idx}"
-    fixed_key = f"vri_acc_fixed_{idx}"
-
-    ignored_key = f"vri_acc_ignored_{idx}"
-
-    # Already applied?
-    if st.session_state.get(fixed_key, False):
-        st.success(f"✅ Diff #{idx} has been applied!")
-        return
-
-    # Already ignored?
-    if st.session_state.get(ignored_key, False):
-        st.caption(f"🔇 Diff #{idx} ignored (false positive).")
-        if st.button("↩️ Undo Ignore", key=f"vri_acc_unignore_{idx}"):
-            st.session_state[ignored_key] = False
-            st.rerun()
-        return
-
-    # Find the anchor (Claude sentence) in the file
-    _anchor = anchor_text.strip()
-    if not _anchor or _anchor not in text:
-        # Try with the got_text directly
-        if got_text and got_text.strip() in text:
-            _anchor = _extract_edit_context(text, got_text.strip())
-        else:
-            st.caption(f"⚙️ Cannot auto-locate this text in the file — edit manually if needed.")
-            return
-
-    # Build the expected replacement
-    if dtype == "REPLACE":
-        # Replace got_text with expected_text inside the anchor
-        if got_text and got_text in _anchor:
-            new_anchor = _anchor.replace(got_text, expected_text, 1)
-        else:
-            # Fallback: show the full anchor for manual editing
-            new_anchor = _anchor
-    elif dtype == "MISSING_IN_CONVERTED":
-        # Nothing to auto-replace — the text is missing entirely
-        new_anchor = _anchor
-    elif dtype == "EXTRA_IN_CONVERTED":
-        # Remove the extra text from the anchor
-        if got_text and got_text in _anchor:
-            new_anchor = _anchor.replace(got_text, "", 1)
-        else:
-            new_anchor = _anchor
-    else:
-        new_anchor = _anchor
-
-    # Inline edit
-    with st.expander(f"✏️ Edit & Apply Fix #{idx}", expanded=False):
-        ea1, ea2 = st.columns([4, 1])
-        with ea1:
-            edited = st.text_area(
-                "Edit text", value=new_anchor, height=120,
-                key=f"vri_acc_edit_{idx}", label_visibility="collapsed",
-            )
-        with ea2:
-            st.markdown("")
-            pending_key = f"vri_acc_pending_{idx}"
-            is_pending = st.session_state.get(pending_key, False)
-
-            if not is_pending:
-                if st.button("✅ Apply Fix", type="primary", key=f"vri_acc_apply_{idx}"):
-                    if edited.strip() and edited != _anchor:
-                        st.session_state[pending_key] = True
-                        st.rerun()
-                    elif edited == _anchor:
-                        st.warning("No changes made.")
-                if st.button("🔇 Ignore", key=f"vri_acc_ignore_{idx}",
-                             help="Mark this diff as a false positive"):
-                    st.session_state[ignored_key] = True
-                    st.rerun()
-            else:
-                st.info("Confirm this change?")
-                cc1, cc2 = st.columns(2)
-                with cc1:
-                    if st.button("✅ Confirm", type="primary", key=f"vri_acc_confirm_{idx}"):
-                        current = converted_txt_path.read_text(encoding="utf-8")
-                        updated = current.replace(_anchor, edited, 1)
-                        if updated != current:
-                            converted_txt_path.write_text(updated, encoding="utf-8")
-                            st.session_state[fixed_key] = True
-                            st.session_state.pop(pending_key, None)
-                            st.success(f"✅ Diff #{idx} applied to file!")
-                            st.rerun()
-                        else:
-                            st.error("Original text not found in file — it may have been changed already.")
-                            st.session_state.pop(pending_key, None)
-                with cc2:
-                    if st.button("❌ Cancel", key=f"vri_acc_cancel_{idx}"):
-                        st.session_state.pop(pending_key, None)
-                        st.rerun()
-
-        # Preview
-        if edited != _anchor:
-            p1, p2 = st.columns(2)
-            with p1:
-                st.markdown("**Before:**")
-                st.code(_anchor, language=None)
-            with p2:
-                st.markdown("**After:**")
-                st.code(edited, language=None)
 
 
 def _render_accuracy_expander(accuracy_report: dict | None,
@@ -772,13 +608,7 @@ def _render_accuracy_expander(accuracy_report: dict | None,
                         f"> *PyMuPDF sentence:* {d['sentence_pymupdf']}\n\n"
                         f"> *Claude sentence:* {d['sentence_converted']}"
                     )
-                    # ── Inline edit for REPLACE diffs ──────────────────
-                    _acc_render_inline_edit(
-                        idx, d, dtype, converted_txt_path,
-                        anchor_text=d.get('sentence_converted', ''),
-                        got_text=d.get('converted_text', ''),
-                        expected_text=d.get('pymupdf_text', ''),
-                    )
+
 
                 elif dtype == "MISSING_IN_CONVERTED":
                     st.markdown(
@@ -786,23 +616,11 @@ def _render_accuracy_expander(accuracy_report: dict | None,
                         f"- **Missing:** {d['missing_text']}\n\n"
                         f"> *Sentence:* {d['sentence']}"
                     )
-                    _acc_render_inline_edit(
-                        idx, d, dtype, converted_txt_path,
-                        anchor_text=d.get('sentence', ''),
-                        got_text='',
-                        expected_text=d.get('missing_text', ''),
-                    )
                 elif dtype == "EXTRA_IN_CONVERTED":
                     st.markdown(
                         f"**#{idx} EXTRA in Claude output**\n\n"
                         f"- **Extra:** {d['extra_text']}\n\n"
                         f"> *Sentence:* {d['sentence']}"
-                    )
-                    _acc_render_inline_edit(
-                        idx, d, dtype, converted_txt_path,
-                        anchor_text=d.get('sentence', ''),
-                        got_text=d.get('extra_text', ''),
-                        expected_text='',
                     )
                 if idx < len(accuracy_report["real_diffs"]):
                     st.divider()
