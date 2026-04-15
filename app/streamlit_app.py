@@ -3251,7 +3251,7 @@ def show_batch_processing():
             if st.button(
                 f"🚀 Process {n_files} Documents",
                 type="primary",
-                width="stretch",
+                use_container_width=True,
                 help="Process all uploaded PDFs using Claude Opus 4.6. "
                      "You can review completed files while others are still processing.",
             ):
@@ -3391,7 +3391,7 @@ def show_batch_processing():
                 if st.button(
                     "📊 View Batch Summary",
                     type="primary",
-                    width="stretch",
+                    use_container_width=True,
                     key="batch_view_summary_btn",
                     help="Switch to the final Batch Summary view with aggregated stats and retry options.",
                 ):
@@ -3685,7 +3685,7 @@ def show_batch_results_section():
                 if st.button(
                     f"🔄 Retry {len(_failed_results)} Failed File{'s' if len(_failed_results) > 1 else ''}",
                     type="primary",
-                    width="stretch",
+                    use_container_width=True,
                     key="batch_retry_failed",
                 ):
                     # Collect failed pdf_paths / file_names
@@ -3824,7 +3824,7 @@ def show_single_file_processing():
             # Main process button - centered and prominent
             if st.button("🚀 Process Document", 
                         type="primary", 
-                        width="stretch",
+                        use_container_width=True,
                         help="Start processing with Claude Opus 4.6 visual conversion"):
                 st.session_state.processing = True
                 st.session_state.current_step = 0
