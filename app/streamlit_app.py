@@ -147,6 +147,8 @@ try:
         st.session_state.audit_json_report = None
     if 'content_accuracy_report' not in st.session_state:
         st.session_state.content_accuracy_report = None
+    if 'gpt_audit_failed' not in st.session_state:
+        st.session_state.gpt_audit_failed = False
     if 'last_uploaded_file_id' not in st.session_state:
         st.session_state.last_uploaded_file_id = None
 
@@ -1317,6 +1319,7 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
         st.session_state.audit_highlighted_dir = None
         st.session_state.audit_json_report = None
         st.session_state.content_accuracy_report = None
+        st.session_state.gpt_audit_failed = False
 
         # Reset validation review fixed/ignored state from any previous run
         for _vri_key in ("vri_fixed_ids", "vri_ignored_ids", "vri_undo_history",
@@ -1508,6 +1511,7 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
                 add_log(f"⚠️ GPT audit failed: {gpt_err}", "warning")
                 logging.error(f"GPT audit error: {gpt_err}", exc_info=True)
                 st.session_state.step_status[7] = "⚠️"
+                st.session_state.gpt_audit_failed = True
             update_progress()
         else:
             st.session_state.step_status[7] = "⚠️"
@@ -1832,6 +1836,7 @@ def show_simple_ui():
             st.session_state.audit_highlighted_dir = None
             st.session_state.audit_json_report = None
             st.session_state.content_accuracy_report = None
+            st.session_state.gpt_audit_failed = False
 
             # Reset batch processing state
             st.session_state.batch_results = []
@@ -2049,6 +2054,7 @@ def show_simple_ui():
             st.session_state.audit_highlighted_dir = None
             st.session_state.audit_json_report = None
             st.session_state.content_accuracy_report = None
+            st.session_state.gpt_audit_failed = False
             for _vri_key in ("vri_fixed_ids", "vri_ignored_ids", "vri_undo_history",
                              "vri_selected_item", "vri_current_page", "vri_filter_mode"):
                 st.session_state.pop(_vri_key, None)
@@ -2170,6 +2176,7 @@ def show_simple_ui():
                     st.session_state.audit_highlighted_dir = None
                     st.session_state.audit_json_report = None
                     st.session_state.content_accuracy_report = None
+                    st.session_state.gpt_audit_failed = False
 
                     # Reset validation review state (fixed/ignored from previous file)
                     st.session_state.pop("vri_fixed_ids", None)
@@ -2535,10 +2542,12 @@ def show_results_section():
 
     _has_audit = bool(st.session_state.get('audit_excel_path'))
     _has_accuracy = bool(st.session_state.get('content_accuracy_report'))
+    _has_highlighted = bool(st.session_state.get('audit_highlighted_dir'))
+    _audit_failed = bool(st.session_state.get('gpt_audit_failed'))
 
     # ── Build tab list dynamically ─────────────────────────────────────────────
     tab_labels = ["📊 Summary"]
-    if (_has_audit or _has_accuracy) and render_inline_validation_review:
+    if (_has_audit or _has_accuracy or _has_highlighted or _audit_failed) and render_inline_validation_review:
         tab_labels.append("🔍 Validation Review")
     if st.session_state.get('processing_logs'):
         tab_labels.append("📋 Activity Log")
@@ -2685,7 +2694,7 @@ def show_results_section():
     # TAB 2 — Validation Review (only if audit data exists)
     # ══════════════════════════════════════════════════════════════════════════
     _tab_idx = 1
-    if (_has_audit or _has_accuracy) and render_inline_validation_review:
+    if (_has_audit or _has_accuracy or _has_highlighted or _audit_failed) and render_inline_validation_review:
         with tabs[_tab_idx]:
             render_inline_validation_review(
                 excel_path=st.session_state.get('audit_excel_path') or "",
@@ -2693,6 +2702,7 @@ def show_results_section():
                 highlighted_dir=st.session_state.get('audit_highlighted_dir'),
                 json_report=st.session_state.get('audit_json_report'),
                 accuracy_report=st.session_state.get('content_accuracy_report'),
+                gpt_audit_failed=_audit_failed,
             )
         _tab_idx += 1
 
@@ -3006,6 +3016,7 @@ class BatchWorker:
         audit_highlighted_dir = None
         audit_json_report = None
         content_accuracy_report = None
+        gpt_audit_failed = False
         pymupdf_text = None
         pymupdf_report = None
         highlight_dir = None
@@ -3156,9 +3167,11 @@ class BatchWorker:
                     f"⚠️ Warnings: {gpt_cmp['warnings']} | "
                     f"❌ Errors: {gpt_cmp['errors']}"
                 )
+                gpt_audit_failed = False
             except Exception as e:
                 add_log(f"⚠️ GPT audit error: {e}", "warning")
                 logging.error(f"BatchWorker GPT audit error: {e}", exc_info=True)
+                gpt_audit_failed = True
         else:
             add_log("⏭️ Skipping GPT audit (no PyMuPDF data)")
 
@@ -3198,6 +3211,7 @@ class BatchWorker:
             "audit_highlighted_dir": audit_highlighted_dir,
             "audit_json_report": audit_json_report,
             "content_accuracy_report": content_accuracy_report,
+            "gpt_audit_failed": gpt_audit_failed,
             "processing_logs": logs,
             "output_data": output_data,
         }
@@ -3432,7 +3446,7 @@ def show_batch_processing():
                 actual_result_idx = _success_indices[new_sel_idx]
                 r = batch_results[actual_result_idx]
 
-                if r.get('audit_excel_path') or r.get('content_accuracy_report'):
+                if r.get('audit_excel_path') or r.get('content_accuracy_report') or r.get('audit_highlighted_dir') or r.get('gpt_audit_failed'):
                     _output_path = r.get('output_path', '')
                     if render_inline_validation_review:
                         render_inline_validation_review(
@@ -3441,6 +3455,7 @@ def show_batch_processing():
                             highlighted_dir=r.get('audit_highlighted_dir'),
                             json_report=r.get('audit_json_report'),
                             accuracy_report=r.get('content_accuracy_report'),
+                            gpt_audit_failed=bool(r.get('gpt_audit_failed')),
                         )
                     else:
                         st.warning("Validation review module not available.")
@@ -3761,7 +3776,7 @@ def show_batch_results_section():
 
                 # Load the selected file's data and render validation review
                 r = results[actual_result_idx]
-                if r.get('audit_excel_path') or r.get('content_accuracy_report'):
+                if r.get('audit_excel_path') or r.get('content_accuracy_report') or r.get('audit_highlighted_dir') or r.get('gpt_audit_failed'):
                     _output_path = r.get('output_path', '')
                     if render_inline_validation_review:
                         render_inline_validation_review(
@@ -3770,6 +3785,7 @@ def show_batch_results_section():
                             highlighted_dir=r.get('audit_highlighted_dir'),
                             json_report=r.get('audit_json_report'),
                             accuracy_report=r.get('content_accuracy_report'),
+                            gpt_audit_failed=bool(r.get('gpt_audit_failed')),
                         )
                     else:
                         st.warning("Validation review module not available.")
