@@ -644,7 +644,7 @@ def gpt_compare_tags(
     response = client.chat.completions.create(
         model=model,
         messages=[{"role": "user", "content": content_parts}],
-        max_completion_tokens=16384,
+        max_completion_tokens=100000,
         temperature=0.0,
     )
 
@@ -975,15 +975,85 @@ def _style_row(ws, row, ncols, fill=None):
 
 
 def _repair_json(raw: str) -> str:
-    """Attempt to fix truncated JSON from GPT."""
+    """Attempt to fix truncated JSON from GPT.
+    
+    Handles deep truncation by rebuilding the closing brackets/braces
+    based on what's actually open in the JSON string.
+    """
+    # Quick check — maybe it's already valid
+    try:
+        json.loads(raw)
+        return raw
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 1: try common simple suffixes first
     for suffix in ["", "]}", "]}}", "]}}",
-                   '"]}', '"]}}', '"}]}}'  ]:
+                   '"]}', '"]}}', '"}]}}',
+                   '"}]}', '"]}]}', '"}]}}'  ]:
         try:
             json.loads(raw + suffix)
+            log.info("JSON repaired with simple suffix: %r", suffix)
             return raw + suffix
         except json.JSONDecodeError:
             continue
-    return raw
+
+    # Strategy 2: structural repair — close all open brackets/braces
+    # Strip trailing partial tokens (incomplete string, trailing comma)
+    trimmed = raw.rstrip()
+    # If we're inside an unterminated string, close it
+    in_string = False
+    escape = False
+    for ch in trimmed:
+        if escape:
+            escape = False
+            continue
+        if ch == '\\':
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+    
+    if in_string:
+        trimmed += '"'
+
+    # Remove any trailing comma
+    trimmed = trimmed.rstrip().rstrip(',')
+
+    # Count unclosed brackets/braces
+    stack = []
+    in_str = False
+    esc = False
+    for ch in trimmed:
+        if esc:
+            esc = False
+            continue
+        if ch == '\\':
+            esc = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if ch in ('{', '['):
+            stack.append(ch)
+        elif ch == '}' and stack and stack[-1] == '{':
+            stack.pop()
+        elif ch == ']' and stack and stack[-1] == '[':
+            stack.pop()
+
+    # Build closing sequence
+    closing = ''.join(']' if c == '[' else '}' for c in reversed(stack))
+    repaired = trimmed + closing
+
+    try:
+        json.loads(repaired)
+        log.info("JSON repaired with structural close (%d brackets added)", len(closing))
+        return repaired
+    except json.JSONDecodeError as e:
+        log.warning("Structural JSON repair also failed: %s", e)
+        return raw
 
 
 # ── CLI entry point ─────────────────────────────────────────────────
