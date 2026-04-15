@@ -941,6 +941,7 @@ def render_inline_validation_review(
     highlighted_dir: str | Path | None = None,
     json_report: dict | None = None,
     accuracy_report: dict | None = None,
+    gpt_audit_failed: bool = False,
 ):
     """
     Render the full validation review UI inline in the Streamlit app.
@@ -957,6 +958,8 @@ def render_inline_validation_review(
         The PyMuPDF JSON report dict (for bbox-based annotations).
     accuracy_report : dict, optional
         Structured dict from ``compare_texts()`` with content accuracy data.
+    gpt_audit_failed : bool
+        If True, the GPT audit step failed — show manual review UI.
     """
     excel_path = Path(str(excel_path)) if excel_path else Path("")
     converted_txt_path = Path(converted_txt_path)
@@ -980,18 +983,38 @@ def render_inline_validation_review(
             )
 
     if not checklist:
-        # Even without a GPT checklist, show accuracy details if available
+        # ── GPT audit failed banner ────────────────────────────────────
+        if gpt_audit_failed:
+            st.markdown(
+                '<div style="background:#fef2f2; border-radius:10px; padding:16px 24px; '
+                'border-left:4px solid #dc2626; margin-bottom:16px;">'
+                '<div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">'
+                '<span style="font-size:1.4rem;">⚠️</span>'
+                '<strong style="color:#991b1b; font-size:1.05rem;">Automatic Validation Report Unavailable</strong>'
+                '</div>'
+                '<p style="color:#7f1d1d; font-size:0.88rem; margin:0 0 8px;">'
+                'The automated GPT audit could not generate a validation report for this file. '
+                'This can happen when the file produces a response that exceeds processing limits.</p>'
+                '<p style="color:#991b1b; font-size:0.88rem; font-weight:600; margin:0;">'
+                '📝 Please review the converted text manually by comparing it against the '
+                'original PDF pages shown below. You can edit the converted text directly.</p>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+
+        # Show accuracy details if available
         if accuracy_report:
             st.markdown("---")
             st.markdown("## 🔍 Validation Review — Text Accuracy")
-            if excel_path.exists():
-                st.info("No checklist items found in the GPT audit Excel, "
-                        "but text accuracy details are available below.")
-            else:
-                st.info("GPT checklist audit was not available for this file, "
-                        "but text accuracy details are available below.")
+            if not gpt_audit_failed:
+                if excel_path.exists():
+                    st.info("No checklist items found in the GPT audit Excel, "
+                            "but text accuracy details are available below.")
+                else:
+                    st.info("GPT checklist audit was not available for this file, "
+                            "but text accuracy details are available below.")
             _render_accuracy_expander(accuracy_report, converted_txt_path)
-        else:
+        elif not gpt_audit_failed:
             st.warning("⚠️ No audit data or accuracy report available for this file.")
 
         # ── Still show the side-by-side PDF ↔ Claude text view ──────
@@ -1005,7 +1028,12 @@ def render_inline_validation_review(
             if "vri_current_page" not in st.session_state:
                 st.session_state.vri_current_page = 1
             st.markdown("---")
-            st.markdown("### 📑 Side-by-Side Comparison")
+            if gpt_audit_failed:
+                st.markdown("### 📝 Manual Review — Original PDF vs Converted Text")
+                st.caption("Compare the highlighted PDF pages on the left with the Claude converted text on the right. "
+                           "You can edit the converted text directly.")
+            else:
+                st.markdown("### 📑 Side-by-Side Comparison")
             _render_twocol_view(
                 page_images=page_images,
                 total_pages=total_pages,
@@ -1297,6 +1325,7 @@ def render_inline_validation_review(
         orig_verdict = str(selected_row.get("Verdict", ""))
         is_error = orig_verdict.startswith("❌")
         is_fixed = cid in fixed_ids
+        is_ignored = cid in ignored_ids
 
         st.markdown("---")
 
@@ -1344,6 +1373,28 @@ def render_inline_validation_review(
                     st.session_state["vri_undo_history"] = history
                     st.success(f"↩️ Reverted! Items {', '.join(f'#{a}' for a in undo_rec['item_ids'])} unmarked.")
                     st.rerun()
+
+        elif is_error and is_ignored:
+            # ── Ignored error — show undo option, no edit box ───────
+            st.success(
+                f"🔇 Item #{cid} has been **ignored** (marked as false positive). "
+                "It no longer counts as an error."
+            )
+            claude_text = str(selected_row.get("Claude Text", "") or "")
+            notes = str(selected_row.get("Notes", "") or "")
+            fix = str(selected_row.get("Suggested Fix", "") or "")
+
+            if claude_text:
+                st.markdown("**Claude Text:**")
+                st.code(claude_text, language=None)
+            if notes:
+                st.info(f"📝 **Notes:** {notes}")
+            if fix:
+                st.warning(f"🔧 **Suggested Fix:** {fix}")
+
+            if st.button("↩️ Undo Ignore", key=f"vri_unignore_{cid}"):
+                _unmark_ignored(cid)
+                st.rerun()
 
         elif is_error:
             st.markdown(f"#### 🛠️ Apply Correction — Item #{cid}")
