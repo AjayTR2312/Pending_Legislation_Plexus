@@ -28,6 +28,13 @@ import streamlit as st
 import streamlit.components.v1 as components
 import openpyxl
 
+# Bidirectional HTML component — enables JS-to-Python communication for clickable table rows
+try:
+    _VRI_CLICK_DIR = Path(__file__).parent / "vri_click_component"
+    _vri_click_bridge = components.declare_component("vri_click_bridge", path=str(_VRI_CLICK_DIR))
+except Exception:
+    _vri_click_bridge = None
+
 # ═══════════════════════════════════════════════════════════════════
 # CUSTOM CSS
 # ═══════════════════════════════════════════════════════════════════
@@ -457,6 +464,79 @@ def _find_affected_items(checklist: list[dict], fixed_ids: set[int],
     return affected
 
 
+def _find_anchor_context_multi(text: str, row: dict) -> str:
+    """Try multiple strategies to find anchor context in the converted text.
+
+    Returns the anchor context string (a substring of *text* that can be
+    used as the search-and-replace target), or empty string if nothing found.
+    """
+    # Strategy 1: Full Context column
+    ctx_col = str(row.get("Context", "") or "").strip()
+    if ctx_col and ctx_col in text:
+        return ctx_col
+
+    # Strategy 2: Partial Context — first 80 chars
+    if ctx_col:
+        partial = ctx_col[:80].strip()
+        if partial and partial in text:
+            return _extract_edit_context(text, partial)
+
+    # Strategy 3: Extract quoted strings from Suggested Fix
+    suggested_fix = str(row.get("Suggested Fix", "") or "")
+    if suggested_fix:
+        # Match single-quotes, double-quotes, and smart quotes
+        quoted = re.findall(
+            r"['\'\u2018\u2019\"\u201c\u201d]([^'\'\u2018\u2019\"\u201c\u201d]{3,})"
+            r"['\'\u2018\u2019\"\u201c\u201d]",
+            suggested_fix,
+        )
+        for q in quoted:
+            if q in text:
+                return _extract_edit_context(text, q)
+
+    # Strategy 4: Extract tag patterns from Suggested Fix  e.g. [A>or policies.<A]
+    if suggested_fix:
+        tag_pats = re.findall(r'\[([AD])>([^\[]{2,}?)<\1\]', suggested_fix)
+        for _tag_letter, inner in tag_pats:
+            if inner.strip() and inner.strip() in text:
+                return _extract_edit_context(text, inner.strip())
+
+    # Strategy 5: Key-phrase patterns from Suggested Fix
+    if suggested_fix:
+        for pat in [
+            r"after\s+['\"\'\u2018](.{3,40}?)['\"\'\u2019]\s",
+            r"before\s+['\"\'\u2018](.{3,40}?)['\"\'\u2019]\s",
+            r"Change\s+(.{3,60}?)\s+to\s+",
+            r"to\s+(.{3,60}?)\s+on\s+page",
+        ]:
+            m = re.search(pat, suggested_fix, re.IGNORECASE)
+            if m:
+                phrase = m.group(1).strip().strip("'\"")
+                if phrase and phrase in text:
+                    return _extract_edit_context(text, phrase)
+
+    # Strategy 6: Context sliding window (smaller chunks)
+    if ctx_col and len(ctx_col) > 20:
+        for size in [len(ctx_col) // 2, 60, 40, 20]:
+            chunk = ctx_col[:size].strip()
+            if len(chunk) >= 10 and chunk in text:
+                return _extract_edit_context(text, chunk)
+
+    # Strategy 7: Notes column — quoted text
+    notes = str(row.get("Notes", "") or "").strip()
+    if notes:
+        quoted = re.findall(
+            r"['\'\u2018\u2019\"\u201c\u201d]([^'\'\u2018\u2019\"\u201c\u201d]{3,})"
+            r"['\'\u2018\u2019\"\u201c\u201d]",
+            notes,
+        )
+        for q in quoted:
+            if q in text:
+                return _extract_edit_context(text, q)
+
+    return ""
+
+
 # ═══════════════════════════════════════════════════════════════════
 # CONTENT ACCURACY HELPERS
 # ═══════════════════════════════════════════════════════════════════
@@ -648,6 +728,8 @@ def _render_twocol_view(
     filter_mode: str,
     fixed_ids: set[int],
     ignored_ids: set[int],
+    all_errors_resolved: bool = False,
+    converted_txt_path: Path | None = None,
 ):
     """Render the side-by-side PDF page + Claude converted text columns."""
 
@@ -665,6 +747,7 @@ def _render_twocol_view(
             if total_pages > 0:
                 cur = st.session_state.vri_current_page
                 cur = max(1, min(cur, total_pages))
+                st.session_state.vri_current_page = cur  # clamp into session
 
                 _nav_bar_style = (
                     'display:flex; align-items:center; gap:8px; '
@@ -682,8 +765,11 @@ def _render_twocol_view(
                             st.session_state.vri_current_page = min(total_pages, cur + 1)
                             st.rerun()
                     with nc2:
+                        # Sync slider widget key to session state so external
+                        # page changes (item nav, ◀/▶ buttons) are reflected
+                        st.session_state["vri_pg_slider"] = cur
                         new_pg = st.slider(
-                            "Page", 1, total_pages, cur,
+                            "Page", 1, total_pages,
                             key="vri_pg_slider", label_visibility="collapsed",
                         )
                         if new_pg != cur:
@@ -705,7 +791,7 @@ def _render_twocol_view(
                 cur = st.session_state.vri_current_page
                 img_idx = cur - 1
                 if 0 <= img_idx < len(page_images):
-                    st.image(str(page_images[img_idx]), use_container_width=True)
+                    st.image(str(page_images[img_idx]), width="stretch")
 
                 # Page summary (only when checklist data is available)
                 on_page = [r for r in checklist if _safe_int(r.get("Page", 0)) == cur]
@@ -721,22 +807,84 @@ def _render_twocol_view(
 
         # ──────── RIGHT: Converted Text ─────────────────────────────
         with col_right:
-            st.markdown(
-                '<p style="font-size:0.92rem;font-weight:700;margin:0 0 6px;">📝 Claude Converted Text</p>',
-                unsafe_allow_html=True,
-            )
-            if total_pages > 0:
-                st.markdown(
-                    '<div style="height:58px;"></div>',
-                    unsafe_allow_html=True,
-                )
-            html = _render_text_html(text, checklist, selected_id, filter_mode, fixed_ids | ignored_ids)
-            st.markdown(
-                f'<div class="vr-text-viewer">{html}</div>',
-                unsafe_allow_html=True,
+            # Determine if edit mode is active
+            _edit_mode_active = (
+                all_errors_resolved
+                and converted_txt_path is not None
+                and st.session_state.get("vri_edit_mode", False)
             )
 
-    # JS: sync text-viewer height to the PDF image height
+            if all_errors_resolved and converted_txt_path is not None:
+                # Header with Edit toggle
+                _hdr_col1, _hdr_col2 = st.columns([3, 1])
+                with _hdr_col1:
+                    st.markdown(
+                        '<p style="font-size:0.92rem;font-weight:700;margin:0 0 6px;">📝 Claude Converted Text</p>',
+                        unsafe_allow_html=True,
+                    )
+                with _hdr_col2:
+                    if _edit_mode_active:
+                        if st.button("🔒 Exit Edit", key="vri_exit_edit", width="stretch"):
+                            st.session_state["vri_edit_mode"] = False
+                            st.session_state.pop("vri_edit_text_buffer", None)
+                            st.rerun()
+                    else:
+                        if st.button("✏️ Edit Text", key="vri_enter_edit", width="stretch"):
+                            st.session_state["vri_edit_mode"] = True
+                            st.rerun()
+            else:
+                st.markdown(
+                    '<p style="font-size:0.92rem;font-weight:700;margin:0 0 6px;">📝 Claude Converted Text</p>',
+                    unsafe_allow_html=True,
+                )
+
+            if _edit_mode_active:
+                # ── Editable text area ──────────────────────────────
+                if total_pages > 0:
+                    st.markdown('<div style="height:16px;"></div>', unsafe_allow_html=True)
+                st.markdown(
+                    '<div style="background:#fffbeb; border:1px solid #fde68a; border-radius:8px; '
+                    'padding:8px 12px; margin-bottom:8px; font-size:0.82rem; color:#92400e;">'
+                    '✏️ <b>Edit Mode</b> — Make your changes below, then click <b>Save</b> to update the file.</div>',
+                    unsafe_allow_html=True,
+                )
+                _edit_buffer = st.text_area(
+                    "Edit converted text",
+                    value=text,
+                    height=500,
+                    key="vri_edit_text_buffer",
+                    label_visibility="collapsed",
+                )
+                _save_col, _cancel_col = st.columns(2)
+                with _save_col:
+                    if st.button("💾 Save Changes", type="primary", key="vri_save_edit", width="stretch"):
+                        if _edit_buffer != text:
+                            converted_txt_path.write_text(_edit_buffer, encoding="utf-8")
+                            st.session_state["vri_edit_mode"] = False
+                            st.session_state.pop("vri_edit_text_buffer", None)
+                            st.success("✅ File saved successfully!")
+                            st.rerun()
+                        else:
+                            st.info("No changes to save.")
+                with _cancel_col:
+                    if st.button("❌ Cancel", type="primary", key="vri_cancel_edit", width="stretch"):
+                        st.session_state["vri_edit_mode"] = False
+                        st.session_state.pop("vri_edit_text_buffer", None)
+                        st.rerun()
+            else:
+                # ── Read-only view ──────────────────────────────────
+                if total_pages > 0:
+                    st.markdown(
+                        '<div style="height:58px;"></div>',
+                        unsafe_allow_html=True,
+                    )
+                html = _render_text_html(text, checklist, selected_id, filter_mode, fixed_ids | ignored_ids)
+                st.markdown(
+                    f'<div class="vr-text-viewer">{html}</div>',
+                    unsafe_allow_html=True,
+                )
+
+    # JS: sync text-viewer / edit textarea height to the PDF image height
     components.html("""
     <script>
     (function syncHeight() {
@@ -744,11 +892,33 @@ def _render_twocol_view(
         const container = doc.querySelector('.st-key-vri_twocol');
         if (!container) return;
         const img = container.querySelector('img');
-        const viewer = container.querySelector('.vr-text-viewer');
-        if (!img || !viewer) return;
+        if (!img) return;
         function adjust() {
             const h = img.clientHeight;
-            if (h > 100) { viewer.style.maxHeight = h + 'px'; }
+            if (h <= 100) return;
+            // Sync read-only viewer
+            const viewer = container.querySelector('.vr-text-viewer');
+            if (viewer) { viewer.style.maxHeight = h + 'px'; }
+            // Sync edit-mode textarea: measure all sibling elements in the
+            // right column except the textarea container, then fill the rest.
+            const ta = container.querySelector('textarea');
+            if (ta) {
+                // Walk up to the stVerticalBlock that holds all right-column widgets
+                var block = ta.closest('[data-testid="stVerticalBlock"]');
+                if (block) {
+                    var usedHeight = 0;
+                    for (var i = 0; i < block.children.length; i++) {
+                        var child = block.children[i];
+                        // Skip the element that contains the textarea itself
+                        if (child.contains(ta)) continue;
+                        usedHeight += child.offsetHeight || 0;
+                    }
+                    var editH = Math.max(300, h - usedHeight - 16);
+                    ta.style.height = editH + 'px';
+                    ta.style.maxHeight = editH + 'px';
+                    ta.style.minHeight = editH + 'px';
+                }
+            }
         }
         if (img.complete && img.clientHeight > 0) {
             adjust();
@@ -798,7 +968,16 @@ def render_inline_validation_review(
     # ── Load data ───────────────────────────────────────────────────
     checklist, findings, summary = [], [], {}
     if excel_path.exists():
-        checklist, findings, summary = _load_excel(excel_path)
+        try:
+            checklist, findings, summary = _load_excel(excel_path)
+        except Exception as _xl_err:
+            import logging as _log
+            _log.warning("Could not load Excel audit file %s: %s", excel_path, _xl_err)
+            st.warning(
+                f"⚠️ The audit Excel file could not be opened (it may be corrupted). "
+                f"Re-running the GPT audit step should fix this.\n\n"
+                f"Details: {_xl_err}"
+            )
 
     if not checklist:
         # Even without a GPT checklist, show accuracy details if available
@@ -836,7 +1015,30 @@ def render_inline_validation_review(
                 filter_mode="all",
                 fixed_ids=set(),
                 ignored_ids=set(),
+                all_errors_resolved=True,
+                converted_txt_path=converted_txt_path,
             )
+
+        # ── Download button — show when no checklist items ─────────────
+        if converted_txt_path.exists():
+            try:
+                _dl_bytes = converted_txt_path.read_bytes()
+                _dl_name = converted_txt_path.name
+                _dl_b64 = base64.b64encode(_dl_bytes).decode()
+                _dl_size = len(_dl_bytes)
+                _dl_label = f"{_dl_size / 1024:.1f} KB" if _dl_size < 1024 * 1024 else f"{_dl_size / (1024*1024):.1f} MB"
+                st.markdown(
+                    f'<div style="text-align:center; margin:12px 0 4px;">'
+                    f'<a href="data:text/plain;base64,{_dl_b64}" download="{_dl_name}" '
+                    f'style="display:inline-block; font-size:0.84rem; '
+                    f'color:#1e40af; text-decoration:none; background:#eff6ff; '
+                    f'padding:8px 20px; border-radius:8px; border:1px solid #bfdbfe;">'
+                    f'📥 Download converted text ({_dl_label})</a></div>',
+                    unsafe_allow_html=True,
+                )
+            except Exception:
+                pass
+
         return
 
     text = ""
@@ -896,7 +1098,8 @@ def render_inline_validation_review(
     """, unsafe_allow_html=True)
 
     total = summary.get("total", 1) or 1
-    st.progress(eff_pass / total, text=f"Pass rate: {eff_pass/total:.0%}  ({eff_pass}/{total})")
+    _pass_rate = min(eff_pass / total, 1.0)
+    st.progress(_pass_rate, text=f"Pass rate: {_pass_rate:.0%}  ({eff_pass}/{total})")
 
     # ── Content Accuracy Report (collapsible) ─────────────────
     _render_accuracy_expander(accuracy_report, converted_txt_path)
@@ -926,6 +1129,19 @@ def render_inline_validation_review(
             st.session_state.vri_selected_item = int(checklist[0].get("#", 1))
         else:
             st.session_state.vri_selected_item = 0
+
+    # ── Handle table row click (from JS component) ──────────────────
+    _table_click_raw = st.session_state.get("vri_table_click")
+    if _table_click_raw is not None:
+        try:
+            _click_cid = int(str(_table_click_raw).split('_')[0])
+            _click_uid = str(_table_click_raw)
+            if _click_uid != st.session_state.get("_vri_last_table_click"):
+                st.session_state["_vri_last_table_click"] = _click_uid
+                st.session_state.vri_selected_item = _click_cid
+                st.session_state["_vri_nav_btn_fired"] = True  # sync selectbox too
+        except (ValueError, IndexError):
+            pass
 
     selected_id = st.session_state.vri_selected_item
 
@@ -974,7 +1190,7 @@ def render_inline_validation_review(
     if error_ids:
         nav_c1, nav_c2, nav_c3 = st.columns([1, 3, 1])
         with nav_c1:
-            if st.button("◀ Prev Error", key="vri_prev_err", use_container_width=True):
+            if st.button("◀ Prev Error", key="vri_prev_err", width="stretch"):
                 if err_pos > 1:
                     st.session_state.vri_selected_item = error_ids[err_pos - 2]
                 else:
@@ -996,7 +1212,7 @@ def render_inline_validation_review(
                 </div>
                 """, unsafe_allow_html=True)
         with nav_c3:
-            if st.button("Next Error ▶", key="vri_next_err", use_container_width=True):
+            if st.button("Next Error ▶", key="vri_next_err", width="stretch"):
                 if err_pos > 0 and err_pos < err_total:
                     st.session_state.vri_selected_item = error_ids[err_pos]
                 else:
@@ -1019,6 +1235,14 @@ def render_inline_validation_review(
     # ══════════════════════════════════════════════════════════════
     st.markdown("---")
 
+    # Edit mode only available when ALL errors are fixed AND all warnings are ignored
+    _remaining_warnings = sum(
+        1 for r in checklist
+        if str(r.get("Verdict", "")).startswith("\u26a0")
+        and int(r.get("#", 0)) not in ignored_ids
+    )
+    _all_issues_resolved = (len(error_ids) == 0) and (_remaining_warnings == 0)
+
     _render_twocol_view(
         page_images=page_images,
         total_pages=total_pages,
@@ -1028,6 +1252,8 @@ def render_inline_validation_review(
         filter_mode=filter_mode,
         fixed_ids=fixed_ids,
         ignored_ids=ignored_ids,
+        all_errors_resolved=_all_issues_resolved,
+        converted_txt_path=converted_txt_path,
     )
 
     # ── Download button — centered below both columns ──────────────
@@ -1076,7 +1302,33 @@ def render_inline_validation_review(
 
         if is_fixed:
             st.success(f"✅ Item #{cid} has been fixed! The text file is updated.")
+
+            # Show content details (same as Apply Fix / warning views)
+            claude_text = str(selected_row.get("Claude Text", "") or "")
+            pymupdf_text = str(selected_row.get("PyMuPDF Text", "") or "")
+            notes = str(selected_row.get("Notes", "") or "")
+            fix = str(selected_row.get("Suggested Fix", "") or "")
+
+            if claude_text:
+                st.markdown("**Claude Text:**")
+                st.code(claude_text, language=None)
+            if notes:
+                st.info(f"📝 **Notes:** {notes}")
+            if fix:
+                st.warning(f"🔧 **Suggested Fix:** {fix}")
+
+            # Show before/after diff if undo history is available
             undo_rec = _get_undo_record(cid)
+            if undo_rec and undo_rec.get("original_context") and undo_rec.get("new_text"):
+                with st.expander("👁️ Applied change (before → after)", expanded=False):
+                    p1, p2 = st.columns(2)
+                    with p1:
+                        st.markdown("**Before:**")
+                        st.code(undo_rec["original_context"], language=None)
+                    with p2:
+                        st.markdown("**After:**")
+                        st.code(undo_rec["new_text"], language=None)
+
             if undo_rec:
                 if st.button("↩️ Undo This Fix", key=f"vri_undo_{cid}"):
                     current_text = converted_txt_path.read_text(encoding="utf-8") if converted_txt_path.exists() else ""
@@ -1123,33 +1375,23 @@ def render_inline_validation_review(
                 else:
                     st.caption("✏️ Edit the text below. Click **Apply Fix** to save your change.")
             else:
-                # Missing text — try to find a nearby anchor from Context column
-                _ctx_col = str(selected_row.get("Context", "") or "").strip()
-                _anchor_context = ""
-                if _ctx_col and _ctx_col in text:
-                    _anchor_context = _ctx_col
-                elif _ctx_col:
-                    # Try partial match — first 80 chars of context
-                    _partial = _ctx_col[:80].strip()
-                    if _partial and _partial in text:
-                        # Expand to full context around the partial match
-                        _anchor_context = _extract_edit_context(text, _partial)
-                original_context = _anchor_context
-                if _anchor_context:
-                    prefill = _anchor_context + "\n" + f"{tag_open}{pymupdf_text}{tag_close}"
+                # Missing text — try multiple strategies to find anchor context
+                original_context = _find_anchor_context_multi(text, selected_row)
+                if original_context:
+                    prefill = original_context
                     st.caption(
                         "⚠️ This text is **missing** from the Claude output. "
-                        "Nearby context is shown above the tagged text. "
-                        "Edit below to place the missing content correctly, "
-                        "then click **Apply Fix** to insert it into the file."
+                        "Nearby context is shown below. Edit the text to add "
+                        "the missing content at the correct position, then "
+                        "click **Apply Fix** to save."
                     )
                 else:
-                    prefill = f"{tag_open}{pymupdf_text}{tag_close}"
+                    prefill = ""
                     st.caption(
                         "⚠️ This text is **missing** from the Claude output. "
                         "It was found by PyMuPDF but not included in the conversion. "
-                        "Click **Mark as Fixed** if you've manually handled it, "
-                        "or **Ignore** if it's a false positive."
+                        "Use the **search box** below the edit area to locate nearby "
+                        "text and apply the fix, or **Mark as Fixed** / **Ignore**."
                     )
 
             fc1, fc2 = st.columns([3, 1])
@@ -1264,28 +1506,111 @@ def render_inline_validation_review(
                                     st.session_state.pop(pending_key, None)
                                     st.rerun()
                     else:
-                        # No anchor context — mark-only (manual handling)
-                        if st.button("✅ Mark as Fixed", type="primary", key=f"vri_copy_{cid}",
-                                     help="Mark this missing-text item as manually resolved"):
-                            _mark_fixed(cid)
-                            _save_undo_history([cid], "", "", str(converted_txt_path))
-                            st.success(f"✅ Item #{cid} marked as fixed!")
-                            st.rerun()
-                        if st.button("🔇 Ignore", key=f"vri_ignore_missing_{cid}",
-                                     help="Mark this as a false positive — no action needed"):
-                            _mark_ignored(cid)
-                            st.rerun()
+                        # No automatic anchor — let the user search for nearby text
+                        st.caption(
+                            "⚠️ No automatic anchor found in the file. "
+                            "**Search** for nearby text below to locate where the fix should go, "
+                            "then click **Apply Fix**. Or use **Mark as Fixed** / **Ignore**."
+                        )
+                        search_term = st.text_input(
+                            "🔍 Search for nearby text in the file",
+                            key=f"vri_search_{cid}",
+                            placeholder="Type text that appears near where the fix should be inserted…",
+                        )
+                        _search_anchor = ""
+                        if search_term and search_term.strip() in text:
+                            _search_anchor = _extract_edit_context(text, search_term.strip())
+                        elif search_term:
+                            st.error("❌ Text not found in the file. Try a different search term.")
 
-            # Preview diff — show for both existing-text edits and missing-text insertions
+                        if _search_anchor:
+                            # User found an anchor — show Apply Fix flow
+                            st.success("✅ Found! Edit the text below to add the missing content, then click **Apply Fix**.")
+                            search_prefill = _search_anchor
+                            search_new_text = st.text_area(
+                                "Edit text", value=search_prefill, height=200,
+                                key=f"vri_search_edit_{cid}", label_visibility="collapsed",
+                            )
+                            s_pending_key = f"vri_pending_search_apply_{cid}"
+                            s_is_pending = st.session_state.get(s_pending_key, False)
+
+                            sc1, sc2 = st.columns([1, 1])
+                            if not s_is_pending:
+                                with sc1:
+                                    if st.button("✅ Apply Fix", type="primary", key=f"vri_search_apply_{cid}"):
+                                        if search_new_text.strip() and search_new_text != _search_anchor:
+                                            st.session_state[s_pending_key] = True
+                                            st.rerun()
+                                        elif search_new_text == _search_anchor:
+                                            st.warning("No changes made — edit the text to include the missing content.")
+                                with sc2:
+                                    if st.button("🔇 Ignore", key=f"vri_ignore_search_{cid}",
+                                                 help="Mark as false positive"):
+                                        _mark_ignored(cid)
+                                        st.rerun()
+                            else:
+                                st.info(f"⚡ **1 item** will be inserted & marked fixed: #{cid}")
+                                sc_c1, sc_c2 = st.columns(2)
+                                with sc_c1:
+                                    if st.button("✅ Confirm", type="primary", key=f"vri_search_confirm_{cid}"):
+                                        updated = text.replace(_search_anchor, search_new_text, 1)
+                                        if updated != text:
+                                            converted_txt_path.write_text(updated, encoding="utf-8")
+                                            _mark_fixed(cid)
+                                            _save_undo_history(
+                                                [cid], _search_anchor,
+                                                search_new_text,
+                                                str(converted_txt_path),
+                                            )
+                                            st.session_state.pop(s_pending_key, None)
+                                            st.success(f"✅ Saved! Item #{cid} inserted & marked fixed!")
+                                            st.rerun()
+                                        else:
+                                            st.error("Anchor context not found — text may have changed.")
+                                            st.session_state.pop(s_pending_key, None)
+                                with sc_c2:
+                                    if st.button("❌ Cancel", key=f"vri_search_cancel_{cid}"):
+                                        st.session_state.pop(s_pending_key, None)
+                                        st.rerun()
+
+                            # Preview diff
+                            if _search_anchor and search_new_text != _search_anchor:
+                                with st.expander("👁️ Preview change", expanded=True):
+                                    sp1, sp2 = st.columns(2)
+                                    with sp1:
+                                        st.markdown("**Before:**")
+                                        st.code(_search_anchor, language=None)
+                                    with sp2:
+                                        st.markdown("**After:**")
+                                        st.code(search_new_text, language=None)
+                        else:
+                            # Fallback — Mark as Fixed / Ignore (no file edit)
+                            fb1, fb2 = st.columns([1, 1])
+                            with fb1:
+                                if st.button("✅ Mark as Fixed", type="primary", key=f"vri_copy_{cid}",
+                                             help="Mark this item as manually resolved"):
+                                    _mark_fixed(cid)
+                                    _save_undo_history([cid], "", "", str(converted_txt_path))
+                                    st.success(f"✅ Item #{cid} marked as fixed!")
+                                    st.rerun()
+                            with fb2:
+                                if st.button("🔇 Ignore", key=f"vri_ignore_missing_{cid}",
+                                             help="Mark as false positive — no action needed"):
+                                    _mark_ignored(cid)
+                                    st.rerun()
+
+            # Preview diff — show only after user clicks Apply Fix (pending confirmation)
             if original_context and new_text != original_context:
-                with st.expander("👁️ Preview change", expanded=True):
-                    p1, p2 = st.columns(2)
-                    with p1:
-                        st.markdown("**Before:**")
-                        st.code(original_context, language=None)
-                    with p2:
-                        st.markdown("**After:**")
-                        st.code(new_text, language=None)
+                _any_pending = st.session_state.get(f"vri_pending_apply_{cid}", False)
+                if _any_pending:
+                    with st.expander("👁️ Preview change", expanded=True):
+                        p1, p2 = st.columns(2)
+                        with p1:
+                            st.markdown("**Before:**")
+                            st.code(original_context, language=None)
+                        with p2:
+                            st.markdown("**After:**")
+                            st.code(new_text, language=None)
         else:
             # ── Warning / pass items ────────────────────────────────
             is_warning = str(selected_row.get("Verdict", "")).startswith("⚠")
@@ -1311,7 +1636,7 @@ def render_inline_validation_review(
                     ig1, ig2 = st.columns([3, 1])
                     with ig2:
                         if st.button("🔇 Ignore (false positive)", key=f"vri_ignore_{cid}",
-                                     use_container_width=True,
+                                     width="stretch",
                                      help="Mark this warning as a false positive — it will count as passing"):
                             _mark_ignored(cid)
                             st.rerun()
@@ -1349,7 +1674,7 @@ def render_inline_validation_review(
             if cid_int == selected_id:
                 rc += " row-selected"
 
-            tbl += f'<tr class="{rc}">'
+            tbl += f'<tr class="{rc}" data-cid="{cid_int}">'
             tbl += f'<td><strong>{cid_int}</strong></td>'
             tbl += f'<td><span class="vr-badge {bc}">{_html_escape(verd)}</span></td>'
             tbl += f'<td>{row.get("Page", "")}</td>'
@@ -1363,6 +1688,10 @@ def render_inline_validation_review(
 
         tbl += "</tbody></table>"
         st.markdown(tbl, unsafe_allow_html=True)
+
+        # ── Clickable rows: bidirectional component bridge ─────────────
+        if _vri_click_bridge is not None:
+            _vri_click_bridge(default=None, key="vri_table_click", height=0)
 
         # Navigation buttons
         st.markdown("")
@@ -1389,10 +1718,15 @@ def render_inline_validation_review(
                         st.session_state.vri_selected_item = id_opts[ci - 1] if ci > 0 else id_opts[-1]
                     else:
                         st.session_state.vri_selected_item = id_opts[-1]
+                    st.session_state["_vri_nav_btn_fired"] = True
                     st.rerun()
         with nc[2]:
             if id_opts:
                 current_idx = id_opts.index(selected_id) if selected_id in id_opts else 0
+                # Force the selectbox to reflect the current selected_id.
+                # Streamlit ignores the `index` param when a keyed widget already
+                # has a browser-submitted value, so we write directly.
+                st.session_state["vri_jump_to"] = id_opts[current_idx]
                 jump = st.selectbox(
                     "Go to #", id_opts,
                     index=current_idx,
@@ -1410,9 +1744,13 @@ def render_inline_validation_review(
                         st.session_state.vri_selected_item = id_opts[ci + 1] if ci < len(id_opts) - 1 else id_opts[0]
                     else:
                         st.session_state.vri_selected_item = id_opts[0]
+                    st.session_state["_vri_nav_btn_fired"] = True
                     st.rerun()
 
-        if id_opts and jump != selected_id and jump in id_opts:
+        # Only honour the selectbox jump if it wasn't a button-driven navigation
+        if st.session_state.pop("_vri_nav_btn_fired", False):
+            pass  # button already set vri_selected_item — ignore stale selectbox value
+        elif id_opts and jump != selected_id and jump in id_opts:
             st.session_state.vri_selected_item = jump
             st.rerun()
 
@@ -1442,7 +1780,7 @@ def render_inline_validation_review(
             data=xl_bytes,
             file_name=excel_path.name,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
+            width="stretch",
         )
     except Exception:
         pass

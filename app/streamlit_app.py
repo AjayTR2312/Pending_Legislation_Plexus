@@ -170,6 +170,28 @@ try:
     if 'batch_worker' not in st.session_state:
         st.session_state.batch_worker = None       # BatchWorker instance (background thread)
 
+    # ── Validation Review inline (vri) state ────────────────────────────────
+    # Pre-initialise so the widget tree is stable from the very first render
+    # of the Validation Review tab.  Without this, the first button click
+    # inside the tab causes new keys to appear → Streamlit's st.tabs() loses
+    # track of the active tab and bounces back to the first tab.
+    if 'vri_fixed_ids' not in st.session_state:
+        st.session_state.vri_fixed_ids = []
+    if 'vri_ignored_ids' not in st.session_state:
+        st.session_state.vri_ignored_ids = []
+    if 'vri_undo_history' not in st.session_state:
+        st.session_state.vri_undo_history = []
+    if 'vri_edit_mode' not in st.session_state:
+        st.session_state.vri_edit_mode = False
+    if 'vri_filter_mode' not in st.session_state:
+        st.session_state.vri_filter_mode = "all"
+    if 'vri_last_sel' not in st.session_state:
+        st.session_state.vri_last_sel = None
+    if '_vri_nav_btn_fired' not in st.session_state:
+        st.session_state._vri_nav_btn_fired = False
+    if '_vri_last_table_click' not in st.session_state:
+        st.session_state._vri_last_table_click = None
+
     # Get session folders
     session_mgr = st.session_state.session_manager
     session_folders = session_mgr.get_session_folders(st.session_state.session_id)
@@ -1844,16 +1866,16 @@ def show_simple_ui():
     if _has_results and (_is_single_done or _is_batch_done):
         # ── Compact info bar for completed results ────────────────────────
         if _is_batch_done:
-            _n_files = len(st.session_state.batch_results)
+            _n_total = len(st.session_state.get('batch_pdf_paths', st.session_state.batch_results))
             _n_ok = sum(1 for r in st.session_state.batch_results if r.get('status') == 'success')
             st.markdown(
                 f'<div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; '
                 f'padding:12px 20px; display:flex; align-items:center; gap:12px; margin-bottom:8px; '
                 f'box-shadow:0 1px 4px rgba(0,0,0,.04);">'
                 f'<span style="font-size:1.2rem;">📦</span>'
-                f'<span style="font-weight:600; color:#1e293b;">Batch: {_n_files} files</span>'
+                f'<span style="font-weight:600; color:#1e293b;">Batch: {_n_total} files</span>'
                 f'<span style="margin-left:auto; color:#16a34a; font-weight:600; font-size:0.85rem;">'
-                f'✅ {_n_ok}/{_n_files} Processed</span>'
+                f'✅ {_n_ok}/{_n_total} Processed</span>'
                 f'</div>',
                 unsafe_allow_html=True,
             )
@@ -1966,6 +1988,25 @@ def show_simple_ui():
 
         if not valid_files:
             st.error("❌ No files to process — all files were skipped due to page or size limits.")
+            st.stop()
+
+        # ── Deduplicate files (same name + same size = same file) ─────────
+        _seen_file_ids = set()
+        _deduped_files = []
+        _dup_names = []
+        for uf in valid_files:
+            _fid = f"{uf.name}_{uf.size}"
+            if _fid in _seen_file_ids:
+                _dup_names.append(uf.name)
+                continue
+            _seen_file_ids.add(_fid)
+            _deduped_files.append(uf)
+        if _dup_names and not _is_processing:
+            st.warning(f"⚠️ Duplicate file(s) removed: {', '.join(_dup_names)}")
+        valid_files = _deduped_files
+
+        if not valid_files:
+            st.error("❌ No files to process — all files were duplicates.")
             st.stop()
 
         if len(valid_files) > MAX_BATCH:
@@ -2672,6 +2713,7 @@ def _swap_batch_vri_state(from_idx: int | None, to_idx: int | None):
     _vri_keys = (
         "vri_fixed_ids", "vri_ignored_ids", "vri_undo_history",
         "vri_selected_item", "vri_current_page", "vri_last_sel",
+        "vri_edit_mode", "vri_filter_mode",
     )
 
     # Save current state under from_idx
@@ -2693,13 +2735,16 @@ def _swap_batch_vri_state(from_idx: int | None, to_idx: int | None):
         "vri_edit_", "vri_pending_apply_", "vri_apply_",
         "vri_confirm_", "vri_cancel_", "vri_copy_",
         "vri_ignore_nochange_", "vri_ignore_", "vri_unignore_",
-        "vri_undo_",
+        "vri_undo_", "vri_search_", "vri_pending_search_",
     )
     # Static widget keys that must also be reset between files
     _static_widget_keys = {
         "vri_pg_slider", "vri_pg_prev", "vri_pg_next",
         "vri_jump_to", "vri_prev_item_btn", "vri_next_item_btn",
         "vri_prev_err", "vri_next_err", "vri_twocol",
+        "vri_enter_edit", "vri_exit_edit", "vri_save_edit",
+        "vri_cancel_edit", "vri_edit_text_buffer",
+        "vri_table_click", "_vri_last_table_click",
     }
     stale_keys = [k for k in list(st.session_state.keys())
                   if any(k.startswith(p) for p in _stale_prefixes)
@@ -3188,9 +3233,16 @@ def show_batch_processing():
     is_processing = st.session_state.batch_processing
 
     # ── If batch is fully done, show final results ────────────────────
+    # Only switch to the final results view if the user explicitly opts in
+    # (via a button) so we don't disrupt validation-review work mid-flow.
     if not is_processing and batch_results and len(batch_results) == n_files:
-        show_batch_results_section()
-        return
+        if st.session_state.get("_batch_show_final"):
+            st.session_state.pop("_batch_show_final", None)
+            show_batch_results_section()
+            return
+        # Otherwise fall through to the live view — it already shows
+        # "batch complete" banners and the Validation Review tab keeps
+        # working undisturbed.
 
     # ── Process button (before processing starts) ─────────────────────
     if not is_processing and not batch_results:
@@ -3220,6 +3272,7 @@ def show_batch_processing():
                 st.session_state.batch_results = []
                 st.session_state.batch_results_offset = 0
                 st.session_state.process_method = "claude_opus"
+                st.session_state.pop("_batch_show_final", None)
                 worker.start()
                 st.rerun()
         return
@@ -3329,6 +3382,21 @@ def show_batch_processing():
                     for i, fn in enumerate(_pending_names):
                         st.markdown(f"<span style='font-size:0.85rem;color:#64748b;'>#{_pending_start + i + 1} — {fn}</span>",
                                     unsafe_allow_html=True)
+
+        # "View Batch Summary" button (shown only after all files are done)
+        if not is_processing and batch_results and len(batch_results) == n_total:
+            st.markdown("")
+            _bc1, _bc2, _bc3 = st.columns([1, 2, 1])
+            with _bc2:
+                if st.button(
+                    "📊 View Batch Summary",
+                    type="primary",
+                    use_container_width=True,
+                    key="batch_view_summary_btn",
+                    help="Switch to the final Batch Summary view with aggregated stats and retry options.",
+                ):
+                    st.session_state["_batch_show_final"] = True
+                    st.rerun()
 
     # ══════════════════════════════════════════════════════════════════
     # TAB 2 — Validation Review (live, for completed files)
@@ -3653,6 +3721,7 @@ def show_batch_results_section():
                     st.session_state.batch_results_offset = len(
                         st.session_state.batch_results
                     )
+                    st.session_state.pop("_batch_show_final", None)
                     worker.start()
                     st.rerun()
 

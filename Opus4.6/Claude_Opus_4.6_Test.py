@@ -1277,7 +1277,7 @@ def deterministic_cleanup(text):
 def post_process_output(text, state_config):
     """
     Apply deterministic post-processing fixes to converted text based on state rules.
-    Strips [A>...<A] tags from specific clauses that should never be tagged.
+    Strips [A>...<A] and [D>...<D] tags from specific clauses that should never be tagged.
 
     Args:
         text (str): Converted text from Claude
@@ -1296,27 +1296,30 @@ def post_process_output(text, state_config):
     state_name = state_config.get('state_name', 'Unknown')
     fix_count = 0
 
+    # Regex fragment that matches any [A>, <A], [D>, or <D] tag (with optional surrounding whitespace)
+    TAG_RE = r'(?:\[A>|<A\]|\[D>|<D\])'
+
     for clause in no_tag_clauses:
-        # Build a regex that matches the clause text even if it has [A> or <A] tags
+        # Build a regex that matches the clause text even if it has [A>/<A]/[D>/<D] tags
         # scattered within it. E.g. "[A>The people of the State<A] of California..."
-        # Strategy: escape the clause, then allow optional [A> and <A] around/between words
+        # Strategy: escape the clause, then allow optional tags around/between words
         escaped = re.escape(clause)
-        # Allow [A> and <A] tags (with optional whitespace) between any characters
-        pattern = escaped.replace(r'\ ', r'\s*(?:\[A>|<A\])?\s*')
+        # Allow any combination of add/delete tags (with optional whitespace) between words
+        pattern = escaped.replace(r'\ ', rf'\s*(?:{TAG_RE}\s*)*')
         # Also allow tags at the very start and end of the clause
-        full_pattern = r'(?:\[A>\s*)?' + pattern + r'(?:\s*<A\])?'
+        full_pattern = rf'(?:{TAG_RE}\s*)*' + pattern + rf'(?:\s*{TAG_RE})*'
 
         def strip_tags(match):
-            """Remove all [A> and <A] tags from the matched text."""
+            """Remove all [A>, <A], [D>, <D] tags from the matched text."""
             matched = match.group(0)
-            cleaned = matched.replace('[A>', '').replace('<A]', '')
+            cleaned = matched.replace('[A>', '').replace('<A]', '').replace('[D>', '').replace('<D]', '')
             return cleaned
 
         new_text = re.sub(full_pattern, strip_tags, text, flags=re.IGNORECASE)
         if new_text != text:
             occurrences = len(re.findall(full_pattern, text, flags=re.IGNORECASE))
             fix_count += occurrences
-            logging.info(f"🔧 Stripped [A> tags from '{clause}' ({occurrences} occurrence(s))")
+            logging.info(f"🔧 Stripped tags from protected clause '{clause}' ({occurrences} occurrence(s))")
             text = new_text
 
     if fix_count > 0:

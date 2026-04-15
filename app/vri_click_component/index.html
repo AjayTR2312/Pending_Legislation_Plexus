@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html>
+<head>
+<script>
+// ── Streamlit Bidirectional Component Protocol ──────────────────
+function _sendMsg(type, data) {
+    window.parent.postMessage(
+        Object.assign({isStreamlitMessage: true, type: type}, data || {}),
+        "*"
+    );
+}
+function setComponentValue(value) {
+    _sendMsg("streamlit:setComponentValue", {value: value});
+}
+function setReady() {
+    _sendMsg("streamlit:componentReady", {apiVersion: 1});
+    _sendMsg("streamlit:setFrameHeight", {height: 0});
+}
+
+// ── Click handler function (shared by all rows) ─────────────────
+function onRowClick(evt) {
+    var tr = evt.currentTarget;
+    var cid = tr.getAttribute('data-cid');
+    if (cid) {
+        setComponentValue(cid + '_' + Date.now());
+    }
+}
+
+// ── Attach click handlers to any un-bound rows ─────────────────
+function attachRowClicks() {
+    var doc = window.parent.document;
+    var rows = doc.querySelectorAll('.vr-cl-table tbody tr[data-cid]');
+    rows.forEach(function(row) {
+        if (row._vri_bound) return;
+        row._vri_bound = true;
+        row.style.cursor = 'pointer';
+        row.addEventListener('click', onRowClick);
+    });
+}
+
+// ── MutationObserver: re-attach whenever DOM under the table changes ──
+// This catches Streamlit replacing the table HTML after every rerun.
+(function() {
+    var doc = window.parent.document;
+    var observer = new MutationObserver(function(mutations) {
+        // Only bother if there are table rows to bind
+        var rows = doc.querySelectorAll('.vr-cl-table tbody tr[data-cid]');
+        if (rows.length) {
+            var needsBind = false;
+            for (var i = 0; i < rows.length; i++) {
+                if (!rows[i]._vri_bound) { needsBind = true; break; }
+            }
+            if (needsBind) attachRowClicks();
+        }
+    });
+
+    function startObserver() {
+        // Observe the whole body for childList / subtree changes
+        observer.observe(doc.body, { childList: true, subtree: true });
+        // Also do an initial attach
+        attachRowClicks();
+    }
+
+    // doc.body may not exist yet when the iframe script runs
+    if (doc.body) {
+        startObserver();
+    } else {
+        var checkBody = setInterval(function() {
+            if (window.parent.document.body) {
+                clearInterval(checkBody);
+                doc = window.parent.document;
+                startObserver();
+            }
+        }, 100);
+    }
+})();
+
+// ── Lifecycle: also re-attach on Streamlit render messages ──────
+window.addEventListener("message", function(event) {
+    if (event.data && event.data.type === "streamlit:render") {
+        // Small delay so Streamlit finishes DOM updates first
+        setTimeout(attachRowClicks, 150);
+    }
+});
+
+// Initial setup
+setReady();
+</script>
+</head>
+<body style="margin:0;padding:0;overflow:hidden;height:0;"></body>
+</html>
