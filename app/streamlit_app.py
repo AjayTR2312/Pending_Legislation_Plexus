@@ -1277,6 +1277,11 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
         if state_config:
             converted_text = opus.post_process_output(converted_text, state_config)
             add_log("🔧 Post-processing: stripped tags from protected clauses (if any)")
+        if strip_protected_tags and detected_state:
+            _before_strip = converted_text
+            converted_text = strip_protected_tags(converted_text, detected_state)
+            if converted_text != _before_strip:
+                add_log(f"🛡️ Stripped tags from protected clauses for {detected_state}")
 
         # ── Step 5: Save output ──────────────────────────────────────────────────
         st.session_state.current_step = 4
@@ -2986,11 +2991,18 @@ class BatchWorker:
 
         # Step 4b: Strip protected clauses
         if state_config:
+            # First: deterministic post-process from netscan_state_template (no_tag_clauses)
+            try:
+                converted_text = opus.post_process_output(converted_text, state_config)
+                add_log("🔧 Post-processing: stripped tags from protected clauses (if any)")
+            except Exception:
+                pass
+            # Second: strip protected clauses from protected_clauses.py (hardcoded list)
             try:
                 from protected_clauses import strip_protected_tags as _strip
-                if _strip:
+                if _strip and detected_state:
                     _before_strip = converted_text
-                    converted_text = _strip(converted_text, state_config)
+                    converted_text = _strip(converted_text, detected_state)
                     if converted_text != _before_strip:
                         add_log(f"🛡️ Stripped tags from protected clauses for {detected_state}")
             except Exception:
