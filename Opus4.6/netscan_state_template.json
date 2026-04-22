@@ -98,23 +98,25 @@
       "add_markup": {
         "underline": false,
         "bold": true,
-        "italic": false,
+        "italic": true,
+        "italic_section_only": "PRINTING CODE",
         "all_caps": false,
         "brackets": false,
         "custom_rules": [
           "CRITICAL: Output the content of every page in EXACT page order, page 1 first, page 2 second, and so on. NEVER move, reorder, or duplicate content from one page to another. If the DIGEST section appears on page 1, it must appear first in the output. The 'January 23, 2026', 'Second Regular Session', and 'PRINTING CODE' block only appears on the bill text page — do NOT copy or repeat it before the DIGEST section.",
           "COMPLETELY REMOVE (do not include in the output at all) the bill reference footer line that appears at the bottom of each page. This line follows the pattern: [BILL TYPE] [NUMBER]—LS [NUMBER]/DI [NUMBER]. Examples: 'SB 85—LS 6422/DI 104', 'HB 1105—LS 6451/DI 87', 'SB 220—LS 6789/DI 55'. This line must NEVER appear anywhere in the output, even once.",
           "COMPLETELY REMOVE (do not include in the output at all) any line that consists of ONLY a standalone page number — a line containing just a single number such as '2', '3', '4', '5', '6' with no other text on that line.",
-          "NEVER use asterisks (*) anywhere in the output. Italic text must be output as plain text with NO markers — no *text*, no **text**, no markdown of any kind. If text is italic in the PDF, just output the plain words.",
-          "Output ALL text content from every page including any digest, citations, and synopsis sections at the top of page 1. Only apply [A> tags to bold text that appears from 'SECTION 1' onwards. Do NOT tag any bold text before 'SECTION 1', but still output that text as plain text.",
-          "In each SECTION introductory clause, the word NEW is printed in bold (e.g., 'IS ADDED TO THE INDIANA CODE AS A NEW SECTION TO READ AS FOLLOWS'). This bold word NEW MUST always be tagged as [A>NEW<A] without exception, including in SECTION 1."
+          "NEVER use asterisks (*) anywhere in the output. Italic text outside the PRINTING CODE section must be output as plain text with NO markers and NO [A> tags — no *text*, no **text**, no markdown of any kind. If text is italic in the PDF outside the PRINTING CODE section, just output the plain words with no tags.",
+          "Output ALL text content from every page including any digest, citations, and synopsis sections at the top of page 1. Apply [A> tags to bold text starting from the 'PRINTING CODE:' section onwards (not before). Do NOT tag any bold text before 'PRINTING CODE:', but still output that text as plain text. EXCEPTION: The Bill or Resolution number line that appears in ALL CAPS and bold at the center of the page (e.g., 'SENATE BILL No. 85', 'HOUSE BILL No. 1105') must NOT be tagged with [A> tags — output it as plain text.",
+          "In each SECTION introductory clause, the word NEW is printed in bold (e.g., 'IS ADDED TO THE INDIANA CODE AS A NEW SECTION TO READ AS FOLLOWS'). This bold word NEW MUST always be tagged as [A>NEW<A] without exception, including in SECTION 1.",
+          "ITALIC TAGGING — ONLY IN PRINTING CODE SECTION: Tag italic text with [A>...<A] tags ONLY within the 'PRINTING CODE:' section (e.g., 'Additions: Coverage of legislation', 'Deletions: Coverage of legislation'). Do NOT tag italic text anywhere else in the document — from SECTION 1 onwards and in the DIGEST, all italic text must be output as plain untagged text with no [A> tags. The italic tagging rule applies EXCLUSIVELY to the PRINTING CODE block and nowhere else."
         ]
       },
       "delete_markup": {
         "strike_out": true,
         "brackets": false,
         "custom_rules": [
-          "Output ALL text content from every page. Only apply [D> tags to strikethrough text that appears from 'SECTION 1' onwards. Do NOT tag any strikethrough text before 'SECTION 1', but still output that text as plain text."
+          "Output ALL text content from every page. Apply [D> tags to strikethrough text starting from the 'PRINTING CODE:' section onwards (not before). Do NOT tag any strikethrough text before 'PRINTING CODE:', but still output that text as plain text. EXCEPTION: The Bill or Resolution number line that appears in ALL CAPS and bold at the center of the page (e.g., 'SENATE BILL No. 85', 'HOUSE BILL No. 1105') must NOT be tagged with [D> tags — output it as plain text."
         ]
       }
     },

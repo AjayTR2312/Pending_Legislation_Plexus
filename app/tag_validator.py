@@ -336,19 +336,51 @@ def compare_spans(
         validated.append(row)
 
     # --- False positives: Claude tags not matched to any PyMuPDF span ---
+    # These are EXTRA tags Claude added that have no formatting in the PDF.
     false_positives: List[FalsePositiveRow] = []
+    extra_add_count = 0
+    extra_del_count = 0
     for ct in claude_tags:
         if not ct.matched:
             tag_label = "[A>...<A]" if ct.tag_type == "add" else "[D>...<D]"
             fp_text = ct.text.strip()
             if not fp_text:
                 continue
+
+            if ct.tag_type == "add":
+                extra_add_count += 1
+            else:
+                extra_del_count += 1
+
             false_positives.append(FalsePositiveRow(
                 tag_type=tag_label,
                 tagged_text=fp_text,
                 position_in_output=ct.start_pos,
                 notes=f"Claude tagged as {tag_label} but no matching {ct.tag_type} formatting detected by PyMuPDF",
             ))
+
+            # --- Also add as an ERROR row in the main Span Validation sheet ---
+            # Extract ~40 chars of surrounding context from Claude output
+            ctx_start = max(0, ct.start_pos - 40)
+            ctx_end = min(len(claude_text), ct.end_pos + 40)
+            surrounding = claude_text[ctx_start:ctx_end].replace("\n", " ").strip()
+
+            validated.append(ValidationRow(
+                page=0,
+                bill_line=None,
+                text=fp_text,
+                format_types="none (plain text)",
+                expected_tag="No tag expected",
+                context=surrounding,
+                tag_found=f"❌ Extra {tag_label}",
+                text_match="❌ Should not be tagged",
+                missing_chars="",
+                extra_chars=fp_text,
+                severity="Critical",
+                notes=f"EXTRA TAG: Claude added {tag_label} to plain text — PyMuPDF found no formatting here",
+            ))
+
+    counts["extra_tags"] = extra_add_count + extra_del_count
 
     # --- Summary ---
     total = counts["total"]
@@ -378,6 +410,8 @@ def compare_spans(
         "matched_partial": counts["matched_partial"],
         "missed": counts["missed"],
         "false_positives": len(false_positives),
+        "extra_add_tags": extra_add_count,
+        "extra_del_tags": extra_del_count,
         "precision_pct": round(precision, 1),
         "recall_pct": round(recall, 1),
         "f1_pct": round(2 * precision * recall / (precision + recall), 1) if (precision + recall) > 0 else 0.0,
@@ -523,7 +557,9 @@ def generate_excel_report(
         ("Fully Matched", summary.get("matched_full", 0)),
         ("Partially Matched", summary.get("matched_partial", 0)),
         ("Missed (not tagged by Claude)", summary.get("missed", 0)),
-        ("False Positives (Claude only)", summary.get("false_positives", 0)),
+        ("Extra Tags (Claude added, no formatting)", summary.get("false_positives", 0)),
+        ("  ↳ Extra [A>] tags", summary.get("extra_add_tags", 0)),
+        ("  ↳ Extra [D>] tags", summary.get("extra_del_tags", 0)),
         ("", ""),
         ("Precision (%)", summary.get("precision_pct", 0)),
         ("Recall (%)", summary.get("recall_pct", 0)),
@@ -665,7 +701,7 @@ def main() -> None:
     print(f"   Fully matched:     {summary['matched_full']}")
     print(f"   Partially matched: {summary['matched_partial']}")
     print(f"   Missed:            {summary['missed']}")
-    print(f"   False positives:   {summary['false_positives']}")
+    print(f"   Extra tags:        {summary['false_positives']}  ([A>]: {summary.get('extra_add_tags',0)}, [D>]: {summary.get('extra_del_tags',0)})")
     print(f"   Precision:         {summary['precision_pct']}%")
     print(f"   Recall:            {summary['recall_pct']}%")
     print(f"   F1 Score:          {summary['f1_pct']}%")

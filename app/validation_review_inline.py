@@ -305,7 +305,20 @@ def _render_text_html(text: str, checklist: list[dict],
         else:
             tag = f'<span class="{hl["css"]}">'
             end_tag = "</span>"
-        safe = safe.replace(needle, f"{tag}{needle}{end_tag}", 1)
+
+        # Try to match the needle within an existing tag span first, so we
+        # wrap the *whole* tag span (e.g. <span class="vr-tag-add">[A>…<A]</span>)
+        # instead of just the inner text — which would create broken nested HTML.
+        wrapped_add = f'<span class="vr-tag-add">[A&gt;{needle}&lt;A]</span>'
+        wrapped_del = f'<span class="vr-tag-del">[D&gt;{needle}&lt;D]</span>'
+
+        if wrapped_add in safe:
+            safe = safe.replace(wrapped_add, f"{tag}{wrapped_add}{end_tag}", 1)
+        elif wrapped_del in safe:
+            safe = safe.replace(wrapped_del, f"{tag}{wrapped_del}{end_tag}", 1)
+        else:
+            # Fallback: plain text match (for items not inside tag spans)
+            safe = safe.replace(needle, f"{tag}{needle}{end_tag}", 1)
 
     return safe
 
@@ -879,9 +892,36 @@ def _render_twocol_view(
                         unsafe_allow_html=True,
                     )
                 html = _render_text_html(text, checklist, selected_id, filter_mode, fixed_ids | ignored_ids)
-                st.markdown(
-                    f'<div class="vr-text-viewer">{html}</div>',
-                    unsafe_allow_html=True,
+                # Use st.html() instead of st.markdown() because Streamlit
+                # >=1.45 sanitises <span class="…"> in markdown, stripping
+                # the styled highlight tags and showing raw HTML to the user.
+                _viewer_css = """
+                <style>
+                .vr-text-viewer {
+                    font-family: 'Cascadia Code','Consolas', monospace;
+                    font-size: 0.82rem; line-height: 1.65;
+                    white-space: pre-wrap; word-break: break-word;
+                    background: #fafafa; border: 1px solid #e2e8f0;
+                    border-radius: 8px; padding: 16px;
+                    overflow-y: auto;
+                    min-height: 400px;
+                    max-height: 80vh;
+                }
+                .vr-tag-add { background:#bbf7d0; color:#166534; padding:1px 2px; border-radius:3px; }
+                .vr-tag-del { background:#fecaca; color:#991b1b; padding:1px 2px; border-radius:3px; text-decoration:line-through; }
+                .vr-span-highlight-pass { background:#86efac; padding:1px 3px; border-radius:3px; }
+                .vr-span-highlight-warn { background:#fde047; padding:1px 3px; border-radius:3px; }
+                .vr-span-highlight-err  { background:#fca5a5; padding:1px 3px; border-radius:3px; }
+                mark.vr-current-span {
+                    background:#60a5fa !important; color:white !important;
+                    padding: 2px 4px; border-radius: 4px;
+                    animation: vr-pulse 1.5s ease-in-out infinite alternate;
+                }
+                @keyframes vr-pulse { from {box-shadow: 0 0 0 0 rgba(96,165,250,.5)} to {box-shadow: 0 0 0 6px rgba(96,165,250,0)} }
+                </style>
+                """
+                st.html(
+                    f'{_viewer_css}<div class="vr-text-viewer">{html}</div>'
                 )
 
     # JS: sync text-viewer / edit textarea height to the PDF image height
@@ -1738,7 +1778,23 @@ def render_inline_validation_review(
             tbl += "</tr>"
 
         tbl += "</tbody></table>"
-        st.markdown(tbl, unsafe_allow_html=True)
+        _tbl_css = """<style>
+.vr-cl-table { width:100%; border-collapse:collapse; font-size:0.82rem; }
+.vr-cl-table th { background:#1e293b; color:white; padding:8px 10px; text-align:left; position:sticky; top:0; z-index:2; border-bottom:2px solid #334155; }
+.vr-cl-table td { padding:7px 10px; border-bottom:1px solid #e2e8f0; vertical-align:top; }
+.vr-cl-table tr:hover { background:#f0f9ff !important; cursor:pointer; }
+.vr-cl-table tr.row-pass  { background:#f0fdf4; }
+.vr-cl-table tr.row-warn  { background:#fefce8; }
+.vr-cl-table tr.row-err   { background:#fef2f2; }
+.vr-cl-table tr.row-fixed { background:#dbeafe; }
+.vr-cl-table tr.row-selected { outline:2px solid #3b82f6; background:#eff6ff !important; }
+.vr-badge { display:inline-block; padding:2px 8px; border-radius:12px; font-weight:600; font-size:0.75rem; white-space:nowrap; }
+.vr-badge-pass  { background:#bbf7d0; color:#166534; }
+.vr-badge-warn  { background:#fde68a; color:#854d0e; }
+.vr-badge-err   { background:#fecaca; color:#991b1b; }
+.vr-badge-fixed { background:#93c5fd; color:#1e3a8a; }
+</style>"""
+        st.html(_tbl_css + tbl)
 
         # ── Clickable rows: bidirectional component bridge ─────────────
         if _vri_click_bridge is not None:

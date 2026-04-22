@@ -21,6 +21,7 @@ PROTECTED_CLAUSES: dict[str, list[str]] = {
         "Citations Affected:",
         "Synopsis:",
         "Effective:",
+        "Be it enacted by the General Assembly of the State of Indiana:",
     ],
     "CA": [
         "The people of the State of California do enact as follows:",
