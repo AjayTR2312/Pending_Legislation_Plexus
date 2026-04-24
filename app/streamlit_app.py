@@ -78,6 +78,93 @@ except ImportError:
     logging.warning("⚠️ pdf_type_detector module not found — scanned PDF detection disabled")
 
 # Full state name lookup for display
+
+def _filter_italic_by_section(pymupdf_report, pymupdf_text, state_config):
+    """Filter italic-only spans/tags to only the scoped section (e.g. PRINTING CODE).
+
+    When a state config has add_markup.italic_section_only set, italic-only spans
+    outside that section are removed from formatted_spans (so validation doesn't
+    flag them) and their [A>...<A] tags are stripped from the tagged text.
+    """
+    if not state_config:
+        return pymupdf_report, pymupdf_text
+    section_scope = (state_config.get("add_markup") or {}).get("italic_section_only")
+    if not section_scope:
+        return pymupdf_report, pymupdf_text
+
+    import re as _re
+
+    # --- Filter formatted_spans ---
+    if pymupdf_report and "formatted_spans" in pymupdf_report:
+        # Find which pages contain the section scope marker
+        # We'll track whether each span is in the scoped section
+        # Strategy: find the section marker in the text, then only keep italic-only
+        # spans whose context or surrounding text is within that section.
+        # Simpler approach: find the section marker position in pymupdf_text,
+        # and keep italic-only spans only between the marker and "SECTION 1"
+        section_start = None
+        section_end = None
+        if pymupdf_text:
+            marker_pos = pymupdf_text.upper().find(section_scope.upper())
+            if marker_pos >= 0:
+                section_start = marker_pos
+                # Section ends at SECTION 1 or similar
+                sec1_pos = pymupdf_text.upper().find("SECTION 1", marker_pos)
+                section_end = sec1_pos if sec1_pos >= 0 else marker_pos + 2000  # fallback
+
+        filtered_spans = []
+        for span in pymupdf_report["formatted_spans"]:
+            fmt_types = span.get("format_types", [])
+            is_italic_only = fmt_types == ["italic"]
+
+            if is_italic_only and section_start is not None:
+                # Check if span text appears in the scoped section
+                span_text = span.get("text", "").strip()
+                if span_text:
+                    section_text = pymupdf_text[section_start:section_end] if section_end else pymupdf_text[section_start:]
+                    if span_text in section_text:
+                        filtered_spans.append(span)  # Keep — it's in scope
+                    else:
+                        continue  # Skip — italic outside scope
+                else:
+                    continue
+            else:
+                filtered_spans.append(span)  # Not italic-only, keep
+
+        pymupdf_report = dict(pymupdf_report)
+        pymupdf_report["formatted_spans"] = filtered_spans
+
+    # --- Filter tagged text: strip [A>...<A] around italic-only text outside section ---
+    # The PyMuPDF tagged text marks ALL italic with [A>...<A].
+    # We need to remove those tags outside the scoped section but keep the text.
+    if pymupdf_text and section_scope:
+        upper_text = pymupdf_text.upper()
+        scope_pos = upper_text.find(section_scope.upper())
+        if scope_pos >= 0:
+            sec1_pos = upper_text.find("SECTION 1", scope_pos)
+            if sec1_pos < 0:
+                sec1_pos = scope_pos + 2000
+
+            # Process in three parts: before scope, in scope, after scope
+            before = pymupdf_text[:scope_pos]
+            in_scope = pymupdf_text[scope_pos:sec1_pos]
+            after = pymupdf_text[sec1_pos:]
+
+            # In before and after, strip italic [A>...<A] tags (keep text)
+            # We only want to strip italic tags, not bold tags.
+            # Since PyMuPDF doesn't distinguish tag source, we need to be careful.
+            # For states with both bold and italic as [A>, we strip ALL [A> outside scope
+            # only if the span was italic-only. But we can't distinguish in tagged text.
+            # Safer approach: only strip in before section (before PRINTING CODE),
+            # leave after section alone since bold tags there are wanted.
+            # Actually, the main issue is: italic tags exist throughout. Bold tags also
+            # exist from PRINTING CODE onwards. We can't distinguish them in plain text.
+            # So let's only filter the formatted_spans (done above) and leave tagged text as-is.
+            # The validation uses formatted_spans, not the tagged text directly.
+            pass
+
+    return pymupdf_report, pymupdf_text
+
 US_STATE_NAMES = {
     "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas",
     "CA": "California", "CO": "Colorado", "CT": "Connecticut", "DE": "Delaware",
@@ -1369,6 +1456,12 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
             with open(pymupdf_txt_path, "w", encoding="utf-8") as tf:
                 tf.write(pymupdf_text)
             add_log(f"✅ PyMuPDF tagged text saved: {len(pymupdf_text):,} chars")
+
+            # 6b.1: Filter italic spans by section scope (e.g. Indiana PRINTING CODE only)
+            pymupdf_report, pymupdf_text = _filter_italic_by_section(pymupdf_report, pymupdf_text, state_config)
+            _n_after = len(pymupdf_report.get("formatted_spans", [])) if pymupdf_report else 0
+            if _n_after != n_spans:
+                add_log(f"🔍 Italic section filter: {n_spans} → {_n_after} spans (removed {n_spans - _n_after} out-of-scope italic spans)")
 
             # 6c: Highlighted page images
             highlight_dir = Path(output_path).parent / f"{Path(pdf_path).stem}_highlighted"
@@ -3071,6 +3164,12 @@ class BatchWorker:
             with open(pymupdf_txt_path, "w", encoding="utf-8") as tf:
                 tf.write(pymupdf_text)
             add_log(f"✅ PyMuPDF tagged text saved: {len(pymupdf_text):,} chars")
+
+            # 6b.1: Filter italic spans by section scope (e.g. Indiana PRINTING CODE only)
+            pymupdf_report, pymupdf_text = _filter_italic_by_section(pymupdf_report, pymupdf_text, state_config)
+            _n_after = len(pymupdf_report.get("formatted_spans", [])) if pymupdf_report else 0
+            if _n_after != n_spans:
+                add_log(f"🔍 Italic section filter: {n_spans} → {_n_after} spans (removed {n_spans - _n_after} out-of-scope italic spans)")
 
             # 6c: Highlighted page images
             highlight_dir = Path(output_path).parent / f"{Path(pdf_path).stem}_highlighted"

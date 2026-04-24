@@ -1442,6 +1442,16 @@ def main():
         print(f"📋 Using default visual interpretation prompt...")
     prompt = get_conversion_prompt(state_config)
    
+    # Save the full prompt to a file for review
+    prompt_dump_path = os.path.join(os.path.dirname(pdf_path) if os.path.dirname(pdf_path) else ".", "prompt_dump.txt")
+    with open(prompt_dump_path, 'w', encoding='utf-8') as pf:
+        pf.write(f"FULL PROMPT BEING SENT TO CLAUDE FOR CONVERSION\n")
+        pf.write(f"{'='*80}\n")
+        pf.write(prompt)
+        pf.write(f"\n{'='*80}\n")
+        pf.write(f"Prompt length: {len(prompt)} characters\n")
+    print(f"📝 Full prompt saved to: {prompt_dump_path} ({len(prompt)} chars)")
+   
     # Pass 1: Visual mode conversion (images)
     print(f"🔄 Visual mode conversion...")
     visual_text, cached_page_images = convert_pdf_to_text(client, pdf_path, prompt)
@@ -1544,6 +1554,26 @@ def main():
                 f.write(pymupdf_text)
             print(f"   ✅ Tagged text saved to: {pymupdf_txt_path}")
             print(f"   📊 {len(pymupdf_text):,} characters")
+
+            # --- Filter italic spans by section scope (e.g. Indiana PRINTING CODE only) ---
+            italic_section = (state_config.get("add_markup") or {}).get("italic_section_only") if state_config else None
+            if italic_section and report:
+                before_count = len(report.get("formatted_spans", []))
+                upper_text = pymupdf_text.upper()
+                scope_pos = upper_text.find(italic_section.upper())
+                sec1_pos = upper_text.find("SECTION 1", scope_pos) if scope_pos >= 0 else -1
+                if scope_pos >= 0:
+                    section_text = pymupdf_text[scope_pos:(sec1_pos if sec1_pos >= 0 else scope_pos + 2000)]
+                    filtered = []
+                    for sp in report.get("formatted_spans", []):
+                        if sp.get("format_types") == ["italic"]:
+                            if sp.get("text", "").strip() not in section_text:
+                                continue  # Skip italic outside scoped section
+                        filtered.append(sp)
+                    report["formatted_spans"] = filtered
+                    removed = before_count - len(filtered)
+                    if removed:
+                        print(f"   🔍 Italic section filter: removed {removed} out-of-scope italic spans")
 
             # --- Highlighted images ---
             print("� Generating highlighted page images...")

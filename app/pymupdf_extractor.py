@@ -312,6 +312,9 @@ def _extract_page_tagged_text(
                         )
                         need_add = (s_ul and mark_underline) or (span_is_italic and mark_italic) or (span_is_bold and mark_bold)
                         need_del = s_so and mark_strikethrough
+                        # Delete (strikethrough) takes precedence — suppress add to avoid nested tags
+                        if need_del and need_add:
+                            need_add = False
                         if in_add and not need_add:
                             output.append(ADD_CLOSE); in_add = False
                         if in_del and not need_del:
@@ -343,6 +346,10 @@ def _extract_page_tagged_text(
 
                     need_add = (is_ul and mark_underline) or (span_is_italic and mark_italic) or (span_is_bold and mark_bold)
                     need_del = is_so and mark_strikethrough
+
+                    # Delete (strikethrough) takes precedence — suppress add to avoid nested tags
+                    if need_del and need_add:
+                        need_add = False
 
                     # -- close tags no longer needed --
                     if in_add and not need_add:
