@@ -347,9 +347,8 @@ State name may NOT appear explicitly in the header. You must judge based on the 
 Respond with ONLY the 2-letter state code (e.g., "KS", "FL", "CO"). If you cannot confidently determine the state, respond with "UNKNOWN"."""
  
         message = client.messages.create(
-            model="claude-opus-4-6",
+            model="claude-opus-4-7",
             max_tokens=100,
-            temperature=0,
             messages=[{
                 "role": "user",
                 "content": [
@@ -816,6 +815,9 @@ def convert_pdf_to_text(client, pdf_path, prompt, batch_size=None):
             "type": "text",
             "text": prompt
         })
+
+        # Log full prompt for debugging
+        logging.info(f"📝 FULL CONVERSION PROMPT ({len(prompt)} chars):\n{prompt}")
  
         messages = [{"role": "user", "content": content}]
  
@@ -830,9 +832,8 @@ def convert_pdf_to_text(client, pdf_path, prompt, batch_size=None):
             try:
                 converted_text = ""
                 with client.messages.stream(
-                    model="claude-opus-4-6",
+                    model="claude-opus-4-7",
                     max_tokens=128000,
-                    temperature=0,
                     messages=messages
                 ) as stream:
                     for text in stream.text_stream:
@@ -913,9 +914,8 @@ def convert_pdf_document_mode(client, pdf_path, prompt):
  
         converted_text = ""
         with client.messages.stream(
-            model="claude-opus-4-6",
+            model="claude-opus-4-7",
             max_tokens=128000,
-            temperature=0,
             messages=messages
         ) as stream:
             for text in stream.text_stream:
@@ -972,9 +972,8 @@ def reconcile_outputs(client, visual_text, doc_text):
  
         reconciled = ""
         with client.messages.stream(
-            model="claude-opus-4-6",
+            model="claude-opus-4-7",
             max_tokens=128000,
-            temperature=0,
             messages=messages
         ) as stream:
             for text in stream.text_stream:
@@ -1073,9 +1072,8 @@ def self_correction_pass(client, converted_text, page_images, state_config=None)
 
         corrected = ""
         with client.messages.stream(
-            model="claude-opus-4-6",
+            model="claude-opus-4-7",
             max_tokens=128000,
-            temperature=0,
             messages=[{"role": "user", "content": content}]
         ) as stream:
             for text in stream.text_stream:
@@ -1442,6 +1440,9 @@ def main():
         print(f"📋 Using default visual interpretation prompt...")
     prompt = get_conversion_prompt(state_config)
    
+    # Log the full prompt for debugging
+    logging.info(f"📝 FULL CONVERSION PROMPT ({len(prompt)} chars):\n{prompt}")
+
     # Save the full prompt to a file for review
     prompt_dump_path = os.path.join(os.path.dirname(pdf_path) if os.path.dirname(pdf_path) else ".", "prompt_dump.txt")
     with open(prompt_dump_path, 'w', encoding='utf-8') as pf:

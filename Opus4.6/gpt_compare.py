@@ -1,12 +1,12 @@
 """
-gpt_compare.py  —  Checklist-Driven Claude Audit via GPT 5.4
-=============================================================
+gpt_compare.py  —  Checklist-Driven Claude Audit via Claude Opus 4.7
+=====================================================================
 
 Two-phase validation of Claude's PDF conversion output:
 
   Phase 1 — CHECKLIST WALK
     PyMuPDF deterministically extracted tagged spans → numbered checklist.
-    GPT 5.4 checks each item against the highlighted page images and
+    Claude Opus 4.7 checks each item against the highlighted page images and
     Claude's converted text.  Is it real?  Did Claude capture it?
 
   Phase 2 — OPEN-ENDED AUDIT
@@ -52,34 +52,24 @@ _THIN_BORDER = Border(
 )
 _WRAP = Alignment(wrap_text=True, vertical="top")
 
-# ── TR OpenAI gateway ──────────────────────────────────────────────
-_TR_WORKSPACE_ID     = "AgentTraininJaH4"
-_TR_OPENAI_TOKEN_URL = "https://aiplatform.gcs.int.thomsonreuters.com/v1/openai/token"
+# ── TR Anthropic gateway ────────────────────────────────────────────
+_TR_WORKSPACE_ID       = "AgentTraininJaH4"
+_TR_ANTHROPIC_TOKEN_URL = "https://aiplatform.gcs.int.thomsonreuters.com/v1/anthropic/token"
 
 
-def _get_openai_client(model_name: str = "gpt-5.4"):
-    """Obtain an OpenAI client via the TR AI Platform gateway."""
+def _get_anthropic_client():
+    """Obtain an Anthropic client via the TR AI Platform gateway."""
     import requests as _requests
-    from openai import OpenAI
+    import anthropic
 
-    payload = {
-        "workspace_id": _TR_WORKSPACE_ID,
-        "model_name": model_name,
-        "oai_access": "openai_direct",
-    }
-    resp = _requests.post(_TR_OPENAI_TOKEN_URL, json=payload, timeout=30)
+    payload = {"workspace_id": _TR_WORKSPACE_ID}
+    resp = _requests.post(_TR_ANTHROPIC_TOKEN_URL, json=payload, timeout=30, verify=False)
     resp.raise_for_status()
     creds = resp.json()
 
-    if creds.get("is_direct_openai"):
-        return OpenAI(
-            api_key=creds["openai_api_key"],
-            base_url="https://us.api.openai.com/v1",
-        )
-    return OpenAI(
-        api_key=creds.get("openai_api_key", creds.get("token", "")),
-        base_url=creds.get("base_url", "https://us.api.openai.com/v1"),
-    )
+    if "anthropic_api_key" in creds:
+        return anthropic.Anthropic(api_key=creds["anthropic_api_key"])
+    raise RuntimeError("No anthropic_api_key in gateway response")
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -573,11 +563,11 @@ def gpt_compare_tags(
     state_code: str,
     state_rules: str = "",
     output_xlsx: str = "gpt_tag_comparison.xlsx",
-    model: str = "gpt-5.4",
+    model: str = "claude-opus-4-7",
     pymupdf_report: Optional[Dict] = None,
 ) -> Dict:
     """
-    Checklist-driven audit of Claude's output using GPT 5.4 vision.
+    Checklist-driven audit of Claude's output using Claude Opus 4.7 vision.
 
     Phase 1: Walk PyMuPDF checklist against images + Claude output.
     Phase 2: Open-ended audit for anything the checklist missed.
@@ -612,6 +602,9 @@ def gpt_compare_tags(
         checklist=checklist_str,
     )
 
+    # ── Log full prompt for debugging ───────────────────────────────
+    log.info("📝 FULL GPT AUDIT PROMPT (%d chars):\n%s", len(prompt), prompt)
+
     # ── Build messages with images ──────────────────────────────────
     content_parts = []
 
@@ -622,10 +615,11 @@ def gpt_compare_tags(
             "text": f"[Highlighted page {i+1} of {len(highlighted_images_b64)}]",
         })
         content_parts.append({
-            "type": "image_url",
-            "image_url": {
-                "url": f"data:image/png;base64,{img_b64}",
-                "detail": "high",
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/png",
+                "data": img_b64,
             },
         })
 
@@ -635,20 +629,19 @@ def gpt_compare_tags(
         "text": prompt,
     })
 
-    # ── Call GPT 5.4 ────────────────────────────────────────────────
-    log.info("🤖 Sending %d images + checklist (%d items) to GPT %s ...",
+    # ── Call Claude Opus 4.7 ────────────────────────────────────────
+    log.info("🤖 Sending %d images + checklist (%d items) to %s ...",
              len(highlighted_images_b64), len(checklist_items), model)
-    client = _get_openai_client(model)
-    log.info("✅ OpenAI client obtained")
+    client = _get_anthropic_client()
+    log.info("✅ Anthropic client obtained")
 
-    response = client.chat.completions.create(
+    message = client.messages.create(
         model=model,
+        max_tokens=128000,
         messages=[{"role": "user", "content": content_parts}],
-        max_completion_tokens=100000,
-        temperature=0.0,
     )
 
-    raw_response = response.choices[0].message.content.strip()
+    raw_response = message.content[0].text.strip()
 
     # ── Parse JSON ──────────────────────────────────────────────────
     if raw_response.startswith("```"):
