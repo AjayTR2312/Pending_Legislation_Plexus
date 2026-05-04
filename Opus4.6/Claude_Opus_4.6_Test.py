@@ -347,7 +347,7 @@ State name may NOT appear explicitly in the header. You must judge based on the 
 Respond with ONLY the 2-letter state code (e.g., "KS", "FL", "CO"). If you cannot confidently determine the state, respond with "UNKNOWN"."""
  
         message = client.messages.create(
-            model="claude-opus-4-7",
+            model="claude-opus-4-6",
             max_tokens=100,
             messages=[{
                 "role": "user",
@@ -832,7 +832,7 @@ def convert_pdf_to_text(client, pdf_path, prompt, batch_size=None):
             try:
                 converted_text = ""
                 with client.messages.stream(
-                    model="claude-opus-4-7",
+                    model="claude-opus-4-6",
                     max_tokens=128000,
                     messages=messages
                 ) as stream:
@@ -914,7 +914,7 @@ def convert_pdf_document_mode(client, pdf_path, prompt):
  
         converted_text = ""
         with client.messages.stream(
-            model="claude-opus-4-7",
+            model="claude-opus-4-6",
             max_tokens=128000,
             messages=messages
         ) as stream:
@@ -972,7 +972,7 @@ def reconcile_outputs(client, visual_text, doc_text):
  
         reconciled = ""
         with client.messages.stream(
-            model="claude-opus-4-7",
+            model="claude-opus-4-6",
             max_tokens=128000,
             messages=messages
         ) as stream:
@@ -1072,7 +1072,7 @@ def self_correction_pass(client, converted_text, page_images, state_config=None)
 
         corrected = ""
         with client.messages.stream(
-            model="claude-opus-4-7",
+            model="claude-opus-4-6",
             max_tokens=128000,
             messages=[{"role": "user", "content": content}]
         ) as stream:

@@ -635,13 +635,15 @@ def gpt_compare_tags(
     client = _get_anthropic_client()
     log.info("✅ Anthropic client obtained")
 
-    message = client.messages.create(
+    raw_response = ""
+    with client.messages.stream(
         model=model,
         max_tokens=128000,
         messages=[{"role": "user", "content": content_parts}],
-    )
-
-    raw_response = message.content[0].text.strip()
+    ) as stream:
+        for text in stream.text_stream:
+            raw_response += text
+    raw_response = raw_response.strip()
 
     # ── Parse JSON ──────────────────────────────────────────────────
     if raw_response.startswith("```"):

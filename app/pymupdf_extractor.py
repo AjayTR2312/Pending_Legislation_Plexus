@@ -698,10 +698,10 @@ def clean_extracted_text(
     *,
     state_code: str | None = None,
     anthropic_client=None,
-    model: str = "claude-opus-4-6",
+    model: str = "claude-opus-4-7",
 ) -> str:
     """
-    Use Claude Opus 4.6 to remove PDF artefacts (headers, footers, line
+    Use Claude Opus 4.7 to remove PDF artefacts (headers, footers, line
     numbers, page markers) from PyMuPDF-extracted text while preserving
     all legislative content and ``[A>…<A]`` / ``[D>…<D]`` tags.
 
@@ -719,7 +719,7 @@ def clean_extracted_text(
         An existing Anthropic client.  If *None*, one is created via
         the TR AI Platform gateway.
     model : str
-        Anthropic model name.  Default: ``claude-opus-4-6``.
+        Anthropic model name.  Default: ``claude-opus-4-7``.
 
     Returns
     -------
@@ -744,7 +744,6 @@ def clean_extracted_text(
         messages=[
             {"role": "user", "content": raw_text},
         ],
-        temperature=0.0,
     )
 
     cleaned = response.content[0].text.strip()
