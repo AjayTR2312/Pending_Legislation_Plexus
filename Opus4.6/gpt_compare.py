@@ -602,8 +602,9 @@ def gpt_compare_tags(
         checklist=checklist_str,
     )
 
-    # ── Log full prompt for debugging ───────────────────────────────
-    log.info("📝 FULL GPT AUDIT PROMPT (%d chars):\n%s", len(prompt), prompt)
+    # ── Log full prompt for debugging (DEBUG only — too verbose for terminal) ──
+    log.debug("📝 FULL GPT AUDIT PROMPT (%d chars):\n%s", len(prompt), prompt)
+    log.info("📝 GPT audit prompt built: %d chars (use DEBUG level to see full prompt)", len(prompt))
 
     # ── Build messages with images ──────────────────────────────────
     content_parts = []

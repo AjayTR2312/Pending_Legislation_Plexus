@@ -772,7 +772,7 @@ def pdf_pages_to_images(pdf_path, dpi=400, trim_borders=True, border_percent=5, 
         logging.error(f"❌ Error converting PDF pages to images: {e}")
         return None
  
-def convert_pdf_to_text(client, pdf_path, prompt, batch_size=None):
+def convert_pdf_to_text(client, pdf_path, prompt, batch_size=None, dpi=400):
     """
     Convert PDF to text using Claude API with visual interpretation.
     Processes all pages in a single API call for maximum consistency.
@@ -782,6 +782,7 @@ def convert_pdf_to_text(client, pdf_path, prompt, batch_size=None):
         pdf_path (str): Path to PDF file
         prompt (str): Conversion prompt
         batch_size (int): Ignored - kept for backward compatibility
+        dpi (int): Resolution for rendering (default 400, use 600 for bold detection)
  
     Returns:
         tuple: (converted_text, page_images) where page_images is list of
@@ -792,7 +793,7 @@ def convert_pdf_to_text(client, pdf_path, prompt, batch_size=None):
         logging.info(f"🔄 Converting PDF (visual mode, ALL PAGES IN ONE CALL): {pdf_path}")
  
         # Render PDF pages to images
-        page_images = pdf_pages_to_images(pdf_path)
+        page_images = pdf_pages_to_images(pdf_path, dpi=dpi)
         if not page_images:
             return None, None
  
@@ -1096,15 +1097,19 @@ def self_correction_pass(client, converted_text, page_images, state_config=None)
         return converted_text  # Fall back to original
 
 
-def deterministic_cleanup(text):
+def deterministic_cleanup(text, state_config=None):
     """
     Apply deterministic fixes for common Claude output inconsistencies.
     These are formatting errors that Claude makes intermittently regardless
     of the prompt — catching them here ensures 100% consistency.
 
+    When *state_config* is provided and bold/italic are enabled in add_markup,
+    markdown **bold** / *italic* are converted to [A>...<A] tags instead of
+    being stripped to plain text.
+
     Fixes applied:
       1. Strip markdown code fences (```plaintext ... ```)
-      2. Remove markdown bold/italic asterisks that slip through
+      2. Remove markdown bold/italic asterisks that slip through (or convert to [A> tags)
       3. Fix malformed tag variants ([D>text<D>, [A>text<A>, etc.)
       4. Fix empty tags ([A><A], [D><D])
       5. Fix nested/overlapping tags
@@ -1153,17 +1158,46 @@ def deterministic_cleanup(text):
     
     protected = re.sub(r'\[A>.*?<A\]|\[D>.*?<D\]', _protect_tag, text, flags=re.DOTALL)
     
-    # Fix **bold** markdown → plain text (remove the asterisks)
-    bold_count = len(re.findall(r'\*\*[^*]+\*\*', protected))
+    # Determine whether bold / italic should be converted to [A> tags or stripped
+    add_cfg = (state_config or {}).get("add_markup", {})
+    bold_enabled = bool(add_cfg.get("bold", False))
+    italic_enabled = bool(add_cfg.get("italic", False))
+
+    # Fix **bold** markdown — use innermost-pair pattern that won't match
+    # across tag placeholders (handles Claude's unbalanced ** markers)
+    bold_pattern = r'\*\*((?:(?!\*\*)(?!__TAG_PLACEHOLDER_).)+?)\*\*'
+    bold_count = 0
+    while True:
+        if bold_enabled:
+            new_p, n = re.subn(bold_pattern, r'[A>\1<A]', protected, flags=re.DOTALL)
+        else:
+            new_p, n = re.subn(bold_pattern, r'\1', protected, flags=re.DOTALL)
+        if n == 0:
+            break
+        bold_count += n
+        protected = new_p
     if bold_count > 0:
-        protected = re.sub(r'\*\*([^*]+)\*\*', r'\1', protected)
-        fix_log.append(f"Removed {bold_count} markdown bold (**) instances")
-    
-    # Fix *italic* markdown → plain text (remove the asterisks)
-    italic_count = len(re.findall(r'(?<!\*)\*(?!\*)([^*]+)(?<!\*)\*(?!\*)', protected))
+        if bold_enabled:
+            fix_log.append(f"Converted {bold_count} markdown bold (**) → [A>...<A] tags")
+        else:
+            fix_log.append(f"Removed {bold_count} markdown bold (**) instances")
+
+    # Strip any remaining orphaned ** markers (unbalanced bold)
+    orphaned_bold = protected.count('**')
+    if orphaned_bold > 0:
+        protected = protected.replace('**', '')
+        fix_log.append(f"Stripped {orphaned_bold} orphaned ** markers")
+
+    # Fix *italic* markdown → [A>...<A] if italic enabled, else plain text
+    italic_pattern = r'(?<!\*)\*(?!\*)([^*]+)(?<!\*)\*(?!\*)'
+    italic_count = len(re.findall(italic_pattern, protected))
     if italic_count > 0:
-        protected = re.sub(r'(?<!\*)\*(?!\*)([^*]+)(?<!\*)\*(?!\*)', r'\1', protected)
-        fix_log.append(f"Removed {italic_count} markdown italic (*) instances")
+        if italic_enabled:
+            protected = re.sub(italic_pattern, r'[A>\1<A]', protected)
+            fix_log.append(f"Converted {italic_count} markdown italic (*) → [A>...<A] tags")
+        else:
+            protected = re.sub(italic_pattern, r'\1', protected)
+            fix_log.append(f"Removed {italic_count} markdown italic (*) instances")
     
     # Restore tags from placeholders
     for key, value in tag_placeholder_map.items():
@@ -1269,6 +1303,102 @@ def deterministic_cleanup(text):
     else:
         logging.info("✅ Deterministic cleanup: no fixes needed")
 
+    # ── Final: Merge mid-sentence splits, then split at subsection boundaries ──
+    text = merge_split_tags(text)
+    text = split_tagged_subsections(text)
+
+    return text
+
+
+def merge_split_tags(text):
+    """
+    Merge adjacent same-type tags that were incorrectly split mid-sentence.
+
+    Merges [A>text<A] followed by [A>continuation<A] into [A>text continuation<A]
+    ONLY when the second tag does NOT start with a subsection marker like (1), (A), (a).
+    Same logic for [D>...<D] tags.
+
+    Example:
+        [A>for purposes of this<A]
+        [A>chapter, means the following:<A]
+        →
+        [A>for purposes of this chapter, means the following:<A]
+    """
+    for tag_type in ['A', 'D']:
+        # 1) Continuations: \n<T][T>text (NOT a subsection marker) → merge
+        #    e.g.  "dispensed\n<D][D>is not more than"  →  "dispensed is not more than"
+        same_cont = (
+            r'\n<' + tag_type + r'\]\[' + tag_type + r'>'
+            r'(?!\s*\(\d+\))'
+            r'(?!\s*\([A-Z]\))'
+            r'(?!\s*\([a-z]\))'
+        )
+        text = re.sub(same_cont, ' ', text)
+
+        # 2) Subsection boundaries: \n<T][T>(1)  →  <T]\n[T>(1)
+        #    Moves closing tag to end of previous line, keeps separate tags.
+        same_sub = r'\n<' + tag_type + r'\]\[' + tag_type + r'>'
+        text = re.sub(same_sub, '<' + tag_type + ']\n[' + tag_type + '>', text)
+
+        # 3) Cross-line joins:  <T]\n[T>  (continuation, not subsection)
+        cross_line = (
+            r'<' + tag_type + r'\]'
+            r'(\s*\n\s*)'
+            r'\[' + tag_type + r'>'
+            r'(?!\s*\(\d+\))'
+            r'(?!\s*\([A-Z]\))'
+            r'(?!\s*\([a-z]\))'
+        )
+        text = re.sub(cross_line, ' ', text)
+    return text
+
+
+def split_tagged_subsections(text):
+    """
+    Split long [A>...<A] and [D>...<D] blocks that contain multiple subsection
+    markers like (1), (2), (A), (B), (a), (b) into separate tagged lines.
+
+    Only splits at markers that appear after sentence-ending punctuation
+    (. ; :) or after 'and'/'or', avoiding false splits on inline references
+    like "seventy-two (72) hour" or "(as defined in IC 12-7-2-135.6)".
+
+    Example:
+        [A>Sec. 12.5. ... means the following: (1) Info... (2) Other...<A]
+        →
+        [A>Sec. 12.5. ... means the following:<A]
+        [A>(1) Info...<A]
+        [A>(2) Other...<A]
+    """
+    # Subsection marker after sentence-ending punctuation or after "and"/"or"
+    subsection_re = re.compile(
+        r'(?:(?<=[.:;])|(?<=\band\b)|(?<=\bor\b))\s+(\(\d+\)|\([A-Z]\)|\([a-z]\))\s'
+    )
+
+    def _split_block(match):
+        tag_open = match.group(1)
+        content = match.group(2)
+        tag_close = match.group(3)
+        markers = list(subsection_re.finditer(content))
+        if len(markers) < 2:
+            return match.group(0)
+        pieces = []
+        prev_end = 0
+        for m in markers:
+            split_at = m.start()
+            before = content[prev_end:split_at].rstrip()
+            if before:
+                pieces.append(before)
+            # Start next piece from the marker character (skip leading whitespace)
+            prev_end = split_at
+        last = content[prev_end:].strip()
+        if last:
+            pieces.append(last)
+        # Wrap each piece, stripping leading/trailing whitespace inside tags
+        tagged_pieces = [f"{tag_open}{p.strip()}{tag_close}" for p in pieces]
+        return '\n'.join(tagged_pieces)
+
+    text = re.sub(r'(\[A>)(.*?)(<A\])', _split_block, text, flags=re.DOTALL)
+    text = re.sub(r'(\[D>)(.*?)(<D\])', _split_block, text, flags=re.DOTALL)
     return text
 
 
@@ -1455,7 +1585,8 @@ def main():
    
     # Pass 1: Visual mode conversion (images)
     print(f"🔄 Visual mode conversion...")
-    visual_text, cached_page_images = convert_pdf_to_text(client, pdf_path, prompt)
+    state_dpi = state_config.get("dpi", 400) if state_config else 400
+    visual_text, cached_page_images = convert_pdf_to_text(client, pdf_path, prompt, dpi=state_dpi)
  
     if not visual_text:
         print("❌ Visual mode conversion failed")
@@ -1482,7 +1613,7 @@ def main():
 
     # Post-process: deterministic cleanup of common Claude inconsistencies
     print(f"🔧 Running deterministic cleanup...")
-    converted_text = deterministic_cleanup(converted_text)
+    converted_text = deterministic_cleanup(converted_text, state_config=state_config)
 
     # Post-process: strip tags from protected clauses (state-specific cleanup)
     if state_config:
@@ -1595,6 +1726,8 @@ def main():
                     anthropic_client=client,   # reuse the Claude client from conversion
                 )
                 pymupdf_clean_text = consolidate_adjacent_tags(pymupdf_clean_text)
+                pymupdf_clean_text = merge_split_tags(pymupdf_clean_text)
+                pymupdf_clean_text = split_tagged_subsections(pymupdf_clean_text)
                 pymupdf_clean_path = output_path.replace(".txt", "_pymupdf_clean.txt")
                 with open(pymupdf_clean_path, "w", encoding="utf-8") as f:
                     f.write(pymupdf_clean_text)

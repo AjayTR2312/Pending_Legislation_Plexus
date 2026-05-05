@@ -1360,7 +1360,11 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
         update_progress()
         add_log(f"✅ Visual conversion complete: {len(converted_text)} characters")
 
-        # ── Step 4b: Post-process — strip tags from protected clauses ────────────
+        # ── Step 4b: Deterministic cleanup of common Claude inconsistencies ─────
+        converted_text = opus.deterministic_cleanup(converted_text, state_config=state_config)
+        add_log("🔧 Deterministic cleanup complete (markdown→tags, malformed tags, etc.)")
+
+        # ── Step 4c: Post-process — strip tags from protected clauses ────────────
         if state_config:
             converted_text = opus.post_process_output(converted_text, state_config)
             add_log("🔧 Post-processing: stripped tags from protected clauses (if any)")
@@ -1496,6 +1500,8 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
                     anthropic_client=client,
                 )
                 pymupdf_clean_text = consolidate_adjacent_tags(pymupdf_clean_text)
+                pymupdf_clean_text = opus.merge_split_tags(pymupdf_clean_text)
+                pymupdf_clean_text = opus.split_tagged_subsections(pymupdf_clean_text)
 
                 # ── Post-process: strip tags from state-specific protected clauses ──
                 if strip_protected_tags and detected_state:
@@ -3082,7 +3088,12 @@ class BatchWorker:
             raise RuntimeError("Visual conversion returned empty text")
         add_log(f"✅ Visual conversion complete: {len(converted_text):,} characters")
 
-        # Step 4b: Strip protected clauses
+        # Step 4b: Deterministic cleanup + Strip protected clauses
+        try:
+            converted_text = opus.deterministic_cleanup(converted_text, state_config=state_config)
+            add_log("🔧 Deterministic cleanup complete (markdown→tags, malformed tags, etc.)")
+        except Exception:
+            pass
         if state_config:
             # First: deterministic post-process from netscan_state_template (no_tag_clauses)
             try:
@@ -3195,6 +3206,8 @@ class BatchWorker:
                     anthropic_client=client,
                 )
                 pymupdf_clean_text = consolidate_adjacent_tags(pymupdf_clean_text)
+                pymupdf_clean_text = opus.merge_split_tags(pymupdf_clean_text)
+                pymupdf_clean_text = opus.split_tagged_subsections(pymupdf_clean_text)
 
                 # Strip tags from protected clauses
                 try:
