@@ -528,6 +528,16 @@ def _find_anchor_context_multi(text: str, row: dict, total_pages: int = 0) -> st
                 return _extract_edit_context(text, inner, **_pg)
             before_marker = ctx_col[:marker_match.start()].replace("…", "").strip()
             after_marker = ctx_col[marker_match.end():].replace("…", "").strip()
+
+            # When inner is short (e.g. "(a)"), try inner + after_marker
+            if after_marker and len(inner) < 10:
+                combined_fwd = inner + " " + after_marker[:50].strip()
+                combined_fwd_ns = inner + after_marker[:50].strip()
+                if combined_fwd in text:
+                    return _extract_edit_context(text, combined_fwd, **_pg)
+                if combined_fwd_ns in text:
+                    return _extract_edit_context(text, combined_fwd_ns, **_pg)
+
             # Try combining tail of before + inner + head of after
             if before_marker:
                 tail = before_marker[-40:].strip()
@@ -1020,14 +1030,33 @@ def render_inline_validation_review(
     converted_txt_path = Path(converted_txt_path)
     highlighted_dir = Path(highlighted_dir) if highlighted_dir else None
 
-    # ── Auto-clear fixed/ignored state when the file changes ────────
+    # ── Save/restore fixed/ignored state per file ────────────────────
     _current_file_key = str(converted_txt_path)
     _prev_file_key = st.session_state.get("vri_file_key", "")
+    _vri_state_keys = ("vri_fixed_ids", "vri_ignored_ids", "vri_undo_history",
+                       "vri_selected_item", "vri_current_page", "vri_filter_mode",
+                       "vri_last_sel", "vri_edit_mode")
     if _current_file_key != _prev_file_key:
-        for _vri_key in ("vri_fixed_ids", "vri_ignored_ids", "vri_undo_history",
-                         "vri_selected_item", "vri_current_page", "vri_filter_mode",
-                         "vri_last_sel"):
-            st.session_state.pop(_vri_key, None)
+        # Save current state under the previous file key
+        if _prev_file_key:
+            _saved = {}
+            for _k in _vri_state_keys:
+                if _k in st.session_state:
+                    _saved[_k] = st.session_state[_k]
+            if _saved:
+                _all_saved = st.session_state.get("vri_per_file_state", {})
+                _all_saved[_prev_file_key] = _saved
+                st.session_state["vri_per_file_state"] = _all_saved
+
+        # Restore saved state for the new file (if any), otherwise clear
+        _all_saved = st.session_state.get("vri_per_file_state", {})
+        _restored = _all_saved.get(_current_file_key, {})
+        for _k in _vri_state_keys:
+            if _k in _restored:
+                st.session_state[_k] = _restored[_k]
+            else:
+                st.session_state.pop(_k, None)
+
         st.session_state["vri_file_key"] = _current_file_key
 
     # Inject CSS

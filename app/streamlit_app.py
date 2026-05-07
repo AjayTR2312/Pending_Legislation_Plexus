@@ -1419,7 +1419,9 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
 
         # Reset validation review fixed/ignored state from any previous run
         for _vri_key in ("vri_fixed_ids", "vri_ignored_ids", "vri_undo_history",
-                         "vri_selected_item", "vri_current_page", "vri_filter_mode"):
+                         "vri_selected_item", "vri_current_page", "vri_filter_mode",
+                         "vri_last_sel", "vri_edit_mode", "vri_file_key",
+                         "vri_per_file_state"):
             st.session_state.pop(_vri_key, None)
 
         try:
@@ -1963,8 +1965,11 @@ def show_simple_ui():
             st.session_state.batch_worker = None
             
             # Reset validation review state (fixed/ignored/undo/selection)
-            st.session_state.pop("vri_fixed_ids", None)
-            st.session_state.pop("vri_ignored_ids", None)
+            for _vri_key in ("vri_fixed_ids", "vri_ignored_ids", "vri_undo_history",
+                             "vri_selected_item", "vri_current_page", "vri_filter_mode",
+                             "vri_last_sel", "vri_edit_mode", "vri_file_key",
+                             "vri_per_file_state"):
+                st.session_state.pop(_vri_key, None)
             st.session_state.pop("vri_undo_history", None)
             st.session_state.pop("vri_selected_item", None)
             st.session_state.pop("vri_current_page", None)
@@ -2169,7 +2174,9 @@ def show_simple_ui():
             st.session_state.content_accuracy_report = None
             st.session_state.gpt_audit_failed = False
             for _vri_key in ("vri_fixed_ids", "vri_ignored_ids", "vri_undo_history",
-                             "vri_selected_item", "vri_current_page", "vri_filter_mode"):
+                             "vri_selected_item", "vri_current_page", "vri_filter_mode",
+                             "vri_last_sel", "vri_edit_mode", "vri_file_key",
+                             "vri_per_file_state"):
                 st.session_state.pop(_vri_key, None)
 
         if is_batch:
@@ -2292,8 +2299,11 @@ def show_simple_ui():
                     st.session_state.gpt_audit_failed = False
 
                     # Reset validation review state (fixed/ignored from previous file)
-                    st.session_state.pop("vri_fixed_ids", None)
-                    st.session_state.pop("vri_ignored_ids", None)
+                    for _vri_key in ("vri_fixed_ids", "vri_ignored_ids", "vri_undo_history",
+                                     "vri_selected_item", "vri_current_page", "vri_filter_mode",
+                                     "vri_last_sel", "vri_edit_mode", "vri_file_key",
+                                     "vri_per_file_state"):
+                        st.session_state.pop(_vri_key, None)
                     st.session_state.pop("vri_undo_history", None)
                     st.session_state.pop("vri_selected_item", None)
                     st.session_state.pop("vri_current_page", None)
