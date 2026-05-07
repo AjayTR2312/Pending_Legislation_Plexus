@@ -481,23 +481,25 @@ def _find_affected_items(checklist: list[dict], fixed_ids: set[int],
     affected = []
     for row in checklist:
         cid = int(row.get("#", 0))
+        if cid == current_cid:
+            continue  # always added at the end
         if cid in fixed_ids:
             continue
         verdict = str(row.get("Verdict", ""))
         if not verdict.startswith("❌"):
             continue
         ct = str(row.get("Claude Text", "") or "").strip()
-        if not ct:
-            continue
+        if not ct or len(ct) < 10:
+            continue  # skip very short text — too many false positives
         # Only consider items on the same or adjacent page
         item_page = int(row.get("Page", 0) or 0)
         if current_page > 0 and item_page > 0 and abs(item_page - current_page) > 1:
             continue
         if ct in original_context:
-            if ct not in new_text or cid == current_cid:
+            if ct not in new_text:
                 affected.append(cid)
-    if current_cid not in affected:
-        affected.append(current_cid)
+    # Always include the current item
+    affected.append(current_cid)
     return affected
 
 
@@ -526,18 +528,34 @@ def _find_anchor_context_multi(text: str, row: dict, total_pages: int = 0) -> st
                 return _extract_edit_context(text, inner, **_pg)
             before_marker = ctx_col[:marker_match.start()].replace("…", "").strip()
             after_marker = ctx_col[marker_match.end():].replace("…", "").strip()
-            # Try combining tail of before + inner + head of after
-            if before_marker:
-                tail = before_marker[-40:].strip()
+            # Normalize multiple spaces to single space for matching
+            import re as _re2
+            after_marker_norm = _re2.sub(r'\s+', ' ', after_marker)
+            before_marker_norm = _re2.sub(r'\s+', ' ', before_marker)
+            # Try combining inner + head of after (e.g. "(a) Come from a flock")
+            if after_marker_norm:
+                head = after_marker_norm[:40].strip()
+                combined_after = inner + " " + head
+                combined_after_ns = inner + head
+                if combined_after in text:
+                    return _extract_edit_context(text, combined_after, **_pg)
+                if combined_after_ns in text:
+                    return _extract_edit_context(text, combined_after_ns, **_pg)
+            # Try combining tail of before + inner
+            if before_marker_norm:
+                tail = before_marker_norm[-40:].strip()
                 combined = tail + inner
+                combined_sp = tail + " " + inner
                 if combined in text:
                     return _extract_edit_context(text, combined, **_pg)
+                if combined_sp in text:
+                    return _extract_edit_context(text, combined_sp, **_pg)
             # For missing text: search using surrounding context WITHOUT the
             # inner text (it may not exist in the converted file).
             # Combine tail of before + head of after as the anchor.
-            if before_marker and after_marker:
-                tail = before_marker[-30:].strip()
-                head = after_marker[:30].strip()
+            if before_marker_norm and after_marker_norm:
+                tail = before_marker_norm[-30:].strip()
+                head = after_marker_norm[:30].strip()
                 surround = tail + " " + head
                 if surround in text:
                     return _extract_edit_context(text, surround, **_pg)
@@ -546,13 +564,13 @@ def _find_anchor_context_multi(text: str, row: dict, total_pages: int = 0) -> st
                 if surround_nospace in text:
                     return _extract_edit_context(text, surround_nospace, **_pg)
             # Try just the tail of before-marker text
-            if before_marker:
-                tail = before_marker[-40:].strip()
+            if before_marker_norm:
+                tail = before_marker_norm[-40:].strip()
                 if len(tail) >= 10 and tail in text:
                     return _extract_edit_context(text, tail, **_pg)
             # Try just the head of after-marker text
-            if after_marker:
-                head = after_marker[:40].strip()
+            if after_marker_norm:
+                head = after_marker_norm[:40].strip()
                 if len(head) >= 10 and head in text:
                     return _extract_edit_context(text, head, **_pg)
         # Try full cleaned context
@@ -1017,6 +1035,16 @@ def render_inline_validation_review(
     excel_path = Path(str(excel_path)) if excel_path else Path("")
     converted_txt_path = Path(converted_txt_path)
     highlighted_dir = Path(highlighted_dir) if highlighted_dir else None
+
+    # ── Auto-clear fixed/ignored state when the file changes ────────
+    _current_file_key = str(converted_txt_path)
+    _prev_file_key = st.session_state.get("vri_file_key", "")
+    if _current_file_key != _prev_file_key:
+        for _vri_key in ("vri_fixed_ids", "vri_ignored_ids", "vri_undo_history",
+                         "vri_selected_item", "vri_current_page", "vri_filter_mode",
+                         "vri_last_sel"):
+            st.session_state.pop(_vri_key, None)
+        st.session_state["vri_file_key"] = _current_file_key
 
     # Inject CSS
     st.markdown(_CSS, unsafe_allow_html=True)
@@ -1489,24 +1517,26 @@ def render_inline_validation_review(
                         # Try to extract text around >>> <<< markers
                         _mm = _re.search(r'>>>\s*(.+?)\s*<<<', _ctx)
                         if _mm:
-                            _after = _ctx[_mm.end():].replace("…", "").strip()
+                            _inner = _mm.group(1).strip()
+                            _after = _re.sub(r'\s+', ' ', _ctx[_mm.end():].replace("…", "").strip())
+                            _before = _re.sub(r'\s+', ' ', _ctx[:_mm.start()].replace("…", "").strip())
+                            # Try inner + after
                             if _after and len(_after) >= 5:
-                                # Search for inner + after_text as combined anchor
-                                _combined = _mm.group(1).strip() + " " + _after[:40].strip()
-                                # Also try without space
-                                _combined_ns = _mm.group(1).strip() + _after[:40].strip()
-                                if _combined in text:
-                                    _search = _combined
-                                elif _combined_ns in text:
-                                    _search = _combined_ns
-                            _before = _ctx[:_mm.start()].replace("…", "").strip()
+                                for _sep in [" ", ""]:
+                                    _combined = _inner + _sep + _after[:40].strip()
+                                    if _combined in text:
+                                        _search = _combined
+                                        break
+                            # Try before + inner
                             if _search == claude_text and _before and len(_before) >= 5:
-                                _combined = _before[-40:].strip() + " " + _mm.group(1).strip()
-                                _combined_ns = _before[-40:].strip() + _mm.group(1).strip()
-                                if _combined in text:
-                                    _search = _combined
-                                elif _combined_ns in text:
-                                    _search = _combined_ns
+                                for _sep in [" ", ""]:
+                                    _combined = _before[-40:].strip() + _sep + _inner
+                                    if _combined in text:
+                                        _search = _combined
+                                        break
+                            # Try just after (if long enough)
+                            if _search == claude_text and _after and len(_after) >= 10 and _after[:40] in text:
+                                _search = _after[:40]
                         elif len(_ctx) >= 15 and _ctx in text:
                             _search = _ctx
 
