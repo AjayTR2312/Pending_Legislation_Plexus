@@ -1097,6 +1097,63 @@ def self_correction_pass(client, converted_text, page_images, state_config=None)
         return converted_text  # Fall back to original
 
 
+def restore_special_symbols(claude_text, pymupdf_text):
+    """
+    Restore special symbols (§, ¶, †, ‡, etc.) that Claude's vision may drop.
+
+    Compares PyMuPDF-extracted text against Claude output and patches in
+    missing symbols by finding matching context around each symbol.
+    """
+    import re as _re
+    if not pymupdf_text or not claude_text:
+        return claude_text
+
+    # Symbols that Claude's vision commonly drops
+    SYMBOLS = ['§', '¶', '†', '‡', '©', '®', '™', '°']
+
+    # Strip tags from both for plain-text alignment
+    tag_re = _re.compile(r'\[([AD])>|<([AD])\]')
+    pymupdf_plain = tag_re.sub('', pymupdf_text)
+    claude_plain = tag_re.sub('', claude_text)
+
+    fixes = 0
+    for sym in SYMBOLS:
+        if sym not in pymupdf_plain:
+            continue
+        if claude_plain.count(sym) >= pymupdf_plain.count(sym):
+            continue  # Claude has at least as many — nothing to restore
+
+        # Find each occurrence of the symbol in PyMuPDF plain text
+        for m in _re.finditer(_re.escape(sym), pymupdf_plain):
+            pos = m.start()
+            # Get surrounding context (without the symbol itself)
+            left = pymupdf_plain[max(0, pos - 25):pos].strip()
+            right = pymupdf_plain[pos + 1:pos + 26].strip()
+            if len(left) < 3 and len(right) < 3:
+                continue
+
+            # Build pattern: left_context + optional_space + right_context
+            # (Claude may have dropped the symbol, leaving adjacent text)
+            left_esc = _re.escape(left[-15:]) if left else ''
+            right_esc = _re.escape(right[:15]) if right else ''
+
+            if left_esc and right_esc:
+                # Look for left+space+right WITHOUT the symbol in Claude text
+                pattern = f'({left_esc})\\s*({right_esc})'
+                replacement = f'\\1 {sym} \\2'
+                new_claude = _re.sub(pattern, replacement, claude_text, count=1)
+                if new_claude != claude_text:
+                    claude_text = new_claude
+                    fixes += 1
+                    # Clean up any double spaces
+                    claude_text = claude_text.replace(f'  {sym}', f' {sym}').replace(f'{sym}  ', f'{sym} ')
+
+    if fixes:
+        logging.info(f"🔧 Restored {fixes} special symbol(s) from PyMuPDF reference")
+
+    return claude_text
+
+
 def deterministic_cleanup(text, state_config=None):
     """
     Apply deterministic fixes for common Claude output inconsistencies.
@@ -1303,10 +1360,53 @@ def deterministic_cleanup(text, state_config=None):
     else:
         logging.info("✅ Deterministic cleanup: no fixes needed")
 
-    # ── Final: Merge mid-sentence splits, then split at subsection boundaries ──
+    # ── Final: Remove nested tags, merge mid-sentence splits, then split at subsection boundaries ──
+    text = remove_nested_tags(text)
     text = merge_split_tags(text)
     text = split_tagged_subsections(text)
 
+    return text
+
+
+def remove_nested_tags(text):
+    """
+    Remove nested/duplicate opening tags that occur when Claude sees a
+    formatting change (e.g. bold → bold+italic) within the same tag type.
+
+    Example:
+        [A>text one[A>text two<A]  →  [A>text one text two<A]
+        [A>text[A>, more text[A>;<A]  →  [A>text, more text;<A]
+    """
+    for tag_type in ['A', 'D']:
+        open_tag = '[' + tag_type + '>'
+        close_tag = '<' + tag_type + ']'
+        # Iteratively remove nested opens: find [T>...[T> and strip the inner [T>
+        # Keep looping until no more nested opens remain
+        changed = True
+        while changed:
+            changed = False
+            result = []
+            depth = 0
+            i = 0
+            while i < len(text):
+                # Check for opening tag
+                if text[i:i+len(open_tag)] == open_tag:
+                    if depth == 0:
+                        result.append(open_tag)
+                        depth = 1
+                    else:
+                        # Nested open — skip it (don't add to result)
+                        changed = True
+                    i += len(open_tag)
+                # Check for closing tag
+                elif text[i:i+len(close_tag)] == close_tag:
+                    result.append(close_tag)
+                    depth = max(0, depth - 1)
+                    i += len(close_tag)
+                else:
+                    result.append(text[i])
+                    i += 1
+            text = ''.join(result)
     return text
 
 
@@ -1325,29 +1425,41 @@ def merge_split_tags(text):
         [A>for purposes of this chapter, means the following:<A]
     """
     for tag_type in ['A', 'D']:
-        # 1) Continuations: \n<T][T>text (NOT a subsection marker) → merge
-        #    e.g.  "dispensed\n<D][D>is not more than"  →  "dispensed is not more than"
-        same_cont = (
-            r'\n<' + tag_type + r'\]\[' + tag_type + r'>'
+        # Negative lookaheads for subsection markers:
+        #   (1), (A), (a) — parenthesized
+        #   b. c.1. — letter-dot
+        #   1. 2. 3. — number-dot
+        _no_sub = (
             r'(?!\s*\(\d+\))'
             r'(?!\s*\([A-Z]\))'
             r'(?!\s*\([a-z]\))'
+            r'(?!\s*[a-z]\.\d*\.?\s)'
+            r'(?!\s*\d+\.\s)'
         )
+
+        # 0) Inline joins: <T][T>text on same line (no newline) — always merge
+        #    e.g.  "[A>a <A][A>condition..."  →  "[A>a condition..."
+        #    Skip subsection markers so they stay as separate tags.
+        inline_cont = r'<' + tag_type + r'\]\[' + tag_type + r'>' + _no_sub
+        text = re.sub(inline_cont, '', text)
+
+        # 0b) Inline subsection boundary: <T][T>(1) → <T]\n\n[T>(1)
+        inline_sub = r'<' + tag_type + r'\]\[' + tag_type + r'>'
+        text = re.sub(inline_sub, '<' + tag_type + ']\n\n[' + tag_type + '>', text)
+
+        # 1) Continuations: \n<T][T>text (NOT a subsection marker) → merge
+        same_cont = r'\n<' + tag_type + r'\]\[' + tag_type + r'>' + _no_sub
         text = re.sub(same_cont, ' ', text)
 
-        # 2) Subsection boundaries: \n<T][T>(1)  →  <T]\n[T>(1)
-        #    Moves closing tag to end of previous line, keeps separate tags.
+        # 2) Subsection boundaries: \n<T][T>(1)  →  <T]\n\n[T>(1)
         same_sub = r'\n<' + tag_type + r'\]\[' + tag_type + r'>'
-        text = re.sub(same_sub, '<' + tag_type + ']\n[' + tag_type + '>', text)
+        text = re.sub(same_sub, '<' + tag_type + ']\n\n[' + tag_type + '>', text)
 
         # 3) Cross-line joins:  <T]\n[T>  (continuation, not subsection)
         cross_line = (
             r'<' + tag_type + r'\]'
             r'(\s*\n\s*)'
-            r'\[' + tag_type + r'>'
-            r'(?!\s*\(\d+\))'
-            r'(?!\s*\([A-Z]\))'
-            r'(?!\s*\([a-z]\))'
+            r'\[' + tag_type + r'>' + _no_sub
         )
         text = re.sub(cross_line, ' ', text)
     return text
@@ -1370,8 +1482,15 @@ def split_tagged_subsections(text):
         [A>(2) Other...<A]
     """
     # Subsection marker after sentence-ending punctuation or after "and"/"or"
+    # Matches: (1) (A) (a) — parenthesized markers
+    #          b. c.1. 1. 2. 3. — period-style markers (Delaware, etc.)
     subsection_re = re.compile(
-        r'(?:(?<=[.:;])|(?<=\band\b)|(?<=\bor\b))\s+(\(\d+\)|\([A-Z]\)|\([a-z]\))\s'
+        r'(?:(?<=[.:;])|(?<=\band\b)|(?<=\bor\b))\s+'
+        r'('
+        r'\(\d+\)|\([A-Z]\)|\([a-z]\)'         # parenthesized: (1), (A), (a)
+        r'|[a-z]\.\d*\.?'                        # letter-dot: b. c.1.
+        r'|\d+\.'                                # number-dot: 1. 2. 3.
+        r')(?:\s|$)'                              # trailing space OR end of content
     )
 
     def _split_block(match):
@@ -1379,7 +1498,7 @@ def split_tagged_subsections(text):
         content = match.group(2)
         tag_close = match.group(3)
         markers = list(subsection_re.finditer(content))
-        if len(markers) < 2:
+        if len(markers) < 1:
             return match.group(0)
         pieces = []
         prev_end = 0
@@ -1395,7 +1514,7 @@ def split_tagged_subsections(text):
             pieces.append(last)
         # Wrap each piece, stripping leading/trailing whitespace inside tags
         tagged_pieces = [f"{tag_open}{p.strip()}{tag_close}" for p in pieces]
-        return '\n'.join(tagged_pieces)
+        return '\n\n'.join(tagged_pieces)
 
     text = re.sub(r'(\[A>)(.*?)(<A\])', _split_block, text, flags=re.DOTALL)
     text = re.sub(r'(\[D>)(.*?)(<D\])', _split_block, text, flags=re.DOTALL)
@@ -1726,6 +1845,7 @@ def main():
                     anthropic_client=client,   # reuse the Claude client from conversion
                 )
                 pymupdf_clean_text = consolidate_adjacent_tags(pymupdf_clean_text)
+                pymupdf_clean_text = remove_nested_tags(pymupdf_clean_text)
                 pymupdf_clean_text = merge_split_tags(pymupdf_clean_text)
                 pymupdf_clean_text = split_tagged_subsections(pymupdf_clean_text)
                 pymupdf_clean_path = output_path.replace(".txt", "_pymupdf_clean.txt")
@@ -1733,6 +1853,16 @@ def main():
                     f.write(pymupdf_clean_text)
                 print(f"   ✅ Clean text saved to: {pymupdf_clean_path}")
                 print(f"   📊 {len(pymupdf_text):,} → {len(pymupdf_clean_text):,} chars")
+
+                # --- Restore special symbols dropped by Claude vision ---
+                converted_text_before = converted_text
+                converted_text = restore_special_symbols(converted_text, pymupdf_clean_text)
+                if converted_text != converted_text_before:
+                    print("   🔧 Restored special symbols from PyMuPDF reference")
+                    # Re-save the corrected output
+                    with open(output_path, "w", encoding="utf-8") as f:
+                        f.write(converted_text)
+                    print(f"   💾 Updated output saved")
 
                 # --- GPT 5.4 Intelligent Tag Comparison ---
                 if _HAS_GPT_COMPARE:

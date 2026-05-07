@@ -1500,6 +1500,7 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
                     anthropic_client=client,
                 )
                 pymupdf_clean_text = consolidate_adjacent_tags(pymupdf_clean_text)
+                pymupdf_clean_text = opus.remove_nested_tags(pymupdf_clean_text)
                 pymupdf_clean_text = opus.merge_split_tags(pymupdf_clean_text)
                 pymupdf_clean_text = opus.split_tagged_subsections(pymupdf_clean_text)
 
@@ -1515,6 +1516,14 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
                     cf.write(pymupdf_clean_text)
                 add_log(f"✅ Clean text saved: {len(pymupdf_text):,} → {len(pymupdf_clean_text):,} chars")
                 st.session_state.step_status[6] = "✅"
+
+                # Restore special symbols dropped by Claude vision
+                converted_before = converted_text
+                converted_text = opus.restore_special_symbols(converted_text, pymupdf_clean_text)
+                if converted_text != converted_before:
+                    add_log("🔧 Restored special symbols (§ etc.) from PyMuPDF reference")
+                    with open(output_path, "w", encoding="utf-8") as f:
+                        f.write(converted_text)
             except Exception as clean_err:
                 add_log(f"⚠️ LLM clean failed: {clean_err}", "warning")
                 logging.error(f"LLM clean error: {clean_err}", exc_info=True)
@@ -3206,6 +3215,7 @@ class BatchWorker:
                     anthropic_client=client,
                 )
                 pymupdf_clean_text = consolidate_adjacent_tags(pymupdf_clean_text)
+                pymupdf_clean_text = opus.remove_nested_tags(pymupdf_clean_text)
                 pymupdf_clean_text = opus.merge_split_tags(pymupdf_clean_text)
                 pymupdf_clean_text = opus.split_tagged_subsections(pymupdf_clean_text)
 
@@ -3221,6 +3231,14 @@ class BatchWorker:
                 with open(pymupdf_clean_path, "w", encoding="utf-8") as cf:
                     cf.write(pymupdf_clean_text)
                 add_log(f"✅ Clean text saved: {len(pymupdf_text):,} → {len(pymupdf_clean_text):,} chars")
+
+                # Restore special symbols dropped by Claude vision
+                converted_before = converted_text
+                converted_text = opus.restore_special_symbols(converted_text, pymupdf_clean_text)
+                if converted_text != converted_before:
+                    add_log("🔧 Restored special symbols (§ etc.) from PyMuPDF reference")
+                    with open(output_path, "w", encoding="utf-8") as f:
+                        f.write(converted_text)
             except Exception as e:
                 add_log(f"⚠️ LLM clean error: {e}", "warning")
                 pymupdf_clean_text = pymupdf_text

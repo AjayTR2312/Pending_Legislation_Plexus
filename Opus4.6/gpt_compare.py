@@ -140,17 +140,27 @@ def _build_checklist(pymupdf_text: str,
                 if tag_text in rs["text"] or rs["text"] in tag_text:
                     used_report[i] = True
                     return rs["context"], rs["page"]
-        # Pass 3: exact text, any page (report page is authoritative)
+        # Pass 3: exact text, any page — prefer nearest page
+        candidates = []
         for i, rs in enumerate(report_spans):
             if not used_report[i] and rs["text"] == tag_text:
-                used_report[i] = True
-                return rs["context"], rs["page"]
-        # Pass 4: partial match, any page
+                candidates.append((abs((rs["page"] or 0) - page), i, rs))
+        if candidates:
+            candidates.sort()
+            _, best_i, best_rs = candidates[0]
+            used_report[best_i] = True
+            return best_rs["context"], best_rs["page"]
+        # Pass 4: partial match, any page — prefer nearest page
+        candidates = []
         for i, rs in enumerate(report_spans):
             if not used_report[i]:
                 if tag_text in rs["text"] or rs["text"] in tag_text:
-                    used_report[i] = True
-                    return rs["context"], rs["page"]
+                    candidates.append((abs((rs["page"] or 0) - page), i, rs))
+        if candidates:
+            candidates.sort()
+            _, best_i, best_rs = candidates[0]
+            used_report[best_i] = True
+            return best_rs["context"], best_rs["page"]
         return "", page
 
     idx = 0
@@ -251,6 +261,10 @@ def _precheck_claude(checklist_items: List[Dict],
         """Collapse whitespace for comparison."""
         return re.sub(r"\s+", " ", s.strip())
 
+    def _norm_loose(s: str) -> str:
+        """Aggressive normalisation: strip §, extra spaces, for fuzzy containment."""
+        return re.sub(r"\s+", " ", s.replace("§", "").strip())
+
     def _strip_brackets(s: str) -> str:
         """Remove outer square brackets for bracket-deletion comparison."""
         s = s.strip()
@@ -309,6 +323,23 @@ def _precheck_claude(checklist_items: List[Dict],
             results[iid] = {"in_claude": "partial", "claude_text": ct["full"]}
         else:
             results[iid] = {"in_claude": "no", "claude_text": ""}
+
+    # ── Pass 3: loose matching for remaining "no" items ─────────
+    # Handles cases where only special characters (§, etc.) differ.
+    for item in checklist_items:
+        iid = item["id"]
+        if results.get(iid, {}).get("in_claude") != "no":
+            continue
+        itxt_loose = _norm_loose(item["text"])
+        ityp = item["tag_type"]
+        for j, ct in enumerate(claude_tags):
+            if j in used or ct["type"] != ityp:
+                continue
+            nc_loose = _norm_loose(ct["text"])
+            if itxt_loose in nc_loose or nc_loose in itxt_loose:
+                used.add(j)
+                results[iid] = {"in_claude": "partial", "claude_text": ct["full"]}
+                break
 
     return results
 
@@ -807,15 +838,18 @@ def _write_excel(checklist_results, additional_findings, checklist_items,
         # Look up context from original checklist_items by checklist_id
         cid = cr.get("checklist_id", 0)
         ctx_text = ""
+        full_pymupdf_text = cr.get("pymupdf_text", "")
         for ci in checklist_items:
             if ci["id"] == cid:
                 ctx_text = ci.get("context", "")
+                # Use full text from checklist item, not GPT's truncated echo
+                full_pymupdf_text = ci.get("text", full_pymupdf_text)
                 break
 
         ws1.cell(row=r, column=1,  value=cid)
         ws1.cell(row=r, column=2,  value=cr.get("tag_type", ""))
         ws1.cell(row=r, column=3,  value=cr.get("page", ""))
-        ws1.cell(row=r, column=4,  value=cr.get("pymupdf_text", ""))
+        ws1.cell(row=r, column=4,  value=full_pymupdf_text)
         ws1.cell(row=r, column=5,  value=ctx_text)
         ws1.cell(row=r, column=6,  value=cr.get("claude_text", ""))
         ws1.cell(row=r, column=7,  value=cr.get("in_image", ""))
