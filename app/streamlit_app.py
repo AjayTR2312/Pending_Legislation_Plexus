@@ -2842,27 +2842,13 @@ def show_results_section():
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _swap_batch_vri_state(from_idx: int | None, to_idx: int | None):
-    """Save current vri_ keys under from_idx, load from to_idx."""
-    _vri_keys = (
-        "vri_fixed_ids", "vri_ignored_ids", "vri_undo_history",
-        "vri_selected_item", "vri_current_page", "vri_last_sel",
-        "vri_edit_mode", "vri_filter_mode",
-    )
+    """Clear stale vri_ widget keys when switching batch files.
 
-    # Save current state under from_idx
-    if from_idx is not None:
-        for k in _vri_keys:
-            st.session_state[f"{k}__batch_{from_idx}"] = st.session_state.pop(k, None)
-
-    # Load state for to_idx
-    if to_idx is not None:
-        for k in _vri_keys:
-            stored = st.session_state.pop(f"{k}__batch_{to_idx}", None)
-            if stored is not None:
-                st.session_state[k] = stored
-            else:
-                st.session_state.pop(k, None)
-
+    The actual per-file state (fixed_ids, ignored_ids, etc.) is saved and
+    restored inside ``render_inline_validation_review`` using the file path
+    as key.  This helper only needs to clear widget keys so stale buttons/
+    radio values don't leak between files.
+    """
     # Clear ALL vri_ widget keys so no stale values leak between files.
     _stale_prefixes = (
         "vri_edit_", "vri_pending_apply_", "vri_apply_",
@@ -2884,9 +2870,6 @@ def _swap_batch_vri_state(from_idx: int | None, to_idx: int | None):
                   or k in _static_widget_keys]
     for k in stale_keys:
         del st.session_state[k]
-
-    # Explicitly reset filter radio to "all"
-    st.session_state["vri_filter_mode"] = "all"
 
 
 # ══════════════════════════════════════════════════════════════════════════════

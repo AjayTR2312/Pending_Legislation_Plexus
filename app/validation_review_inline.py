@@ -1031,29 +1031,34 @@ def render_inline_validation_review(
     highlighted_dir = Path(highlighted_dir) if highlighted_dir else None
 
     # ── Save/restore fixed/ignored state per file ────────────────────
-    _current_file_key = str(converted_txt_path)
+    import copy as _copy
+
+    _current_file_key = str(Path(str(converted_txt_path)).resolve())
     _prev_file_key = st.session_state.get("vri_file_key", "")
     _vri_state_keys = ("vri_fixed_ids", "vri_ignored_ids", "vri_undo_history",
                        "vri_selected_item", "vri_current_page", "vri_filter_mode",
                        "vri_last_sel", "vri_edit_mode")
-    if _current_file_key != _prev_file_key:
-        # Save current state under the previous file key
-        if _prev_file_key:
-            _saved = {}
-            for _k in _vri_state_keys:
-                if _k in st.session_state:
-                    _saved[_k] = st.session_state[_k]
-            if _saved:
-                _all_saved = st.session_state.get("vri_per_file_state", {})
-                _all_saved[_prev_file_key] = _saved
-                st.session_state["vri_per_file_state"] = _all_saved
 
+    # Always persist current vri_ state under the CURRENT file key on every rerun.
+    # This ensures that any fix/ignore made since the last rerun is captured
+    # BEFORE we potentially switch to a different file.
+    if _prev_file_key:
+        _all_saved = st.session_state.get("vri_per_file_state", {})
+        _saved = {}
+        for _k in _vri_state_keys:
+            if _k in st.session_state:
+                _saved[_k] = _copy.deepcopy(st.session_state[_k])
+        if _saved:
+            _all_saved[_prev_file_key] = _saved
+            st.session_state["vri_per_file_state"] = _all_saved
+
+    if _current_file_key != _prev_file_key:
         # Restore saved state for the new file (if any), otherwise clear
         _all_saved = st.session_state.get("vri_per_file_state", {})
         _restored = _all_saved.get(_current_file_key, {})
         for _k in _vri_state_keys:
             if _k in _restored:
-                st.session_state[_k] = _restored[_k]
+                st.session_state[_k] = _copy.deepcopy(_restored[_k])
             else:
                 st.session_state.pop(_k, None)
 
@@ -1110,6 +1115,20 @@ def render_inline_validation_review(
             _render_accuracy_expander(accuracy_report, converted_txt_path)
         elif not gpt_audit_failed:
             st.warning("⚠️ No audit data or accuracy report available for this file.")
+
+        # ── Show additional findings even when checklist is empty ────
+        if findings:
+            st.markdown("---")
+            st.markdown(f"#### 🔔 Additional Findings ({len(findings)})")
+            for af in findings:
+                it = str(af.get("Issue Type", ""))
+                cls = "vr-af-error" if it in ("content_dropped", "tag_error", "text_error") else "vr-af-warn"
+                st.markdown(f"""
+                <div class="vr-af-card {cls}">
+                    <strong>Page {af.get("Page","")}</strong> — <em>{_html_escape(it)}</em><br>
+                    {_html_escape(str(af.get("Description", "")))}
+                </div>
+                """, unsafe_allow_html=True)
 
         # ── Still show the side-by-side PDF ↔ Claude text view ──────
         page_images = _get_page_images(highlighted_dir)

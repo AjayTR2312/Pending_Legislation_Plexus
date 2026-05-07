@@ -341,7 +341,17 @@ def _precheck_claude(checklist_items: List[Dict],
                 results[iid] = {"in_claude": "partial", "claude_text": ct["full"]}
                 break
 
-    return results
+    # ── Collect extra Claude tags not matched to any checklist item ──
+    extra_tags = []
+    for j, ct in enumerate(claude_tags):
+        if j not in used:
+            extra_tags.append({
+                "type": ct["type"],
+                "text": ct["text"],
+                "full": ct["full"],
+            })
+
+    return results, extra_tags
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -613,12 +623,12 @@ def gpt_compare_tags(
     checklist_items = _build_checklist(pymupdf_clean_text, pymupdf_report)
 
     # ── Deterministic Claude pre-check ──────────────────────────────
-    precheck = _precheck_claude(checklist_items, claude_converted_text)
+    precheck, extra_claude_tags = _precheck_claude(checklist_items, claude_converted_text)
     n_pre_yes = sum(1 for v in precheck.values() if v["in_claude"] == "yes")
     n_pre_partial = sum(1 for v in precheck.values() if v["in_claude"] == "partial")
     n_pre_no = sum(1 for v in precheck.values() if v["in_claude"] == "no")
-    log.info("🔍 Claude pre-check: %d exact, %d partial, %d not tagged",
-             n_pre_yes, n_pre_partial, n_pre_no)
+    log.info("🔍 Claude pre-check: %d exact, %d partial, %d not tagged, %d extra Claude tags",
+             n_pre_yes, n_pre_partial, n_pre_no, len(extra_claude_tags))
 
     checklist_str = _format_checklist(checklist_items, precheck)
     log.info("� Built checklist: %d tagged spans from PyMuPDF", len(checklist_items))
@@ -697,6 +707,38 @@ def gpt_compare_tags(
     log.info("✅ GPT audit complete: %d checklist results, %d additional findings",
              len(checklist_results), len(additional_findings))
 
+    # ── Inject deterministic extra-tag findings into checklist ──────
+    # Claude tags not matched to any PyMuPDF checklist item are extras.
+    # Add them as checklist error rows so they appear in the main audit table.
+    if extra_claude_tags:
+        log.info("🔍 Injecting %d extra Claude tags into checklist (deterministic)",
+                 len(extra_claude_tags))
+        max_cid = max((cr.get("checklist_id", 0) for cr in checklist_results), default=len(checklist_items))
+        for i, et in enumerate(extra_claude_tags, start=max_cid + 1):
+            tag_label = "[A>...<A]" if et["type"] == "addition" else "[D>...<D]"
+            tag_type = "addition" if et["type"] == "addition" else "deletion"
+            checklist_results.append({
+                "checklist_id": i,
+                "tag_type": tag_type,
+                "page": "",
+                "pymupdf_text": "",
+                "claude_text": et["full"],
+                "in_image": "no",
+                "in_claude": "yes",
+                "verdict": "❌ error",
+                "classification": "extra_tag",
+                "notes": (f"EXTRA TAG: Claude added {tag_label} to text that has "
+                          f"no matching formatting in PyMuPDF"),
+                "suggested_fix": f"Remove the {tag_label} tags from: {et['text'][:120]}",
+            })
+            # Also add to checklist_items so Excel context lookup works
+            checklist_items.append({
+                "id": i,
+                "tag_type": tag_type,
+                "text": et["text"],
+                "context": f"Extra tag added by Claude: {et['full'][:80]}",
+            })
+
     # ── Override in_claude / claude_text with deterministic values ───
     # GPT can hallucinate these fields. The pre-check is ground truth.
     n_overridden = 0
@@ -748,6 +790,7 @@ def gpt_compare_tags(
     n_dropped = sum(1 for r in checklist_results if r.get("classification") == "content_dropped")
     n_real_miss = sum(1 for r in checklist_results if r.get("classification") == "real_miss")
     n_partial = sum(1 for r in checklist_results if r.get("classification") == "partial_match")
+    n_extra_tag = sum(1 for r in checklist_results if r.get("classification") == "extra_tag")
 
     # ── Build Excel ─────────────────────────────────────────────────
     _write_excel(checklist_results, additional_findings, checklist_items,
@@ -765,6 +808,7 @@ def gpt_compare_tags(
         "content_dropped": n_dropped,
         "real_misses": n_real_miss,
         "partial_matches": n_partial,
+        "extra_tags": n_extra_tag,
         "additional_findings": len(additional_findings),
         "excel_path": str(output_xlsx),
         "raw_result": result,
@@ -929,13 +973,14 @@ def _write_excel(checklist_results, additional_findings, checklist_items,
     n_dropped = sum(1 for r in checklist_results if r.get("classification") == "content_dropped")
     n_real_miss = sum(1 for r in checklist_results if r.get("classification") == "real_miss")
     n_partial = sum(1 for r in checklist_results if r.get("classification") == "partial_match")
+    n_extra_tag = sum(1 for r in checklist_results if r.get("classification") == "extra_tag")
 
     n_af_dropped = sum(1 for a in additional_findings if a.get("issue_type") == "content_dropped")
     n_af_added = sum(1 for a in additional_findings if a.get("issue_type") == "content_added")
     n_af_tag_err = sum(1 for a in additional_findings if a.get("issue_type") == "tag_error")
     n_af_text_err = sum(1 for a in additional_findings if a.get("issue_type") == "text_error")
 
-    total_errors = n_dropped + n_real_miss + n_partial + len(additional_findings)
+    total_errors = n_dropped + n_real_miss + n_partial + n_extra_tag + len(additional_findings)
 
     summary_rows = [
         ("", ""),
@@ -948,6 +993,7 @@ def _write_excel(checklist_results, additional_findings, checklist_items,
         ("❌ Error — partial match (wrong tag boundaries)", n_partial),
         ("❌ Error — content dropped by Claude", n_dropped),
         ("❌ Error — real miss (untagged formatting)", n_real_miss),
+        ("❌ Error — extra tag (Claude tagged plain text)", n_extra_tag),
         ("", ""),
         ("PHASE 2: ADDITIONAL FINDINGS", ""),
         ("Total additional findings", len(additional_findings)),
