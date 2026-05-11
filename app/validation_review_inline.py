@@ -1518,6 +1518,8 @@ def render_inline_validation_review(
         elif is_error:
             st.markdown(f"#### 🛠️ Apply Correction — Item #{cid}")
 
+            st.info("💡 Always verify the correction against the original PDF before applying. The suggested fix is a recommendation — confirm it matches the source document.")
+
             claude_text = str(selected_row.get("Claude Text", "") or "")
             pymupdf_text = str(selected_row.get("PyMuPDF Text", ""))
             tag_type = str(selected_row.get("Tag Type", "addition"))
@@ -1530,8 +1532,6 @@ def render_inline_validation_review(
                 st.warning(f"🔧 **Suggested Fix:** {suggested_fix}")
             elif not suggested_fix or suggested_fix.lower() in ("none", "n/a"):
                 st.info("🔍 **No fix suggestion available.** Please review the expected text and surrounding context above, then compare the PDF with the Claude output to identify the issue.")
-
-            st.info("💡 Always verify the correction against the original PDF before applying. The suggested fix is a recommendation — confirm it matches the source document.")
 
             tag_open = "[D>" if tag_type == "deletion" else "[A>"
             tag_close = "<D]" if tag_type == "deletion" else "<A]"

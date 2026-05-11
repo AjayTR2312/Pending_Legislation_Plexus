@@ -495,7 +495,11 @@ def get_conversion_prompt(state_config=None):
             )
         if add_markup.get("bold"):
             visual_hints.append(
-                "For bold: bold text has visually thicker/heavier strokes compared to regular body text."
+                "For bold: bold text has visually thicker/heavier strokes compared to regular (non-bold) text. "
+                "IMPORTANT: In some bills, the MAJORITY of the statutory body text is bold — this is intentional "
+                "and means that text IS newly added legislative language. You MUST tag ALL bold text as [A>...<A] "
+                "even if most or all of the body text appears bold. Do NOT skip bold text just because it "
+                "'looks the same as surrounding text' — if the strokes are thick/heavy, it IS bold and MUST be tagged."
             )
         if add_markup.get("all_caps"):
             visual_hints.append(
@@ -526,7 +530,8 @@ def get_conversion_prompt(state_config=None):
             "9. Do NOT use your knowledge of legislative conventions, bill formatting rules, or "
             "how states typically mark new/added sections. Ignore what you know about how bills work. "
             "10. Compare each word ONLY to the surrounding body text on the same page. "
-            "If it looks the same as the body text, do NOT tag it. "
+            "If it looks the same as the body text, do NOT tag it — EXCEPT for formatting types "
+            "explicitly listed above (e.g., if bold is listed, tag ALL bold text even if the majority of the page is bold). "
             f"{formatting_guidance} "
         )
     
@@ -657,6 +662,9 @@ def get_document_mode_prompt(state_config=None):
             "ADDED TEXT MARKUP: Wrap the following types of text with [A> and <A] tags "
             "(opening tag is [A> and closing tag is <A]): "
             + "; ".join(add_rules) + ". "
+            "STRIKETHROUGH PRIORITY RULE — CRITICAL: If text has strikethrough AND any other formatting "
+            "(bold, italic, underline, or any combination), strikethrough ALWAYS wins — tag it as [D>...<D] only. "
+            "Do NOT tag such text as [A>]. Deletion overrides addition without exception. "
             "CRITICAL TAG FORMAT REQUIREMENTS: "
             "1. You MUST use [A> and <A] tags exactly as specified. Example: [A>new text<A] "
             "2. Do NOT use asterisks (*), do NOT use Markdown formatting, do NOT use any other markup style. "
@@ -1040,6 +1048,8 @@ def self_correction_pass(client, converted_text, page_images, state_config=None)
             "REVIEW CHECKLIST — scan each page image and check the output for:\n"
             "1. MISSED TAGS: text that is clearly formatted (strikethrough, underline, bold, italic, ALL CAPS) "
             "in the PDF but appears as plain text in the output → add the correct [A> or [D> tag\n"
+            "   PRIORITY RULE: If text has BOTH strikethrough AND other formatting (bold/italic/underline), "
+            "strikethrough ALWAYS wins → tag as [D>...<D] only, NEVER as [A>...<A].\n"
             "2. FALSE TAGS: text tagged with [A> or [D> but NOT formatted in the PDF → remove the tag\n"
             "3. MARKDOWN: any *text* or **text** → replace with [A>text<A] or remove asterisks\n"
             "4. DROPPED WORDS: words visible in the PDF that are missing from the output → add them back\n"
@@ -1431,8 +1441,8 @@ def merge_split_tags(text):
         #   1. 2. 3. — number-dot
         _no_sub = (
             r'(?!\s*\(\d+\))'
-            r'(?!\s*\([A-Z]\))'
-            r'(?!\s*\([a-z]\))'
+            r'(?!\s*\([A-Z]+\))'
+            r'(?!\s*\([a-z]+\))'
             r'(?!\s*[a-z]\.\d*\.?\s)'
             r'(?!\s*\d+\.\s)'
         )
@@ -1487,10 +1497,16 @@ def split_tagged_subsections(text):
     subsection_re = re.compile(
         r'(?:(?<=[.:;])|(?<=\band\b)|(?<=\bor\b))\s+'
         r'('
-        r'\(\d+\)|\([A-Z]\)|\([a-z]\)'         # parenthesized: (1), (A), (a)
+        r'\(\d+\)|\([A-Z]+\)|\([a-z]+\)'       # parenthesized: (1), (A), (a), (ii), (iii), (AA)
         r'|[a-z]\.\d*\.?'                        # letter-dot: b. c.1.
         r'|\d+\.'                                # number-dot: 1. 2. 3.
         r')(?:\s|$)'                              # trailing space OR end of content
+        , re.IGNORECASE
+    )
+
+    # Patterns that should NOT be split (e.g., "Sec. 2." or "Section 1.")
+    _nosplit_re = re.compile(
+        r'(?:Sec|Section|Art|Article)\.\s*$', re.IGNORECASE
     )
 
     def _split_block(match):
@@ -1498,6 +1514,11 @@ def split_tagged_subsections(text):
         content = match.group(2)
         tag_close = match.group(3)
         markers = list(subsection_re.finditer(content))
+        if len(markers) < 1:
+            return match.group(0)
+        # Filter out false-positive markers preceded by "Sec." / "Section." etc.
+        markers = [m for m in markers
+                   if not _nosplit_re.search(content[:m.start()])]
         if len(markers) < 1:
             return match.group(0)
         pieces = []

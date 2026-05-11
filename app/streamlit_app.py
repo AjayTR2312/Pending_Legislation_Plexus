@@ -1598,6 +1598,9 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
                     sr_parts.append(f"Strikethrough={d_cfg.get('strike_out', False)}")
                     sr_parts.append(f"Italic={a_cfg.get('italic', False)}")
                     sr_parts.append(f"Bold={a_cfg.get('bold', False)}")
+                    # Add strikethrough priority rule when both add and delete formats are active
+                    if d_cfg.get('strike_out', False) and (a_cfg.get('underline', False) or a_cfg.get('italic', False) or a_cfg.get('bold', False)):
+                        sr_parts.append("PRIORITY: If text has strikethrough AND any other formatting (underline/italic/bold), strikethrough ALWAYS wins → tag as [D>...<D] only, NEVER [A>...<A]")
                 state_rules_str = ", ".join(sr_parts) if sr_parts else f"State: {detected_state or 'unknown'}"
 
                 gpt_xlsx = output_path.replace(".txt", "_gpt_comparison.xlsx") if isinstance(output_path, str) else str(output_path).replace(".txt", "_gpt_comparison.xlsx")
@@ -3281,6 +3284,9 @@ class BatchWorker:
                     sr_parts.append(f"Strikethrough={d_cfg.get('strike_out', False)}")
                     sr_parts.append(f"Italic={a_cfg.get('italic', False)}")
                     sr_parts.append(f"Bold={a_cfg.get('bold', False)}")
+                    # Add strikethrough priority rule when both add and delete formats are active
+                    if d_cfg.get('strike_out', False) and (a_cfg.get('underline', False) or a_cfg.get('italic', False) or a_cfg.get('bold', False)):
+                        sr_parts.append("PRIORITY: If text has strikethrough AND any other formatting (underline/italic/bold), strikethrough ALWAYS wins → tag as [D>...<D] only, NEVER [A>...<A]")
                 state_rules_str = ", ".join(sr_parts) if sr_parts else f"State: {detected_state or 'unknown'}"
 
                 gpt_xlsx = output_path.replace(".txt", "_gpt_comparison.xlsx")

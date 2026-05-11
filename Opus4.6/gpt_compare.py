@@ -30,6 +30,7 @@ Usage:
 import re
 import json
 import logging
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import List, Optional, Dict
 
@@ -222,6 +223,86 @@ def _format_checklist(items: List[Dict],
 
 
 # ════════════════════════════════════════════════════════════════════
+# Text normalisation helpers (used by pre-check and dedup)
+# ════════════════════════════════════════════════════════════════════
+
+def _norm(s: str) -> str:
+    """Collapse whitespace and normalise quotes for comparison."""
+    s = re.sub(r"\s+", " ", s.strip())
+    s = s.replace("\u201c", '"').replace("\u201d", '"')   # \u201c \u201d
+    s = s.replace("\u2018", "'").replace("\u2019", "'")   # \u2018 \u2019
+    return s
+
+
+def _norm_loose(s: str) -> str:
+    """Aggressive normalisation: strip \u00a7, quotes, extra spaces."""
+    s = s.replace("\u00a7", "")
+    s = s.replace("\u201c", '"').replace("\u201d", '"')
+    s = s.replace("\u2018", "'").replace("\u2019", "'")
+    return re.sub(r"\s+", " ", s.strip())
+
+
+def _token_similarity(a: str, b: str) -> float:
+    """Return similarity ratio (0..1) using two tiers:
+    Tier 1: Jaccard token overlap (fast, handles word drops).
+    Tier 2: SequenceMatcher (character-level, handles typos/rewordings).
+    Returns the higher of the two scores."""
+    wa = set(a.lower().split())
+    wb = set(b.lower().split())
+    if not wa or not wb:
+        return 0.0
+    intersection = wa & wb
+    shorter = min(len(wa), len(wb))
+    token_ratio = len(intersection) / shorter if shorter else 0.0
+    if token_ratio >= 0.85:
+        return token_ratio
+    # Tier 2: character-level SequenceMatcher for borderline cases
+    if len(a) < 2000 and len(b) < 2000:
+        seq_ratio = SequenceMatcher(None, a.lower(), b.lower()).ratio()
+        return max(token_ratio, seq_ratio)
+    return token_ratio
+
+
+def _word_diff_fix(pymupdf_text: str, claude_text: str) -> str:
+    """Generate a human-readable suggested fix showing word-level differences.
+    Returns a string like: "Missing word 'as' — expected: '...premium as required...'
+    but Claude wrote: '...premium required...'"
+    """
+    if not pymupdf_text or not claude_text:
+        return ""
+    # Strip tag markers from claude_text for comparison
+    ct_clean = re.sub(r'\[([AD])>', '', claude_text)
+    ct_clean = re.sub(r'<([AD])\]', '', ct_clean).strip()
+
+    pw = pymupdf_text.split()
+    cw = ct_clean.split()
+
+    sm = SequenceMatcher(None, pw, cw)
+    missing_in_claude: list[str] = []
+    extra_in_claude: list[str] = []
+    for op, i1, i2, j1, j2 in sm.get_opcodes():
+        if op == 'delete':
+            missing_in_claude.extend(pw[i1:i2])
+        elif op == 'insert':
+            extra_in_claude.extend(cw[j1:j2])
+        elif op == 'replace':
+            missing_in_claude.extend(pw[i1:i2])
+            extra_in_claude.extend(cw[j1:j2])
+
+    parts = []
+    if missing_in_claude:
+        words = "', '".join(missing_in_claude[:5])
+        parts.append(f"Missing word(s) in Claude output: '{words}'")
+    if extra_in_claude:
+        words = "', '".join(extra_in_claude[:5])
+        parts.append(f"Extra word(s) in Claude output: '{words}'")
+
+    if not parts:
+        return ""
+
+    fix = ". ".join(parts)
+    fix += f". Expected: '{pymupdf_text[:150]}'"
+    return fix# ════════════════════════════════════════════════════════════════════
 # Deterministic Claude pre-check
 # ════════════════════════════════════════════════════════════════════
 
@@ -256,14 +337,6 @@ def _precheck_claude(checklist_items: List[Dict],
                 "text": m.group(4).strip(),
                 "full": m.group(0),
             })
-
-    def _norm(s: str) -> str:
-        """Collapse whitespace for comparison."""
-        return re.sub(r"\s+", " ", s.strip())
-
-    def _norm_loose(s: str) -> str:
-        """Aggressive normalisation: strip §, extra spaces, for fuzzy containment."""
-        return re.sub(r"\s+", " ", s.replace("§", "").strip())
 
     def _strip_brackets(s: str) -> str:
         """Remove outer square brackets for bracket-deletion comparison."""
@@ -315,6 +388,11 @@ def _precheck_claude(checklist_items: List[Dict],
                 overlap = len(nc)
                 if overlap > best_overlap:
                     best_j, best_overlap, best_contained = j, overlap, False
+            else:
+                # Fuzzy: token overlap ≥ 85% catches single-word drops
+                sim = _token_similarity(itxt, nc)
+                if sim >= 0.85 and len(itxt) > best_overlap:
+                    best_j, best_overlap, best_contained = j, len(itxt), False
 
         if best_j is not None and best_overlap >= 2:
             used.add(best_j)
@@ -371,6 +449,11 @@ Coloured overlays mark formatting detected in the PDF:
   🔵 Blue = ITALIC
   🟠 Orange = BOLD
 What you SEE in these images is the truth about the document.
+
+⚠️ STRIKETHROUGH PRIORITY RULE — CRITICAL: If text has BOTH strikethrough (red) AND any
+other formatting (green/blue/orange — i.e. underline/italic/bold), strikethrough ALWAYS wins.
+Tag such text as [D>…<D] ONLY, NEVER as [A>…<A]. Deletion overrides addition without exception.
+Example: text that is italic+strikethrough → [D>text<D], NOT [A>text<A].
 
 ══════════════════════════════════════
   VALIDATION TARGET — Claude Converted Text
@@ -739,6 +822,9 @@ def gpt_compare_tags(
                 "context": f"Extra tag added by Claude: {et['full'][:80]}",
             })
 
+    # ── Build full-text lookup from checklist_items (GPT truncates) ──
+    _full_pymupdf = {ci["id"]: ci["text"] for ci in checklist_items}
+
     # ── Override in_claude / claude_text with deterministic values ───
     # GPT can hallucinate these fields. The pre-check is ground truth.
     n_overridden = 0
@@ -774,10 +860,142 @@ def gpt_compare_tags(
             cr["verdict"] = "❌ error"
             cr["notes"] = (cr.get("notes", "") +
                            " [AUTO-CORRECTED: pre-check shows PARTIAL MATCH]").strip()
+            # Generate word-diff suggested fix
+            pymupdf_txt = _full_pymupdf.get(cid, cr.get("pymupdf_text", ""))
+            claude_txt = cr.get("claude_text", "")
+            if pymupdf_txt and claude_txt:
+                diff_fix = _word_diff_fix(pymupdf_txt, claude_txt)
+                if diff_fix:
+                    cr["suggested_fix"] = diff_fix
 
     if n_overridden:
         log.info("🔧 Overrode in_claude/claude_text on %d items (deterministic pre-check)",
                  n_overridden)
+
+    # ── Generate word-diff fix for any partial_match missing a suggested_fix ──
+    for cr in checklist_results:
+        if cr.get("classification") != "partial_match":
+            continue
+        if cr.get("suggested_fix", "").strip():
+            continue
+        cid = cr.get("checklist_id", 0)
+        pymupdf_txt = _full_pymupdf.get(cid, cr.get("pymupdf_text", ""))
+        claude_txt = cr.get("claude_text", "")
+        if pymupdf_txt and claude_txt:
+            diff_fix = _word_diff_fix(pymupdf_txt, claude_txt)
+            if diff_fix:
+                cr["suggested_fix"] = diff_fix
+
+    # ── Deduplicate real_miss ↔ extra_tag with overlapping text ─────
+    # When PyMuPDF and Claude segment the same content differently,
+    # the same text can appear as a real_miss (PyMuPDF span not in Claude)
+    # AND an extra_tag (Claude tag not in PyMuPDF).  Cross-reference and
+    # merge them into a single "segmentation_diff" warning instead.
+    miss_indices  = [i for i, cr in enumerate(checklist_results)
+                     if cr.get("classification") == "real_miss"]
+    extra_indices = [i for i, cr in enumerate(checklist_results)
+                     if cr.get("classification") == "extra_tag"]
+    paired_extras: set[int] = set()
+    n_deduped = 0
+    for mi in miss_indices:
+        miss_row = checklist_results[mi]
+        miss_txt = _norm(miss_row.get("pymupdf_text", "") or miss_row.get("claude_text", ""))
+        if not miss_txt or len(miss_txt) < 3:
+            continue
+        for ei in extra_indices:
+            if ei in paired_extras:
+                continue
+            extra_row = checklist_results[ei]
+            extra_txt = _norm(extra_row.get("claude_text", ""))
+            if not extra_txt or len(extra_txt) < 3:
+                continue
+            # Check overlap: substring containment, token overlap, or char-level similarity
+            miss_words = set(miss_txt.lower().split())
+            extra_words = set(extra_txt.lower().split())
+            shorter = min(len(miss_words), len(extra_words))
+            token_ratio = len(miss_words & extra_words) / shorter if shorter else 0.0
+            seq_ratio = 0.0
+            if 0.70 <= token_ratio < 0.85 and len(miss_txt) < 2000 and len(extra_txt) < 2000:
+                seq_ratio = SequenceMatcher(None, miss_txt.lower(), extra_txt.lower()).ratio()
+            best_ratio = max(token_ratio, seq_ratio)
+            if miss_txt in extra_txt or extra_txt in miss_txt or best_ratio >= 0.85:
+                # Merge: upgrade miss to segmentation_diff (warning), remove extra
+                miss_row["classification"] = "segmentation_diff"
+                miss_row["verdict"] = "⚠️ warning"
+                miss_row["claude_text"] = extra_row.get("claude_text", "")
+                miss_row["notes"] = (
+                    f"Segmentation difference: PyMuPDF and Claude split "
+                    f"the same text at different boundaries"
+                )
+                miss_row["suggested_fix"] = ""
+                paired_extras.add(ei)
+                n_deduped += 1
+                break
+    # Remove the paired extra_tag rows (iterate in reverse to preserve indices)
+    for ei in sorted(paired_extras, reverse=True):
+        checklist_results.pop(ei)
+    if n_deduped:
+        log.info("🔗 Merged %d real_miss + extra_tag pairs into segmentation_diff warnings",
+                 n_deduped)
+
+    # ── Deduplicate partial_match ↔ extra_tag ───────────────────────
+    # When a partial_match's PyMuPDF text contains the extra_tag text (i.e.
+    # the extra tag is the "missing portion" of the partial), absorb the
+    # extra tag into the partial_match row and note the wrong tag type.
+    partial_indices = [i for i, cr in enumerate(checklist_results)
+                       if cr.get("classification") == "partial_match"]
+    extra_indices2 = [i for i, cr in enumerate(checklist_results)
+                      if cr.get("classification") == "extra_tag"]
+    paired_extras2: set[int] = set()
+    n_absorbed = 0
+    for pi in partial_indices:
+        p_row = checklist_results[pi]
+        p_pymupdf = _norm(p_row.get("pymupdf_text", ""))
+        p_claude = _norm(re.sub(r'\[([AD])>', '',
+                     re.sub(r'<([AD])\]', '', p_row.get("claude_text", ""))).strip())
+        if not p_pymupdf or len(p_pymupdf) < 5:
+            continue
+        for ei in extra_indices2:
+            if ei in paired_extras2:
+                continue
+            e_row = checklist_results[ei]
+            e_txt = _norm(re.sub(r'\[([AD])>', '',
+                      re.sub(r'<([AD])\]', '', e_row.get("claude_text", ""))).strip())
+            if not e_txt or len(e_txt) < 3:
+                continue
+            # Check: is the extra tag text part of the PyMuPDF expected text?
+            if e_txt in p_pymupdf or _token_similarity(e_txt, p_pymupdf) >= 0.50:
+                # Determine if tag type mismatch (e.g. A vs D — strikethrough priority violation)
+                p_tag_type = p_row.get("tag_type", "")
+                e_tag_type = e_row.get("tag_type", "")
+                tag_mismatch = (p_tag_type != e_tag_type)
+                # Absorb: add note to partial_match, remove extra
+                extra_note = (
+                    f" | Absorbed extra tag: Claude also tagged '{e_txt[:80]}' "
+                    f"but used wrong tag type [{e_tag_type[0].upper() if e_tag_type else '?'}>"
+                    f"…<{e_tag_type[0].upper() if e_tag_type else '?'}] "
+                    f"instead of [{p_tag_type[0].upper() if p_tag_type else '?'}>"
+                    f"…<{p_tag_type[0].upper() if p_tag_type else '?'}]"
+                ) if tag_mismatch else (
+                    f" | Absorbed extra tag: '{e_txt[:80]}' "
+                    f"(same text, different segmentation)"
+                )
+                p_row["notes"] = (p_row.get("notes", "") + extra_note).strip()
+                # Update suggested fix to mention the full expected text
+                if tag_mismatch:
+                    tag_label = "[D>...<D]" if p_tag_type == "deletion" else "[A>...<A]"
+                    p_row["suggested_fix"] = (
+                        f"Tag the full text as {tag_label}: '{p_pymupdf[:150]}'. "
+                        f"Claude incorrectly split it and used wrong tag type "
+                        f"for '{e_txt[:80]}'"
+                    )
+                paired_extras2.add(ei)
+                n_absorbed += 1
+                break
+    for ei in sorted(paired_extras2, reverse=True):
+        checklist_results.pop(ei)
+    if n_absorbed:
+        log.info("🔗 Absorbed %d extra_tag(s) into partial_match items", n_absorbed)
 
     # ── Compute counts ──────────────────────────────────────────────
     n_pass = sum(1 for r in checklist_results if r.get("verdict", "").startswith("✅"))
@@ -791,6 +1009,7 @@ def gpt_compare_tags(
     n_real_miss = sum(1 for r in checklist_results if r.get("classification") == "real_miss")
     n_partial = sum(1 for r in checklist_results if r.get("classification") == "partial_match")
     n_extra_tag = sum(1 for r in checklist_results if r.get("classification") == "extra_tag")
+    n_seg_diff = sum(1 for r in checklist_results if r.get("classification") == "segmentation_diff")
 
     # ── Build Excel ─────────────────────────────────────────────────
     _write_excel(checklist_results, additional_findings, checklist_items,
@@ -809,6 +1028,7 @@ def gpt_compare_tags(
         "real_misses": n_real_miss,
         "partial_matches": n_partial,
         "extra_tags": n_extra_tag,
+        "segmentation_diffs": n_seg_diff,
         "additional_findings": len(additional_findings),
         "excel_path": str(output_xlsx),
         "raw_result": result,
@@ -974,6 +1194,7 @@ def _write_excel(checklist_results, additional_findings, checklist_items,
     n_real_miss = sum(1 for r in checklist_results if r.get("classification") == "real_miss")
     n_partial = sum(1 for r in checklist_results if r.get("classification") == "partial_match")
     n_extra_tag = sum(1 for r in checklist_results if r.get("classification") == "extra_tag")
+    n_seg_diff = sum(1 for r in checklist_results if r.get("classification") == "segmentation_diff")
 
     n_af_dropped = sum(1 for a in additional_findings if a.get("issue_type") == "content_dropped")
     n_af_added = sum(1 for a in additional_findings if a.get("issue_type") == "content_added")
@@ -994,6 +1215,7 @@ def _write_excel(checklist_results, additional_findings, checklist_items,
         ("❌ Error — content dropped by Claude", n_dropped),
         ("❌ Error — real miss (untagged formatting)", n_real_miss),
         ("❌ Error — extra tag (Claude tagged plain text)", n_extra_tag),
+        ("⚠️ Warning — segmentation diff (text split differently)", n_seg_diff),
         ("", ""),
         ("PHASE 2: ADDITIONAL FINDINGS", ""),
         ("Total additional findings", len(additional_findings)),
