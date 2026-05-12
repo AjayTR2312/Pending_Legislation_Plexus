@@ -1663,7 +1663,7 @@ def render_inline_validation_review(
             _has_page = bool(selected_row.get("Page"))
             if _cat == "extra_tag" and not _has_page:
                 st.markdown(
-                    '<p style="color:#5a4e00; background:#fff8e1; padding:8px 12px; '
+                    '<p style="color:#8b0000; background:#fde8e8; padding:8px 12px; '
                     'border-radius:6px; font-size:0.92rem; margin:4px 0;">'
                     '🔁 The flagged issue involves a character that appears in '
                     'multiple locations &mdash; please verify manually for '
@@ -1786,7 +1786,7 @@ def render_inline_validation_review(
                 # Warn if the same short text repeats in the PDF (e.g. commas, parentheses)
                 if len(claude_text.strip()) <= 3 and _search_count > 1:
                     st.markdown(
-                        '<p style="color:#5a4e00; background:#fff8e1; padding:8px 12px; '
+                        '<p style="color:#8b0000; background:#fde8e8; padding:8px 12px; '
                         'border-radius:6px; font-size:0.92rem; margin:4px 0;">'
                         '🔁 The flagged issue involves a character that appears in '
                         'multiple locations &mdash; please verify manually for '
@@ -1807,7 +1807,7 @@ def render_inline_validation_review(
                     # Warn for short repeated text in PDF
                     if len(pymupdf_text.strip()) <= 3:
                         st.markdown(
-                            '<p style="color:#5a4e00; background:#fff8e1; padding:8px 12px; '
+                            '<p style="color:#8b0000; background:#fde8e8; padding:8px 12px; '
                             'border-radius:6px; font-size:0.92rem; margin:4px 0;">'
                             '🔁 The flagged issue involves a character that appears in '
                             'multiple locations &mdash; please verify manually for '
