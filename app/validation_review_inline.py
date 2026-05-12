@@ -1536,7 +1536,15 @@ def render_inline_validation_review(
             if notes:
                 st.info(f"📝 **Auditor Notes:** {notes}")
             if suggested_fix and suggested_fix.lower() not in ("none", "n/a", ""):
-                st.warning(f"🔧 **Suggested Fix:** {suggested_fix}")
+                line_info = selected_row.get("Line", "")
+                page_info = selected_row.get("Page", "")
+                loc_parts = []
+                if page_info:
+                    loc_parts.append(f"page {page_info}")
+                if line_info:
+                    loc_parts.append(f"line {line_info}")
+                loc_suffix = f" on {', '.join(loc_parts)}" if loc_parts else ""
+                st.warning(f"🔧 **Suggested Fix:** {suggested_fix}{loc_suffix}")
             elif not suggested_fix or suggested_fix.lower() in ("none", "n/a"):
                 st.info("🔍 **No fix suggestion available.** Please review the expected text and surrounding context above, then compare the PDF with the Claude output to identify the issue.")
 

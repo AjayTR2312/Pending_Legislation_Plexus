@@ -338,9 +338,7 @@ def _format_checklist(items: List[Dict],
         preview = item["text"][:120].replace("\n", " ↵ ")
         if len(item["text"]) > 120:
             preview += "…"
-        bl = item.get('bill_line')
-        loc = f"Page {item['page']}, Line {bl}" if bl else f"Page {item['page']}"
-        line = f"  {item['id']:3d}. {loc}  {tag_label}  \"{preview}\""
+        line = f"  {item['id']:3d}. Page {item['page']}  {tag_label}  \"{preview}\""
         ctx = item.get("context", "")
         if ctx:
             line += f"  — context: {ctx}"
@@ -705,10 +703,9 @@ For EACH of the {n_checklist} checklist items above, determine:
 6. **notes**: Brief explanation of your reasoning
 
 7. **suggested_fix**: Concrete fix instruction (empty string if pass/warning)
-   Use the exact Page and Line from the checklist item when referencing location.
-   - For content_dropped: "Add [A>text here<A] after 'context' on page X, line Y"
-   - For real_miss: "Wrap 'text' in [A>…<A] tags on page X, line Y"
-   - For partial_match: "Change [A>wrong text<A] to [A>correct text<A] on page X, line Y" — specify exact boundaries
+   - For content_dropped: "Add [A>text here<A] after 'context' on page X"
+   - For real_miss: "Wrap 'text' in [A>…<A] tags on page X"
+   - For partial_match: "Change [A>wrong text<A] to [A>correct text<A] on page X" — specify exact boundaries
    - For table_content: "No fix needed — table formatting, not legislative underline"
    - For header: "No fix needed — page header correctly omitted"
 
@@ -1203,25 +1200,6 @@ def gpt_compare_tags(
     if n_header_auto:
         log.info("🏷️ Auto-classified %d item(s) as header warnings (bill_line=null)",
                  n_header_auto)
-
-    # ── Enrich suggested_fix with line numbers ──────────────────────
-    for cr in checklist_results:
-        fix = cr.get("suggested_fix", "") or ""
-        if not fix:
-            continue
-        cid = cr.get("checklist_id", 0)
-        bl = _bill_line_lookup.get(cid)
-        if bl is None:
-            continue
-        # Append/replace "on page N" with "on page N, line L"
-        # or append at end if no page reference
-        import re as _re
-        page_pat = _re.compile(r'on page (\d+)(?!\s*,\s*line)')
-        if page_pat.search(fix):
-            fix = page_pat.sub(rf'on page \1, line {bl}', fix)
-        else:
-            fix = f"{fix.rstrip('.')} (line {bl})"
-        cr["suggested_fix"] = fix
 
     # ── Compute counts ──────────────────────────────────────────────
     n_pass = sum(1 for r in checklist_results if r.get("verdict", "").startswith("✅"))
