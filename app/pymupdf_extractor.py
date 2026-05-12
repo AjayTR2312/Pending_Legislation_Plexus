@@ -737,14 +737,31 @@ def clean_extracted_text(
         model, state_code or "universal",
     )
 
-    response = anthropic_client.messages.create(
-        model=model,
-        max_tokens=16384,
-        system=system_prompt,
-        messages=[
-            {"role": "user", "content": raw_text},
-        ],
-    )
+    import time as _time
+    max_retries = 5
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = anthropic_client.messages.create(
+                model=model,
+                max_tokens=16384,
+                system=system_prompt,
+                messages=[
+                    {"role": "user", "content": raw_text},
+                ],
+            )
+            break
+        except Exception as _api_err:
+            if "529" in str(_api_err) or "overloaded" in str(_api_err).lower():
+                wait = min(2 ** attempt, 30)
+                logger.warning(
+                    "⏳ Anthropic overloaded (attempt %d/%d), retrying in %ds…",
+                    attempt, max_retries, wait,
+                )
+                _time.sleep(wait)
+                if attempt == max_retries:
+                    raise
+            else:
+                raise
 
     cleaned = response.content[0].text.strip()
 

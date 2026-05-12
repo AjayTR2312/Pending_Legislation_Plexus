@@ -1310,11 +1310,17 @@ def render_inline_validation_review(
 
     # ── Page state ──────────────────────────────────────────────────
     sel_item_page = 1
+    sel_item_line = None
     if selected_row:
         try:
             sel_item_page = int(selected_row.get("Page", 1))
         except (ValueError, TypeError):
             sel_item_page = 1
+        try:
+            _line_val = selected_row.get("Line", None)
+            sel_item_line = int(_line_val) if _line_val else None
+        except (ValueError, TypeError):
+            sel_item_line = None
 
     if "vri_current_page" not in st.session_state:
         st.session_state.vri_current_page = sel_item_page
@@ -1338,18 +1344,19 @@ def render_inline_validation_review(
                     st.session_state.vri_selected_item = error_ids[-1]
                 st.rerun()
         with nav_c2:
+            _line_info = f", Line {sel_item_line}" if sel_item_line else ""
             if err_pos > 0:
                 st.markdown(f"""
                 <div class="vr-error-nav-bar">
                     <span class="nav-label">❌ Error {err_pos} of {err_total}  (Item #{selected_id})</span>
-                    <span class="nav-page">Page {sel_item_page}</span>
+                    <span class="nav-page">Page {sel_item_page}{_line_info}</span>
                 </div>
                 """, unsafe_allow_html=True)
             else:
                 st.markdown(f"""
                 <div class="vr-error-nav-bar">
                     <span class="nav-label">📋 Item #{selected_id}</span>
-                    <span class="nav-page">Page {sel_item_page}  •  {err_total} errors remaining</span>
+                    <span class="nav-page">Page {sel_item_page}{_line_info}  •  {err_total} errors remaining</span>
                 </div>
                 """, unsafe_allow_html=True)
         with nav_c3:
@@ -1861,7 +1868,7 @@ def render_inline_validation_review(
         st.info("No items match the current filter.")
     else:
         tbl = '<table class="vr-cl-table"><thead><tr>'
-        for c in ["#", "Status", "Page", "Tag Type", "Expected Text (PDF)",
+        for c in ["#", "Status", "Page", "Line", "Tag Type", "Expected Text (PDF)",
                    "Found?", "Output Text", "Category", "Notes"]:
             tbl += f"<th>{c}</th>"
         tbl += "</tr></thead><tbody>"
@@ -1895,6 +1902,7 @@ def render_inline_validation_review(
             tbl += f'<td><strong>{cid_int}</strong></td>'
             tbl += f'<td><span class="vr-badge {bc}">{_html_escape(verd)}</span></td>'
             tbl += f'<td>{row.get("Page", "")}</td>'
+            tbl += f'<td>{row.get("Line", "") or ""}</td>'
             tbl += f'<td>{_html_escape(str(row.get("Tag Type", "")))}</td>'
             tbl += f'<td title="{_pymupdf_full}">{_pymupdf_disp}</td>'
             tbl += f'<td>{_html_escape(str(row.get("In Claude?", "")))}</td>'
