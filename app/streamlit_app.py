@@ -1517,6 +1517,20 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
                 with open(pymupdf_clean_path, "w", encoding="utf-8") as cf:
                     cf.write(pymupdf_clean_text)
                 add_log(f"✅ Clean text saved: {len(pymupdf_text):,} → {len(pymupdf_clean_text):,} chars")
+
+                # Rebuild report context using cleaned text for better anchor matching
+                if pymupdf_report:
+                    try:
+                        from pymupdf_extractor import rebuild_report_context
+                        pymupdf_report = rebuild_report_context(pymupdf_report, pymupdf_clean_text)
+                        # Re-save the updated report
+                        with open(pymupdf_json_path, "w", encoding="utf-8") as jf:
+                            _json.dump(pymupdf_report, jf, indent=2, ensure_ascii=False)
+                        add_log("🔄 Report context rebuilt from cleaned text")
+                        st.session_state.audit_json_report = pymupdf_report
+                    except Exception as _ctx_err:
+                        logging.warning(f"Context rebuild failed (non-critical): {_ctx_err}")
+
                 st.session_state.step_status[6] = "✅"
 
                 # Restore special symbols dropped by Claude vision
@@ -3227,6 +3241,18 @@ class BatchWorker:
                 with open(pymupdf_clean_path, "w", encoding="utf-8") as cf:
                     cf.write(pymupdf_clean_text)
                 add_log(f"✅ Clean text saved: {len(pymupdf_text):,} → {len(pymupdf_clean_text):,} chars")
+
+                # Rebuild report context using cleaned text for better anchor matching
+                if pymupdf_report:
+                    try:
+                        from pymupdf_extractor import rebuild_report_context
+                        pymupdf_report = rebuild_report_context(pymupdf_report, pymupdf_clean_text)
+                        with open(pymupdf_json_path, "w", encoding="utf-8") as jf:
+                            _json.dump(pymupdf_report, jf, indent=2, ensure_ascii=False)
+                        add_log("🔄 Report context rebuilt from cleaned text")
+                        audit_json_report = pymupdf_report
+                    except Exception as _ctx_err:
+                        logging.warning(f"Context rebuild failed (non-critical): {_ctx_err}")
 
                 # Restore special symbols dropped by Claude vision
                 converted_before = converted_text

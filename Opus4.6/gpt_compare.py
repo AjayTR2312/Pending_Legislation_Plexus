@@ -424,6 +424,24 @@ def _word_diff_fix(pymupdf_text: str, claude_text: str) -> str:
             missing_in_claude.extend(pw[i1:i2])
             extra_in_claude.extend(cw[j1:j2])
 
+    # ── Detect simple character-level diffs (e.g. "program" vs "program.") ──
+    # When the only difference is added/removed punctuation or a few chars,
+    # give a clearer message instead of "Missing word / Extra word".
+    if len(missing_in_claude) <= 2 and len(extra_in_claude) <= 2:
+        pairs = list(zip(missing_in_claude, extra_in_claude))
+        char_diffs = []
+        for mw, ew in pairs:
+            if mw in ew:
+                extra_chars = ew.replace(mw, '', 1)
+                char_diffs.append(f"'{extra_chars}' should not be included after '{mw}' — Claude wrote '{ew}' but expected '{mw}'")
+            elif ew in mw:
+                missing_chars = mw.replace(ew, '', 1)
+                char_diffs.append(f"'{missing_chars}' is missing from '{ew}' — expected '{mw}'")
+        unpaired_missing = missing_in_claude[len(pairs):]
+        unpaired_extra = extra_in_claude[len(pairs):]
+        if char_diffs and not unpaired_missing and not unpaired_extra:
+            return ". ".join(char_diffs)
+
     parts = []
     if missing_in_claude:
         words = "', '".join(missing_in_claude[:5])

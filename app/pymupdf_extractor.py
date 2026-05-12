@@ -1489,3 +1489,89 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Post-clean context rebuilder
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def rebuild_report_context(report: Dict[str, Any], clean_text: str,
+                           context_chars: int = 100) -> Dict[str, Any]:
+    """Rebuild the ``context`` field for each formatted_span using the cleaned text.
+
+    The original context is built from raw PyMuPDF output which has extra
+    whitespace, line numbers, and PDF artifacts.  After LLM cleaning, the text
+    matches Claude's conversion output much more closely, so context derived
+    from it produces better anchor matching in the validation UI.
+
+    For each span, we search for its text in the cleaned output (whitespace-
+    flexible) and rebuild ``>>>text<<<`` with surrounding characters from the
+    clean text.  If the span text can't be found, the original context is kept.
+
+    Args:
+        report: The PyMuPDF JSON report dict (modified in-place and returned)
+        clean_text: The LLM-cleaned PyMuPDF tagged text
+        context_chars: Number of surrounding characters on each side
+
+    Returns:
+        The same report dict with updated ``context`` fields
+    """
+    if not report or not clean_text:
+        return report
+
+    spans = report.get("formatted_spans", [])
+    if not spans:
+        return report
+
+    # Strip tags from clean_text for plain-text searching
+    plain = re.sub(r'\[([AD])>', '', clean_text)
+    plain = re.sub(r'<([AD])\]', '', plain)
+
+    # Track search position per page to handle duplicates in order
+    page_positions: Dict[int, int] = {}
+
+    for span in spans:
+        span_text = span.get("text", "").strip()
+        if not span_text:
+            continue
+
+        page = span.get("page", 0)
+        start_from = page_positions.get(page, 0)
+
+        # Try literal match first
+        pos = plain.find(span_text, start_from)
+
+        # If not found, try whitespace-flexible search
+        if pos == -1:
+            tokens = span_text.split()
+            if len(tokens) >= 2:
+                pattern = r'\s+'.join(re.escape(t) for t in tokens)
+                m = re.search(pattern, plain[start_from:])
+                if m:
+                    pos = start_from + m.start()
+                    span_text = m.group(0)  # use matched text for context
+
+        if pos == -1:
+            # Can't find in clean text — keep original context
+            continue
+
+        # Update search position for this page (advance past this match)
+        page_positions[page] = pos + len(span_text)
+
+        # Build new context
+        before_start = max(0, pos - context_chars)
+        after_end = min(len(plain), pos + len(span_text) + context_chars)
+        before = plain[before_start:pos].strip()
+        after = plain[pos + len(span_text):after_end].strip()
+
+        new_context = ""
+        if before:
+            new_context += f"…{before} "
+        new_context += f">>>{span_text.strip()}<<<"
+        if after:
+            new_context += f" {after}…"
+
+        span["context"] = new_context
+
+    logger.info("🔄 Rebuilt context for %d spans using cleaned text", len(spans))
+    return report

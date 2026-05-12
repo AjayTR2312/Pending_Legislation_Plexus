@@ -432,30 +432,38 @@ def _safe_int(val, default=0) -> int:
 def _extract_edit_context(full_text: str, search_text: str,
                           context_chars: int = 600,
                           target_page: int = 0,
-                          total_pages: int = 0) -> str:
+                          total_pages: int = 0,
+                          hint_pos: int = -1) -> str:
     if not search_text:
         return search_text
 
-    # Find ALL occurrences and pick the one nearest to the estimated page position
-    positions = []
-    start_search = 0
-    while True:
-        pos = full_text.find(search_text, start_search)
-        if pos == -1:
-            break
-        positions.append(pos)
-        start_search = pos + 1
-
-    if not positions:
-        return search_text
-
-    if len(positions) == 1 or target_page <= 0 or total_pages <= 0:
-        pos = positions[0]
+    # If caller already knows the exact position, use it directly
+    if hint_pos >= 0 and full_text[hint_pos:hint_pos + len(search_text)] == search_text:
+        pos = hint_pos
     else:
-        # Estimate where the target page starts in the text
-        estimated_pos = int((target_page - 1) / total_pages * len(full_text))
-        # Pick the occurrence nearest to the estimated position
-        pos = min(positions, key=lambda p: abs(p - estimated_pos))
+        # Find ALL occurrences and pick the one nearest to the estimated page position
+        positions = []
+        start_search = 0
+        while True:
+            pos = full_text.find(search_text, start_search)
+            if pos == -1:
+                break
+            positions.append(pos)
+            start_search = pos + 1
+
+        if not positions:
+            return search_text
+
+        if hint_pos >= 0:
+            # hint_pos given but exact match failed — pick nearest to hint
+            pos = min(positions, key=lambda p: abs(p - hint_pos))
+        elif len(positions) == 1 or target_page <= 0 or total_pages <= 0:
+            pos = positions[0]
+        else:
+            # Estimate where the target page starts in the text
+            estimated_pos = int((target_page - 1) / total_pages * len(full_text))
+            # Pick the occurrence nearest to the estimated position
+            pos = min(positions, key=lambda p: abs(p - estimated_pos))
 
     raw_start = max(0, pos - context_chars)
     if raw_start > 0:
@@ -503,6 +511,48 @@ def _find_affected_items(checklist: list[dict], fixed_ids: set[int],
     return affected
 
 
+def _ws_find(needle: str, haystack: str, unique: bool = False):
+    """Find *needle* in *haystack* allowing flexible whitespace.
+    Returns (matched_text, position) or ('', -1) if not found.
+    If unique=True, only returns a match if it appears exactly once."""
+    _EMPTY = ("", -1)
+    if not needle or len(needle) < 3:
+        return _EMPTY
+    # Try literal first (fast path)
+    if needle in haystack:
+        if unique and haystack.count(needle) > 1:
+            return _EMPTY
+        return (needle, haystack.find(needle))
+    # Build regex: collapse each whitespace run in needle to \s+
+    import re as _re
+    tokens = needle.split()
+    if len(tokens) >= 2:
+        pattern = r'\s+'.join(_re.escape(t) for t in tokens)
+        matches = list(_re.finditer(pattern, haystack))
+        if matches:
+            if unique and len(matches) > 1:
+                return _EMPTY
+            return (matches[0].group(0), matches[0].start())
+    # Try Unicode-normalized: replace common lookalikes
+    _norm = needle.replace("\u00a7", "§").replace("\u2019", "'").replace("\u2018", "'")
+    _norm = _norm.replace("\u201c", '"').replace("\u201d", '"').replace("\u2014", "-")
+    _norm = _norm.replace("\u2013", "-").replace("\u00a0", " ")
+    if _norm != needle and _norm in haystack:
+        if unique and haystack.count(_norm) > 1:
+            return _EMPTY
+        return (_norm, haystack.find(_norm))
+    # Try with all non-ASCII stripped from both sides
+    _ascii_needle = ''.join(c if ord(c) < 128 else '.' for c in needle)
+    if len(_ascii_needle) >= 10:
+        _pat = _re.escape(_ascii_needle).replace(r'\.', '.')
+        _m = list(_re.finditer(_pat, haystack))
+        if _m:
+            if unique and len(_m) > 1:
+                return _EMPTY
+            return (_m[0].group(0), _m[0].start())
+    return _EMPTY
+
+
 def _find_anchor_context_multi(text: str, row: dict, total_pages: int = 0) -> str:
     """Try multiple strategies to find anchor context in the converted text.
 
@@ -511,6 +561,14 @@ def _find_anchor_context_multi(text: str, row: dict, total_pages: int = 0) -> st
     """
     target_page = int(row.get("Page", 0) or 0)
     _pg = {"target_page": target_page, "total_pages": total_pages}
+
+    def _ws_find_context(needle, haystack, unique=False, **pg_kwargs):
+        """Combine _ws_find + _extract_edit_context: find needle in haystack
+        with flexible whitespace and return the edit context, or '' if not found."""
+        hit, hit_pos = _ws_find(needle, haystack, unique=unique)
+        if hit:
+            return _extract_edit_context(haystack, hit, hint_pos=hit_pos, **pg_kwargs)
+        return ""
 
     # Strategy 1: Full Context column
     ctx_col = str(row.get("Context", "") or "").strip()
@@ -524,53 +582,126 @@ def _find_anchor_context_multi(text: str, row: dict, total_pages: int = 0) -> st
         marker_match = _re.search(r'>>>\s*(.+?)\s*<<<', ctx_col)
         if marker_match:
             inner = marker_match.group(1).strip()
-            if len(inner) >= 5 and inner in text:
-                return _extract_edit_context(text, inner, **_pg)
             before_marker = ctx_col[:marker_match.start()].replace("…", "").strip()
             after_marker = ctx_col[marker_match.end():].replace("…", "").strip()
 
-            # When inner is short (e.g. "(a)"), try inner + after_marker
+            # For very short inner text (≤3 chars like ",", ")", "."),
+            # always use surrounding context to disambiguate — never search by inner alone
+            if len(inner) <= 3:
+                _after_full = after_marker.strip()
+                _before_full = before_marker.strip()
+
+                # Try: before_tail + inner + after — prefer UNIQUE matches
+                if _before_full and _after_full:
+                    tail = _before_full[-40:].strip()
+                    for after_len in [len(_after_full), 80, 60, 45, 30]:
+                        head = _after_full[:after_len].strip()
+                        if not head:
+                            continue
+                        for combo in [tail + inner + head, tail + " " + inner + " " + head]:
+                            r = _ws_find_context(combo, text, unique=True, **_pg)
+                            if r: return r
+                    for after_len in [len(_after_full), 60, 45, 30]:
+                        head = _after_full[:after_len].strip()
+                        if not head:
+                            continue
+                        for combo in [tail + inner + head, tail + " " + inner + " " + head]:
+                            r = _ws_find_context(combo, text, **_pg)
+                            if r: return r
+                if _after_full:
+                    for after_len in [len(_after_full), 80, 60, 45, 30]:
+                        head = _after_full[:after_len].strip()
+                        if not head:
+                            continue
+                        r = _ws_find_context(inner + " " + head, text, unique=True, **_pg)
+                        if r: return r
+                    for after_len in [len(_after_full), 60, 45, 30]:
+                        head = _after_full[:after_len].strip()
+                        if not head:
+                            continue
+                        for combo in [inner + head, inner + " " + head]:
+                            r = _ws_find_context(combo, text, **_pg)
+                            if r: return r
+                if _before_full:
+                    tail = _before_full[-40:].strip()
+                    for combo in [tail + inner, tail + " " + inner]:
+                        r = _ws_find_context(combo, text, **_pg)
+                        if r: return r
+                if _before_full and _after_full:
+                    tail = _before_full[-40:].strip()
+                    for after_len in [len(_after_full), 80, 60, 40, 30]:
+                        head = _after_full[:after_len].strip()
+                        if not head:
+                            continue
+                        r = _ws_find_context(tail + " " + head, text, unique=True, **_pg)
+                        if r: return r
+                    for after_len in [len(_after_full), 60, 40, 30]:
+                        head = _after_full[:after_len].strip()
+                        if not head:
+                            continue
+                        for combo in [tail + " " + head, tail + head]:
+                            r = _ws_find_context(combo, text, **_pg)
+                            if r: return r
+            else:
+                # Normal-length inner text
+                if len(inner) >= 5:
+                    r = _ws_find_context(inner, text, **_pg)
+                    if r: return r
+
+            # When inner is short-to-medium (< 10 chars), try inner + after_marker
             if after_marker and len(inner) < 10:
-                combined_fwd = inner + " " + after_marker[:50].strip()
-                combined_fwd_ns = inner + after_marker[:50].strip()
-                if combined_fwd in text:
-                    return _extract_edit_context(text, combined_fwd, **_pg)
-                if combined_fwd_ns in text:
-                    return _extract_edit_context(text, combined_fwd_ns, **_pg)
+                for combo in [inner + " " + after_marker[:50].strip(),
+                              inner + after_marker[:50].strip()]:
+                    r = _ws_find_context(combo, text, **_pg)
+                    if r: return r
 
             # Try combining tail of before + inner + head of after
             if before_marker:
                 tail = before_marker[-40:].strip()
-                combined = tail + inner
-                if combined in text:
-                    return _extract_edit_context(text, combined, **_pg)
-            # For missing text: search using surrounding context WITHOUT the
-            # inner text (it may not exist in the converted file).
-            # Combine tail of before + head of after as the anchor.
+                r = _ws_find_context(tail + inner, text, **_pg)
+                if r: return r
+            # For missing text: use surrounding context WITHOUT inner
             if before_marker and after_marker:
                 tail = before_marker[-30:].strip()
                 head = after_marker[:30].strip()
-                surround = tail + " " + head
-                if surround in text:
-                    return _extract_edit_context(text, surround, **_pg)
-                # Try without space (text may be adjacent)
-                surround_nospace = tail + head
-                if surround_nospace in text:
-                    return _extract_edit_context(text, surround_nospace, **_pg)
-            # Try just the tail of before-marker text
+                for combo in [tail + " " + head, tail + head]:
+                    r = _ws_find_context(combo, text, **_pg)
+                    if r: return r
+                # Try shorter tails/heads in case of char mismatch at boundary
+                for t_len in [25, 20, 15]:
+                    for h_len in [25, 20, 15]:
+                        t = before_marker[-t_len:].strip()
+                        h = after_marker[:h_len].strip()
+                        if len(t) >= 8 and len(h) >= 8:
+                            r = _ws_find_context(t + " " + h, text, **_pg)
+                            if r: return r
             if before_marker:
                 tail = before_marker[-40:].strip()
-                if len(tail) >= 10 and tail in text:
-                    return _extract_edit_context(text, tail, **_pg)
-            # Try just the head of after-marker text
+                if len(tail) >= 10:
+                    r = _ws_find_context(tail, text, **_pg)
+                    if r: return r
+                # Try progressively shorter
+                for size in [30, 20, 15]:
+                    chunk = before_marker[-size:].strip()
+                    if len(chunk) >= 10:
+                        r = _ws_find_context(chunk, text, **_pg)
+                        if r: return r
             if after_marker:
                 head = after_marker[:40].strip()
-                if len(head) >= 10 and head in text:
-                    return _extract_edit_context(text, head, **_pg)
+                if len(head) >= 10:
+                    r = _ws_find_context(head, text, **_pg)
+                    if r: return r
+                # Try progressively shorter
+                for size in [30, 20, 15]:
+                    chunk = after_marker[:size].strip()
+                    if len(chunk) >= 10:
+                        r = _ws_find_context(chunk, text, **_pg)
+                        if r: return r
         # Try full cleaned context
         ctx_clean = ctx_col.replace(">>>", "").replace("<<<", "").replace("…", "").strip()
-        if ctx_clean and len(ctx_clean) >= 10 and ctx_clean in text:
-            return _extract_edit_context(text, ctx_clean, **_pg)
+        if ctx_clean and len(ctx_clean) >= 10:
+            r = _ws_find_context(ctx_clean, text, **_pg)
+            if r: return r
 
     # Strategy 2: Partial Context — first 80 chars
     if ctx_col:
@@ -1527,6 +1658,19 @@ def render_inline_validation_review(
 
             st.info("💡 Always verify the correction against the original PDF before applying. The suggested fix is a recommendation — confirm it matches the source document.")
 
+            # Extra-tag items with no page/line: warn that location is approximate
+            _cat = str(selected_row.get("Category", "")).lower()
+            _has_page = bool(selected_row.get("Page"))
+            if _cat == "extra_tag" and not _has_page:
+                st.markdown(
+                    '<p style="color:#5a4e00; background:#fff8e1; padding:8px 12px; '
+                    'border-radius:6px; font-size:0.92rem; margin:4px 0;">'
+                    '🔁 The flagged issue involves a character that appears in '
+                    'multiple locations &mdash; please verify manually for '
+                    '100% accuracy.</p>',
+                    unsafe_allow_html=True
+                )
+
             claude_text = str(selected_row.get("Claude Text", "") or "")
             pymupdf_text = str(selected_row.get("PyMuPDF Text", ""))
             tag_type = str(selected_row.get("Tag Type", "addition"))
@@ -1536,15 +1680,19 @@ def render_inline_validation_review(
             if notes:
                 st.info(f"📝 **Auditor Notes:** {notes}")
             if suggested_fix and suggested_fix.lower() not in ("none", "n/a", ""):
-                line_info = selected_row.get("Line", "")
-                page_info = selected_row.get("Page", "")
+                classification = str(selected_row.get("Category", "")).lower()
+                # Strip any existing trailing "on page N" (possibly followed by parenthetical) from GPT's fix
+                clean_fix = re.sub(r'\s+on\s+page\s+\d+(\s*\([^)]*\))?\s*$', '', suggested_fix, flags=re.IGNORECASE).strip()
                 loc_parts = []
+                page_info = selected_row.get("Page", "")
+                line_info = selected_row.get("Line", "")
                 if page_info:
                     loc_parts.append(f"page {page_info}")
-                if line_info:
+                # Only show line number for real_miss — partial_match already has context
+                if line_info and classification == "real_miss":
                     loc_parts.append(f"line {line_info}")
                 loc_suffix = f" on {', '.join(loc_parts)}" if loc_parts else ""
-                st.warning(f"🔧 **Suggested Fix:** {suggested_fix}{loc_suffix}")
+                st.warning(f"🔧 **Suggested Fix:** {clean_fix}{loc_suffix}")
             elif not suggested_fix or suggested_fix.lower() in ("none", "n/a"):
                 st.info("🔍 **No fix suggestion available.** Please review the expected text and surrounding context above, then compare the PDF with the Claude output to identify the issue.")
 
@@ -1557,6 +1705,8 @@ def render_inline_validation_review(
                 # For very short claude_text (e.g. "(c)"), use Context column
                 # to build a better search phrase with surrounding text
                 _search = claude_text
+                _hint_pos = -1
+                _pg_kw = {"target_page": _item_page, "total_pages": total_pages}
                 if len(claude_text.strip()) < 15:
                     import re as _re
                     _ctx = str(selected_row.get("Context", "") or "").strip()
@@ -1564,31 +1714,66 @@ def render_inline_validation_review(
                         # Try to extract text around >>> <<< markers
                         _mm = _re.search(r'>>>\s*(.+?)\s*<<<', _ctx)
                         if _mm:
+                            _inner = _mm.group(1).strip()
                             _after = _ctx[_mm.end():].replace("…", "").strip()
-                            if _after and len(_after) >= 5:
-                                # Search for inner + after_text as combined anchor
-                                _combined = _mm.group(1).strip() + " " + _after[:40].strip()
-                                # Also try without space
-                                _combined_ns = _mm.group(1).strip() + _after[:40].strip()
-                                if _combined in text:
-                                    _search = _combined
-                                elif _combined_ns in text:
-                                    _search = _combined_ns
                             _before = _ctx[:_mm.start()].replace("…", "").strip()
-                            if _search == claude_text and _before and len(_before) >= 5:
-                                _combined = _before[-40:].strip() + " " + _mm.group(1).strip()
-                                _combined_ns = _before[-40:].strip() + _mm.group(1).strip()
-                                if _combined in text:
-                                    _search = _combined
-                                elif _combined_ns in text:
-                                    _search = _combined_ns
-                        elif len(_ctx) >= 15 and _ctx in text:
-                            _search = _ctx
+
+                            # Use _ws_find for robust matching (handles Unicode, whitespace)
+                            # Try: before_tail + inner + after
+                            if _before and _after:
+                                _tail = _before[-40:].strip()
+                                for _alen in [len(_after), 60, 40, 30]:
+                                    _head = _after[:_alen].strip()
+                                    if not _head:
+                                        continue
+                                    for _c in [_tail + _inner + _head, _tail + " " + _inner + " " + _head]:
+                                        _h, _p = _ws_find(_c, text)
+                                        if _h:
+                                            _search, _hint_pos = _h, _p
+                                            break
+                                    if _hint_pos >= 0:
+                                        break
+
+                            # Try: inner + after
+                            if _hint_pos < 0 and _after:
+                                for _alen in [len(_after), 60, 40, 30]:
+                                    _head = _after[:_alen].strip()
+                                    if not _head:
+                                        continue
+                                    for _c in [_inner + " " + _head, _inner + _head]:
+                                        _h, _p = _ws_find(_c, text)
+                                        if _h:
+                                            _search, _hint_pos = _h, _p
+                                            break
+                                    if _hint_pos >= 0:
+                                        break
+
+                            # Try: before_tail + inner
+                            if _hint_pos < 0 and _before:
+                                _tail = _before[-40:].strip()
+                                for _c in [_tail + " " + _inner, _tail + _inner]:
+                                    _h, _p = _ws_find(_c, text)
+                                    if _h:
+                                        _search, _hint_pos = _h, _p
+                                        break
+
+                        elif len(_ctx) >= 15:
+                            _h, _p = _ws_find(_ctx, text)
+                            if _h:
+                                _search, _hint_pos = _h, _p
 
                 original_context = _extract_edit_context(text, _search,
-                    target_page=_item_page, total_pages=total_pages)
+                    target_page=_item_page, total_pages=total_pages,
+                    hint_pos=_hint_pos)
                 prefill = original_context
                 has_extra_context = (original_context != claude_text)
+
+                # Check if the search text appears multiple times — may show wrong location
+                _search_count = text.count(_search) if len(_search.strip()) <= 5 else 0
+                if _search_count <= 1 and len(_search.strip()) <= 5:
+                    # For very short text, check if original_context appears multiple times
+                    _search_count = text.count(original_context) if original_context else 0
+
                 if has_extra_context:
                     st.caption(
                         "✏️ Surrounding context shown — you can **move tag "
@@ -1597,6 +1782,17 @@ def render_inline_validation_review(
                     )
                 else:
                     st.caption("✏️ Edit the text below. Click **Apply Fix** to save your change.")
+
+                # Warn if the same short text repeats in the PDF (e.g. commas, parentheses)
+                if len(claude_text.strip()) <= 3 and _search_count > 1:
+                    st.markdown(
+                        '<p style="color:#5a4e00; background:#fff8e1; padding:8px 12px; '
+                        'border-radius:6px; font-size:0.92rem; margin:4px 0;">'
+                        '🔁 The flagged issue involves a character that appears in '
+                        'multiple locations &mdash; please verify manually for '
+                        '100% accuracy.</p>',
+                        unsafe_allow_html=True
+                    )
             else:
                 # Missing text — try multiple strategies to find anchor context
                 original_context = _find_anchor_context_multi(text, selected_row, total_pages=total_pages)
@@ -1608,87 +1804,32 @@ def render_inline_validation_review(
                         "the missing content at the correct position, then "
                         "click **Apply Fix** to save."
                     )
+                    # Warn for short repeated text in PDF
+                    if len(pymupdf_text.strip()) <= 3:
+                        st.markdown(
+                            '<p style="color:#5a4e00; background:#fff8e1; padding:8px 12px; '
+                            'border-radius:6px; font-size:0.92rem; margin:4px 0;">'
+                            '🔁 The flagged issue involves a character that appears in '
+                            'multiple locations &mdash; please verify manually for '
+                            '100% accuracy.</p>',
+                            unsafe_allow_html=True
+                        )
                 else:
                     prefill = ""
-                    st.caption(
-                        "⚠️ This text is **missing** from the Claude output. "
-                        "It was found by PyMuPDF but not included in the conversion. "
-                        "Use the **search box** below the edit area to locate nearby "
-                        "text and apply the fix, or **Mark as Fixed** / **Ignore**."
+                    # No anchor found — don't show text box, just show info + buttons
+                    _no_anchor = True
+
+            if not locals().get('_no_anchor', False):
+                fc1, fc2 = st.columns([3, 1])
+                with fc1:
+                    new_text = st.text_area(
+                        "Edit text", value=prefill, height=200,
+                        key=f"vri_edit_{cid}", label_visibility="collapsed",
                     )
-
-            fc1, fc2 = st.columns([3, 1])
-            with fc1:
-                new_text = st.text_area(
-                    "Edit text", value=prefill, height=200,
-                    key=f"vri_edit_{cid}", label_visibility="collapsed",
-                )
-            with fc2:
-                st.markdown("")
-                st.markdown("")
-                if claude_text:
-                    pending_key = f"vri_pending_apply_{cid}"
-                    is_pending = st.session_state.get(pending_key, False)
-
-                    if not is_pending:
-                        if st.button("✅ Apply Fix", type="primary", key=f"vri_apply_{cid}"):
-                            if new_text.strip() and new_text != original_context:
-                                st.session_state[pending_key] = True
-                                st.rerun()
-                            elif new_text == original_context:
-                                st.warning("No changes made.")
-                        if st.button("🔇 Ignore", key=f"vri_ignore_nochange_{cid}",
-                                     help="Mark this item as a false positive — no edit needed"):
-                            _mark_ignored(cid)
-                            st.rerun()
-                    else:
-                        affected_preview = _find_affected_items(
-                            checklist, fixed_ids,
-                            original_context, new_text, cid,
-                            current_page=_item_page,
-                        )
-                        st.info(
-                            f"⚡ **{len(affected_preview)} item(s)** will be "
-                            f"marked fixed: {', '.join(f'#{a}' for a in affected_preview)}"
-                        )
-                        cc1, cc2 = st.columns(2)
-                        with cc1:
-                            if st.button("✅ Confirm", type="primary", key=f"vri_confirm_{cid}"):
-                                updated = text.replace(original_context, new_text, 1)
-                                if updated != text:
-                                    converted_txt_path.write_text(updated, encoding="utf-8")
-                                    affected = _find_affected_items(
-                                        checklist, fixed_ids,
-                                        original_context, new_text, cid,
-                                        current_page=_item_page,
-                                    )
-                                    for aid in affected:
-                                        _mark_fixed(aid)
-                                    _save_undo_history(
-                                        affected, original_context,
-                                        new_text,
-                                        str(converted_txt_path),
-                                    )
-                                    st.session_state.pop(pending_key, None)
-                                    if len(affected) > 1:
-                                        st.success(
-                                            f"✅ Saved! **{len(affected)} items** "
-                                            f"marked fixed: {', '.join(f'#{a}' for a in affected)}"
-                                        )
-                                    else:
-                                        st.success("✅ Saved & updated!")
-                                    st.rerun()
-                                else:
-                                    st.error("Text not found in file.")
-                                    st.session_state.pop(pending_key, None)
-                        with cc2:
-                            if st.button("❌ Cancel", key=f"vri_cancel_{cid}"):
-                                st.session_state.pop(pending_key, None)
-                                st.rerun()
-                else:
-                    # Missing text — use the same Apply Fix → Confirm flow
-                    # when we have an anchor context to locate the insertion point
-                    if original_context:
+                with fc2:
+                    st.markdown("")
+                    st.markdown("")
+                    if claude_text:
                         pending_key = f"vri_pending_apply_{cid}"
                         is_pending = st.session_state.get(pending_key, False)
 
@@ -1698,15 +1839,20 @@ def render_inline_validation_review(
                                     st.session_state[pending_key] = True
                                     st.rerun()
                                 elif new_text == original_context:
-                                    st.warning("No changes made — edit the text to include the missing content.")
-                            if st.button("🔇 Ignore", key=f"vri_ignore_missing_{cid}",
-                                         help="Mark this as a false positive — no action needed"):
+                                    st.warning("No changes made.")
+                            if st.button("🔇 Ignore", key=f"vri_ignore_nochange_{cid}",
+                                         help="Mark this item as a false positive — no edit needed"):
                                 _mark_ignored(cid)
                                 st.rerun()
                         else:
+                            affected_preview = _find_affected_items(
+                                checklist, fixed_ids,
+                                original_context, new_text, cid,
+                                current_page=_item_page,
+                            )
                             st.info(
-                                f"⚡ **1 item** will be inserted & "
-                                f"marked fixed: #{cid}"
+                                f"⚡ **{len(affected_preview)} item(s)** will be "
+                                f"marked fixed: {', '.join(f'#{a}' for a in affected_preview)}"
                             )
                             cc1, cc2 = st.columns(2)
                             with cc1:
@@ -1714,128 +1860,126 @@ def render_inline_validation_review(
                                     updated = text.replace(original_context, new_text, 1)
                                     if updated != text:
                                         converted_txt_path.write_text(updated, encoding="utf-8")
-                                        _mark_fixed(cid)
+                                        affected = _find_affected_items(
+                                            checklist, fixed_ids,
+                                            original_context, new_text, cid,
+                                            current_page=_item_page,
+                                        )
+                                        for aid in affected:
+                                            _mark_fixed(aid)
                                         _save_undo_history(
-                                            [cid], original_context,
+                                            affected, original_context,
                                             new_text,
                                             str(converted_txt_path),
                                         )
                                         st.session_state.pop(pending_key, None)
-                                        st.success(f"✅ Saved! Item #{cid} inserted & marked fixed!")
+                                        if len(affected) > 1:
+                                            st.success(
+                                                f"✅ Saved! **{len(affected)} items** "
+                                                f"marked fixed: {', '.join(f'#{a}' for a in affected)}"
+                                            )
+                                        else:
+                                            st.success("✅ Saved & updated!")
+                                        # Auto-advance to next unfixed error
+                                        _next_errors = _get_error_ids(checklist,
+                                                                      _get_fixed_ids(),
+                                                                      _get_ignored_ids())
+                                        if _next_errors:
+                                            st.session_state.vri_selected_item = _next_errors[0]
                                         st.rerun()
                                     else:
-                                        st.error("Anchor context not found in file — text may have changed.")
+                                        st.error("Text not found in file.")
                                         st.session_state.pop(pending_key, None)
                             with cc2:
                                 if st.button("❌ Cancel", key=f"vri_cancel_{cid}"):
                                     st.session_state.pop(pending_key, None)
                                     st.rerun()
                     else:
-                        # No automatic anchor — let the user search for nearby text
-                        st.caption(
-                            "⚠️ No automatic anchor found in the file. "
-                            "**Search** for nearby text below to locate where the fix should go, "
-                            "then click **Apply Fix**. Or use **Mark as Fixed** / **Ignore**."
-                        )
-                        search_term = st.text_input(
-                            "🔍 Search for nearby text in the file",
-                            key=f"vri_search_{cid}",
-                            placeholder="Type text that appears near where the fix should be inserted…",
-                        )
-                        _search_anchor = ""
-                        if search_term and search_term.strip() in text:
-                            _search_anchor = _extract_edit_context(text, search_term.strip())
-                        elif search_term:
-                            st.error("❌ Text not found in the file. Try a different search term.")
+                        # Missing text — use the same Apply Fix → Confirm flow
+                        if original_context:
+                            pending_key = f"vri_pending_apply_{cid}"
+                            is_pending = st.session_state.get(pending_key, False)
 
-                        if _search_anchor:
-                            # User found an anchor — show Apply Fix flow
-                            st.success("✅ Found! Edit the text below to add the missing content, then click **Apply Fix**.")
-                            search_prefill = _search_anchor
-                            search_new_text = st.text_area(
-                                "Edit text", value=search_prefill, height=200,
-                                key=f"vri_search_edit_{cid}", label_visibility="collapsed",
-                            )
-                            s_pending_key = f"vri_pending_search_apply_{cid}"
-                            s_is_pending = st.session_state.get(s_pending_key, False)
-
-                            sc1, sc2 = st.columns([1, 1])
-                            if not s_is_pending:
-                                with sc1:
-                                    if st.button("✅ Apply Fix", type="primary", key=f"vri_search_apply_{cid}"):
-                                        if search_new_text.strip() and search_new_text != _search_anchor:
-                                            st.session_state[s_pending_key] = True
-                                            st.rerun()
-                                        elif search_new_text == _search_anchor:
-                                            st.warning("No changes made — edit the text to include the missing content.")
-                                with sc2:
-                                    if st.button("🔇 Ignore", key=f"vri_ignore_search_{cid}",
-                                                 help="Mark as false positive"):
-                                        _mark_ignored(cid)
+                            if not is_pending:
+                                if st.button("✅ Apply Fix", type="primary", key=f"vri_apply_{cid}"):
+                                    if new_text.strip() and new_text != original_context:
+                                        st.session_state[pending_key] = True
                                         st.rerun()
+                                    elif new_text == original_context:
+                                        st.warning("No changes made — edit the text to include the missing content.")
+                                if st.button("🔇 Ignore", key=f"vri_ignore_missing_{cid}",
+                                             help="Mark this as a false positive — no action needed"):
+                                    _mark_ignored(cid)
+                                    st.rerun()
                             else:
-                                st.info(f"⚡ **1 item** will be inserted & marked fixed: #{cid}")
-                                sc_c1, sc_c2 = st.columns(2)
-                                with sc_c1:
-                                    if st.button("✅ Confirm", type="primary", key=f"vri_search_confirm_{cid}"):
-                                        updated = text.replace(_search_anchor, search_new_text, 1)
+                                st.info(
+                                    f"⚡ **1 item** will be inserted & "
+                                    f"marked fixed: #{cid}"
+                                )
+                                cc1, cc2 = st.columns(2)
+                                with cc1:
+                                    if st.button("✅ Confirm", type="primary", key=f"vri_confirm_{cid}"):
+                                        updated = text.replace(original_context, new_text, 1)
                                         if updated != text:
                                             converted_txt_path.write_text(updated, encoding="utf-8")
                                             _mark_fixed(cid)
                                             _save_undo_history(
-                                                [cid], _search_anchor,
-                                                search_new_text,
+                                                [cid], original_context,
+                                                new_text,
                                                 str(converted_txt_path),
                                             )
-                                            st.session_state.pop(s_pending_key, None)
+                                            st.session_state.pop(pending_key, None)
                                             st.success(f"✅ Saved! Item #{cid} inserted & marked fixed!")
+                                            _next_errors = _get_error_ids(checklist,
+                                                                          _get_fixed_ids(),
+                                                                          _get_ignored_ids())
+                                            if _next_errors:
+                                                st.session_state.vri_selected_item = _next_errors[0]
                                             st.rerun()
                                         else:
-                                            st.error("Anchor context not found — text may have changed.")
-                                            st.session_state.pop(s_pending_key, None)
-                                with sc_c2:
-                                    if st.button("❌ Cancel", key=f"vri_search_cancel_{cid}"):
-                                        st.session_state.pop(s_pending_key, None)
+                                            st.error("Anchor context not found in file — text may have changed.")
+                                            st.session_state.pop(pending_key, None)
+                                with cc2:
+                                    if st.button("❌ Cancel", key=f"vri_cancel_{cid}"):
+                                        st.session_state.pop(pending_key, None)
                                         st.rerun()
 
-                            # Preview diff
-                            if _search_anchor and search_new_text != _search_anchor:
-                                with st.expander("👁️ Preview change", expanded=True):
-                                    sp1, sp2 = st.columns(2)
-                                    with sp1:
-                                        st.markdown("**Before:**")
-                                        st.code(_search_anchor, language=None)
-                                    with sp2:
-                                        st.markdown("**After:**")
-                                        st.code(search_new_text, language=None)
-                        else:
-                            # Fallback — Mark as Fixed / Ignore (no file edit)
-                            fb1, fb2 = st.columns([1, 1])
-                            with fb1:
-                                if st.button("✅ Mark as Fixed", type="primary", key=f"vri_copy_{cid}",
-                                             help="Mark this item as manually resolved"):
-                                    _mark_fixed(cid)
-                                    _save_undo_history([cid], "", "", str(converted_txt_path))
-                                    st.success(f"✅ Item #{cid} marked as fixed!")
-                                    st.rerun()
-                            with fb2:
-                                if st.button("🔇 Ignore", key=f"vri_ignore_missing_{cid}",
-                                             help="Mark as false positive — no action needed"):
-                                    _mark_ignored(cid)
-                                    st.rerun()
-
-            # Preview diff — show only after user clicks Apply Fix (pending confirmation)
-            if original_context and new_text != original_context:
-                _any_pending = st.session_state.get(f"vri_pending_apply_{cid}", False)
-                if _any_pending:
-                    with st.expander("👁️ Preview change", expanded=True):
-                        p1, p2 = st.columns(2)
-                        with p1:
-                            st.markdown("**Before:**")
-                            st.code(original_context, language=None)
-                        with p2:
-                            st.markdown("**After:**")
-                            st.code(new_text, language=None)
+                # Preview diff
+                if original_context and new_text != original_context:
+                    _any_pending = st.session_state.get(f"vri_pending_apply_{cid}", False)
+                    if _any_pending:
+                        with st.expander("👁️ Preview change", expanded=True):
+                            p1, p2 = st.columns(2)
+                            with p1:
+                                st.markdown("**Before:**")
+                                st.code(original_context, language=None)
+                            with p2:
+                                st.markdown("**After:**")
+                                st.code(new_text, language=None)
+            else:
+                # No anchor — show info message and Mark as Fixed / Ignore only
+                st.info(
+                    "📌 **Text not found** due to the internal structure of the PDF. "
+                    "This item needs to be handled manually once all other errors and "
+                    "warnings are **Fixed / Ignored**."
+                )
+                _defer_c1, _defer_c2 = st.columns([1, 1])
+                with _defer_c1:
+                    if st.button("✅ Mark as Fixed", type="primary", key=f"vri_copy_na_{cid}",
+                                 help="Mark this item as manually resolved"):
+                        _mark_fixed(cid)
+                        _save_undo_history([cid], "", "", str(converted_txt_path))
+                        _next_errors = _get_error_ids(checklist,
+                                                      _get_fixed_ids(),
+                                                      _get_ignored_ids())
+                        if _next_errors:
+                            st.session_state.vri_selected_item = _next_errors[0]
+                        st.rerun()
+                with _defer_c2:
+                    if st.button("🔇 Ignore", key=f"vri_ignore_na_{cid}",
+                                 help="Mark as false positive — no action needed"):
+                        _mark_ignored(cid)
+                        st.rerun()
         else:
             # ── Warning / pass items ────────────────────────────────
             is_warning = str(selected_row.get("Verdict", "")).startswith("⚠")
