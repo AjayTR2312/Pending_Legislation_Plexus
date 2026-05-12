@@ -93,14 +93,41 @@ def strip_protected_tags(text: str, state_code: str | None) -> str:
 
     for clause in clauses:
         pattern = _build_pattern(clause)
-        # Replace each match with a tag-free version (just strip all tags)
+
         def _strip_tags(m: re.Match) -> str:
             matched = m.group(0)
-            # Remove all [A>…<A] and [D>…<D] markers from the matched span
-            cleaned = re.sub(r'\[A>', '', cleaned := matched)
+            # Detect if the match consumed an opening tag [A> or [D>
+            leading_tag_m = re.match(r'\[(A|D)>', matched)
+            leading_tag = leading_tag_m.group(1) if leading_tag_m else None
+
+            # Detect if the match consumed a closing tag <A] or <D]
+            trailing_tag_m = re.search(r'<(A|D)\]$', matched)
+            trailing_tag = trailing_tag_m.group(1) if trailing_tag_m else None
+
+            # Strip all tags from the matched span
+            cleaned = re.sub(r'\[A>', '', matched)
             cleaned = re.sub(r'<A\]', '', cleaned)
             cleaned = re.sub(r'\[D>', '', cleaned)
             cleaned = re.sub(r'<D\]', '', cleaned)
+
+            # If the match consumed an opening tag but NOT a closing tag,
+            # the text AFTER the protected clause in the original span is
+            # now orphaned (has a closer but no opener).
+            # → Close the tag before the clause, then re-open it after.
+            # But since the clause is at the start of the span, we just
+            # need to re-open the tag after the cleaned clause text.
+            if leading_tag and not trailing_tag:
+                cleaned = cleaned + f'[{leading_tag}>'
+
+            # If the match consumed a closing tag but NOT an opening tag,
+            # the text BEFORE the clause is orphaned.
+            # → Close the tag before the clause text.
+            if trailing_tag and not leading_tag:
+                cleaned = f'<{trailing_tag}]' + cleaned
+
+            # If both consumed, the clause was a complete tagged span — just
+            # return the cleaned text (no re-opening/closing needed).
+
             return cleaned
 
         text = pattern.sub(_strip_tags, text)

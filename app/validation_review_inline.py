@@ -417,7 +417,7 @@ def _get_effective_verdict(row: dict, fixed_ids: set[int],
     return str(row.get("Verdict", ""))
 
 
-def _trunc(s, n=80):
+def _trunc(s, n=120):
     s = str(s) if s else ""
     return s if len(s) <= n else s[:n] + "…"
 
@@ -430,12 +430,40 @@ def _safe_int(val, default=0) -> int:
 
 
 def _extract_edit_context(full_text: str, search_text: str,
-                          context_chars: int = 200) -> str:
+                          context_chars: int = 600,
+                          target_page: int = 0,
+                          total_pages: int = 0,
+                          hint_pos: int = -1) -> str:
     if not search_text:
         return search_text
-    pos = full_text.find(search_text)
-    if pos == -1:
-        return search_text
+
+    # If caller already knows the exact position, use it directly
+    if hint_pos >= 0 and full_text[hint_pos:hint_pos + len(search_text)] == search_text:
+        pos = hint_pos
+    else:
+        # Find ALL occurrences and pick the one nearest to the estimated page position
+        positions = []
+        start_search = 0
+        while True:
+            pos = full_text.find(search_text, start_search)
+            if pos == -1:
+                break
+            positions.append(pos)
+            start_search = pos + 1
+
+        if not positions:
+            return search_text
+
+        if hint_pos >= 0:
+            # hint_pos given but exact match failed — pick nearest to hint
+            pos = min(positions, key=lambda p: abs(p - hint_pos))
+        elif len(positions) == 1 or target_page <= 0 or total_pages <= 0:
+            pos = positions[0]
+        else:
+            # Estimate where the target page starts in the text
+            estimated_pos = int((target_page - 1) / total_pages * len(full_text))
+            # Pick the occurrence nearest to the estimated position
+            pos = min(positions, key=lambda p: abs(p - estimated_pos))
 
     raw_start = max(0, pos - context_chars)
     if raw_start > 0:
@@ -457,42 +485,229 @@ def _extract_edit_context(full_text: str, search_text: str,
 
 def _find_affected_items(checklist: list[dict], fixed_ids: set[int],
                          original_context: str, new_text: str,
-                         current_cid: int) -> list[int]:
+                         current_cid: int, current_page: int = 0) -> list[int]:
     affected = []
     for row in checklist:
         cid = int(row.get("#", 0))
+        if cid == current_cid:
+            continue  # always added at the end
         if cid in fixed_ids:
             continue
         verdict = str(row.get("Verdict", ""))
         if not verdict.startswith("❌"):
             continue
         ct = str(row.get("Claude Text", "") or "").strip()
-        if not ct:
+        if not ct or len(ct) < 10:
+            continue  # skip very short text — too many false positives
+        # Only consider items on the same or adjacent page
+        item_page = int(row.get("Page", 0) or 0)
+        if current_page > 0 and item_page > 0 and abs(item_page - current_page) > 1:
             continue
         if ct in original_context:
-            if ct not in new_text or cid == current_cid:
+            if ct not in new_text:
                 affected.append(cid)
-    if current_cid not in affected:
-        affected.append(current_cid)
+    # Always include the current item
+    affected.append(current_cid)
     return affected
 
 
-def _find_anchor_context_multi(text: str, row: dict) -> str:
+def _ws_find(needle: str, haystack: str, unique: bool = False):
+    """Find *needle* in *haystack* allowing flexible whitespace.
+    Returns (matched_text, position) or ('', -1) if not found.
+    If unique=True, only returns a match if it appears exactly once."""
+    _EMPTY = ("", -1)
+    if not needle or len(needle) < 3:
+        return _EMPTY
+    # Try literal first (fast path)
+    if needle in haystack:
+        if unique and haystack.count(needle) > 1:
+            return _EMPTY
+        return (needle, haystack.find(needle))
+    # Build regex: collapse each whitespace run in needle to \s+
+    import re as _re
+    tokens = needle.split()
+    if len(tokens) >= 2:
+        pattern = r'\s+'.join(_re.escape(t) for t in tokens)
+        matches = list(_re.finditer(pattern, haystack))
+        if matches:
+            if unique and len(matches) > 1:
+                return _EMPTY
+            return (matches[0].group(0), matches[0].start())
+    # Try Unicode-normalized: replace common lookalikes
+    _norm = needle.replace("\u00a7", "§").replace("\u2019", "'").replace("\u2018", "'")
+    _norm = _norm.replace("\u201c", '"').replace("\u201d", '"').replace("\u2014", "-")
+    _norm = _norm.replace("\u2013", "-").replace("\u00a0", " ")
+    if _norm != needle and _norm in haystack:
+        if unique and haystack.count(_norm) > 1:
+            return _EMPTY
+        return (_norm, haystack.find(_norm))
+    # Try with all non-ASCII stripped from both sides
+    _ascii_needle = ''.join(c if ord(c) < 128 else '.' for c in needle)
+    if len(_ascii_needle) >= 10:
+        _pat = _re.escape(_ascii_needle).replace(r'\.', '.')
+        _m = list(_re.finditer(_pat, haystack))
+        if _m:
+            if unique and len(_m) > 1:
+                return _EMPTY
+            return (_m[0].group(0), _m[0].start())
+    return _EMPTY
+
+
+def _find_anchor_context_multi(text: str, row: dict, total_pages: int = 0) -> str:
     """Try multiple strategies to find anchor context in the converted text.
 
     Returns the anchor context string (a substring of *text* that can be
     used as the search-and-replace target), or empty string if nothing found.
     """
+    target_page = int(row.get("Page", 0) or 0)
+    _pg = {"target_page": target_page, "total_pages": total_pages}
+
+    def _ws_find_context(needle, haystack, unique=False, **pg_kwargs):
+        """Combine _ws_find + _extract_edit_context: find needle in haystack
+        with flexible whitespace and return the edit context, or '' if not found."""
+        hit, hit_pos = _ws_find(needle, haystack, unique=unique)
+        if hit:
+            return _extract_edit_context(haystack, hit, hint_pos=hit_pos, **pg_kwargs)
+        return ""
+
     # Strategy 1: Full Context column
     ctx_col = str(row.get("Context", "") or "").strip()
     if ctx_col and ctx_col in text:
         return ctx_col
 
+    # Strategy 1b: Context column with >>> <<< markers stripped
+    if ctx_col:
+        import re as _re
+        # Extract text between >>> and <<< markers as focused search phrase
+        marker_match = _re.search(r'>>>\s*(.+?)\s*<<<', ctx_col)
+        if marker_match:
+            inner = marker_match.group(1).strip()
+            before_marker = ctx_col[:marker_match.start()].replace("…", "").strip()
+            after_marker = ctx_col[marker_match.end():].replace("…", "").strip()
+
+            # For very short inner text (≤3 chars like ",", ")", "."),
+            # always use surrounding context to disambiguate — never search by inner alone
+            if len(inner) <= 3:
+                _after_full = after_marker.strip()
+                _before_full = before_marker.strip()
+
+                # Try: before_tail + inner + after — prefer UNIQUE matches
+                if _before_full and _after_full:
+                    tail = _before_full[-40:].strip()
+                    for after_len in [len(_after_full), 80, 60, 45, 30]:
+                        head = _after_full[:after_len].strip()
+                        if not head:
+                            continue
+                        for combo in [tail + inner + head, tail + " " + inner + " " + head]:
+                            r = _ws_find_context(combo, text, unique=True, **_pg)
+                            if r: return r
+                    for after_len in [len(_after_full), 60, 45, 30]:
+                        head = _after_full[:after_len].strip()
+                        if not head:
+                            continue
+                        for combo in [tail + inner + head, tail + " " + inner + " " + head]:
+                            r = _ws_find_context(combo, text, **_pg)
+                            if r: return r
+                if _after_full:
+                    for after_len in [len(_after_full), 80, 60, 45, 30]:
+                        head = _after_full[:after_len].strip()
+                        if not head:
+                            continue
+                        r = _ws_find_context(inner + " " + head, text, unique=True, **_pg)
+                        if r: return r
+                    for after_len in [len(_after_full), 60, 45, 30]:
+                        head = _after_full[:after_len].strip()
+                        if not head:
+                            continue
+                        for combo in [inner + head, inner + " " + head]:
+                            r = _ws_find_context(combo, text, **_pg)
+                            if r: return r
+                if _before_full:
+                    tail = _before_full[-40:].strip()
+                    for combo in [tail + inner, tail + " " + inner]:
+                        r = _ws_find_context(combo, text, **_pg)
+                        if r: return r
+                if _before_full and _after_full:
+                    tail = _before_full[-40:].strip()
+                    for after_len in [len(_after_full), 80, 60, 40, 30]:
+                        head = _after_full[:after_len].strip()
+                        if not head:
+                            continue
+                        r = _ws_find_context(tail + " " + head, text, unique=True, **_pg)
+                        if r: return r
+                    for after_len in [len(_after_full), 60, 40, 30]:
+                        head = _after_full[:after_len].strip()
+                        if not head:
+                            continue
+                        for combo in [tail + " " + head, tail + head]:
+                            r = _ws_find_context(combo, text, **_pg)
+                            if r: return r
+            else:
+                # Normal-length inner text
+                if len(inner) >= 5:
+                    r = _ws_find_context(inner, text, **_pg)
+                    if r: return r
+
+            # When inner is short-to-medium (< 10 chars), try inner + after_marker
+            if after_marker and len(inner) < 10:
+                for combo in [inner + " " + after_marker[:50].strip(),
+                              inner + after_marker[:50].strip()]:
+                    r = _ws_find_context(combo, text, **_pg)
+                    if r: return r
+
+            # Try combining tail of before + inner + head of after
+            if before_marker:
+                tail = before_marker[-40:].strip()
+                r = _ws_find_context(tail + inner, text, **_pg)
+                if r: return r
+            # For missing text: use surrounding context WITHOUT inner
+            if before_marker and after_marker:
+                tail = before_marker[-30:].strip()
+                head = after_marker[:30].strip()
+                for combo in [tail + " " + head, tail + head]:
+                    r = _ws_find_context(combo, text, **_pg)
+                    if r: return r
+                # Try shorter tails/heads in case of char mismatch at boundary
+                for t_len in [25, 20, 15]:
+                    for h_len in [25, 20, 15]:
+                        t = before_marker[-t_len:].strip()
+                        h = after_marker[:h_len].strip()
+                        if len(t) >= 8 and len(h) >= 8:
+                            r = _ws_find_context(t + " " + h, text, **_pg)
+                            if r: return r
+            if before_marker:
+                tail = before_marker[-40:].strip()
+                if len(tail) >= 10:
+                    r = _ws_find_context(tail, text, **_pg)
+                    if r: return r
+                # Try progressively shorter
+                for size in [30, 20, 15]:
+                    chunk = before_marker[-size:].strip()
+                    if len(chunk) >= 10:
+                        r = _ws_find_context(chunk, text, **_pg)
+                        if r: return r
+            if after_marker:
+                head = after_marker[:40].strip()
+                if len(head) >= 10:
+                    r = _ws_find_context(head, text, **_pg)
+                    if r: return r
+                # Try progressively shorter
+                for size in [30, 20, 15]:
+                    chunk = after_marker[:size].strip()
+                    if len(chunk) >= 10:
+                        r = _ws_find_context(chunk, text, **_pg)
+                        if r: return r
+        # Try full cleaned context
+        ctx_clean = ctx_col.replace(">>>", "").replace("<<<", "").replace("…", "").strip()
+        if ctx_clean and len(ctx_clean) >= 10:
+            r = _ws_find_context(ctx_clean, text, **_pg)
+            if r: return r
+
     # Strategy 2: Partial Context — first 80 chars
     if ctx_col:
         partial = ctx_col[:80].strip()
         if partial and partial in text:
-            return _extract_edit_context(text, partial)
+            return _extract_edit_context(text, partial, **_pg)
 
     # Strategy 3: Extract quoted strings from Suggested Fix
     suggested_fix = str(row.get("Suggested Fix", "") or "")
@@ -505,14 +720,14 @@ def _find_anchor_context_multi(text: str, row: dict) -> str:
         )
         for q in quoted:
             if q in text:
-                return _extract_edit_context(text, q)
+                return _extract_edit_context(text, q, **_pg)
 
     # Strategy 4: Extract tag patterns from Suggested Fix  e.g. [A>or policies.<A]
     if suggested_fix:
         tag_pats = re.findall(r'\[([AD])>([^\[]{2,}?)<\1\]', suggested_fix)
         for _tag_letter, inner in tag_pats:
             if inner.strip() and inner.strip() in text:
-                return _extract_edit_context(text, inner.strip())
+                return _extract_edit_context(text, inner.strip(), **_pg)
 
     # Strategy 5: Key-phrase patterns from Suggested Fix
     if suggested_fix:
@@ -526,14 +741,14 @@ def _find_anchor_context_multi(text: str, row: dict) -> str:
             if m:
                 phrase = m.group(1).strip().strip("'\"")
                 if phrase and phrase in text:
-                    return _extract_edit_context(text, phrase)
+                    return _extract_edit_context(text, phrase, **_pg)
 
     # Strategy 6: Context sliding window (smaller chunks)
     if ctx_col and len(ctx_col) > 20:
         for size in [len(ctx_col) // 2, 60, 40, 20]:
             chunk = ctx_col[:size].strip()
             if len(chunk) >= 10 and chunk in text:
-                return _extract_edit_context(text, chunk)
+                return _extract_edit_context(text, chunk, **_pg)
 
     # Strategy 7: Notes column — quoted text
     notes = str(row.get("Notes", "") or "").strip()
@@ -545,7 +760,19 @@ def _find_anchor_context_multi(text: str, row: dict) -> str:
         )
         for q in quoted:
             if q in text:
-                return _extract_edit_context(text, q)
+                return _extract_edit_context(text, q, **_pg)
+
+    # Strategy 8: PyMuPDF Text column — search for the expected text itself
+    pymupdf_text = str(row.get("PyMuPDF Text", "") or "").strip()
+    if pymupdf_text and len(pymupdf_text) >= 10:
+        # Try full text first
+        if pymupdf_text in text:
+            return _extract_edit_context(text, pymupdf_text, **_pg)
+        # Try sliding windows of decreasing size
+        for size in [min(len(pymupdf_text), 80), 60, 40, 20]:
+            chunk = pymupdf_text[:size].strip()
+            if len(chunk) >= 10 and chunk in text:
+                return _extract_edit_context(text, chunk, **_pg)
 
     return ""
 
@@ -642,90 +869,19 @@ def _render_accuracy_expander(accuracy_report: dict | None,
                 f"{n_repos} block(s) repositioned but no missing content."
             )
 
-        # Real differences
-        if accuracy_report["real_diffs"]:
-            st.markdown("#### ⚠️ Real Differences")
-            for idx, d in enumerate(accuracy_report["real_diffs"], 1):
-                dtype = d["type"]
-                sub = d.get("sub_type", "")
-
-                if dtype == "REPLACE":
-                    if sub == "TRANSPOSED":
-                        st.markdown(
-                            f"**#{idx} 🔀 Transposed Words**\n\n"
-                            f"- **Expected order:** {d['pymupdf_text']}\n"
-                            f"- **Got order:** {d['converted_text']}"
-                        )
-                        moved = d.get("moved_words", [])
-                        if moved:
-                            _rows = "".join(
-                                f"<tr><td style='padding:2px 8px;text-align:center;'>{m['position']}</td>"
-                                f"<td style='padding:2px 8px;'><code>{m['expected']}</code></td>"
-                                f"<td style='padding:2px 8px;'>→</td>"
-                                f"<td style='padding:2px 8px;'><code>{m['got']}</code></td></tr>"
-                                for m in moved
-                            )
-                            st.markdown(
-                                f"<table style='font-size:0.85rem;margin:4px 0 8px 20px;'>"
-                                f"<tr><th style='padding:2px 8px;'>Pos</th><th>Expected</th>"
-                                f"<th></th><th>Got</th></tr>{_rows}</table>",
-                                unsafe_allow_html=True,
-                            )
-                    elif sub == "PUNCTUATION":
-                        st.markdown(
-                            f"**#{idx} ✂️ Punctuation Difference**\n\n"
-                            f"- **Expected:** `{d['pymupdf_text']}`\n"
-                            f"- **Got:** `{d['converted_text']}`"
-                        )
-                        char_diffs = d.get("char_diffs", [])
-                        if char_diffs:
-                            for cd in char_diffs:
-                                kind = cd["kind"]
-                                ch = cd["char"]
-                                ctx = cd.get("context", "")
-                                if kind == "MISSING":
-                                    st.markdown(f"  - ❌ **Missing** {ch}  `…{ctx}…`")
-                                elif kind == "EXTRA":
-                                    st.markdown(f"  - ➕ **Extra** {ch}  `…{ctx}…`")
-                                elif kind == "CHANGED":
-                                    st.markdown(f"  - 🔄 **Changed** {ch}  `…{ctx}…`")
-                    else:
-                        st.markdown(
-                            f"**#{idx} REPLACE**\n\n"
-                            f"- **PyMuPDF:** {d['pymupdf_text']}\n"
-                            f"- **Claude:** {d['converted_text']}"
-                        )
-
-                    # Sentence context for all REPLACE sub-types
-                    st.markdown(
-                        f"> *PyMuPDF sentence:* {d['sentence_pymupdf']}\n\n"
-                        f"> *Claude sentence:* {d['sentence_converted']}"
-                    )
-
-
-                elif dtype == "MISSING_IN_CONVERTED":
-                    st.markdown(
-                        f"**#{idx} MISSING in Claude output**\n\n"
-                        f"- **Missing:** {d['missing_text']}\n\n"
-                        f"> *Sentence:* {d['sentence']}"
-                    )
-                elif dtype == "EXTRA_IN_CONVERTED":
-                    st.markdown(
-                        f"**#{idx} EXTRA in Claude output**\n\n"
-                        f"- **Extra:** {d['extra_text']}\n\n"
-                        f"> *Sentence:* {d['sentence']}"
-                    )
-                if idx < len(accuracy_report["real_diffs"]):
+        # Real differences — only show MISSING in Claude output
+        missing_diffs = [d for d in accuracy_report["real_diffs"]
+                         if d["type"] == "MISSING_IN_CONVERTED"]
+        if missing_diffs:
+            st.markdown("#### ⚠️ Missing in Claude Output")
+            for idx, d in enumerate(missing_diffs, 1):
+                st.markdown(
+                    f"**#{idx} MISSING in Claude output**\n\n"
+                    f"- **Missing:** {d['missing_text']}\n\n"
+                    f"> *Sentence:* {d['sentence']}"
+                )
+                if idx < len(missing_diffs):
                     st.divider()
-
-        # Repositioned blocks (informational)
-        if accuracy_report["repositioned"]:
-            st.markdown("#### ℹ️ Repositioned Blocks")
-            st.caption("Content exists in both files but at different positions — not real errors.")
-            for idx, rp in enumerate(accuracy_report["repositioned"], 1):
-                text = rp.get("pymupdf_text") or rp.get("converted_text", "")
-                display = text if len(text) <= 150 else text[:147] + "..."
-                st.text(f"  #{idx}: {display}")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1005,6 +1161,40 @@ def render_inline_validation_review(
     converted_txt_path = Path(converted_txt_path)
     highlighted_dir = Path(highlighted_dir) if highlighted_dir else None
 
+    # ── Save/restore fixed/ignored state per file ────────────────────
+    import copy as _copy
+
+    _current_file_key = str(Path(str(converted_txt_path)).resolve())
+    _prev_file_key = st.session_state.get("vri_file_key", "")
+    _vri_state_keys = ("vri_fixed_ids", "vri_ignored_ids", "vri_undo_history",
+                       "vri_selected_item", "vri_current_page", "vri_filter_mode",
+                       "vri_last_sel", "vri_edit_mode")
+
+    # Always persist current vri_ state under the CURRENT file key on every rerun.
+    # This ensures that any fix/ignore made since the last rerun is captured
+    # BEFORE we potentially switch to a different file.
+    if _prev_file_key:
+        _all_saved = st.session_state.get("vri_per_file_state", {})
+        _saved = {}
+        for _k in _vri_state_keys:
+            if _k in st.session_state:
+                _saved[_k] = _copy.deepcopy(st.session_state[_k])
+        if _saved:
+            _all_saved[_prev_file_key] = _saved
+            st.session_state["vri_per_file_state"] = _all_saved
+
+    if _current_file_key != _prev_file_key:
+        # Restore saved state for the new file (if any), otherwise clear
+        _all_saved = st.session_state.get("vri_per_file_state", {})
+        _restored = _all_saved.get(_current_file_key, {})
+        for _k in _vri_state_keys:
+            if _k in _restored:
+                st.session_state[_k] = _copy.deepcopy(_restored[_k])
+            else:
+                st.session_state.pop(_k, None)
+
+        st.session_state["vri_file_key"] = _current_file_key
+
     # Inject CSS
     st.markdown(_CSS, unsafe_allow_html=True)
 
@@ -1056,6 +1246,20 @@ def render_inline_validation_review(
             _render_accuracy_expander(accuracy_report, converted_txt_path)
         elif not gpt_audit_failed:
             st.warning("⚠️ No audit data or accuracy report available for this file.")
+
+        # ── Show additional findings even when checklist is empty ────
+        if findings:
+            st.markdown("---")
+            st.markdown(f"#### 🔔 Additional Findings ({len(findings)})")
+            for af in findings:
+                it = str(af.get("Issue Type", ""))
+                cls = "vr-af-error" if it in ("content_dropped", "tag_error", "text_error") else "vr-af-warn"
+                st.markdown(f"""
+                <div class="vr-af-card {cls}">
+                    <strong>Page {af.get("Page","")}</strong> — <em>{_html_escape(it)}</em><br>
+                    {_html_escape(str(af.get("Description", "")))}
+                </div>
+                """, unsafe_allow_html=True)
 
         # ── Still show the side-by-side PDF ↔ Claude text view ──────
         page_images = _get_page_images(highlighted_dir)
@@ -1237,11 +1441,17 @@ def render_inline_validation_review(
 
     # ── Page state ──────────────────────────────────────────────────
     sel_item_page = 1
+    sel_item_line = None
     if selected_row:
         try:
             sel_item_page = int(selected_row.get("Page", 1))
         except (ValueError, TypeError):
             sel_item_page = 1
+        try:
+            _line_val = selected_row.get("Line", None)
+            sel_item_line = int(_line_val) if _line_val else None
+        except (ValueError, TypeError):
+            sel_item_line = None
 
     if "vri_current_page" not in st.session_state:
         st.session_state.vri_current_page = sel_item_page
@@ -1265,18 +1475,19 @@ def render_inline_validation_review(
                     st.session_state.vri_selected_item = error_ids[-1]
                 st.rerun()
         with nav_c2:
+            _line_info = f", Line {sel_item_line}" if sel_item_line else ""
             if err_pos > 0:
                 st.markdown(f"""
                 <div class="vr-error-nav-bar">
                     <span class="nav-label">❌ Error {err_pos} of {err_total}  (Item #{selected_id})</span>
-                    <span class="nav-page">Page {sel_item_page}</span>
+                    <span class="nav-page">Page {sel_item_page}{_line_info}</span>
                 </div>
                 """, unsafe_allow_html=True)
             else:
                 st.markdown(f"""
                 <div class="vr-error-nav-bar">
                     <span class="nav-label">📋 Item #{selected_id}</span>
-                    <span class="nav-page">Page {sel_item_page}  •  {err_total} errors remaining</span>
+                    <span class="nav-page">Page {sel_item_page}{_line_info}  •  {err_total} errors remaining</span>
                 </div>
                 """, unsafe_allow_html=True)
         with nav_c3:
@@ -1354,8 +1565,12 @@ def render_inline_validation_review(
 
         st.markdown(f"#### 📋 Review — Item #{cid}")
 
-        st.markdown("**Expected text (from PDF):**")
-        st.code(str(selected_row.get("PyMuPDF Text", "")), language=None)
+        _tag_type = str(selected_row.get("Tag Type", "addition"))
+        _tag_badge = "🟢 Addition needed" if _tag_type == "addition" else "🔴 Deletion needed"
+        _tag_example = "`[A>...<A]`" if _tag_type == "addition" else "`[D>...<D]`"
+        st.markdown(f"**Expected text (from PDF):** &nbsp; {_tag_badge} &nbsp; {_tag_example}")
+        _expected_text = str(selected_row.get("PyMuPDF Text", ""))
+        st.code(_expected_text, language=None)
         ctx = str(selected_row.get("Context", ""))
         if ctx:
             st.markdown("**Surrounding context:**")
@@ -1383,10 +1598,10 @@ def render_inline_validation_review(
                 st.code(claude_text, language=None)
             if notes:
                 st.info(f"📝 **Notes:** {notes}")
-            if fix:
+            if fix and fix.lower() not in ("none", "n/a", ""):
                 st.warning(f"🔧 **Suggested Fix:** {fix}")
-
-            # Show before/after diff if undo history is available
+            elif not fix or fix.lower() in ("none", "n/a"):
+                st.info("🔍 **No fix suggestion available.** Please review the expected text above, then compare the PDF with the Claude output to identify the issue.")
             undo_rec = _get_undo_record(cid)
             if undo_rec and undo_rec.get("original_context") and undo_rec.get("new_text"):
                 with st.expander("👁️ Applied change (before → after)", expanded=False):
@@ -1429,8 +1644,10 @@ def render_inline_validation_review(
                 st.code(claude_text, language=None)
             if notes:
                 st.info(f"📝 **Notes:** {notes}")
-            if fix:
+            if fix and fix.lower() not in ("none", "n/a", ""):
                 st.warning(f"🔧 **Suggested Fix:** {fix}")
+            elif not fix or fix.lower() in ("none", "n/a"):
+                st.info("🔍 **No fix suggestion available.** Please review the expected text and surrounding context above, then compare the PDF with the Claude output to identify the issue.")
 
             if st.button("↩️ Undo Ignore", key=f"vri_unignore_{cid}"):
                 _unmark_ignored(cid)
@@ -1438,6 +1655,21 @@ def render_inline_validation_review(
 
         elif is_error:
             st.markdown(f"#### 🛠️ Apply Correction — Item #{cid}")
+
+            st.info("💡 Always verify the correction against the original PDF before applying. The suggested fix is a recommendation — confirm it matches the source document.")
+
+            # Extra-tag items with no page/line: warn that location is approximate
+            _cat = str(selected_row.get("Category", "")).lower()
+            _has_page = bool(selected_row.get("Page"))
+            if _cat == "extra_tag" and not _has_page:
+                st.markdown(
+                    '<p style="color:#8b0000; background:#fde8e8; padding:8px 12px; '
+                    'border-radius:6px; font-size:0.92rem; margin:4px 0;">'
+                    '🔁 The flagged issue involves a character that appears in '
+                    'multiple locations &mdash; please verify manually for '
+                    '100% accuracy.</p>',
+                    unsafe_allow_html=True
+                )
 
             claude_text = str(selected_row.get("Claude Text", "") or "")
             pymupdf_text = str(selected_row.get("PyMuPDF Text", ""))
@@ -1447,16 +1679,101 @@ def render_inline_validation_review(
             notes = str(selected_row.get("Notes", ""))
             if notes:
                 st.info(f"📝 **Auditor Notes:** {notes}")
-            if suggested_fix:
-                st.warning(f"🔧 **Suggested Fix:** {suggested_fix}")
+            if suggested_fix and suggested_fix.lower() not in ("none", "n/a", ""):
+                classification = str(selected_row.get("Category", "")).lower()
+                # Strip any existing trailing "on page N" (possibly followed by parenthetical) from GPT's fix
+                clean_fix = re.sub(r'\s+on\s+page\s+\d+(\s*\([^)]*\))?\s*$', '', suggested_fix, flags=re.IGNORECASE).strip()
+                loc_parts = []
+                page_info = selected_row.get("Page", "")
+                line_info = selected_row.get("Line", "")
+                if page_info:
+                    loc_parts.append(f"page {page_info}")
+                # Only show line number for real_miss — partial_match already has context
+                if line_info and classification == "real_miss":
+                    loc_parts.append(f"line {line_info}")
+                loc_suffix = f" on {', '.join(loc_parts)}" if loc_parts else ""
+                st.warning(f"🔧 **Suggested Fix:** {clean_fix}{loc_suffix}")
+            elif not suggested_fix or suggested_fix.lower() in ("none", "n/a"):
+                st.info("🔍 **No fix suggestion available.** Please review the expected text and surrounding context above, then compare the PDF with the Claude output to identify the issue.")
 
             tag_open = "[D>" if tag_type == "deletion" else "[A>"
             tag_close = "<D]" if tag_type == "deletion" else "<A]"
 
+            _item_page = int(selected_row.get("Page", 0) or 0)
+
             if claude_text:
-                original_context = _extract_edit_context(text, claude_text)
+                # For very short claude_text (e.g. "(c)"), use Context column
+                # to build a better search phrase with surrounding text
+                _search = claude_text
+                _hint_pos = -1
+                _pg_kw = {"target_page": _item_page, "total_pages": total_pages}
+                if len(claude_text.strip()) < 15:
+                    import re as _re
+                    _ctx = str(selected_row.get("Context", "") or "").strip()
+                    if _ctx:
+                        # Try to extract text around >>> <<< markers
+                        _mm = _re.search(r'>>>\s*(.+?)\s*<<<', _ctx)
+                        if _mm:
+                            _inner = _mm.group(1).strip()
+                            _after = _ctx[_mm.end():].replace("…", "").strip()
+                            _before = _ctx[:_mm.start()].replace("…", "").strip()
+
+                            # Use _ws_find for robust matching (handles Unicode, whitespace)
+                            # Try: before_tail + inner + after
+                            if _before and _after:
+                                _tail = _before[-40:].strip()
+                                for _alen in [len(_after), 60, 40, 30]:
+                                    _head = _after[:_alen].strip()
+                                    if not _head:
+                                        continue
+                                    for _c in [_tail + _inner + _head, _tail + " " + _inner + " " + _head]:
+                                        _h, _p = _ws_find(_c, text)
+                                        if _h:
+                                            _search, _hint_pos = _h, _p
+                                            break
+                                    if _hint_pos >= 0:
+                                        break
+
+                            # Try: inner + after
+                            if _hint_pos < 0 and _after:
+                                for _alen in [len(_after), 60, 40, 30]:
+                                    _head = _after[:_alen].strip()
+                                    if not _head:
+                                        continue
+                                    for _c in [_inner + " " + _head, _inner + _head]:
+                                        _h, _p = _ws_find(_c, text)
+                                        if _h:
+                                            _search, _hint_pos = _h, _p
+                                            break
+                                    if _hint_pos >= 0:
+                                        break
+
+                            # Try: before_tail + inner
+                            if _hint_pos < 0 and _before:
+                                _tail = _before[-40:].strip()
+                                for _c in [_tail + " " + _inner, _tail + _inner]:
+                                    _h, _p = _ws_find(_c, text)
+                                    if _h:
+                                        _search, _hint_pos = _h, _p
+                                        break
+
+                        elif len(_ctx) >= 15:
+                            _h, _p = _ws_find(_ctx, text)
+                            if _h:
+                                _search, _hint_pos = _h, _p
+
+                original_context = _extract_edit_context(text, _search,
+                    target_page=_item_page, total_pages=total_pages,
+                    hint_pos=_hint_pos)
                 prefill = original_context
                 has_extra_context = (original_context != claude_text)
+
+                # Check if the search text appears multiple times — may show wrong location
+                _search_count = text.count(_search) if len(_search.strip()) <= 5 else 0
+                if _search_count <= 1 and len(_search.strip()) <= 5:
+                    # For very short text, check if original_context appears multiple times
+                    _search_count = text.count(original_context) if original_context else 0
+
                 if has_extra_context:
                     st.caption(
                         "✏️ Surrounding context shown — you can **move tag "
@@ -1465,9 +1782,20 @@ def render_inline_validation_review(
                     )
                 else:
                     st.caption("✏️ Edit the text below. Click **Apply Fix** to save your change.")
+
+                # Warn if the same short text repeats in the PDF (e.g. commas, parentheses)
+                if len(claude_text.strip()) <= 3 and _search_count > 1:
+                    st.markdown(
+                        '<p style="color:#8b0000; background:#fde8e8; padding:8px 12px; '
+                        'border-radius:6px; font-size:0.92rem; margin:4px 0;">'
+                        '🔁 The flagged issue involves a character that appears in '
+                        'multiple locations &mdash; please verify manually for '
+                        '100% accuracy.</p>',
+                        unsafe_allow_html=True
+                    )
             else:
                 # Missing text — try multiple strategies to find anchor context
-                original_context = _find_anchor_context_multi(text, selected_row)
+                original_context = _find_anchor_context_multi(text, selected_row, total_pages=total_pages)
                 if original_context:
                     prefill = original_context
                     st.caption(
@@ -1476,85 +1804,32 @@ def render_inline_validation_review(
                         "the missing content at the correct position, then "
                         "click **Apply Fix** to save."
                     )
+                    # Warn for short repeated text in PDF
+                    if len(pymupdf_text.strip()) <= 3:
+                        st.markdown(
+                            '<p style="color:#8b0000; background:#fde8e8; padding:8px 12px; '
+                            'border-radius:6px; font-size:0.92rem; margin:4px 0;">'
+                            '🔁 The flagged issue involves a character that appears in '
+                            'multiple locations &mdash; please verify manually for '
+                            '100% accuracy.</p>',
+                            unsafe_allow_html=True
+                        )
                 else:
                     prefill = ""
-                    st.caption(
-                        "⚠️ This text is **missing** from the Claude output. "
-                        "It was found by PyMuPDF but not included in the conversion. "
-                        "Use the **search box** below the edit area to locate nearby "
-                        "text and apply the fix, or **Mark as Fixed** / **Ignore**."
+                    # No anchor found — don't show text box, just show info + buttons
+                    _no_anchor = True
+
+            if not locals().get('_no_anchor', False):
+                fc1, fc2 = st.columns([3, 1])
+                with fc1:
+                    new_text = st.text_area(
+                        "Edit text", value=prefill, height=200,
+                        key=f"vri_edit_{cid}", label_visibility="collapsed",
                     )
-
-            fc1, fc2 = st.columns([3, 1])
-            with fc1:
-                new_text = st.text_area(
-                    "Edit text", value=prefill, height=200,
-                    key=f"vri_edit_{cid}", label_visibility="collapsed",
-                )
-            with fc2:
-                st.markdown("")
-                st.markdown("")
-                if claude_text:
-                    pending_key = f"vri_pending_apply_{cid}"
-                    is_pending = st.session_state.get(pending_key, False)
-
-                    if not is_pending:
-                        if st.button("✅ Apply Fix", type="primary", key=f"vri_apply_{cid}"):
-                            if new_text.strip() and new_text != original_context:
-                                st.session_state[pending_key] = True
-                                st.rerun()
-                            elif new_text == original_context:
-                                st.warning("No changes made.")
-                        if st.button("🔇 Ignore", key=f"vri_ignore_nochange_{cid}",
-                                     help="Mark this item as a false positive — no edit needed"):
-                            _mark_ignored(cid)
-                            st.rerun()
-                    else:
-                        affected_preview = _find_affected_items(
-                            checklist, fixed_ids,
-                            original_context, new_text, cid,
-                        )
-                        st.info(
-                            f"⚡ **{len(affected_preview)} item(s)** will be "
-                            f"marked fixed: {', '.join(f'#{a}' for a in affected_preview)}"
-                        )
-                        cc1, cc2 = st.columns(2)
-                        with cc1:
-                            if st.button("✅ Confirm", type="primary", key=f"vri_confirm_{cid}"):
-                                updated = text.replace(original_context, new_text, 1)
-                                if updated != text:
-                                    converted_txt_path.write_text(updated, encoding="utf-8")
-                                    affected = _find_affected_items(
-                                        checklist, fixed_ids,
-                                        original_context, new_text, cid,
-                                    )
-                                    for aid in affected:
-                                        _mark_fixed(aid)
-                                    _save_undo_history(
-                                        affected, original_context,
-                                        new_text,
-                                        str(converted_txt_path),
-                                    )
-                                    st.session_state.pop(pending_key, None)
-                                    if len(affected) > 1:
-                                        st.success(
-                                            f"✅ Saved! **{len(affected)} items** "
-                                            f"marked fixed: {', '.join(f'#{a}' for a in affected)}"
-                                        )
-                                    else:
-                                        st.success("✅ Saved & updated!")
-                                    st.rerun()
-                                else:
-                                    st.error("Text not found in file.")
-                                    st.session_state.pop(pending_key, None)
-                        with cc2:
-                            if st.button("❌ Cancel", key=f"vri_cancel_{cid}"):
-                                st.session_state.pop(pending_key, None)
-                                st.rerun()
-                else:
-                    # Missing text — use the same Apply Fix → Confirm flow
-                    # when we have an anchor context to locate the insertion point
-                    if original_context:
+                with fc2:
+                    st.markdown("")
+                    st.markdown("")
+                    if claude_text:
                         pending_key = f"vri_pending_apply_{cid}"
                         is_pending = st.session_state.get(pending_key, False)
 
@@ -1564,15 +1839,20 @@ def render_inline_validation_review(
                                     st.session_state[pending_key] = True
                                     st.rerun()
                                 elif new_text == original_context:
-                                    st.warning("No changes made — edit the text to include the missing content.")
-                            if st.button("🔇 Ignore", key=f"vri_ignore_missing_{cid}",
-                                         help="Mark this as a false positive — no action needed"):
+                                    st.warning("No changes made.")
+                            if st.button("🔇 Ignore", key=f"vri_ignore_nochange_{cid}",
+                                         help="Mark this item as a false positive — no edit needed"):
                                 _mark_ignored(cid)
                                 st.rerun()
                         else:
+                            affected_preview = _find_affected_items(
+                                checklist, fixed_ids,
+                                original_context, new_text, cid,
+                                current_page=_item_page,
+                            )
                             st.info(
-                                f"⚡ **1 item** will be inserted & "
-                                f"marked fixed: #{cid}"
+                                f"⚡ **{len(affected_preview)} item(s)** will be "
+                                f"marked fixed: {', '.join(f'#{a}' for a in affected_preview)}"
                             )
                             cc1, cc2 = st.columns(2)
                             with cc1:
@@ -1580,128 +1860,126 @@ def render_inline_validation_review(
                                     updated = text.replace(original_context, new_text, 1)
                                     if updated != text:
                                         converted_txt_path.write_text(updated, encoding="utf-8")
-                                        _mark_fixed(cid)
+                                        affected = _find_affected_items(
+                                            checklist, fixed_ids,
+                                            original_context, new_text, cid,
+                                            current_page=_item_page,
+                                        )
+                                        for aid in affected:
+                                            _mark_fixed(aid)
                                         _save_undo_history(
-                                            [cid], original_context,
+                                            affected, original_context,
                                             new_text,
                                             str(converted_txt_path),
                                         )
                                         st.session_state.pop(pending_key, None)
-                                        st.success(f"✅ Saved! Item #{cid} inserted & marked fixed!")
+                                        if len(affected) > 1:
+                                            st.success(
+                                                f"✅ Saved! **{len(affected)} items** "
+                                                f"marked fixed: {', '.join(f'#{a}' for a in affected)}"
+                                            )
+                                        else:
+                                            st.success("✅ Saved & updated!")
+                                        # Auto-advance to next unfixed error
+                                        _next_errors = _get_error_ids(checklist,
+                                                                      _get_fixed_ids(),
+                                                                      _get_ignored_ids())
+                                        if _next_errors:
+                                            st.session_state.vri_selected_item = _next_errors[0]
                                         st.rerun()
                                     else:
-                                        st.error("Anchor context not found in file — text may have changed.")
+                                        st.error("Text not found in file.")
                                         st.session_state.pop(pending_key, None)
                             with cc2:
                                 if st.button("❌ Cancel", key=f"vri_cancel_{cid}"):
                                     st.session_state.pop(pending_key, None)
                                     st.rerun()
                     else:
-                        # No automatic anchor — let the user search for nearby text
-                        st.caption(
-                            "⚠️ No automatic anchor found in the file. "
-                            "**Search** for nearby text below to locate where the fix should go, "
-                            "then click **Apply Fix**. Or use **Mark as Fixed** / **Ignore**."
-                        )
-                        search_term = st.text_input(
-                            "🔍 Search for nearby text in the file",
-                            key=f"vri_search_{cid}",
-                            placeholder="Type text that appears near where the fix should be inserted…",
-                        )
-                        _search_anchor = ""
-                        if search_term and search_term.strip() in text:
-                            _search_anchor = _extract_edit_context(text, search_term.strip())
-                        elif search_term:
-                            st.error("❌ Text not found in the file. Try a different search term.")
+                        # Missing text — use the same Apply Fix → Confirm flow
+                        if original_context:
+                            pending_key = f"vri_pending_apply_{cid}"
+                            is_pending = st.session_state.get(pending_key, False)
 
-                        if _search_anchor:
-                            # User found an anchor — show Apply Fix flow
-                            st.success("✅ Found! Edit the text below to add the missing content, then click **Apply Fix**.")
-                            search_prefill = _search_anchor
-                            search_new_text = st.text_area(
-                                "Edit text", value=search_prefill, height=200,
-                                key=f"vri_search_edit_{cid}", label_visibility="collapsed",
-                            )
-                            s_pending_key = f"vri_pending_search_apply_{cid}"
-                            s_is_pending = st.session_state.get(s_pending_key, False)
-
-                            sc1, sc2 = st.columns([1, 1])
-                            if not s_is_pending:
-                                with sc1:
-                                    if st.button("✅ Apply Fix", type="primary", key=f"vri_search_apply_{cid}"):
-                                        if search_new_text.strip() and search_new_text != _search_anchor:
-                                            st.session_state[s_pending_key] = True
-                                            st.rerun()
-                                        elif search_new_text == _search_anchor:
-                                            st.warning("No changes made — edit the text to include the missing content.")
-                                with sc2:
-                                    if st.button("🔇 Ignore", key=f"vri_ignore_search_{cid}",
-                                                 help="Mark as false positive"):
-                                        _mark_ignored(cid)
+                            if not is_pending:
+                                if st.button("✅ Apply Fix", type="primary", key=f"vri_apply_{cid}"):
+                                    if new_text.strip() and new_text != original_context:
+                                        st.session_state[pending_key] = True
                                         st.rerun()
+                                    elif new_text == original_context:
+                                        st.warning("No changes made — edit the text to include the missing content.")
+                                if st.button("🔇 Ignore", key=f"vri_ignore_missing_{cid}",
+                                             help="Mark this as a false positive — no action needed"):
+                                    _mark_ignored(cid)
+                                    st.rerun()
                             else:
-                                st.info(f"⚡ **1 item** will be inserted & marked fixed: #{cid}")
-                                sc_c1, sc_c2 = st.columns(2)
-                                with sc_c1:
-                                    if st.button("✅ Confirm", type="primary", key=f"vri_search_confirm_{cid}"):
-                                        updated = text.replace(_search_anchor, search_new_text, 1)
+                                st.info(
+                                    f"⚡ **1 item** will be inserted & "
+                                    f"marked fixed: #{cid}"
+                                )
+                                cc1, cc2 = st.columns(2)
+                                with cc1:
+                                    if st.button("✅ Confirm", type="primary", key=f"vri_confirm_{cid}"):
+                                        updated = text.replace(original_context, new_text, 1)
                                         if updated != text:
                                             converted_txt_path.write_text(updated, encoding="utf-8")
                                             _mark_fixed(cid)
                                             _save_undo_history(
-                                                [cid], _search_anchor,
-                                                search_new_text,
+                                                [cid], original_context,
+                                                new_text,
                                                 str(converted_txt_path),
                                             )
-                                            st.session_state.pop(s_pending_key, None)
+                                            st.session_state.pop(pending_key, None)
                                             st.success(f"✅ Saved! Item #{cid} inserted & marked fixed!")
+                                            _next_errors = _get_error_ids(checklist,
+                                                                          _get_fixed_ids(),
+                                                                          _get_ignored_ids())
+                                            if _next_errors:
+                                                st.session_state.vri_selected_item = _next_errors[0]
                                             st.rerun()
                                         else:
-                                            st.error("Anchor context not found — text may have changed.")
-                                            st.session_state.pop(s_pending_key, None)
-                                with sc_c2:
-                                    if st.button("❌ Cancel", key=f"vri_search_cancel_{cid}"):
-                                        st.session_state.pop(s_pending_key, None)
+                                            st.error("Anchor context not found in file — text may have changed.")
+                                            st.session_state.pop(pending_key, None)
+                                with cc2:
+                                    if st.button("❌ Cancel", key=f"vri_cancel_{cid}"):
+                                        st.session_state.pop(pending_key, None)
                                         st.rerun()
 
-                            # Preview diff
-                            if _search_anchor and search_new_text != _search_anchor:
-                                with st.expander("👁️ Preview change", expanded=True):
-                                    sp1, sp2 = st.columns(2)
-                                    with sp1:
-                                        st.markdown("**Before:**")
-                                        st.code(_search_anchor, language=None)
-                                    with sp2:
-                                        st.markdown("**After:**")
-                                        st.code(search_new_text, language=None)
-                        else:
-                            # Fallback — Mark as Fixed / Ignore (no file edit)
-                            fb1, fb2 = st.columns([1, 1])
-                            with fb1:
-                                if st.button("✅ Mark as Fixed", type="primary", key=f"vri_copy_{cid}",
-                                             help="Mark this item as manually resolved"):
-                                    _mark_fixed(cid)
-                                    _save_undo_history([cid], "", "", str(converted_txt_path))
-                                    st.success(f"✅ Item #{cid} marked as fixed!")
-                                    st.rerun()
-                            with fb2:
-                                if st.button("🔇 Ignore", key=f"vri_ignore_missing_{cid}",
-                                             help="Mark as false positive — no action needed"):
-                                    _mark_ignored(cid)
-                                    st.rerun()
-
-            # Preview diff — show only after user clicks Apply Fix (pending confirmation)
-            if original_context and new_text != original_context:
-                _any_pending = st.session_state.get(f"vri_pending_apply_{cid}", False)
-                if _any_pending:
-                    with st.expander("👁️ Preview change", expanded=True):
-                        p1, p2 = st.columns(2)
-                        with p1:
-                            st.markdown("**Before:**")
-                            st.code(original_context, language=None)
-                        with p2:
-                            st.markdown("**After:**")
-                            st.code(new_text, language=None)
+                # Preview diff
+                if original_context and new_text != original_context:
+                    _any_pending = st.session_state.get(f"vri_pending_apply_{cid}", False)
+                    if _any_pending:
+                        with st.expander("👁️ Preview change", expanded=True):
+                            p1, p2 = st.columns(2)
+                            with p1:
+                                st.markdown("**Before:**")
+                                st.code(original_context, language=None)
+                            with p2:
+                                st.markdown("**After:**")
+                                st.code(new_text, language=None)
+            else:
+                # No anchor — show info message and Mark as Fixed / Ignore only
+                st.info(
+                    "📌 **Text not found** due to the internal structure of the PDF. "
+                    "This item needs to be handled manually once all other errors and "
+                    "warnings are **Fixed / Ignored**."
+                )
+                _defer_c1, _defer_c2 = st.columns([1, 1])
+                with _defer_c1:
+                    if st.button("✅ Mark as Fixed", type="primary", key=f"vri_copy_na_{cid}",
+                                 help="Mark this item as manually resolved"):
+                        _mark_fixed(cid)
+                        _save_undo_history([cid], "", "", str(converted_txt_path))
+                        _next_errors = _get_error_ids(checklist,
+                                                      _get_fixed_ids(),
+                                                      _get_ignored_ids())
+                        if _next_errors:
+                            st.session_state.vri_selected_item = _next_errors[0]
+                        st.rerun()
+                with _defer_c2:
+                    if st.button("🔇 Ignore", key=f"vri_ignore_na_{cid}",
+                                 help="Mark as false positive — no action needed"):
+                        _mark_ignored(cid)
+                        st.rerun()
         else:
             # ── Warning / pass items ────────────────────────────────
             is_warning = str(selected_row.get("Verdict", "")).startswith("⚠")
@@ -1713,7 +1991,7 @@ def render_inline_validation_review(
             fix = str(selected_row.get("Suggested Fix", ""))
             if notes:
                 st.info(f"📝 **Notes:** {notes}")
-            if fix:
+            if fix and fix.lower() not in ("none", "n/a", ""):
                 st.warning(f"🔧 **Suggested Fix:** {fix}")
 
             # Ignore / Undo-Ignore for warnings
@@ -1742,7 +2020,7 @@ def render_inline_validation_review(
         st.info("No items match the current filter.")
     else:
         tbl = '<table class="vr-cl-table"><thead><tr>'
-        for c in ["#", "Status", "Page", "Tag Type", "Expected Text (PDF)",
+        for c in ["#", "Status", "Page", "Line", "Tag Type", "Expected Text (PDF)",
                    "Found?", "Output Text", "Category", "Notes"]:
             tbl += f"<th>{c}</th>"
         tbl += "</tr></thead><tbody>"
@@ -1766,15 +2044,23 @@ def render_inline_validation_review(
                 rc += " row-selected"
 
             tbl += f'<tr class="{rc}" data-cid="{cid_int}">'
+            _pymupdf_full = _html_escape(str(row.get("PyMuPDF Text", "")))
+            _pymupdf_disp = _html_escape(_trunc(row.get("PyMuPDF Text", "")))
+            _claude_full = _html_escape(str(row.get("Claude Text", "")))
+            _claude_disp = _html_escape(_trunc(row.get("Claude Text", "")))
+            _notes_full = _html_escape(str(row.get("Notes", "")))
+            _notes_disp = _html_escape(_trunc(row.get("Notes", ""), 100))
+
             tbl += f'<td><strong>{cid_int}</strong></td>'
             tbl += f'<td><span class="vr-badge {bc}">{_html_escape(verd)}</span></td>'
             tbl += f'<td>{row.get("Page", "")}</td>'
+            tbl += f'<td>{row.get("Line", "") or ""}</td>'
             tbl += f'<td>{_html_escape(str(row.get("Tag Type", "")))}</td>'
-            tbl += f'<td>{_html_escape(_trunc(row.get("PyMuPDF Text", "")))}</td>'
+            tbl += f'<td title="{_pymupdf_full}">{_pymupdf_disp}</td>'
             tbl += f'<td>{_html_escape(str(row.get("In Claude?", "")))}</td>'
-            tbl += f'<td>{_html_escape(_trunc(row.get("Claude Text", "")))}</td>'
+            tbl += f'<td title="{_claude_full}">{_claude_disp}</td>'
             tbl += f'<td>{_html_escape(str(row.get("Classification", "")))}</td>'
-            tbl += f'<td>{_html_escape(_trunc(row.get("Notes", ""), 100))}</td>'
+            tbl += f'<td title="{_notes_full}">{_notes_disp}</td>'
             tbl += "</tr>"
 
         tbl += "</tbody></table>"

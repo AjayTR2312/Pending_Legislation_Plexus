@@ -1360,7 +1360,11 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
         update_progress()
         add_log(f"✅ Visual conversion complete: {len(converted_text)} characters")
 
-        # ── Step 4b: Post-process — strip tags from protected clauses ────────────
+        # ── Step 4b: Deterministic cleanup of common Claude inconsistencies ─────
+        converted_text = opus.deterministic_cleanup(converted_text, state_config=state_config)
+        add_log("🔧 Deterministic cleanup complete (markdown→tags, malformed tags, etc.)")
+
+        # ── Step 4c: Post-process — strip tags from protected clauses ────────────
         if state_config:
             converted_text = opus.post_process_output(converted_text, state_config)
             add_log("🔧 Post-processing: stripped tags from protected clauses (if any)")
@@ -1415,7 +1419,9 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
 
         # Reset validation review fixed/ignored state from any previous run
         for _vri_key in ("vri_fixed_ids", "vri_ignored_ids", "vri_undo_history",
-                         "vri_selected_item", "vri_current_page", "vri_filter_mode"):
+                         "vri_selected_item", "vri_current_page", "vri_filter_mode",
+                         "vri_last_sel", "vri_edit_mode", "vri_file_key",
+                         "vri_per_file_state"):
             st.session_state.pop(_vri_key, None)
 
         try:
@@ -1496,6 +1502,9 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
                     anthropic_client=client,
                 )
                 pymupdf_clean_text = consolidate_adjacent_tags(pymupdf_clean_text)
+                pymupdf_clean_text = opus.remove_nested_tags(pymupdf_clean_text)
+                pymupdf_clean_text = opus.merge_split_tags(pymupdf_clean_text)
+                pymupdf_clean_text = opus.split_tagged_subsections(pymupdf_clean_text)
 
                 # ── Post-process: strip tags from state-specific protected clauses ──
                 if strip_protected_tags and detected_state:
@@ -1508,7 +1517,29 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
                 with open(pymupdf_clean_path, "w", encoding="utf-8") as cf:
                     cf.write(pymupdf_clean_text)
                 add_log(f"✅ Clean text saved: {len(pymupdf_text):,} → {len(pymupdf_clean_text):,} chars")
+
+                # Rebuild report context using cleaned text for better anchor matching
+                if pymupdf_report:
+                    try:
+                        from pymupdf_extractor import rebuild_report_context
+                        pymupdf_report = rebuild_report_context(pymupdf_report, pymupdf_clean_text)
+                        # Re-save the updated report
+                        with open(pymupdf_json_path, "w", encoding="utf-8") as jf:
+                            _json.dump(pymupdf_report, jf, indent=2, ensure_ascii=False)
+                        add_log("🔄 Report context rebuilt from cleaned text")
+                        st.session_state.audit_json_report = pymupdf_report
+                    except Exception as _ctx_err:
+                        logging.warning(f"Context rebuild failed (non-critical): {_ctx_err}")
+
                 st.session_state.step_status[6] = "✅"
+
+                # Restore special symbols dropped by Claude vision
+                converted_before = converted_text
+                converted_text = opus.restore_special_symbols(converted_text, pymupdf_clean_text)
+                if converted_text != converted_before:
+                    add_log("🔧 Restored special symbols (§ etc.) from PyMuPDF reference")
+                    with open(output_path, "w", encoding="utf-8") as f:
+                        f.write(converted_text)
             except Exception as clean_err:
                 add_log(f"⚠️ LLM clean failed: {clean_err}", "warning")
                 logging.error(f"LLM clean error: {clean_err}", exc_info=True)
@@ -1581,6 +1612,9 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
                     sr_parts.append(f"Strikethrough={d_cfg.get('strike_out', False)}")
                     sr_parts.append(f"Italic={a_cfg.get('italic', False)}")
                     sr_parts.append(f"Bold={a_cfg.get('bold', False)}")
+                    # Add strikethrough priority rule when both add and delete formats are active
+                    if d_cfg.get('strike_out', False) and (a_cfg.get('underline', False) or a_cfg.get('italic', False) or a_cfg.get('bold', False)):
+                        sr_parts.append("PRIORITY: If text has strikethrough AND any other formatting (underline/italic/bold), strikethrough ALWAYS wins → tag as [D>...<D] only, NEVER [A>...<A]")
                 state_rules_str = ", ".join(sr_parts) if sr_parts else f"State: {detected_state or 'unknown'}"
 
                 gpt_xlsx = output_path.replace(".txt", "_gpt_comparison.xlsx") if isinstance(output_path, str) else str(output_path).replace(".txt", "_gpt_comparison.xlsx")
@@ -1948,8 +1982,11 @@ def show_simple_ui():
             st.session_state.batch_worker = None
             
             # Reset validation review state (fixed/ignored/undo/selection)
-            st.session_state.pop("vri_fixed_ids", None)
-            st.session_state.pop("vri_ignored_ids", None)
+            for _vri_key in ("vri_fixed_ids", "vri_ignored_ids", "vri_undo_history",
+                             "vri_selected_item", "vri_current_page", "vri_filter_mode",
+                             "vri_last_sel", "vri_edit_mode", "vri_file_key",
+                             "vri_per_file_state"):
+                st.session_state.pop(_vri_key, None)
             st.session_state.pop("vri_undo_history", None)
             st.session_state.pop("vri_selected_item", None)
             st.session_state.pop("vri_current_page", None)
@@ -2154,7 +2191,9 @@ def show_simple_ui():
             st.session_state.content_accuracy_report = None
             st.session_state.gpt_audit_failed = False
             for _vri_key in ("vri_fixed_ids", "vri_ignored_ids", "vri_undo_history",
-                             "vri_selected_item", "vri_current_page", "vri_filter_mode"):
+                             "vri_selected_item", "vri_current_page", "vri_filter_mode",
+                             "vri_last_sel", "vri_edit_mode", "vri_file_key",
+                             "vri_per_file_state"):
                 st.session_state.pop(_vri_key, None)
 
         if is_batch:
@@ -2277,8 +2316,11 @@ def show_simple_ui():
                     st.session_state.gpt_audit_failed = False
 
                     # Reset validation review state (fixed/ignored from previous file)
-                    st.session_state.pop("vri_fixed_ids", None)
-                    st.session_state.pop("vri_ignored_ids", None)
+                    for _vri_key in ("vri_fixed_ids", "vri_ignored_ids", "vri_undo_history",
+                                     "vri_selected_item", "vri_current_page", "vri_filter_mode",
+                                     "vri_last_sel", "vri_edit_mode", "vri_file_key",
+                                     "vri_per_file_state"):
+                        st.session_state.pop(_vri_key, None)
                     st.session_state.pop("vri_undo_history", None)
                     st.session_state.pop("vri_selected_item", None)
                     st.session_state.pop("vri_current_page", None)
@@ -2817,27 +2859,13 @@ def show_results_section():
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _swap_batch_vri_state(from_idx: int | None, to_idx: int | None):
-    """Save current vri_ keys under from_idx, load from to_idx."""
-    _vri_keys = (
-        "vri_fixed_ids", "vri_ignored_ids", "vri_undo_history",
-        "vri_selected_item", "vri_current_page", "vri_last_sel",
-        "vri_edit_mode", "vri_filter_mode",
-    )
+    """Clear stale vri_ widget keys when switching batch files.
 
-    # Save current state under from_idx
-    if from_idx is not None:
-        for k in _vri_keys:
-            st.session_state[f"{k}__batch_{from_idx}"] = st.session_state.pop(k, None)
-
-    # Load state for to_idx
-    if to_idx is not None:
-        for k in _vri_keys:
-            stored = st.session_state.pop(f"{k}__batch_{to_idx}", None)
-            if stored is not None:
-                st.session_state[k] = stored
-            else:
-                st.session_state.pop(k, None)
-
+    The actual per-file state (fixed_ids, ignored_ids, etc.) is saved and
+    restored inside ``render_inline_validation_review`` using the file path
+    as key.  This helper only needs to clear widget keys so stale buttons/
+    radio values don't leak between files.
+    """
     # Clear ALL vri_ widget keys so no stale values leak between files.
     _stale_prefixes = (
         "vri_edit_", "vri_pending_apply_", "vri_apply_",
@@ -2859,9 +2887,6 @@ def _swap_batch_vri_state(from_idx: int | None, to_idx: int | None):
                   or k in _static_widget_keys]
     for k in stale_keys:
         del st.session_state[k]
-
-    # Explicitly reset filter radio to "all"
-    st.session_state["vri_filter_mode"] = "all"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -3082,7 +3107,12 @@ class BatchWorker:
             raise RuntimeError("Visual conversion returned empty text")
         add_log(f"✅ Visual conversion complete: {len(converted_text):,} characters")
 
-        # Step 4b: Strip protected clauses
+        # Step 4b: Deterministic cleanup + Strip protected clauses
+        try:
+            converted_text = opus.deterministic_cleanup(converted_text, state_config=state_config)
+            add_log("🔧 Deterministic cleanup complete (markdown→tags, malformed tags, etc.)")
+        except Exception:
+            pass
         if state_config:
             # First: deterministic post-process from netscan_state_template (no_tag_clauses)
             try:
@@ -3195,6 +3225,9 @@ class BatchWorker:
                     anthropic_client=client,
                 )
                 pymupdf_clean_text = consolidate_adjacent_tags(pymupdf_clean_text)
+                pymupdf_clean_text = opus.remove_nested_tags(pymupdf_clean_text)
+                pymupdf_clean_text = opus.merge_split_tags(pymupdf_clean_text)
+                pymupdf_clean_text = opus.split_tagged_subsections(pymupdf_clean_text)
 
                 # Strip tags from protected clauses
                 try:
@@ -3208,6 +3241,26 @@ class BatchWorker:
                 with open(pymupdf_clean_path, "w", encoding="utf-8") as cf:
                     cf.write(pymupdf_clean_text)
                 add_log(f"✅ Clean text saved: {len(pymupdf_text):,} → {len(pymupdf_clean_text):,} chars")
+
+                # Rebuild report context using cleaned text for better anchor matching
+                if pymupdf_report:
+                    try:
+                        from pymupdf_extractor import rebuild_report_context
+                        pymupdf_report = rebuild_report_context(pymupdf_report, pymupdf_clean_text)
+                        with open(pymupdf_json_path, "w", encoding="utf-8") as jf:
+                            _json.dump(pymupdf_report, jf, indent=2, ensure_ascii=False)
+                        add_log("🔄 Report context rebuilt from cleaned text")
+                        audit_json_report = pymupdf_report
+                    except Exception as _ctx_err:
+                        logging.warning(f"Context rebuild failed (non-critical): {_ctx_err}")
+
+                # Restore special symbols dropped by Claude vision
+                converted_before = converted_text
+                converted_text = opus.restore_special_symbols(converted_text, pymupdf_clean_text)
+                if converted_text != converted_before:
+                    add_log("🔧 Restored special symbols (§ etc.) from PyMuPDF reference")
+                    with open(output_path, "w", encoding="utf-8") as f:
+                        f.write(converted_text)
             except Exception as e:
                 add_log(f"⚠️ LLM clean error: {e}", "warning")
                 pymupdf_clean_text = pymupdf_text
@@ -3257,6 +3310,9 @@ class BatchWorker:
                     sr_parts.append(f"Strikethrough={d_cfg.get('strike_out', False)}")
                     sr_parts.append(f"Italic={a_cfg.get('italic', False)}")
                     sr_parts.append(f"Bold={a_cfg.get('bold', False)}")
+                    # Add strikethrough priority rule when both add and delete formats are active
+                    if d_cfg.get('strike_out', False) and (a_cfg.get('underline', False) or a_cfg.get('italic', False) or a_cfg.get('bold', False)):
+                        sr_parts.append("PRIORITY: If text has strikethrough AND any other formatting (underline/italic/bold), strikethrough ALWAYS wins → tag as [D>...<D] only, NEVER [A>...<A]")
                 state_rules_str = ", ".join(sr_parts) if sr_parts else f"State: {detected_state or 'unknown'}"
 
                 gpt_xlsx = output_path.replace(".txt", "_gpt_comparison.xlsx")
