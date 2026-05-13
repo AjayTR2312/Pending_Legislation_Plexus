@@ -1189,36 +1189,6 @@ def gpt_compare_tags(
         log.info("🔗 Auto-linked %d fragment item(s) to their parent items (no separate fix needed)",
                  n_linked)
 
-    # ── Auto-classify header/title items (bill_line is null) ────────
-    # Spans with bill_line=null are in the header/title/footer area of the
-    # PDF, not in the legislative body.  If GPT flagged them as errors,
-    # downgrade to warnings — they are title formatting, not legislative content.
-    _bill_line_lookup = {ci["id"]: ci.get("bill_line") for ci in checklist_items}
-    n_header_auto = 0
-    for cr in checklist_results:
-        if not cr.get("verdict", "").startswith("❌"):
-            continue
-        cls = cr.get("classification", "")
-        if cls == "extra_tag":
-            continue  # extra tags are real errors — Claude added something not in PDF
-        cid = cr.get("checklist_id", 0)
-        if cid not in _bill_line_lookup:
-            continue  # no matching checklist item (e.g. extra_tag) — skip
-        bl = _bill_line_lookup[cid]
-        if bl is None:  # bill_line is null → header/title area
-            cr["classification"] = "header"
-            cr["verdict"] = "⚠️ warning"
-            cr["in_claude"] = "n/a"
-            cr["suggested_fix"] = "No fix needed — bill title/header formatting, not legislative content"
-            cr["notes"] = (
-                f"Auto-classified as header: bill_line is null "
-                f"(not in legislative body). {cr.get('notes', '')}"
-            ).strip()
-            n_header_auto += 1
-    if n_header_auto:
-        log.info("🏷️ Auto-classified %d item(s) as header warnings (bill_line=null)",
-                 n_header_auto)
-
     # ── Compute counts ──────────────────────────────────────────────
     n_pass = sum(1 for r in checklist_results if r.get("verdict", "").startswith("✅"))
     n_warn = sum(1 for r in checklist_results if r.get("verdict", "").startswith("⚠️"))
