@@ -1626,6 +1626,7 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
                     state_rules=state_rules_str,
                     output_xlsx=gpt_xlsx,
                     pymupdf_report=pymupdf_report,
+                    pymupdf_raw_text=pymupdf_text,
                 )
 
                 st.session_state.audit_excel_path = gpt_xlsx
@@ -3324,6 +3325,7 @@ class BatchWorker:
                     state_rules=state_rules_str,
                     output_xlsx=gpt_xlsx,
                     pymupdf_report=pymupdf_report,
+                    pymupdf_raw_text=pymupdf_text,
                 )
 
                 audit_excel_path = gpt_xlsx

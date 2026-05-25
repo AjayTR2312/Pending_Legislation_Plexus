@@ -349,6 +349,7 @@ Respond with ONLY the 2-letter state code (e.g., "KS", "FL", "CO"). If you canno
         message = client.messages.create(
             model="claude-opus-4-6",
             max_tokens=100,
+            temperature=0,
             messages=[{
                 "role": "user",
                 "content": [
@@ -843,6 +844,7 @@ def convert_pdf_to_text(client, pdf_path, prompt, batch_size=None, dpi=400):
                 with client.messages.stream(
                     model="claude-opus-4-6",
                     max_tokens=128000,
+                    temperature=0,
                     messages=messages
                 ) as stream:
                     for text in stream.text_stream:
@@ -925,6 +927,7 @@ def convert_pdf_document_mode(client, pdf_path, prompt):
         with client.messages.stream(
             model="claude-opus-4-6",
             max_tokens=128000,
+            temperature=0,
             messages=messages
         ) as stream:
             for text in stream.text_stream:
@@ -983,6 +986,7 @@ def reconcile_outputs(client, visual_text, doc_text):
         with client.messages.stream(
             model="claude-opus-4-6",
             max_tokens=128000,
+            temperature=0,
             messages=messages
         ) as stream:
             for text in stream.text_stream:
@@ -1085,6 +1089,7 @@ def self_correction_pass(client, converted_text, page_images, state_config=None)
         with client.messages.stream(
             model="claude-opus-4-6",
             max_tokens=128000,
+            temperature=0,
             messages=[{"role": "user", "content": content}]
         ) as stream:
             for text in stream.text_stream:
@@ -1315,14 +1320,17 @@ def deterministic_cleanup(text, state_config=None):
     text = re.sub(r'\s+<D\]', '<D]', text)
 
     # ── Fix 7: Merge adjacent same-type tags ──────────────────────
-    # [A>text1<A] [A>text2<A] → [A>text1 text2<A]  (if only whitespace between)
-    merge_a = len(re.findall(r'<A\]\s*\[A>', text))
-    merge_d = len(re.findall(r'<D\]\s*\[D>', text))
+    # [A>text1<A] [A>text2<A] → [A>text1 text2<A]  (if only spaces/tabs between, NOT newlines)
+    # Using [^\S\n]* instead of \s* to avoid merging tags across lines,
+    # which would incorrectly merge separate underlined spans separated by
+    # plain-text content like subsection labels.
+    merge_a = len(re.findall(r'<A\][^\S\n]*\[A>', text))
+    merge_d = len(re.findall(r'<D\][^\S\n]*\[D>', text))
     if merge_a > 0:
-        text = re.sub(r'<A\]\s*\[A>', ' ', text)
+        text = re.sub(r'<A\][^\S\n]*\[A>', ' ', text)
         fix_log.append(f"Merged {merge_a} adjacent [A>...<A] tag pairs")
     if merge_d > 0:
-        text = re.sub(r'<D\]\s*\[D>', ' ', text)
+        text = re.sub(r'<D\][^\S\n]*\[D>', ' ', text)
         fix_log.append(f"Merged {merge_d} adjacent [D>...<D] tag pairs")
 
     # ── Fix 8: Fix orphaned/mismatched tags ───────────────────────
@@ -1497,16 +1505,19 @@ def split_tagged_subsections(text):
     subsection_re = re.compile(
         r'(?:(?<=[.:;])|(?<=\band\b)|(?<=\bor\b))\s+'
         r'('
-        r'\(\d+\)|\([A-Z]+\)|\([a-z]+\)'       # parenthesized: (1), (A), (a), (ii), (iii), (AA)
-        r'|[a-z]\.\d*\.?'                        # letter-dot: b. c.1.
-        r'|\d+\.'                                # number-dot: 1. 2. 3.
+        r'\(\d+\)[a-z]\.\d*\.?'                  # composite: (3)a. (1)b.1.
+        r'|\(\d+\)|\([A-Z]+\)|\([a-z]+\)'        # parenthesized: (1), (A), (a), (ii), (iii), (AA)
+        r'|[a-z]\.\d*\.?'                         # letter-dot: b. c.1.
+        r'|\d+\.'                                 # number-dot: 1. 2. 3.
         r')(?:\s|$)'                              # trailing space OR end of content
         , re.IGNORECASE
     )
 
     # Patterns that should NOT be split (e.g., "Sec. 2." or "Section 1.")
+    # Avoid matching "this section." or "under section." — require Sec/Section
+    # to appear at start of text or after a newline (i.e., as a heading prefix)
     _nosplit_re = re.compile(
-        r'(?:Sec|Section|Art|Article)\.\s*$', re.IGNORECASE
+        r'(?:^|\n)\s*(?:Sec|Section|Art|Article)\.\s*$', re.IGNORECASE
     )
 
     def _split_block(match):
