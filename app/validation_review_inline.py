@@ -499,9 +499,9 @@ def _find_affected_items(checklist: list[dict], fixed_ids: set[int],
         ct = str(row.get("Claude Text", "") or "").strip()
         if not ct or len(ct) < 10:
             continue  # skip very short text — too many false positives
-        # Only consider items on the same or adjacent page
+        # Only consider items on the same page
         item_page = int(row.get("Page", 0) or 0)
-        if current_page > 0 and item_page > 0 and abs(item_page - current_page) > 1:
+        if current_page > 0 and item_page > 0 and item_page != current_page:
             continue
         if ct in original_context:
             if ct not in new_text:
@@ -813,11 +813,12 @@ def _render_accuracy_expander(accuracy_report: dict | None,
     n_repos = accuracy_report["repositioned_count"]
     n_trans = accuracy_report.get("transposed_count", 0)
     n_punct = accuracy_report.get("punctuation_count", 0)
+    n_spacing = accuracy_report.get("spacing_count", 0)
     n_word  = accuracy_report.get("word_diff_count", n_diffs)
     status = accuracy_report["status"]
 
     # If identical, no expander needed
-    if status == "IDENTICAL" and n_diffs == 0 and n_repos == 0:
+    if status == "IDENTICAL" and n_diffs == 0 and n_repos == 0 and n_spacing == 0:
         return
 
     # Build breakdown chips for the label
@@ -825,6 +826,7 @@ def _render_accuracy_expander(accuracy_report: dict | None,
     if n_word:  _chips.append(f"{n_word} word")
     if n_trans: _chips.append(f"{n_trans} transposed")
     if n_punct: _chips.append(f"{n_punct} punctuation")
+    if n_spacing: _chips.append(f"{n_spacing} spacing (ignored)")
     _chip_str = ", ".join(_chips) if _chips else f"{n_diffs} difference{'s' if n_diffs != 1 else ''}"
 
     label = (
@@ -844,7 +846,7 @@ def _render_accuracy_expander(accuracy_report: dict | None,
         c3.metric("Matching", f"{accuracy_report['matching_words']:,}")
 
         # Sub-type breakdown pills
-        if n_diffs > 0 and (n_trans > 0 or n_punct > 0):
+        if n_diffs > 0 or n_spacing > 0:
             _pill = ('display:inline-block; padding:3px 10px; border-radius:12px; '
                      'font-size:0.78rem; font-weight:600; margin:2px 4px;')
             _pills_html = ""
@@ -857,6 +859,9 @@ def _render_accuracy_expander(accuracy_report: dict | None,
             if n_punct:
                 _pills_html += (f'<span style="{_pill} background:#eff6ff; color:#1e40af;">'
                                 f'✂️ {n_punct} Punctuation</span>')
+            if n_spacing:
+                _pills_html += (f'<span style="{_pill} background:#f5f5f5; color:#6b7280;">'
+                                f'📏 {n_spacing} Spacing (ignored)</span>')
             if n_repos:
                 _pills_html += (f'<span style="{_pill} background:#f0fdf4; color:#166534;">'
                                 f'↔️ {n_repos} Repositioned</span>')
@@ -869,18 +874,74 @@ def _render_accuracy_expander(accuracy_report: dict | None,
                 f"{n_repos} block(s) repositioned but no missing content."
             )
 
-        # Real differences — only show MISSING in Claude output
-        missing_diffs = [d for d in accuracy_report["real_diffs"]
-                         if d["type"] == "MISSING_IN_CONVERTED"]
-        if missing_diffs:
-            st.markdown("#### ⚠️ Missing in Claude Output")
-            for idx, d in enumerate(missing_diffs, 1):
-                st.markdown(
-                    f"**#{idx} MISSING in Claude output**\n\n"
-                    f"- **Missing:** {d['missing_text']}\n\n"
-                    f"> *Sentence:* {d['sentence']}"
-                )
-                if idx < len(missing_diffs):
+        # Real differences — show all types
+        real_diffs = accuracy_report["real_diffs"]
+        if real_diffs:
+            st.markdown("#### ⚠️ Real Differences")
+            for idx, d in enumerate(real_diffs, 1):
+                dtype = d["type"]
+                sub = d.get("sub_type", "")
+
+                if dtype == "REPLACE":
+                    if sub == "TRANSPOSED":
+                        lines = (
+                            f"**#{idx} 🔀 TRANSPOSED WORDS**\n\n"
+                            f"- **Expected order:** {d['pymupdf_text']}\n"
+                            f"- **Got order:** {d['converted_text']}"
+                        )
+                        moved = d.get("moved_words", [])
+                        if moved:
+                            lines += "\n- **Moved:** " + ", ".join(
+                                f'pos {m["position"]}: "{m["expected"]}" → "{m["got"]}"'
+                                for m in moved
+                            )
+                    elif sub == "PUNCTUATION":
+                        lines = (
+                            f"**#{idx} ✂️ PUNCTUATION DIFFERENCE**\n\n"
+                            f"- **Expected:** {d['pymupdf_text']}\n"
+                            f"- **Got:** {d['converted_text']}"
+                        )
+                        char_diffs = d.get("char_diffs", [])
+                        if char_diffs:
+                            lines += "\n- **Details:** " + ", ".join(
+                                f'{cd["kind"]} `{cd["char"]}`' for cd in char_diffs
+                            )
+                    else:
+                        lines = (
+                            f"**#{idx} 🔄 REPLACE**\n\n"
+                            f"- **PyMuPDF:** {d['pymupdf_text']}\n"
+                            f"- **Claude:** {d['converted_text']}\n\n"
+                            f"> *PyMuPDF sentence:* {d.get('sentence_pymupdf', '')}\n\n"
+                            f"> *Claude sentence:* {d.get('sentence_converted', '')}"
+                        )
+                elif dtype == "MISSING_IN_CONVERTED":
+                    lines = (
+                        f"**#{idx} ❌ MISSING in Claude output**\n\n"
+                        f"- **Missing:** {d['missing_text']}\n\n"
+                        f"> *Sentence:* {d['sentence']}"
+                    )
+                elif dtype == "EXTRA_IN_CONVERTED":
+                    lines = (
+                        f"**#{idx} ➕ EXTRA in Claude output**\n\n"
+                        f"- **Extra:** {d['extra_text']}\n\n"
+                        f"> *Sentence:* {d['sentence']}"
+                    )
+                else:
+                    lines = f"**#{idx} {dtype}**\n\n- {d}"
+
+                st.markdown(lines)
+                if idx < len(real_diffs):
+                    st.divider()
+
+        # Repositioned blocks
+        repositioned = accuracy_report.get("repositioned", [])
+        if repositioned:
+            st.markdown("#### ↔️ Repositioned Blocks")
+            for idx, rp in enumerate(repositioned, 1):
+                text_val = rp.get("pymupdf_text") or rp.get("converted_text", "")
+                display = text_val if len(text_val) <= 150 else text_val[:147] + "..."
+                st.markdown(f"**#{idx}** {display}")
+                if idx < len(repositioned):
                     st.divider()
 
 
@@ -909,58 +970,63 @@ def _render_twocol_view(
         with col_left:
             st.markdown(
                 '<p style="font-size:0.92rem;font-weight:700;margin:0 0 6px;">'
-                '📄 PDF Page — Original Reference</p>',
+                '📄 PDF Pages — Original Reference</p>',
                 unsafe_allow_html=True,
             )
 
             if total_pages > 0:
                 cur = st.session_state.vri_current_page
                 cur = max(1, min(cur, total_pages))
-                st.session_state.vri_current_page = cur  # clamp into session
+                st.session_state.vri_current_page = cur
 
-                _nav_bar_style = (
-                    'display:flex; align-items:center; gap:8px; '
-                    'padding:6px 14px; margin-bottom:8px; min-height:42px; '
-                    'background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px;'
+                st.markdown(
+                    f'<p style="font-size:0.82rem;color:#64748b;margin:0 0 6px;">'
+                    f'📍 Scrolled to <b>Page {cur}</b> / {total_pages}</p>',
+                    unsafe_allow_html=True,
                 )
-                if total_pages > 1:
-                    nc1, nc2, nc3, nc4 = st.columns([1, 5, 1, 3])
-                    with nc1:
-                        if st.button("◀", key="vri_pg_prev"):
-                            st.session_state.vri_current_page = max(1, cur - 1)
-                            st.rerun()
-                    with nc3:
-                        if st.button("▶", key="vri_pg_next"):
-                            st.session_state.vri_current_page = min(total_pages, cur + 1)
-                            st.rerun()
-                    with nc2:
-                        # Sync slider widget key to session state so external
-                        # page changes (item nav, ◀/▶ buttons) are reflected
-                        st.session_state["vri_pg_slider"] = cur
-                        new_pg = st.slider(
-                            "Page", 1, total_pages,
-                            key="vri_pg_slider", label_visibility="collapsed",
-                        )
-                        if new_pg != cur:
-                            st.session_state.vri_current_page = new_pg
-                    with nc4:
-                        st.markdown(
-                            f'<p style="font-size:0.82rem;color:#64748b;margin:8px 0 0;text-align:right;">'
-                            f'Page <b>{cur}</b> / {total_pages}</p>',
-                            unsafe_allow_html=True,
-                        )
-                else:
-                    st.markdown(
-                        f'<div style="{_nav_bar_style} justify-content:center;">'
-                        '<span style="font-size:0.82rem;color:#64748b;">'
-                        'Page <b>1</b> / 1</span></div>',
-                        unsafe_allow_html=True,
+
+                # Build all pages in a scrollable container with anchors
+                _pdf_images_html = ""
+                for pg_idx, pg_path in enumerate(page_images):
+                    pg_num = pg_idx + 1
+                    import base64 as _b64_mod
+                    _img_bytes = pg_path.read_bytes()
+                    _img_b64 = _b64_mod.b64encode(_img_bytes).decode()
+                    _border = "3px solid #3b82f6" if pg_num == cur else "1px solid #e2e8f0"
+                    _pdf_images_html += (
+                        f'<div id="vri-pdf-page-{pg_num}" style="margin-bottom:12px; border:{_border}; border-radius:6px; overflow:hidden;">'
+                        f'<div style="background:#f1f5f9; padding:4px 10px; font-size:0.75rem; font-weight:600; color:#475569;">Page {pg_num}</div>'
+                        f'<img src="data:image/png;base64,{_img_b64}" style="width:100%; display:block;" />'
+                        f'</div>'
                     )
 
-                cur = st.session_state.vri_current_page
-                img_idx = cur - 1
-                if 0 <= img_idx < len(page_images):
-                    st.image(str(page_images[img_idx]), width="stretch")
+                st.html(
+                    f'<div class="vr-pdf-scroll-container" style="'
+                    f'overflow-y:auto; max-height:80vh; min-height:400px; '
+                    f'border:1px solid #e2e8f0; border-radius:8px; padding:8px; background:#fafafa;">'
+                    f'{_pdf_images_html}'
+                    f'</div>'
+                    f'<script>'
+                    f'(function() {{'
+                    f'  var target = {cur};'
+                    f'  function doScroll() {{'
+                    f'    var el = document.getElementById("vri-pdf-page-" + target);'
+                    f'    if (!el) return false;'
+                    f'    var container = el.closest(".vr-pdf-scroll-container");'
+                    f'    if (container) {{'
+                    f'      var pos = el.offsetTop - container.offsetTop;'
+                    f'      if (pos > 0) {{ container.scrollTop = pos; return true; }}'
+                    f'    }}'
+                    f'    return false;'
+                    f'  }}'
+                    f'  var attempts = 0;'
+                    f'  var timer = setInterval(function() {{'
+                    f'    attempts++;'
+                    f'    if (doScroll() || attempts > 50) clearInterval(timer);'
+                    f'  }}, 100);'
+                    f'}})();'
+                    f'</script>'
+                )
 
                 # Page summary (only when checklist data is available)
                 on_page = [r for r in checklist if _safe_int(r.get("Page", 0)) == cur]
@@ -978,12 +1044,11 @@ def _render_twocol_view(
         with col_right:
             # Determine if edit mode is active
             _edit_mode_active = (
-                all_errors_resolved
-                and converted_txt_path is not None
+                converted_txt_path is not None
                 and st.session_state.get("vri_edit_mode", False)
             )
 
-            if all_errors_resolved and converted_txt_path is not None:
+            if converted_txt_path is not None:
                 # Header with Edit toggle
                 _hdr_col1, _hdr_col2 = st.columns([3, 1])
                 with _hdr_col1:
@@ -1080,32 +1145,29 @@ def _render_twocol_view(
                     f'{_viewer_css}<div class="vr-text-viewer">{html}</div>'
                 )
 
-    # JS: sync text-viewer / edit textarea height to the PDF image height
+    # JS: sync text-viewer / edit textarea height to the PDF scroll container height
     components.html("""
     <script>
     (function syncHeight() {
         const doc = window.parent.document;
         const container = doc.querySelector('.st-key-vri_twocol');
         if (!container) return;
-        const img = container.querySelector('img');
-        if (!img) return;
+        const pdfScroll = container.querySelector('.vr-pdf-scroll-container');
+        if (!pdfScroll) return;
         function adjust() {
-            const h = img.clientHeight;
+            const h = pdfScroll.clientHeight;
             if (h <= 100) return;
             // Sync read-only viewer
             const viewer = container.querySelector('.vr-text-viewer');
             if (viewer) { viewer.style.maxHeight = h + 'px'; }
-            // Sync edit-mode textarea: measure all sibling elements in the
-            // right column except the textarea container, then fill the rest.
+            // Sync edit-mode textarea
             const ta = container.querySelector('textarea');
             if (ta) {
-                // Walk up to the stVerticalBlock that holds all right-column widgets
                 var block = ta.closest('[data-testid="stVerticalBlock"]');
                 if (block) {
                     var usedHeight = 0;
                     for (var i = 0; i < block.children.length; i++) {
                         var child = block.children[i];
-                        // Skip the element that contains the textarea itself
                         if (child.contains(ta)) continue;
                         usedHeight += child.offsetHeight || 0;
                     }
@@ -1116,12 +1178,17 @@ def _render_twocol_view(
                 }
             }
         }
-        if (img.complete && img.clientHeight > 0) {
-            adjust();
-        } else {
-            img.addEventListener('load', adjust);
-        }
-        new ResizeObserver(adjust).observe(img);
+        // Wait for images to load then adjust
+        var images = pdfScroll.querySelectorAll('img');
+        var loaded = 0;
+        if (images.length === 0) { adjust(); return; }
+        images.forEach(function(img) {
+            if (img.complete) { loaded++; } else {
+                img.addEventListener('load', function() { loaded++; if (loaded >= images.length) adjust(); });
+            }
+        });
+        if (loaded >= images.length) adjust();
+        new ResizeObserver(adjust).observe(pdfScroll);
     })();
     </script>
     """, height=0)
@@ -1247,19 +1314,7 @@ def render_inline_validation_review(
         elif not gpt_audit_failed:
             st.warning("⚠️ No audit data or accuracy report available for this file.")
 
-        # ── Show additional findings even when checklist is empty ────
-        if findings:
-            st.markdown("---")
-            st.markdown(f"#### 🔔 Additional Findings ({len(findings)})")
-            for af in findings:
-                it = str(af.get("Issue Type", ""))
-                cls = "vr-af-error" if it in ("content_dropped", "tag_error", "text_error") else "vr-af-warn"
-                st.markdown(f"""
-                <div class="vr-af-card {cls}">
-                    <strong>Page {af.get("Page","")}</strong> — <em>{_html_escape(it)}</em><br>
-                    {_html_escape(str(af.get("Description", "")))}
-                </div>
-                """, unsafe_allow_html=True)
+        # ── Additional findings section removed (duplicates checklist) ────
 
         # ── Still show the side-by-side PDF ↔ Claude text view ──────
         page_images = _get_page_images(highlighted_dir)
@@ -1510,50 +1565,147 @@ def render_inline_validation_review(
             st.success("🎉 **All issues resolved!** All errors are fixed and all warnings addressed.")
 
     # ══════════════════════════════════════════════════════════════
-    # TWO-COLUMN LAYOUT: PDF Page | Claude Text
+    # CHECKLIST TABLE (moved to top of review area)
     # ══════════════════════════════════════════════════════════════
     st.markdown("---")
+    st.markdown("#### 📋 Full Audit Checklist")
 
-    # Edit mode only available when ALL errors are fixed AND all warnings are ignored
-    _remaining_warnings = sum(
-        1 for r in checklist
-        if str(r.get("Verdict", "")).startswith("\u26a0")
-        and int(r.get("#", 0)) not in ignored_ids
+    # Detect if any items have line numbers
+    _has_line_numbers = any(
+        r.get("Line") not in (None, "", 0, "0")
+        for r in checklist
     )
-    _all_issues_resolved = (len(error_ids) == 0) and (_remaining_warnings == 0)
+    if not _has_line_numbers and checklist:
+        st.caption("ℹ️ This bill does not have printed line numbers — line references are not available.")
 
-    _render_twocol_view(
-        page_images=page_images,
-        total_pages=total_pages,
-        text=text,
-        checklist=checklist,
-        selected_id=selected_id,
-        filter_mode=filter_mode,
-        fixed_ids=fixed_ids,
-        ignored_ids=ignored_ids,
-        all_errors_resolved=_all_issues_resolved,
-        converted_txt_path=converted_txt_path,
-    )
+    if not display_cl:
+        st.info("No items match the current filter.")
+    else:
+        tbl = '<table class="vr-cl-table"><thead><tr>'
+        for c in ["#", "Status", "Page", "Line", "Tag Type", "Expected Text (PDF)",
+                   "Found?", "Output Text", "Category", "Notes"]:
+            tbl += f"<th>{c}</th>"
+        tbl += "</tr></thead><tbody>"
 
-    # ── Download button — centered below both columns ──────────────
-    if converted_txt_path.exists():
-        try:
-            _dl_bytes = converted_txt_path.read_bytes()
-            _dl_name = converted_txt_path.name
-            _dl_b64 = base64.b64encode(_dl_bytes).decode()
-            _dl_size = len(_dl_bytes)
-            _dl_label = f"{_dl_size / 1024:.1f} KB" if _dl_size < 1024 * 1024 else f"{_dl_size / (1024*1024):.1f} MB"
-            st.markdown(
-                f'<div style="text-align:center; margin:12px 0 4px;">'
-                f'<a href="data:text/plain;base64,{_dl_b64}" download="{_dl_name}" '
-                f'style="display:inline-block; font-size:0.84rem; '
-                f'color:#1e40af; text-decoration:none; background:#eff6ff; '
-                f'padding:8px 20px; border-radius:8px; border:1px solid #bfdbfe;">'
-                f'📥 Download converted text ({_dl_label})</a></div>',
-                unsafe_allow_html=True,
-            )
-        except Exception:
-            pass
+        for row in display_cl:
+            cid_int = int(row.get("#", 0))
+            verd = _get_effective_verdict(row, fixed_ids, ignored_ids)
+
+            if cid_int in fixed_ids:
+                rc, bc = "row-fixed", "vr-badge-fixed"
+            elif cid_int in ignored_ids:
+                rc, bc = "row-fixed", "vr-badge-fixed"
+            elif verd.startswith("✅"):
+                rc, bc = "row-pass", "vr-badge-pass"
+            elif verd.startswith("⚠"):
+                rc, bc = "row-warn", "vr-badge-warn"
+            else:
+                rc, bc = "row-err", "vr-badge-err"
+
+            if cid_int == selected_id:
+                rc += " row-selected"
+
+            tbl += f'<tr class="{rc}" data-cid="{cid_int}">'
+            _pymupdf_full = _html_escape(str(row.get("PyMuPDF Text", "")))
+            _pymupdf_disp = _html_escape(_trunc(row.get("PyMuPDF Text", "")))
+            _claude_full = _html_escape(str(row.get("Claude Text", "")))
+            _claude_disp = _html_escape(_trunc(row.get("Claude Text", "")))
+            _notes_full = _html_escape(str(row.get("Notes", "")))
+            _notes_disp = _html_escape(_trunc(row.get("Notes", ""), 100))
+
+            tbl += f'<td><strong>{cid_int}</strong></td>'
+            tbl += f'<td><span class="vr-badge {bc}">{_html_escape(verd)}</span></td>'
+            tbl += f'<td>{row.get("Page", "")}</td>'
+            _line_val = row.get("Line", "") or ""
+            tbl += f'<td>{_line_val if _line_val else ("—" if not _has_line_numbers else "")}</td>'
+            tbl += f'<td>{_html_escape(str(row.get("Tag Type", "")))}</td>'
+            tbl += f'<td title="{_pymupdf_full}">{_pymupdf_disp}</td>'
+            tbl += f'<td>{_html_escape(str(row.get("In Claude?", "")))}</td>'
+            tbl += f'<td title="{_claude_full}">{_claude_disp}</td>'
+            tbl += f'<td>{_html_escape(str(row.get("Classification", "")))}</td>'
+            tbl += f'<td title="{_notes_full}">{_notes_disp}</td>'
+            tbl += "</tr>"
+
+        tbl += "</tbody></table>"
+        _tbl_css = """<style>
+.vr-cl-table { width:100%; border-collapse:collapse; font-size:0.82rem; }
+.vr-cl-table th { background:#1e293b; color:white; padding:8px 10px; text-align:left; position:sticky; top:0; z-index:2; border-bottom:2px solid #334155; }
+.vr-cl-table td { padding:7px 10px; border-bottom:1px solid #e2e8f0; vertical-align:top; }
+.vr-cl-table tr:hover { background:#f0f9ff !important; cursor:pointer; }
+.vr-cl-table tr.row-pass  { background:#f0fdf4; }
+.vr-cl-table tr.row-warn  { background:#fefce8; }
+.vr-cl-table tr.row-err   { background:#fef2f2; }
+.vr-cl-table tr.row-fixed { background:#dbeafe; }
+.vr-cl-table tr.row-selected { outline:2px solid #3b82f6; background:#eff6ff !important; }
+.vr-badge { display:inline-block; padding:2px 8px; border-radius:12px; font-weight:600; font-size:0.75rem; white-space:nowrap; }
+.vr-badge-pass  { background:#bbf7d0; color:#166534; }
+.vr-badge-warn  { background:#fde68a; color:#854d0e; }
+.vr-badge-err   { background:#fecaca; color:#991b1b; }
+.vr-badge-fixed { background:#93c5fd; color:#1e3a8a; }
+</style>"""
+        st.html(_tbl_css + tbl)
+
+        # ── Clickable rows: bidirectional component bridge ─────────────
+        if _vri_click_bridge is not None:
+            _vri_click_bridge(default=None, key="vri_table_click", height=0)
+
+        # Navigation buttons
+        st.markdown("")
+        nc = st.columns([2, 1, 1, 1, 2])
+
+        id_opts = [int(r.get("#", 0)) for r in display_cl]
+
+        # If current selection isn't in the filtered list, find the nearest valid item
+        if id_opts and selected_id not in id_opts:
+            # Pick the first item in the filtered list as a sane default
+            _nearest = id_opts[0]
+            for _oid in id_opts:
+                if _oid >= selected_id:
+                    _nearest = _oid
+                    break
+            st.session_state.vri_selected_item = _nearest
+            st.rerun()
+
+        with nc[1]:
+            if st.button("⬆️ Prev Item", key="vri_prev_item_btn"):
+                if id_opts:
+                    if selected_id in id_opts:
+                        ci = id_opts.index(selected_id)
+                        st.session_state.vri_selected_item = id_opts[ci - 1] if ci > 0 else id_opts[-1]
+                    else:
+                        st.session_state.vri_selected_item = id_opts[-1]
+                    st.session_state["_vri_nav_btn_fired"] = True
+                    st.rerun()
+        with nc[2]:
+            if id_opts:
+                current_idx = id_opts.index(selected_id) if selected_id in id_opts else 0
+                st.session_state["vri_jump_to"] = id_opts[current_idx]
+                jump = st.selectbox(
+                    "Go to #", id_opts,
+                    index=current_idx,
+                    key="vri_jump_to", label_visibility="collapsed",
+                )
+            else:
+                jump = selected_id
+                st.selectbox("Go to #", [selected_id], index=0,
+                             key="vri_jump_to", label_visibility="collapsed", disabled=True)
+        with nc[3]:
+            if st.button("⬇️ Next Item", key="vri_next_item_btn"):
+                if id_opts:
+                    if selected_id in id_opts:
+                        ci = id_opts.index(selected_id)
+                        st.session_state.vri_selected_item = id_opts[ci + 1] if ci < len(id_opts) - 1 else id_opts[0]
+                    else:
+                        st.session_state.vri_selected_item = id_opts[0]
+                    st.session_state["_vri_nav_btn_fired"] = True
+                    st.rerun()
+
+        # Only honour the selectbox jump if it wasn't a button-driven navigation
+        if st.session_state.pop("_vri_nav_btn_fired", False):
+            pass  # button already set vri_selected_item — ignore stale selectbox value
+        elif id_opts and jump != selected_id and jump in id_opts:
+            st.session_state.vri_selected_item = jump
+            st.rerun()
 
     # ══════════════════════════════════════════════════════════════
     # ITEM DETAIL + INLINE FIX
@@ -1710,6 +1862,7 @@ def render_inline_validation_review(
                 if len(claude_text.strip()) < 15:
                     import re as _re
                     _ctx = str(selected_row.get("Context", "") or "").strip()
+                    _is_addition = (tag_type == "addition")
                     if _ctx:
                         # Try to extract text around >>> <<< markers
                         _mm = _re.search(r'>>>\s*(.+?)\s*<<<', _ctx)
@@ -1718,9 +1871,41 @@ def render_inline_validation_review(
                             _after = _ctx[_mm.end():].replace("…", "").strip()
                             _before = _ctx[:_mm.start()].replace("…", "").strip()
 
-                            # Use _ws_find for robust matching (handles Unicode, whitespace)
-                            # Try: before_tail + inner + after
-                            if _before and _after:
+                            # For ADDITION items the inner text is MISSING from
+                            # Claude output — search surrounding context first
+                            # (before + after without the inner) exactly like
+                            # the Review section shows.
+                            if _is_addition and _before and _after:
+                                _tail = _before[-40:].strip()
+                                for _alen in [len(_after), 60, 40, 30]:
+                                    _head = _after[:_alen].strip()
+                                    if not _head:
+                                        continue
+                                    for _c in [_tail + " " + _head, _tail + _head]:
+                                        _h, _p = _ws_find(_c, text)
+                                        if _h:
+                                            _search, _hint_pos = _h, _p
+                                            break
+                                    if _hint_pos >= 0:
+                                        break
+
+                            # For ADDITION: try before alone, then after alone
+                            if _is_addition and _hint_pos < 0 and _before:
+                                _tail = _before[-40:].strip()
+                                if len(_tail) >= 10:
+                                    _h, _p = _ws_find(_tail, text)
+                                    if _h:
+                                        _search, _hint_pos = _h, _p
+                            if _is_addition and _hint_pos < 0 and _after:
+                                _head = _after[:40].strip()
+                                if len(_head) >= 10:
+                                    _h, _p = _ws_find(_head, text)
+                                    if _h:
+                                        _search, _hint_pos = _h, _p
+
+                            # Try: before_tail + inner + after (works for deletions
+                            # or when text IS present in Claude output)
+                            if _hint_pos < 0 and _before and _after:
                                 _tail = _before[-40:].strip()
                                 for _alen in [len(_after), 60, 40, 30]:
                                     _head = _after[:_alen].strip()
@@ -1756,6 +1941,35 @@ def render_inline_validation_review(
                                     if _h:
                                         _search, _hint_pos = _h, _p
                                         break
+
+                            # Fallback: before + after without inner (non-addition)
+                            if _hint_pos < 0 and not _is_addition and _before and _after:
+                                _tail = _before[-40:].strip()
+                                for _alen in [len(_after), 60, 40, 30]:
+                                    _head = _after[:_alen].strip()
+                                    if not _head:
+                                        continue
+                                    for _c in [_tail + " " + _head, _tail + _head]:
+                                        _h, _p = _ws_find(_c, text)
+                                        if _h:
+                                            _search, _hint_pos = _h, _p
+                                            break
+                                    if _hint_pos >= 0:
+                                        break
+
+                            # Last resort: before or after alone
+                            if _hint_pos < 0 and _before:
+                                _tail = _before[-40:].strip()
+                                if len(_tail) >= 10:
+                                    _h, _p = _ws_find(_tail, text)
+                                    if _h:
+                                        _search, _hint_pos = _h, _p
+                            if _hint_pos < 0 and _after:
+                                _head = _after[:40].strip()
+                                if len(_head) >= 10:
+                                    _h, _p = _ws_find(_head, text)
+                                    if _h:
+                                        _search, _hint_pos = _h, _p
 
                         elif len(_ctx) >= 15:
                             _h, _p = _ws_find(_ctx, text)
@@ -1794,8 +2008,83 @@ def render_inline_validation_review(
                         unsafe_allow_html=True
                     )
             else:
-                # Missing text — try multiple strategies to find anchor context
-                original_context = _find_anchor_context_multi(text, selected_row, total_pages=total_pages)
+                # Missing text — use surrounding context from Review section
+                # (the >>>...<<< markers in Context column) to find the
+                # correct location in Claude output, same approach as Review.
+                import re as _re
+                _ctx = str(selected_row.get("Context", "") or "").strip()
+                _search = pymupdf_text
+                _hint_pos = -1
+                _pg_kw = {"target_page": _item_page, "total_pages": total_pages}
+
+                if _ctx:
+                    _mm = _re.search(r'>>>\s*(.+?)\s*<<<', _ctx)
+                    if _mm:
+                        _inner = _mm.group(1).strip()
+                        _after = _ctx[_mm.end():].replace("…", "").strip()
+                        _before = _ctx[:_mm.start()].replace("…", "").strip()
+
+                        # For missing additions: inner not in Claude, search before+after
+                        # For missing deletions: inner IS in Claude (untagged), search before+inner+after
+                        _is_addition = (tag_type == "addition")
+
+                        # Strategy 1: before + inner + after (deletions — text exists untagged)
+                        if not _is_addition and _before and _after:
+                            _tail = _before[-40:].strip()
+                            for _alen in [len(_after), 60, 40, 30]:
+                                _head = _after[:_alen].strip()
+                                if not _head: continue
+                                for _c in [_tail + " " + _inner + " " + _head,
+                                           _tail + _inner + _head]:
+                                    _h, _p = _ws_find(_c, text)
+                                    if _h:
+                                        _search, _hint_pos = _h, _p
+                                        break
+                                if _hint_pos >= 0: break
+
+                        # Strategy 2: before + after (without inner) — works for both
+                        if _hint_pos < 0 and _before and _after:
+                            _tail = _before[-40:].strip()
+                            for _alen in [len(_after), 60, 40, 30]:
+                                _head = _after[:_alen].strip()
+                                if not _head: continue
+                                for _c in [_tail + " " + _head, _tail + _head]:
+                                    _h, _p = _ws_find(_c, text)
+                                    if _h:
+                                        _search, _hint_pos = _h, _p
+                                        break
+                                if _hint_pos >= 0: break
+
+                        # Strategy 3: before alone
+                        if _hint_pos < 0 and _before:
+                            _tail = _before[-40:].strip()
+                            if len(_tail) >= 10:
+                                _h, _p = _ws_find(_tail, text)
+                                if _h:
+                                    _search, _hint_pos = _h, _p
+
+                        # Strategy 4: after alone
+                        if _hint_pos < 0 and _after:
+                            _head = _after[:40].strip()
+                            if len(_head) >= 10:
+                                _h, _p = _ws_find(_head, text)
+                                if _h:
+                                    _search, _hint_pos = _h, _p
+
+                        # Strategy 5: inner alone (for deletions)
+                        if _hint_pos < 0 and not _is_addition and len(_inner) >= 5:
+                            _h, _p = _ws_find(_inner, text)
+                            if _h:
+                                _search, _hint_pos = _h, _p
+
+                if _hint_pos >= 0:
+                    original_context = _extract_edit_context(text, _search,
+                        target_page=_item_page, total_pages=total_pages,
+                        hint_pos=_hint_pos)
+                else:
+                    # Fallback to old multi-strategy search
+                    original_context = _find_anchor_context_multi(text, selected_row, total_pages=total_pages)
+
                 if original_context:
                     prefill = original_context
                     st.caption(
@@ -2011,157 +2300,50 @@ def render_inline_validation_review(
                             st.rerun()
 
     # ══════════════════════════════════════════════════════════════
-    # CHECKLIST TABLE
+    # TWO-COLUMN LAYOUT: PDF Page | Claude Text (at the bottom)
     # ══════════════════════════════════════════════════════════════
     st.markdown("---")
-    st.markdown("#### 📋 Full Audit Checklist")
 
-    if not display_cl:
-        st.info("No items match the current filter.")
-    else:
-        tbl = '<table class="vr-cl-table"><thead><tr>'
-        for c in ["#", "Status", "Page", "Line", "Tag Type", "Expected Text (PDF)",
-                   "Found?", "Output Text", "Category", "Notes"]:
-            tbl += f"<th>{c}</th>"
-        tbl += "</tr></thead><tbody>"
+    # Edit mode only available when ALL errors are fixed AND all warnings are ignored
+    _remaining_warnings = sum(
+        1 for r in checklist
+        if str(r.get("Verdict", "")).startswith("\u26a0")
+        and int(r.get("#", 0)) not in ignored_ids
+    )
+    _all_issues_resolved = (len(error_ids) == 0) and (_remaining_warnings == 0)
 
-        for row in display_cl:
-            cid_int = int(row.get("#", 0))
-            verd = _get_effective_verdict(row, fixed_ids, ignored_ids)
+    _render_twocol_view(
+        page_images=page_images,
+        total_pages=total_pages,
+        text=text,
+        checklist=checklist,
+        selected_id=selected_id,
+        filter_mode=filter_mode,
+        fixed_ids=fixed_ids,
+        ignored_ids=ignored_ids,
+        all_errors_resolved=_all_issues_resolved,
+        converted_txt_path=converted_txt_path,
+    )
 
-            if cid_int in fixed_ids:
-                rc, bc = "row-fixed", "vr-badge-fixed"
-            elif cid_int in ignored_ids:
-                rc, bc = "row-fixed", "vr-badge-fixed"
-            elif verd.startswith("✅"):
-                rc, bc = "row-pass", "vr-badge-pass"
-            elif verd.startswith("⚠"):
-                rc, bc = "row-warn", "vr-badge-warn"
-            else:
-                rc, bc = "row-err", "vr-badge-err"
-
-            if cid_int == selected_id:
-                rc += " row-selected"
-
-            tbl += f'<tr class="{rc}" data-cid="{cid_int}">'
-            _pymupdf_full = _html_escape(str(row.get("PyMuPDF Text", "")))
-            _pymupdf_disp = _html_escape(_trunc(row.get("PyMuPDF Text", "")))
-            _claude_full = _html_escape(str(row.get("Claude Text", "")))
-            _claude_disp = _html_escape(_trunc(row.get("Claude Text", "")))
-            _notes_full = _html_escape(str(row.get("Notes", "")))
-            _notes_disp = _html_escape(_trunc(row.get("Notes", ""), 100))
-
-            tbl += f'<td><strong>{cid_int}</strong></td>'
-            tbl += f'<td><span class="vr-badge {bc}">{_html_escape(verd)}</span></td>'
-            tbl += f'<td>{row.get("Page", "")}</td>'
-            tbl += f'<td>{row.get("Line", "") or ""}</td>'
-            tbl += f'<td>{_html_escape(str(row.get("Tag Type", "")))}</td>'
-            tbl += f'<td title="{_pymupdf_full}">{_pymupdf_disp}</td>'
-            tbl += f'<td>{_html_escape(str(row.get("In Claude?", "")))}</td>'
-            tbl += f'<td title="{_claude_full}">{_claude_disp}</td>'
-            tbl += f'<td>{_html_escape(str(row.get("Classification", "")))}</td>'
-            tbl += f'<td title="{_notes_full}">{_notes_disp}</td>'
-            tbl += "</tr>"
-
-        tbl += "</tbody></table>"
-        _tbl_css = """<style>
-.vr-cl-table { width:100%; border-collapse:collapse; font-size:0.82rem; }
-.vr-cl-table th { background:#1e293b; color:white; padding:8px 10px; text-align:left; position:sticky; top:0; z-index:2; border-bottom:2px solid #334155; }
-.vr-cl-table td { padding:7px 10px; border-bottom:1px solid #e2e8f0; vertical-align:top; }
-.vr-cl-table tr:hover { background:#f0f9ff !important; cursor:pointer; }
-.vr-cl-table tr.row-pass  { background:#f0fdf4; }
-.vr-cl-table tr.row-warn  { background:#fefce8; }
-.vr-cl-table tr.row-err   { background:#fef2f2; }
-.vr-cl-table tr.row-fixed { background:#dbeafe; }
-.vr-cl-table tr.row-selected { outline:2px solid #3b82f6; background:#eff6ff !important; }
-.vr-badge { display:inline-block; padding:2px 8px; border-radius:12px; font-weight:600; font-size:0.75rem; white-space:nowrap; }
-.vr-badge-pass  { background:#bbf7d0; color:#166534; }
-.vr-badge-warn  { background:#fde68a; color:#854d0e; }
-.vr-badge-err   { background:#fecaca; color:#991b1b; }
-.vr-badge-fixed { background:#93c5fd; color:#1e3a8a; }
-</style>"""
-        st.html(_tbl_css + tbl)
-
-        # ── Clickable rows: bidirectional component bridge ─────────────
-        if _vri_click_bridge is not None:
-            _vri_click_bridge(default=None, key="vri_table_click", height=0)
-
-        # Navigation buttons
-        st.markdown("")
-        nc = st.columns([2, 1, 1, 1, 2])
-
-        id_opts = [int(r.get("#", 0)) for r in display_cl]
-
-        # If current selection isn't in the filtered list, find the nearest valid item
-        if id_opts and selected_id not in id_opts:
-            # Pick the first item in the filtered list as a sane default
-            _nearest = id_opts[0]
-            for _oid in id_opts:
-                if _oid >= selected_id:
-                    _nearest = _oid
-                    break
-            st.session_state.vri_selected_item = _nearest
-            st.rerun()
-
-        with nc[1]:
-            if st.button("⬆️ Prev Item", key="vri_prev_item_btn"):
-                if id_opts:
-                    if selected_id in id_opts:
-                        ci = id_opts.index(selected_id)
-                        st.session_state.vri_selected_item = id_opts[ci - 1] if ci > 0 else id_opts[-1]
-                    else:
-                        st.session_state.vri_selected_item = id_opts[-1]
-                    st.session_state["_vri_nav_btn_fired"] = True
-                    st.rerun()
-        with nc[2]:
-            if id_opts:
-                current_idx = id_opts.index(selected_id) if selected_id in id_opts else 0
-                # Force the selectbox to reflect the current selected_id.
-                # Streamlit ignores the `index` param when a keyed widget already
-                # has a browser-submitted value, so we write directly.
-                st.session_state["vri_jump_to"] = id_opts[current_idx]
-                jump = st.selectbox(
-                    "Go to #", id_opts,
-                    index=current_idx,
-                    key="vri_jump_to", label_visibility="collapsed",
-                )
-            else:
-                jump = selected_id
-                st.selectbox("Go to #", [selected_id], index=0,
-                             key="vri_jump_to", label_visibility="collapsed", disabled=True)
-        with nc[3]:
-            if st.button("⬇️ Next Item", key="vri_next_item_btn"):
-                if id_opts:
-                    if selected_id in id_opts:
-                        ci = id_opts.index(selected_id)
-                        st.session_state.vri_selected_item = id_opts[ci + 1] if ci < len(id_opts) - 1 else id_opts[0]
-                    else:
-                        st.session_state.vri_selected_item = id_opts[0]
-                    st.session_state["_vri_nav_btn_fired"] = True
-                    st.rerun()
-
-        # Only honour the selectbox jump if it wasn't a button-driven navigation
-        if st.session_state.pop("_vri_nav_btn_fired", False):
-            pass  # button already set vri_selected_item — ignore stale selectbox value
-        elif id_opts and jump != selected_id and jump in id_opts:
-            st.session_state.vri_selected_item = jump
-            st.rerun()
-
-    # ══════════════════════════════════════════════════════════════
-    # ADDITIONAL FINDINGS
-    # ══════════════════════════════════════════════════════════════
-    if findings:
-        st.markdown("---")
-        st.markdown(f"#### 🔔 Additional Findings ({len(findings)})")
-        for af in findings:
-            it = str(af.get("Issue Type", ""))
-            cls = "vr-af-error" if it in ("content_dropped", "tag_error", "text_error") else "vr-af-warn"
-            st.markdown(f"""
-            <div class="vr-af-card {cls}">
-                <strong>Page {af.get("Page","")}</strong> — <em>{_html_escape(it)}</em><br>
-                {_html_escape(str(af.get("Description", "")))}
-            </div>
-            """, unsafe_allow_html=True)
+    # ── Download button — centered below both columns ──────────────
+    if converted_txt_path.exists():
+        try:
+            _dl_bytes = converted_txt_path.read_bytes()
+            _dl_name = converted_txt_path.name
+            _dl_b64 = base64.b64encode(_dl_bytes).decode()
+            _dl_size = len(_dl_bytes)
+            _dl_label = f"{_dl_size / 1024:.1f} KB" if _dl_size < 1024 * 1024 else f"{_dl_size / (1024*1024):.1f} MB"
+            st.markdown(
+                f'<div style="text-align:center; margin:12px 0 4px;">'
+                f'<a href="data:text/plain;base64,{_dl_b64}" download="{_dl_name}" '
+                f'style="display:inline-block; font-size:0.84rem; '
+                f'color:#1e40af; text-decoration:none; background:#eff6ff; '
+                f'padding:8px 20px; border-radius:8px; border:1px solid #bfdbfe;">'
+                f'📥 Download converted text ({_dl_label})</a></div>',
+                unsafe_allow_html=True,
+            )
+        except Exception:
+            pass
 
     # ── Download Excel ──────────────────────────────────────────
     st.markdown("---")

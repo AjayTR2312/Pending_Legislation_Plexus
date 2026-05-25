@@ -85,7 +85,8 @@ _TAG_RE = re.compile(
 
 
 def _build_checklist(pymupdf_text: str,
-                     pymupdf_report: Optional[Dict] = None) -> List[Dict]:
+                     pymupdf_report: Optional[Dict] = None,
+                     pymupdf_raw_text: Optional[str] = None) -> List[Dict]:
     """
     Extract every tagged span from PyMuPDF text and return as a numbered
     checklist.  Each item has: id, tag_type, text, approximate page, context.
@@ -93,6 +94,11 @@ def _build_checklist(pymupdf_text: str,
     If *pymupdf_report* is provided (the JSON from extract_pdf_json_report),
     each item is enriched with a 'context' field showing surrounding text so
     GPT can pinpoint the exact location of short spans like "." or ",".
+
+    If *pymupdf_raw_text* is provided (the original PyMuPDF text with page
+    markers before LLM cleaning), it is used to build a reliable
+    character-offset → page mapping.  This avoids the fragile span-matching
+    approach for page assignment when the clean text has no page markers.
     """
     items = []
     # Split into pages (PAGE markers or simple heuristic)
@@ -112,6 +118,101 @@ def _build_checklist(pymupdf_text: str,
         # Include any text before first page marker as page 1
         if page_splits[0].strip():
             chunks.insert(0, (1, page_splits[0]))
+
+    # ── Build a page-lookup from the RAW pymupdf text (with page markers) ──
+    # When the clean text has no page markers but the raw text does, we
+    # build a helper that finds a tag's page by locating it in the raw text.
+    _raw_page_chunks: List[tuple] = []  # (page_num, raw_chunk_text)
+    if pymupdf_raw_text and len(page_splits) == 1:
+        _raw_splits = re.split(
+            r"---\s*PAGE\s+(\d+)\s*---", pymupdf_raw_text, flags=re.IGNORECASE
+        )
+        if len(_raw_splits) > 1:
+            for ri in range(1, len(_raw_splits), 2):
+                rpg = int(_raw_splits[ri])
+                rtxt = _raw_splits[ri + 1] if ri + 1 < len(_raw_splits) else ""
+                # Strip tags to get plain text for matching
+                _raw_page_chunks.append((rpg, rtxt))
+            if _raw_splits[0].strip():
+                _raw_page_chunks.insert(0, (1, _raw_splits[0]))
+            log.info("📄 Built raw-text page lookup: %d pages", len(_raw_page_chunks))
+
+    # Track which position in each raw page chunk we've consumed,
+    # so identical spans on the same page are matched in order.
+    _raw_search_offsets = {pg: 0 for pg, _ in _raw_page_chunks}
+
+    def _find_page_from_raw(tag_text: str, surrounding: str) -> Optional[int]:
+        """Find the page of a tag by locating it in the raw pymupdf text.
+        Uses surrounding plain text (from the clean text) to disambiguate
+        identical short spans. Returns the page number or None.
+
+        Collects ALL candidate matches across pages and picks the one with
+        the best context score.  Always advances the search offset on the
+        winning page so the same position is not re-matched for the next
+        identical span.
+        """
+        if not _raw_page_chunks:
+            return None
+
+        surr_lower = surrounding.lower() if surrounding else ""
+        surr_norm = re.sub(r'\s+', ' ', surr_lower) if surr_lower else ""
+        tag_lower = tag_text.lower()
+
+        # Collect all candidate matches: (context_score, page, pos, rtxt_plain)
+        candidates = []
+        for rpg, rtxt in _raw_page_chunks:
+            search_from = _raw_search_offsets.get(rpg, 0)
+            rtxt_plain = re.sub(r'\[([AD])>(.*?)<\1\]', r'\2', rtxt, flags=re.DOTALL)
+            pos = rtxt_plain.lower().find(tag_lower, search_from)
+            if pos < 0:
+                continue
+
+            ctx_score = 0.0
+            if surr_norm and tag_lower in surr_norm:
+                raw_surr = rtxt_plain[max(0, pos-60):pos+len(tag_text)+60].lower()
+                raw_surr_norm = re.sub(r'\s+', ' ', raw_surr)
+                before_tag = surr_norm[:surr_norm.find(tag_lower)]
+                after_tag_start = surr_norm.find(tag_lower) + len(tag_lower)
+                after_tag = surr_norm[after_tag_start:]
+
+                # Score before-context
+                if before_tag and len(before_tag) >= 10:
+                    check_frag = before_tag[-25:].strip()
+                    if check_frag and check_frag in raw_surr_norm:
+                        ctx_score += 1.0
+                    elif len(check_frag) >= 8 and check_frag[-12:] in raw_surr_norm:
+                        ctx_score += 0.5
+
+                # Score after-context
+                if after_tag and len(after_tag) >= 10:
+                    check_frag_after = after_tag[:25].strip()
+                    if check_frag_after and check_frag_after in raw_surr_norm:
+                        ctx_score += 1.0
+                    elif len(check_frag_after) >= 8 and check_frag_after[:12] in raw_surr_norm:
+                        ctx_score += 0.5
+
+            candidates.append((rpg, pos, ctx_score))
+
+        if not candidates:
+            return None
+
+        # Pick the best candidate: highest context score, then first page
+        candidates.sort(key=lambda c: (-c[2], c[0]))
+        best_pg, best_pos, best_score = candidates[0]
+
+        # If ALL candidates scored 0.0 (no context matched anywhere),
+        # don't guess — return None so the neighbor-smoothing pass
+        # can infer the correct page from surrounding items.
+        if best_score == 0.0 and len(candidates) > 1:
+            log.debug(
+                "📄 _find_page_from_raw: all %d candidates for '%s' scored 0 — skipping",
+                len(candidates), tag_text[:30]
+            )
+            return None
+
+        # Always advance the search offset on the winning page
+        _raw_search_offsets[best_pg] = best_pos + len(tag_text)
+        return best_pg
 
     # Pre-index report spans by (page, stripped_text) for fast lookup.
     # Falls back to text-only match if page differs (LLM cleaning may shift pages).
@@ -144,6 +245,17 @@ def _build_checklist(pymupdf_text: str,
             })
     # Track which report spans have been used (to handle duplicates)
     used_report = [False] * len(report_spans)
+
+    # ── Quote normalisation helper ─────────────────────────────────
+    # Claude LLM cleaning often normalises smart quotes (\u201c\u201d\u2018\u2019) to
+    # straight ASCII quotes, but the report keeps the originals from PyMuPDF.
+    _QUOTE_TABLE = str.maketrans({
+        '\u201c': '"', '\u201d': '"',   # smart double → straight double
+        '\u2018': "'", '\u2019': "'",   # smart single → straight single
+    })
+
+    def _norm_quotes(s: str) -> str:
+        return s.translate(_QUOTE_TABLE)
 
     # ── Strip tags from clean text to build a plain-text index ────────
     # This lets us look up surrounding text at each tag's position.
@@ -207,6 +319,11 @@ def _build_checklist(pymupdf_text: str,
             return 0.0
         return score / checks
 
+    # Track the index of the last matched report span so we can add a
+    # monotonicity bias: when context scores tie, prefer the span whose
+    # index is closest to the last match (soft preference, not hard block).
+    _last_matched_idx = [0]   # mutable so nested function can update it
+
     def _find_context(tag_text: str, page: int, tag_type: str = "",
                       tag_offset: int = -1) -> tuple:
         """Find best matching context from report for this tagged span.
@@ -225,12 +342,25 @@ def _build_checklist(pymupdf_text: str,
         # For short text, require tag_type match to avoid cross-type confusion
         _require_type = (len(tag_text) <= 3 and tag_type)
 
-        # Pass 1: exact text + same page (unused)
+        # Normalise quotes for comparison (Claude cleaning may straighten curly quotes)
+        tag_text_nq = _norm_quotes(tag_text)
+
+        def _text_eq(span_text: str) -> bool:
+            return _norm_quotes(span_text) == tag_text_nq
+
+        def _text_contains(span_text: str) -> bool:
+            st = _norm_quotes(span_text)
+            return tag_text_nq in st or st in tag_text_nq
+
+        # Pass 1: exact text + same page
         for i, rs in enumerate(report_spans):
-            if not used_report[i] and rs["text"] == tag_text and rs["page"] == page:
+            if used_report[i]:
+                continue
+            if _text_eq(rs["text"]) and rs["page"] == page:
                 if _require_type and rs.get("tag_type") != tag_type:
                     continue
                 used_report[i] = True
+                _last_matched_idx[0] = i
                 return rs["context"], rs["page"], rs.get("bill_line")
 
         # Pass 2: text contained in report text or vice-versa, same page
@@ -238,9 +368,18 @@ def _build_checklist(pymupdf_text: str,
         # because they match inside longer spans incorrectly
         if len(tag_text) > 3:
             for i, rs in enumerate(report_spans):
-                if not used_report[i] and rs["page"] == page:
-                    if tag_text in rs["text"] or rs["text"] in tag_text:
+                if used_report[i]:
+                    continue
+                if rs["page"] == page:
+                    # Require the shorter side to be ≥30% of the longer side
+                    # to prevent 'a' matching inside 'Military status means any...'
+                    shorter = min(len(tag_text), len(rs["text"]))
+                    longer = max(len(tag_text), len(rs["text"]))
+                    if shorter / longer < 0.3:
+                        continue
+                    if _text_contains(rs["text"]):
                         used_report[i] = True
+                        _last_matched_idx[0] = i
                         return rs["context"], rs["page"], rs.get("bill_line")
 
         # Pass 3: exact text, any page — CONTEXT-VERIFIED
@@ -248,18 +387,28 @@ def _build_checklist(pymupdf_text: str,
         # correct span among multiple identical candidates.
         candidates = []
         for i, rs in enumerate(report_spans):
-            if not used_report[i] and rs["text"] == tag_text:
+            if used_report[i]:
+                continue
+            if _text_eq(rs["text"]):
                 if _require_type and rs.get("tag_type") != tag_type:
                     continue
                 ctx_sc = _context_score(rs, tag_offset) if tag_offset >= 0 else 0.0
                 page_dist = abs((rs["page"] or 0) - page)
-                # Sort by: context score (desc), then page distance (asc)
-                # Negate context score so higher scores sort first
-                candidates.append((-ctx_sc, page_dist, i, rs))
+                same_page = 0 if (rs["page"] or 0) == page else 1
+                index_dist = abs(i - _last_matched_idx[0])
+                candidates.append((-ctx_sc, same_page, index_dist, page_dist, i, rs))
         if candidates:
             candidates.sort()
-            _, _, best_i, best_rs = candidates[0]
+            best_ctx_sc, _, _, _, best_i, best_rs = candidates[0]
+            best_ctx_sc = -best_ctx_sc  # un-negate
             used_report[best_i] = True
+            _last_matched_idx[0] = best_i
+            # If context score is poor, the report span is likely from a
+            # different location. Generate context from the clean text instead.
+            if best_ctx_sc < 0.3 and tag_offset >= 0:
+                surr = _surrounding_text(tag_offset, radius=80)
+                fallback_ctx = f"…{surr}…"
+                return fallback_ctx, best_rs["page"], best_rs.get("bill_line")
             return best_rs["context"], best_rs["page"], best_rs.get("bill_line")
 
         # Pass 4: partial match (containment), any page — CONTEXT-VERIFIED
@@ -267,15 +416,29 @@ def _build_checklist(pymupdf_text: str,
         candidates = []
         if len(tag_text) > 3:
             for i, rs in enumerate(report_spans):
-                if not used_report[i]:
-                    if tag_text in rs["text"] or rs["text"] in tag_text:
-                        ctx_sc = _context_score(rs, tag_offset) if tag_offset >= 0 else 0.0
-                        page_dist = abs((rs["page"] or 0) - page)
-                        candidates.append((-ctx_sc, page_dist, i, rs))
+                if used_report[i]:
+                    continue
+                # Require the shorter side to be ≥30% of the longer side
+                shorter = min(len(tag_text), len(rs["text"]))
+                longer = max(len(tag_text), len(rs["text"]))
+                if shorter / longer < 0.3:
+                    continue
+                if _text_contains(rs["text"]):
+                    ctx_sc = _context_score(rs, tag_offset) if tag_offset >= 0 else 0.0
+                    page_dist = abs((rs["page"] or 0) - page)
+                    same_page = 0 if (rs["page"] or 0) == page else 1
+                    index_dist = abs(i - _last_matched_idx[0])
+                    candidates.append((-ctx_sc, same_page, index_dist, page_dist, i, rs))
         if candidates:
             candidates.sort()
-            _, _, best_i, best_rs = candidates[0]
+            best_ctx_sc, _, _, _, best_i, best_rs = candidates[0]
+            best_ctx_sc = -best_ctx_sc  # un-negate
             used_report[best_i] = True
+            _last_matched_idx[0] = best_i
+            if best_ctx_sc < 0.3 and tag_offset >= 0:
+                surr = _surrounding_text(tag_offset, radius=80)
+                fallback_ctx = f"…{surr}…"
+                return fallback_ctx, best_rs["page"], best_rs.get("bill_line")
             return best_rs["context"], best_rs["page"], best_rs.get("bill_line")
 
         return "", page, None
@@ -293,9 +456,29 @@ def _build_checklist(pymupdf_text: str,
         return len(plain_prefix)
 
     idx = 0
+    # When there are no page markers in the clean text (len(chunks)==1),
+    # page_num is a meaningless 1 for all tags.  Pass page=0 to
+    # _find_context so that Pass 1/2 (same-page matching) never fire
+    # and every span goes through context-verified Passes 3/4 instead
+    # of greedily consuming page-1 report spans.
+    _no_page_markers = (len(chunks) == 1 and len(report_spans) > 0)
+
+    # Track cumulative offset to avoid str.find() returning the wrong
+    # position when chunk text appears multiple times in pymupdf_text.
+    _search_from = 0
     for page_num, chunk in chunks:
         # Compute the chunk's offset within the full pymupdf_text
-        chunk_start_in_full = pymupdf_text.find(chunk) if len(chunks) > 1 else 0
+        if len(chunks) > 1:
+            chunk_start_in_full = pymupdf_text.find(chunk, _search_from)
+            if chunk_start_in_full < 0:
+                chunk_start_in_full = pymupdf_text.find(chunk)  # fallback
+            _search_from = chunk_start_in_full + len(chunk)
+        else:
+            chunk_start_in_full = 0
+
+        # When no page markers, use 0 so Pass 1/2 won't match
+        _lookup_page = 0 if _no_page_markers else page_num
+
         for m in _TAG_RE.finditer(chunk):
             idx += 1
             if m.group(1):   # [A>…<A]
@@ -308,16 +491,86 @@ def _build_checklist(pymupdf_text: str,
             # Compute plain-text offset for context verification
             abs_match_start = chunk_start_in_full + m.start()
             plain_offset = _compute_plain_offset(abs_match_start, pymupdf_text)
-            ctx, report_pg, bill_line = _find_context(stripped, page_num, tag_type,
+            ctx, report_pg, bill_line = _find_context(stripped, _lookup_page, tag_type,
                                                         tag_offset=plain_offset)
+            # ── Determine page number ──────────────────────────────
+            # Priority:
+            # 1. Raw pymupdf text page lookup (most reliable — uses
+            #    page markers + surrounding text in original document)
+            # 2. Report page from _find_context match
+            # 3. page_num from clean text page markers (fallback)
+            raw_pg = None
+            if _raw_page_chunks and len(stripped) > 3:
+                # Only use raw-text lookup for spans > 3 chars; very short
+                # spans like "a", "," match too many places in the raw text.
+                surround = _surrounding_text(plain_offset, radius=60)
+                raw_pg = _find_page_from_raw(stripped, surround)
+            final_page = raw_pg or report_pg or page_num
             items.append({
                 "id": idx,
                 "tag_type": tag_type,
                 "text": stripped,
-                "page": report_pg,
+                "page": final_page,
                 "bill_line": bill_line,
                 "context": ctx,
             })
+    # ── Post-process: fix page numbers using monotonicity + neighbors ──
+    # Tags are extracted in document order, so page numbers must be
+    # non-decreasing overall.  A page that jumps ahead of all subsequent
+    # items, or falls behind all preceding items, is likely wrong.
+    #
+    # Strategy: two passes.
+    #  Pass 1 (forward): if an item's page jumps ahead then the NEXT item
+    #    drops back, the jump was wrong — clamp to previous page.
+    #  Pass 2 (median window): catch remaining outliers by comparing each
+    #    item to the median of its ±5 neighbors.
+    if len(items) > 2:
+        pages = [it["page"] for it in items]
+        n = len(pages)
+
+        # ── Pass 1: forward monotonicity ──
+        # If page[i] > page[i-1] AND page[i] > page[i+1], it jumped
+        # ahead incorrectly.  Clamp it to max(prev, next).
+        for i in range(1, n - 1):
+            prev_p = pages[i - 1]
+            curr_p = pages[i]
+            next_p = pages[i + 1]
+            if curr_p > prev_p and curr_p > next_p and (curr_p - prev_p) >= 1:
+                # Also check i+2 to confirm it's a spike, not a real transition
+                next2_p = pages[i + 2] if i + 2 < n else next_p
+                if curr_p > next2_p:
+                    fixed = max(prev_p, next_p)
+                    log.info(
+                        "📄 Monotonicity fix: item %d '%s' page %d → %d (spike)",
+                        items[i]["id"], items[i]["text"][:30], curr_p, fixed
+                    )
+                    pages[i] = fixed
+                    items[i]["page"] = fixed
+
+        # ── Pass 2: median-window outlier fix ──
+        for i in range(n):
+            window = []
+            for j in range(max(0, i - 5), min(n, i + 6)):
+                if j != i:
+                    window.append(pages[j])
+            if not window:
+                continue
+
+            curr = pages[i]
+            window.sort()
+            median_pg = window[len(window) // 2]
+
+            if abs(curr - median_pg) > 1:
+                # Pick replacement: median reflects the local cluster
+                replacement = median_pg
+                log.info(
+                    "📄 Page fix: item %d '%s' page %d → %d (median=%d)",
+                    items[i]["id"], items[i]["text"][:30], curr,
+                    replacement, median_pg
+                )
+                pages[i] = replacement
+                items[i]["page"] = replacement
+
     return items
 
 
@@ -380,6 +633,8 @@ def _norm_loose(s: str) -> str:
 def _token_similarity(a: str, b: str) -> float:
     """Return similarity ratio (0..1) using two tiers:
     Tier 1: Jaccard token overlap (fast, handles word drops).
+      Uses BOTH min-denominator (recall) and max-denominator (precision)
+      to avoid false matches when one text is much longer than the other.
     Tier 2: SequenceMatcher (character-level, handles typos/rewordings).
     Returns the higher of the two scores."""
     wa = set(a.lower().split())
@@ -388,7 +643,13 @@ def _token_similarity(a: str, b: str) -> float:
         return 0.0
     intersection = wa & wb
     shorter = min(len(wa), len(wb))
-    token_ratio = len(intersection) / shorter if shorter else 0.0
+    longer  = max(len(wa), len(wb))
+    recall_ratio    = len(intersection) / shorter if shorter else 0.0
+    precision_ratio = len(intersection) / longer  if longer  else 0.0
+    # Require high overlap relative to BOTH texts — prevents a 9-token phrase
+    # from matching a 35-token phrase just because all 9 words appear in it.
+    # Use geometric mean to balance recall and precision.
+    token_ratio = (recall_ratio * precision_ratio) ** 0.5
     if token_ratio >= 0.85:
         return token_ratio
     # Tier 2: character-level SequenceMatcher for borderline cases
@@ -513,16 +774,27 @@ def _precheck_claude(checklist_items: List[Dict],
                 break
 
     # ── Pass 2: containment matches for remaining items ─────────
-    for item in checklist_items:
+    # Sort unmatched items by descending text length so longer/more-specific
+    # items match first, preventing short items (e.g. "c. The") from stealing
+    # Claude tags that should match longer items (e.g. "c. The Department...").
+    unmatched_items = [item for item in checklist_items if item["id"] not in results]
+    unmatched_items.sort(key=lambda it: len(it["text"]), reverse=True)
+
+    # Build a mapping from checklist item id → expected positional rank
+    # so we can prefer Claude tags that are closest in document order.
+    _item_rank = {it["id"]: i for i, it in enumerate(checklist_items)}
+    _n_claude = len(claude_tags) if claude_tags else 1
+
+    for item in unmatched_items:
         iid = item["id"]
-        if iid in results:
-            continue
         itxt = _norm(item["text"])
         ityp = item["tag_type"]
 
+        # Expected Claude tag index (proportional position in Claude's output)
+        expected_j = (_item_rank.get(iid, 0) / max(len(checklist_items), 1)) * _n_claude
+
         best_j:    Optional[int] = None
-        best_overlap: int  = 0
-        best_contained: bool = False     # True  → item text ⊂ Claude tag
+        best_score: tuple  = (-1, 0)  # (overlap, -distance) — higher is better
 
         for j, ct in enumerate(claude_tags):
             if j in used or ct["type"] != ityp:
@@ -533,21 +805,31 @@ def _precheck_claude(checklist_items: List[Dict],
             #      Claude:  "[, thereafter,]" → ", thereafter,"
             itxt_inner = _norm(_strip_brackets(item["text"]))
             nc_inner   = _norm(_strip_brackets(ct["text"]))
+            overlap = 0
             if itxt in nc or itxt_inner in nc_inner:  # item inside Claude tag
-                overlap = len(itxt)
-                if overlap > best_overlap:
-                    best_j, best_overlap, best_contained = j, overlap, True
+                # For very short items (≤5 chars), require Claude tag to be
+                # similarly short — prevents "(1)" matching a 100-word span
+                # that merely starts with "(1)".
+                if len(itxt) <= 5 and len(nc) > len(itxt) * 4:
+                    overlap = 0  # skip — too disproportionate
+                else:
+                    overlap = len(itxt)
             elif nc in itxt or nc_inner in itxt_inner:  # Claude tag inside item
                 overlap = len(nc)
-                if overlap > best_overlap:
-                    best_j, best_overlap, best_contained = j, overlap, False
             else:
                 # Fuzzy: token overlap ≥ 85% catches single-word drops
                 sim = _token_similarity(itxt, nc)
-                if sim >= 0.85 and len(itxt) > best_overlap:
-                    best_j, best_overlap, best_contained = j, len(itxt), False
+                if sim >= 0.85:
+                    overlap = len(itxt)
 
-        if best_j is not None and best_overlap >= 2:
+            if overlap >= 2:
+                # Tiebreaker: prefer Claude tag closest in document position
+                distance = abs(j - expected_j)
+                score = (overlap, -distance)
+                if score > best_score:
+                    best_j, best_score = j, score
+
+        if best_j is not None:
             used.add(best_j)
             ct = claude_tags[best_j]
             # Both directions are partial — boundaries differ either way
@@ -842,6 +1124,7 @@ def gpt_compare_tags(
     output_xlsx: str = "gpt_tag_comparison.xlsx",
     model: str = "claude-opus-4-7",
     pymupdf_report: Optional[Dict] = None,
+    pymupdf_raw_text: Optional[str] = None,
 ) -> Dict:
     """
     Checklist-driven audit of Claude's output using Claude Opus 4.7 vision.
@@ -856,7 +1139,7 @@ def gpt_compare_tags(
     Returns a summary dict and writes an Excel report.
     """
     # ── Build checklist from PyMuPDF text ───────────────────────────
-    checklist_items = _build_checklist(pymupdf_clean_text, pymupdf_report)
+    checklist_items = _build_checklist(pymupdf_clean_text, pymupdf_report, pymupdf_raw_text)
 
     # ── Deterministic Claude pre-check ──────────────────────────────
     precheck, extra_claude_tags = _precheck_claude(checklist_items, claude_converted_text)
@@ -946,6 +1229,7 @@ def gpt_compare_tags(
     # ── Inject deterministic extra-tag findings into checklist ──────
     # Claude tags not matched to any PyMuPDF checklist item are extras.
     # Add them as checklist error rows so they appear in the main audit table.
+
     if extra_claude_tags:
         log.info("🔍 Injecting %d extra Claude tags into checklist (deterministic)",
                  len(extra_claude_tags))
@@ -953,10 +1237,11 @@ def gpt_compare_tags(
         for i, et in enumerate(extra_claude_tags, start=max_cid + 1):
             tag_label = "[A>...<A]" if et["type"] == "addition" else "[D>...<D]"
             tag_type = "addition" if et["type"] == "addition" else "deletion"
+            et_page = ""
             checklist_results.append({
                 "checklist_id": i,
                 "tag_type": tag_type,
-                "page": "",
+                "page": et_page,
                 "pymupdf_text": "",
                 "claude_text": et["full"],
                 "in_image": "no",
@@ -972,11 +1257,30 @@ def gpt_compare_tags(
                 "id": i,
                 "tag_type": tag_type,
                 "text": et["text"],
+                "page": et_page,
                 "context": f"Extra tag added by Claude: {et['full'][:80]}",
             })
 
     # ── Build full-text lookup from checklist_items (GPT truncates) ──
     _full_pymupdf = {ci["id"]: ci["text"] for ci in checklist_items}
+    _item_page = {ci["id"]: ci["page"] for ci in checklist_items}
+
+    # ── Override page with deterministic value from checklist_items ──
+    # GPT often returns page 1 for everything. The PAGE markers in
+    # PyMuPDF text are ground truth.
+    _page_overrides = 0
+    for cr in checklist_results:
+        cid = cr.get("checklist_id")
+        try:
+            cid = int(cid)
+        except (ValueError, TypeError):
+            continue
+        if cid in _item_page:
+            old_page = cr.get("page")
+            cr["page"] = _item_page[cid]
+            if old_page != _item_page[cid]:
+                _page_overrides += 1
+    log.info("📄 Page override: corrected %d/%d items", _page_overrides, len(checklist_results))
 
     # ── Override in_claude / claude_text with deterministic values ───
     # GPT can hallucinate these fields. The pre-check is ground truth.
@@ -1150,6 +1454,61 @@ def gpt_compare_tags(
     if n_absorbed:
         log.info("🔗 Absorbed %d extra_tag(s) into partial_match items", n_absorbed)
 
+    # ── Auto-resolve short fragments already captured in a parent span ──
+    # PyMuPDF sometimes splits fractions (e.g. "1/2") or short tokens into
+    # separate checklist items ("1", "/", "2").  If a short item (≤3 chars)
+    # is already contained within a Claude-tagged span on the same page,
+    # it is not a real miss or table_content — reclassify as pass.
+    # Build a lookup of Claude-tagged texts per page from passing/partial items.
+    _claude_texts_by_page: dict[int, list[str]] = {}
+    for cr in checklist_results:
+        ct = cr.get("claude_text", "") or ""
+        pg = int(cr.get("page", 0) or 0)
+        if ct and pg:
+            _claude_texts_by_page.setdefault(pg, []).append(ct)
+    n_frag_resolved = 0
+    for cr in checklist_results:
+        pymupdf_txt = (cr.get("pymupdf_text", "") or "").strip()
+        if len(pymupdf_txt) > 3 or len(pymupdf_txt) == 0:
+            continue
+        cls = cr.get("classification", "")
+        if cls in ("match", "linked_fragment", "segmentation_diff"):
+            continue  # already resolved
+        pg = int(cr.get("page", 0) or 0)
+        if pg <= 0:
+            continue
+        # Check if this short text is contained in any Claude span on same page
+        # Only match if the Claude span is similarly short — prevents "(4)"
+        # matching a 100-word span that merely starts with "(4)".
+        # Also verify tag type matches — addition must be in [A>…<A], deletion in [D>…<D].
+        item_tag_type = (cr.get("tag_type", "") or "").lower()
+        for ct in _claude_texts_by_page.get(pg, []):
+            if pymupdf_txt in ct and len(ct) <= len(pymupdf_txt) * 6:
+                # Tag-type guard: reject if item is addition but Claude span is deletion, or vice versa
+                ct_is_add = ct.startswith("[A>") or "[A>" in ct
+                ct_is_del = ct.startswith("[D>") or "[D>" in ct
+                if item_tag_type == "addition" and ct_is_del and not ct_is_add:
+                    continue
+                if item_tag_type == "deletion" and ct_is_add and not ct_is_del:
+                    continue
+                cid = cr.get("checklist_id", 0)
+                cr["classification"] = "linked_fragment"
+                cr["verdict"] = "✅ pass"
+                cr["in_claude"] = "yes"
+                cr["claude_text"] = ct[:200]
+                cr["notes"] = (
+                    f"Short fragment '{pymupdf_txt}' already captured within "
+                    f"parent Claude span. {cr.get('notes', '')}"
+                ).strip()
+                cr["suggested_fix"] = ""
+                n_frag_resolved += 1
+                log.debug("  Resolved short fragment #%d '%s' → already in Claude span",
+                          cid, pymupdf_txt)
+                break
+    if n_frag_resolved:
+        log.info("🔗 Auto-resolved %d short fragment(s) already captured in Claude spans",
+                 n_frag_resolved)
+
     # ── Auto-link "See item #N" fragment items ──────────────────────
     # When GPT marks a fragment (e.g. a standalone ".") with suggested_fix
     # "See item #N — include this character in that span's tag", the fix
@@ -1188,6 +1547,44 @@ def gpt_compare_tags(
     if n_linked:
         log.info("🔗 Auto-linked %d fragment item(s) to their parent items (no separate fix needed)",
                  n_linked)
+
+    # ── Normalize verdicts based on classification ────────────────────
+    # Ensure error classifications always have ❌ error verdict,
+    # even if GPT returned ⚠️ warning for them.
+    _ERROR_CLASSIFICATIONS = {"partial_match", "real_miss", "content_dropped", "extra_tag"}
+    _WARNING_CLASSIFICATIONS = {"header", "table_content", "segmentation_diff"}
+    n_verdict_fixed = 0
+    for cr in checklist_results:
+        cls = cr.get("classification", "")
+        verdict = cr.get("verdict", "")
+        if cls in _ERROR_CLASSIFICATIONS and not verdict.startswith("❌"):
+            cr["verdict"] = "❌ error"
+            cr["notes"] = (cr.get("notes", "") +
+                           f" [AUTO-CORRECTED: {cls} must be ❌ error]").strip()
+            n_verdict_fixed += 1
+        elif cls in _WARNING_CLASSIFICATIONS:
+            # Special case: if it's table_content/header BUT Claude actually
+            # tagged it, that's an error — the tag needs to be removed.
+            in_claude = cr.get("in_claude", "")
+            claude_text = (cr.get("claude_text", "") or "").strip()
+            if in_claude in ("yes", "partial") or claude_text:
+                cr["verdict"] = "❌ error"
+                cr["classification"] = "extra_tag"
+                tag_label = "[A>...<A]" if cr.get("tag_type") == "addition" else "[D>...<D]"
+                cr["suggested_fix"] = (
+                    f"Remove the {tag_label} tags from: {claude_text[:150]}. "
+                    f"This is {cls} (table/header formatting), not legislative markup."
+                )
+                cr["notes"] = (cr.get("notes", "") +
+                               f" [AUTO-CORRECTED: {cls} but Claude tagged it → extra_tag error]").strip()
+                n_verdict_fixed += 1
+            elif not verdict.startswith("⚠"):
+                cr["verdict"] = "⚠️ warning"
+                cr["notes"] = (cr.get("notes", "") +
+                               f" [AUTO-CORRECTED: {cls} is ⚠️ warning]").strip()
+                n_verdict_fixed += 1
+    if n_verdict_fixed:
+        log.info("🔧 Auto-corrected %d mismatched verdict↔classification pairs", n_verdict_fixed)
 
     # ── Compute counts ──────────────────────────────────────────────
     n_pass = sum(1 for r in checklist_results if r.get("verdict", "").startswith("✅"))

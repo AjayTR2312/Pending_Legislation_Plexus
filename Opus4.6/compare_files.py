@@ -131,7 +131,11 @@ def _classify_replace(pymupdf_words: list[str], converted_words: list[str]) -> d
             moved.append({"position": idx, "expected": exp, "got": got})
         return {"sub_type": "TRANSPOSED", "moved_words": moved}
 
-    # ── 2. PUNCTUATION-only: words identical ignoring punctuation ──
+    # ── 2. SPACING-only: joined text is identical (e.g. "Therelease" vs "The release")
+    if ''.join(pymupdf_words) == ''.join(converted_words):
+        return {"sub_type": "SPACING"}
+
+    # ── 3. PUNCTUATION-only: words identical ignoring punctuation ──
     p_stripped = [_strip_punct(w) for w in pymupdf_words]
     c_stripped = [_strip_punct(w) for w in converted_words]
     if p_stripped == c_stripped:
@@ -392,9 +396,33 @@ def compare_texts(pymupdf_clean_text: str, converted_text: str) -> dict:
     real_diffs = _merge_transposed_pairs(real_diffs, pymupdf_words, converted_words)
 
     # Count sub-types for quick access
+    n_spacing = sum(1 for d in real_diffs if d.get("sub_type") == "SPACING")
     n_transposed = sum(1 for d in real_diffs if d.get("sub_type") == "TRANSPOSED")
     n_punctuation = sum(1 for d in real_diffs if d.get("sub_type") == "PUNCTUATION")
+
+    # Separate spacing-only diffs — these are not real content differences
+    spacing_diffs = [d for d in real_diffs if d.get("sub_type") == "SPACING"]
+    real_diffs = [d for d in real_diffs if d.get("sub_type") != "SPACING"]
+
+    # Recalculate accuracy excluding spacing-only diffs.
+    # For each spacing diff, the words on both sides are the same content
+    # just split differently, so count the larger side as "matching".
+    if spacing_diffs:
+        spacing_bonus = sum(
+            max(len(d.get("pymupdf_text", "").split()),
+                len(d.get("converted_text", "").split()))
+            for d in spacing_diffs
+        )
+        adjusted_matching = matching_words + spacing_bonus
+        accuracy = (adjusted_matching / max_words * 100) if max_words > 0 else 100.0
+        base["accuracy"] = round(accuracy, 2)
+        base["matching_words"] = adjusted_matching
+
     n_word_diffs = len(real_diffs) - n_transposed - n_punctuation
+
+    # Recompute status after removing spacing diffs
+    if not real_diffs and status == "DIFFERENT":
+        status = "CONTENT_MATCH"
 
     base.update(
         status=status,
@@ -404,6 +432,8 @@ def compare_texts(pymupdf_clean_text: str, converted_text: str) -> dict:
         repositioned_count=len(repositioned),
         transposed_count=n_transposed,
         punctuation_count=n_punctuation,
+        spacing_count=n_spacing,
+        spacing_diffs=spacing_diffs,
         word_diff_count=n_word_diffs,
     )
     return base

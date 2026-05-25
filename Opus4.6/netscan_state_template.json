@@ -152,7 +152,8 @@
         "strike_out": true,
         "brackets": false,
         "custom_rules": [
-          "KEEP the amendment status line that appears at the top of page one (e.g., 'As Amended by Senate Committee', 'As Amended by House Committee'). This is bill metadata, not a repeating page header — do NOT remove it."
+          "KEEP the amendment status line that appears at the top of page one (e.g., 'As Amended by Senate Committee', 'As Amended by House Committee'). This is bill metadata, not a repeating page header — do NOT remove it.",
+          "KEEP the certification/signing block at the end of the bill (e.g., 'I hereby certify that the above BILL originated in the House...', 'Speaker of the House', 'President of the Senate', 'APPROVED', 'Governor'). This is bill content — transcribe it as plain text, do NOT omit it."
         ]
       }
     },

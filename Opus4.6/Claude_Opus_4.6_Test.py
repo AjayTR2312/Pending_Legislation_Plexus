@@ -349,6 +349,7 @@ Respond with ONLY the 2-letter state code (e.g., "KS", "FL", "CO"). If you canno
         message = client.messages.create(
             model="claude-opus-4-6",
             max_tokens=100,
+            temperature=0,
             messages=[{
                 "role": "user",
                 "content": [
@@ -843,6 +844,7 @@ def convert_pdf_to_text(client, pdf_path, prompt, batch_size=None, dpi=400):
                 with client.messages.stream(
                     model="claude-opus-4-6",
                     max_tokens=128000,
+                    temperature=0,
                     messages=messages
                 ) as stream:
                     for text in stream.text_stream:
@@ -925,6 +927,7 @@ def convert_pdf_document_mode(client, pdf_path, prompt):
         with client.messages.stream(
             model="claude-opus-4-6",
             max_tokens=128000,
+            temperature=0,
             messages=messages
         ) as stream:
             for text in stream.text_stream:
@@ -983,6 +986,7 @@ def reconcile_outputs(client, visual_text, doc_text):
         with client.messages.stream(
             model="claude-opus-4-6",
             max_tokens=128000,
+            temperature=0,
             messages=messages
         ) as stream:
             for text in stream.text_stream:
@@ -1085,6 +1089,7 @@ def self_correction_pass(client, converted_text, page_images, state_config=None)
         with client.messages.stream(
             model="claude-opus-4-6",
             max_tokens=128000,
+            temperature=0,
             messages=[{"role": "user", "content": content}]
         ) as stream:
             for text in stream.text_stream:
@@ -1315,14 +1320,17 @@ def deterministic_cleanup(text, state_config=None):
     text = re.sub(r'\s+<D\]', '<D]', text)
 
     # ── Fix 7: Merge adjacent same-type tags ──────────────────────
-    # [A>text1<A] [A>text2<A] → [A>text1 text2<A]  (if only whitespace between)
-    merge_a = len(re.findall(r'<A\]\s*\[A>', text))
-    merge_d = len(re.findall(r'<D\]\s*\[D>', text))
+    # [A>text1<A] [A>text2<A] → [A>text1 text2<A]  (if only spaces/tabs between, NOT newlines)
+    # Using [^\S\n]* instead of \s* to avoid merging tags across lines,
+    # which would incorrectly merge separate underlined spans separated by
+    # plain-text content like subsection labels.
+    merge_a = len(re.findall(r'<A\][^\S\n]*\[A>', text))
+    merge_d = len(re.findall(r'<D\][^\S\n]*\[D>', text))
     if merge_a > 0:
-        text = re.sub(r'<A\]\s*\[A>', ' ', text)
+        text = re.sub(r'<A\][^\S\n]*\[A>', ' ', text)
         fix_log.append(f"Merged {merge_a} adjacent [A>...<A] tag pairs")
     if merge_d > 0:
-        text = re.sub(r'<D\]\s*\[D>', ' ', text)
+        text = re.sub(r'<D\][^\S\n]*\[D>', ' ', text)
         fix_log.append(f"Merged {merge_d} adjacent [D>...<D] tag pairs")
 
     # ── Fix 8: Fix orphaned/mismatched tags ───────────────────────
@@ -1370,12 +1378,82 @@ def deterministic_cleanup(text, state_config=None):
     else:
         logging.info("✅ Deterministic cleanup: no fixes needed")
 
-    # ── Final: Remove nested tags, merge mid-sentence splits, then split at subsection boundaries ──
+    # ── Final: Fix cross-type overlaps, remove nested tags, merge mid-sentence splits, then split at subsection boundaries ──
+    text = fix_overlapping_cross_tags(text)
     text = remove_nested_tags(text)
     text = merge_split_tags(text)
     text = split_tagged_subsections(text)
 
     return text
+
+
+def fix_overlapping_cross_tags(text):
+    """
+    Fix overlapping tags between different types (A and D).
+
+    When an [A> tag contains a [D>...<D] inside it (or vice versa),
+    split them so they don't overlap:
+        [A>added text[D>deleted text<D] more added<A]
+    becomes:
+        [A>added text<A][D>deleted text<D] [A>more added<A]
+
+    Similarly for [D> containing [A>...<A].
+    """
+    result = []
+    i = 0
+    stack = []  # track which tag type is currently open: 'A' or 'D'
+
+    while i < len(text):
+        # Check for opening tags
+        if text[i:i+3] == '[A>' or text[i:i+3] == '[D>':
+            tag_type = text[i+1]  # 'A' or 'D'
+            other = 'D' if tag_type == 'A' else 'A'
+
+            if stack and stack[-1] == other:
+                # We're inside the other type — close it first, then open this one
+                result.append(f'<{other}]')
+                stack.pop()
+                result.append(f'[{tag_type}>')
+                stack.append(tag_type)
+                # Mark that we need to reopen the other type after this tag closes
+                stack.append(f'reopen_{other}')
+            else:
+                result.append(text[i:i+3])
+                stack.append(tag_type)
+            i += 3
+
+        # Check for closing tags
+        elif text[i:i+3] == '<A]' or text[i:i+3] == '<D]':
+            tag_type = text[i+1]  # 'A' or 'D'
+            result.append(text[i:i+3])
+
+            # Remove from stack
+            # First check if there's a reopen marker above
+            new_stack = []
+            found = False
+            reopen = None
+            for s in reversed(stack):
+                if not found and s == tag_type:
+                    found = True
+                    continue
+                if not found and s.startswith('reopen_'):
+                    reopen = s
+                    continue
+                new_stack.insert(0, s)
+            stack = new_stack
+
+            # If we had a reopen marker, reopen that tag type
+            if reopen:
+                reopen_type = reopen.split('_')[1]
+                # Only reopen if there's content before the next close
+                result.append(f' [{reopen_type}>')
+                stack.append(reopen_type)
+            i += 3
+        else:
+            result.append(text[i])
+            i += 1
+
+    return ''.join(result)
 
 
 def remove_nested_tags(text):
@@ -1497,16 +1575,19 @@ def split_tagged_subsections(text):
     subsection_re = re.compile(
         r'(?:(?<=[.:;])|(?<=\band\b)|(?<=\bor\b))\s+'
         r'('
-        r'\(\d+\)|\([A-Z]+\)|\([a-z]+\)'       # parenthesized: (1), (A), (a), (ii), (iii), (AA)
-        r'|[a-z]\.\d*\.?'                        # letter-dot: b. c.1.
-        r'|\d+\.'                                # number-dot: 1. 2. 3.
+        r'\(\d+\)[a-z]\.\d*\.?'                  # composite: (3)a. (1)b.1.
+        r'|\(\d+\)|\([A-Z]+\)|\([a-z]+\)'        # parenthesized: (1), (A), (a), (ii), (iii), (AA)
+        r'|[a-z]\.\d*\.?'                         # letter-dot: b. c.1.
+        r'|\d+\.'                                 # number-dot: 1. 2. 3.
         r')(?:\s|$)'                              # trailing space OR end of content
         , re.IGNORECASE
     )
 
     # Patterns that should NOT be split (e.g., "Sec. 2." or "Section 1.")
+    # Avoid matching "this section." or "under section." — require Sec/Section
+    # to appear at start of text or after a newline (i.e., as a heading prefix)
     _nosplit_re = re.compile(
-        r'(?:Sec|Section|Art|Article)\.\s*$', re.IGNORECASE
+        r'(?:^|\n)\s*(?:Sec|Section|Art|Article)\.\s*$', re.IGNORECASE
     )
 
     def _split_block(match):
