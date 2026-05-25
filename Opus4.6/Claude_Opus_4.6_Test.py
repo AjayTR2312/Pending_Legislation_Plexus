@@ -1378,12 +1378,82 @@ def deterministic_cleanup(text, state_config=None):
     else:
         logging.info("✅ Deterministic cleanup: no fixes needed")
 
-    # ── Final: Remove nested tags, merge mid-sentence splits, then split at subsection boundaries ──
+    # ── Final: Fix cross-type overlaps, remove nested tags, merge mid-sentence splits, then split at subsection boundaries ──
+    text = fix_overlapping_cross_tags(text)
     text = remove_nested_tags(text)
     text = merge_split_tags(text)
     text = split_tagged_subsections(text)
 
     return text
+
+
+def fix_overlapping_cross_tags(text):
+    """
+    Fix overlapping tags between different types (A and D).
+
+    When an [A> tag contains a [D>...<D] inside it (or vice versa),
+    split them so they don't overlap:
+        [A>added text[D>deleted text<D] more added<A]
+    becomes:
+        [A>added text<A][D>deleted text<D] [A>more added<A]
+
+    Similarly for [D> containing [A>...<A].
+    """
+    result = []
+    i = 0
+    stack = []  # track which tag type is currently open: 'A' or 'D'
+
+    while i < len(text):
+        # Check for opening tags
+        if text[i:i+3] == '[A>' or text[i:i+3] == '[D>':
+            tag_type = text[i+1]  # 'A' or 'D'
+            other = 'D' if tag_type == 'A' else 'A'
+
+            if stack and stack[-1] == other:
+                # We're inside the other type — close it first, then open this one
+                result.append(f'<{other}]')
+                stack.pop()
+                result.append(f'[{tag_type}>')
+                stack.append(tag_type)
+                # Mark that we need to reopen the other type after this tag closes
+                stack.append(f'reopen_{other}')
+            else:
+                result.append(text[i:i+3])
+                stack.append(tag_type)
+            i += 3
+
+        # Check for closing tags
+        elif text[i:i+3] == '<A]' or text[i:i+3] == '<D]':
+            tag_type = text[i+1]  # 'A' or 'D'
+            result.append(text[i:i+3])
+
+            # Remove from stack
+            # First check if there's a reopen marker above
+            new_stack = []
+            found = False
+            reopen = None
+            for s in reversed(stack):
+                if not found and s == tag_type:
+                    found = True
+                    continue
+                if not found and s.startswith('reopen_'):
+                    reopen = s
+                    continue
+                new_stack.insert(0, s)
+            stack = new_stack
+
+            # If we had a reopen marker, reopen that tag type
+            if reopen:
+                reopen_type = reopen.split('_')[1]
+                # Only reopen if there's content before the next close
+                result.append(f' [{reopen_type}>')
+                stack.append(reopen_type)
+            i += 3
+        else:
+            result.append(text[i])
+            i += 1
+
+    return ''.join(result)
 
 
 def remove_nested_tags(text):

@@ -76,6 +76,11 @@ try:
 except ImportError:
     detect_pdf_type = None
     logging.warning("⚠️ pdf_type_detector module not found — scanned PDF detection disabled")
+try:
+    from pdf_margin_cropper import auto_crop_if_needed
+except ImportError:
+    auto_crop_if_needed = None
+    logging.warning("⚠️ pdf_margin_cropper module not found — margin cropping disabled")
 
 # Full state name lookup for display
 
@@ -2361,6 +2366,18 @@ def show_simple_ui():
                                 st.session_state.temp_pdf_path = None
                                 st.session_state.last_uploaded_file_id = None
                                 st.stop()
+                        # ── Broad-margin auto-crop ────────────────────────────
+                        if auto_crop_if_needed is not None:
+                            with st.spinner("📐 Checking PDF margins..."):
+                                cropped_path = auto_crop_if_needed(temp_path)
+                            if cropped_path != temp_path:
+                                # Replace temp with cropped version
+                                try:
+                                    os.remove(temp_path)
+                                except Exception:
+                                    pass
+                                temp_path = cropped_path
+                                st.info("✂️ PDF had broad margins — auto-cropped for better extraction.")
                         # ──────────────────────────────────────────────────────
                         st.session_state.temp_pdf_path = temp_path
                         st.session_state.last_uploaded_file_id = current_file_id
