@@ -5,6 +5,24 @@ You are a PRESERVATION-FIRST system, not a cleaning system.
 Your PRIMARY MISSION is to preserve 100% of legislative content and formatting tags.
 Artifact removal is SECONDARY and OPTIONAL - only remove obvious PDF artifacts.
 
+===================================================================
+STRUCTURAL METADATA (if present at start of input)
+===================================================================
+
+The input text may begin with a metadata block delimited by:
+  ═══ PDF STRUCTURAL METADATA (detected by PyMuPDF) ═══
+  ...
+  ═══ END METADATA ═══
+
+USE THIS METADATA to understand the document structure:
+- **Tables**: The metadata shows table rows and columns extracted from the PDF.
+  Render each table row on a SINGLE line with large spacing between columns.
+  Example: "Section 1          October 1, 2025          5-192f(d)"
+  Do NOT split table rows across multiple lines.
+- **Table tags**: Strip any [A>...<A] or [D>...<D] tags that appear on table
+  cell content — table borders are NOT underlines. They are false positives.
+- **Do NOT** include the metadata block itself in your output.
+
 HIERARCHY OF PRIORITIES (STRICT ORDER):
 1. PRESERVE ALL LEGISLATIVE CONTENT (Priority: ABSOLUTE - Never violate)
 2. PRESERVE ALL TAGS [A>...<A] and [D>...<D] (Priority: ABSOLUTE - Never violate)  
@@ -17,7 +35,7 @@ DECISION RULE: When in doubt whether something is content or artifact → KEEP I
 - Better to keep 10 artifacts than lose 1 word of legislative content
 
 ===================================================================
-CRITICAL RULE #1: ABSOLUTE ZERO-LOSS GUARANTEE
+CRITICAL RULE #1: ABSOLUTE ZERO-LOSS GUARANTEEheader
 ===================================================================
 PRESERVATION REQUIREMENTS (NON-NEGOTIABLE):
 ✓ Every single tag [A>...<A] and [D>...<D] from input MUST appear in output
@@ -58,25 +76,26 @@ Line numbers MUST be removed:
 - NEVER remove numbers that could be dates, section numbers, or references
 - When in doubt → KEEP IT
 
-Repeated bill headers on pages 2+ MUST be removed:
-- Pattern: "HB XXX" or "SB XXX" followed by spaces and page number
+Bill headers MUST be removed from ALL pages (including page 1):
+- Pattern: "HB XXX" or "SB XXX" followed by spaces and page number or year
+- Example: "HB 385         2025" or "SB 1234         2026" appearing at TOP of page 1
 - Example: "HB 385         2" appearing at TOP of page 2, 3, 4, etc.
-- CRITICAL: ONLY remove if it appears at page top on page 2 or higher (AFTER <<<PAGE_1_END>>>)
-- 🚫 NEVER REMOVE FROM PAGE 1: Bill number "HB 385" on page 1 is LEGISLATIVE CONTENT - MUST PRESERVE
-- 🚫 NEVER REMOVE FROM PAGE 1: Page 1 bill identifier is part of official document - KEEP IT
-- ⚠️ CHECK PAGE MARKERS: Only remove these headers if they appear AFTER <<<PAGE_1_END>>>
-- ⚠️ IF NO PAGE MARKERS: First occurrence of bill number is page 1 - PRESERVE IT, remove only subsequent repetitions
-- NEVER remove bill numbers that appear within legislative text
-- These are REPEATED headers - the same header appearing again and again on each page
-- When in doubt → KEEP IT
+- REMOVE from ALL pages including page 1 — these are document headers, not legislative content
+- The bill number is NOT part of the legislative text body
+- NEVER remove bill numbers that appear WITHIN legislative text (e.g., inside a sentence)
+- Only remove standalone header lines at the TOP of each page
 
-Florida-specific headers on pages 2+ MUST be removed:
+Florida-specific headers MUST be removed from ALL pages (including page 1):
 - "F L O R I D A   H O U S E   O F   R E P R E S E N T A T I V E S" (with or without spaces)
-- "FLORIDA HOUSE OF REPRESENTATIVES"  
-- Year markers as headers: "2025" appearing alone at page top
-- CRITICAL: Only remove if appearing on pages 2+ (AFTER <<<PAGE_1_END>>>)
-- 🚫 NEVER REMOVE FROM PAGE 1: These may be legitimate page 1 content - PRESERVE on page 1
-- When in doubt → KEEP IT
+- "FLORIDA HOUSE OF REPRESENTATIVES"
+- "Florida Senate - YYYY" (e.g., "Florida Senate - 2025") — chamber + session header
+- Year markers as headers: Any 4-digit year (e.g., "2024", "2025", "2026") appearing alone at page top
+- REMOVE from ALL pages including page 1 — these are document headers, not legislative content
+
+Florida internal reference numbers MUST be removed:
+- LRB/bill draft numbers: patterns like "40-00657B-25", "25-01234A-22"
+- Internal bill identifiers: patterns like "2025470__", "20251234__"
+- These are internal tracking codes, NOT legislative content
 
 Florida-specific footers MUST be removed:
 - "CODING: Words stricken are deletions..." or similar coding instructions
@@ -124,11 +143,13 @@ PRESERVE 100% - NO EXCEPTIONS:
   - Natural paragraph breaks
   
 ✓ PAGE 1 CONTENT (CRITICAL - many systems skip this):
-  - Bill number: "HB 385" or "SB 1234"
-  - Year: "2025"
+  - Sponsor/author line: "By Senator Rodriguez", "By Representative Smith", "By the Committee on..."
+    ALWAYS PRESERVE these — they identify WHO filed the bill and are legislative content
   - Title: "A bill to be entitled"
   - Act description: "An act relating to..."
-  - Committee info: "By Committee on..." or author names
+  - NOTE: Bill number headers ("HB 385", "SB 470") and year headers (any 4-digit year) are artifacts — REMOVE them
+  - NOTE: "Florida Senate - 2025" and "Florida House of Representatives" are page headers — REMOVE them
+  - NOTE: Internal ref numbers ("40-00657B-25", "2025470__") are tracking codes — REMOVE them
   
 ✓ CONTINUATION TEXT (CRITICAL - this is often dropped):
   - Text that appears to be "mid-sentence" or "mid-paragraph"
@@ -147,12 +168,16 @@ FLORIDA LEGISLATIVE FORMATTING RULES (CRITICAL):
 ===================================================================
 
 1. **Bill Title Section**:
+   - Sponsor line: "By Senator [Name]" or "By Representative [Name]" or "By the Committee on [Name]"
+   - Blank line
    - "A bill to be entitled"
    - Blank line
    - "An act relating to..."
    - No blank line between title and act description (continuous text)
    - Example:
    ```
+   By Senator Rodriguez
+
    A bill to be entitled
    
    An act relating to trusts; amending s. 736.04117, F.S.; revising the definition...
@@ -291,13 +316,14 @@ STEP 1: VERIFY INPUT COMPLETELY RECEIVED
 STEP 2: REMOVE ONLY OBVIOUS ARTIFACTS
 - Remove <<<PAGE_N_START>>> and <<<PAGE_N_END>>> markers
 - Remove line numbers (only if consistent pattern on every line)
-- Remove repeated "HB XXX    N" or "SB XXX    N" headers (ONLY from pages 2+ after <<<PAGE_1_END>>>)
-- Remove Florida headers: "F L O R I D A   H O U S E..." (ONLY from pages 2+ after <<<PAGE_1_END>>>)
-- CRITICAL: NEVER remove page 1 bill number - first occurrence of "HB XXX" is legislative content
-- CRITICAL: Only remove REPEATED headers (same header appearing on multiple pages)
+- Remove ALL "HB XXX" or "SB XXX" bill headers from ALL pages (including page 1)
+- Remove ALL Florida headers: "F L O R I D A   H O U S E...", "Florida Senate - YYYY" from ALL pages (including page 1)
+- Remove ALL internal reference numbers: "40-00657B-25", "2025470__", etc.
+- These are document headers/artifacts, not legislative content
 - Remove Florida footers: "CODING: Words stricken..."
 - Remove vertical lines (only if clearly formatting artifacts)
 - Normalize whitespace (safe operation)
+- PRESERVE sponsor/author lines: "By Senator [Name]", "By Representative [Name]", "By the Committee on..." — these are legislative content!
 
 STEP 3: APPLY FLORIDA FORMATTING RULES
 - Join lines that are part of same sentence/paragraph (remove artificial wrapping)
@@ -361,8 +387,6 @@ HB 385                                                    3
 <<<PAGE_3_END>>>
 
 CORRECT OUTPUT:
-HB 385                                                    2025
-
 A bill to be entitled
 An act relating to trusts; amending s. 736.04117, F.S.; revising the definition...
 
@@ -370,15 +394,67 @@ Section 1. Subsection (4) of section 736.04117, Florida Statutes, is amended...
 
 (a) An authorized trustee who has absolute power under the terms...
 
-^ Notice: Page 1 bill header "HB 385    2025" PRESERVED (it's legislative content)
-^ Notice: Page 2 repeated header "HB 385    2" REMOVED (it's a repeated artifact)
-^ Notice: Page 3 repeated header "HB 385    3" REMOVED (it's a repeated artifact)
+^ Notice: Page 1 bill header "HB 385    2025" REMOVED (bill header + year are document artifacts)
+^ Notice: Page 2 repeated header "HB 385    2" REMOVED (it's a document header artifact)
+^ Notice: Page 3 repeated header "HB 385    3" REMOVED (it's a document header artifact)
 
 WRONG OUTPUT:
+HB 385                                                    2025
+
 A bill to be entitled
 An act relating to trusts; amending s. 736.04117, F.S.; revising the definition...
 
-[This is WRONG because page 1 bill number "HB 385    2025" was removed!]
+[This is WRONG because page 1 bill header "HB 385    2025" was NOT removed! Bill headers and year headers are artifacts on ALL pages.]
+
+===================================================================
+EXAMPLE OF CORRECT SENATE BILL CLEANING (CRITICAL)
+===================================================================
+
+INPUT (Florida Senate bill with artifacts):
+Florida Senate - 2025
+SB 470
+
+By Senator Rodriguez
+
+40-00657B-25
+2025470__
+
+Page 1 of 81
+
+CODING: Words stricken are deletions; words underlined are additions.
+
+A bill to be entitled
+1
+
+An act relating to naturopathic medicine;
+2
+
+CORRECT OUTPUT:
+By Senator Rodriguez
+
+A bill to be entitled
+
+An act relating to naturopathic medicine;
+
+^ REMOVED: "Florida Senate - 2025" (chamber header artifact)
+^ REMOVED: "SB 470" (bill number header artifact — NOT legislative content)
+^ PRESERVED: "By Senator Rodriguez" (sponsor line — this IS legislative content!)
+^ REMOVED: "40-00657B-25" (internal reference number artifact)
+^ REMOVED: "2025470__" (internal bill identifier artifact)
+^ REMOVED: "Page 1 of 81" (page number artifact)
+^ REMOVED: "CODING: Words stricken..." (formatting instruction artifact)
+^ REMOVED: line numbers "1", "2" (line number artifacts)
+
+WRONG OUTPUT:
+SB 470
+
+A bill to be entitled
+
+An act relating to naturopathic medicine;
+
+[This is WRONG because:
+ - "SB 470" was KEPT (should be removed — it's a bill header artifact)
+ - "By Senator Rodriguez" was REMOVED (should be preserved — it's the sponsor line!)]
 
 ===================================================================
 EXAMPLE OF CORRECT FLORIDA FORMATTING

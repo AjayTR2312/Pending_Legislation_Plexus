@@ -76,6 +76,17 @@ try:
 except ImportError:
     detect_pdf_type = None
     logging.warning("⚠️ pdf_type_detector module not found — scanned PDF detection disabled")
+try:
+    from pdf_compare_viewer import (
+        render_pdf_pages as compare_render_pdf_pages,
+        extract_word_bboxes as compare_extract_word_bboxes,
+        build_word_level_map as compare_build_word_level_map,
+        build_viewer_html as compare_build_viewer_html,
+    )
+except ImportError:
+    compare_render_pdf_pages = compare_extract_word_bboxes = None
+    compare_build_word_level_map = compare_build_viewer_html = None
+    logging.warning("⚠️ pdf_compare_viewer module not found — PDF↔Text compare viewer disabled")
 
 # Full state name lookup for display
 
@@ -1668,6 +1679,515 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
         logging.error(f"Claude Opus processing error: {e}", exc_info=True)
         return None
 
+
+def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeholder=None, status_placeholder=None, log_placeholder=None):
+    """Process PDF using only PyMuPDF extraction + Claude LLM clean (no visual conversion, no GPT audit)."""
+    import importlib.util
+
+    start_time = time.time()
+    session_mgr = st.session_state.session_manager
+    session_folders = session_mgr.get_session_folders(session_id)
+
+    st.session_state.processing_logs = []
+
+    steps_labels = [
+        {"name": "Initialize",               "icon": "🤖"},
+        {"name": "Detect State",              "icon": "🔍"},
+        {"name": "PyMuPDF Extraction",        "icon": "📄"},
+        {"name": "Claude LLM Clean",          "icon": "🧹"},
+        {"name": "Save Output",              "icon": "💾"},
+    ]
+    st.session_state.step_status = {i: "⏳" for i in range(len(steps_labels))}
+    # Override the steps display for this mode
+    st.session_state._pymupdf_only_steps = steps_labels
+
+    def add_log(message, level="info"):
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        step_idx = st.session_state.get('current_step', 0)
+        st.session_state.processing_logs.append(
+            {"time": timestamp, "message": message, "level": level, "step": step_idx}
+        )
+        logging.info(message)
+        if log_placeholder is not None:
+            with log_placeholder.container():
+                st.markdown(_build_activity_feed_html(st.session_state.processing_logs), unsafe_allow_html=True)
+
+    def update_progress():
+        if progress_placeholder:
+            with progress_placeholder.container():
+                _show_steps(steps_labels)
+
+    def _show_steps(steps):
+        cols = st.columns(len(steps))
+        for i, step in enumerate(steps):
+            status = st.session_state.step_status.get(i, "⏳")
+            with cols[i]:
+                st.markdown(f"<div style='text-align:center'>{status}<br><small>{step['icon']} {step['name']}</small></div>", unsafe_allow_html=True)
+
+    session_mgr.start_processing(session_id)
+    add_log("Starting PyMuPDF Extract + Clean pipeline...")
+
+    try:
+        # ── Load opus module for utilities ──────────────────────────────────────
+        opus_module_path = os.path.normpath(
+            os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         '..', 'Opus4.6', 'Claude_Opus_4.6_Test.py')
+        )
+        spec = importlib.util.spec_from_file_location("claude_opus_converter", opus_module_path)
+        opus = importlib.util.module_from_spec(spec)
+        _orig_stdout, _orig_stderr = sys.stdout, sys.stderr
+        spec.loader.exec_module(opus)
+        sys.stdout, sys.stderr = _orig_stdout, _orig_stderr
+
+        # Reset token tracker for this run
+        if hasattr(opus, 'reset_token_tracker'):
+            opus.reset_token_tracker()
+
+        # ── Step 1: Initialize client ────────────────────────────────────────────
+        st.session_state.current_step = 0
+        st.session_state.step_status[0] = "🔄"
+        update_progress()
+        add_log("🤖 Initializing Anthropic client...")
+        if status_placeholder:
+            status_placeholder.info("🤖 Initializing Anthropic client...")
+
+        client = opus.get_anthropic_client()
+        if not client:
+            raise Exception("Failed to initialize Anthropic client")
+
+        st.session_state.step_status[0] = "✅"
+        update_progress()
+        add_log("✅ Client initialized")
+
+        # ── Step 2: Detect State ──────────────────────────────────────────────────
+        st.session_state.current_step = 1
+        st.session_state.step_status[1] = "🔄"
+        update_progress()
+        add_log("🔍 Detecting state from filename...")
+
+        detected_state = opus.detect_state_from_filename(pdf_path)
+        if detected_state:
+            add_log(f"✅ State detected from filename: {detected_state}")
+        else:
+            add_log("🔍 Analyzing PDF content to identify state via AI...")
+            detected_state = opus.detect_state_from_content(client, pdf_path)
+
+        st.session_state.detected_state = detected_state
+        if detected_state:
+            _state_name = US_STATE_NAMES.get(detected_state, detected_state)
+            add_log(f"✅ Detected state: {detected_state} — {_state_name}")
+        else:
+            add_log("⚠️ Could not detect state — using defaults", "warning")
+
+        state_config = opus.load_state_template(detected_state) if detected_state else None
+        st.session_state.step_status[1] = "✅"
+        update_progress()
+
+        # ── Step 3: PyMuPDF Extraction ───────────────────────────────────────────
+        st.session_state.current_step = 2
+        st.session_state.step_status[2] = "🔄"
+        update_progress()
+        add_log("📄 Running PyMuPDF extraction...")
+        if status_placeholder:
+            status_placeholder.info("📄 Running PyMuPDF extraction...")
+
+        # Reset audit data
+        st.session_state.audit_excel_path = None
+        st.session_state.audit_highlighted_dir = None
+        st.session_state.audit_json_report = None
+        st.session_state.content_accuracy_report = None
+        st.session_state.gpt_audit_failed = False
+
+        from pymupdf_extractor import (
+            extract_pdf_json_report,
+            extract_pdf_with_pymupdf,
+            highlight_pdf_formatting,
+            clean_extracted_text,
+            consolidate_adjacent_tags,
+        )
+
+        # Determine state-specific marking flags
+        _mark_flags = {}
+        if state_config:
+            add_cfg = state_config.get("add_markup", {})
+            del_cfg = state_config.get("delete_markup", {})
+            _mark_flags["mark_underline"] = add_cfg.get("underline", True)
+            _mark_flags["mark_italic"] = add_cfg.get("italic", False) or del_cfg.get("italic", False)
+            _mark_flags["mark_bold"] = add_cfg.get("bold", False)
+            _mark_flags["mark_strikethrough"] = del_cfg.get("strike_out", True)
+            _mark_flags["mark_brackets"] = add_cfg.get("brackets", False) or del_cfg.get("brackets", False)
+
+        # Output paths
+        output_filename = Path(pdf_path).stem + "_claude_opus_pymupdf_clean.txt"
+        output_path = os.path.join(session_folders['output_folder'], output_filename)
+        os.makedirs(session_folders['output_folder'], exist_ok=True)
+
+        # JSON report
+        pymupdf_report = extract_pdf_json_report(pdf_path, **_mark_flags)
+        n_spans = len(pymupdf_report.get("formatted_spans", []))
+        add_log(f"📊 PyMuPDF JSON report: {n_spans} formatted spans detected")
+
+        pymupdf_json_path = output_path.replace(".txt", "_report.json")
+        import json as _json
+        with open(pymupdf_json_path, "w", encoding="utf-8") as jf:
+            _json.dump(pymupdf_report, jf, indent=2, ensure_ascii=False)
+
+        # Tagged text
+        pymupdf_text = extract_pdf_with_pymupdf(pdf_path, join_pages=True, **_mark_flags)
+        pymupdf_txt_path = output_path.replace("_clean.txt", ".txt")
+        with open(pymupdf_txt_path, "w", encoding="utf-8") as tf:
+            tf.write(pymupdf_text)
+        add_log(f"✅ PyMuPDF tagged text: {len(pymupdf_text):,} chars")
+
+        # Filter italic by section if needed
+        pymupdf_report, pymupdf_text = _filter_italic_by_section(pymupdf_report, pymupdf_text, state_config)
+
+        # Highlighted images
+        highlight_dir = Path(output_path).parent / f"{Path(pdf_path).stem}_highlighted"
+        hi_imgs = highlight_pdf_formatting(pdf_path, report=pymupdf_report, output_dir=highlight_dir, **_mark_flags)
+        add_log(f"✅ {len(hi_imgs)} highlighted page images saved")
+
+        st.session_state.audit_highlighted_dir = str(highlight_dir)
+        st.session_state.audit_json_report = pymupdf_report
+        st.session_state.step_status[2] = "✅"
+        update_progress()
+
+        # ── Step 4: Claude LLM Clean ─────────────────────────────────────────────
+        st.session_state.current_step = 3
+        st.session_state.step_status[3] = "🔄"
+        update_progress()
+        add_log("🧹 Cleaning PyMuPDF text with Claude...")
+        if status_placeholder:
+            status_placeholder.info("🧹 Cleaning PyMuPDF text with Claude...")
+
+        pymupdf_clean_text = clean_extracted_text(
+            pymupdf_text,
+            state_code=detected_state,
+            anthropic_client=client,
+        )
+
+        # Track LLM usage from the clean call
+        _clean_usage = getattr(clean_extracted_text, '_last_usage', None)
+        if _clean_usage and hasattr(opus, '_track_usage'):
+            class _UsageObj:
+                def __init__(self, d):
+                    self.input_tokens = d.get('input_tokens', 0)
+                    self.output_tokens = d.get('output_tokens', 0)
+            opus._track_usage("LLM Clean", _UsageObj(_clean_usage), _clean_usage.get('model', 'claude-opus-4-6'))
+
+        pymupdf_clean_text = consolidate_adjacent_tags(pymupdf_clean_text)
+        pymupdf_clean_text = opus.remove_nested_tags(pymupdf_clean_text)
+        pymupdf_clean_text = opus.merge_split_tags(pymupdf_clean_text)
+        pymupdf_clean_text = opus.split_tagged_subsections(pymupdf_clean_text)
+
+        # Strip tags from protected clauses
+        if strip_protected_tags and detected_state:
+            _before = pymupdf_clean_text
+            pymupdf_clean_text = strip_protected_tags(pymupdf_clean_text, detected_state)
+            if pymupdf_clean_text != _before:
+                add_log(f"🛡️ Stripped tags from protected clauses for {detected_state}")
+
+        st.session_state.step_status[3] = "✅"
+        update_progress()
+        add_log(f"✅ Clean text: {len(pymupdf_text):,} → {len(pymupdf_clean_text):,} chars")
+
+        # Rebuild report context using cleaned text for better anchor matching
+        if pymupdf_report:
+            try:
+                from pymupdf_extractor import rebuild_report_context
+                pymupdf_report = rebuild_report_context(pymupdf_report, pymupdf_clean_text)
+                with open(pymupdf_json_path, "w", encoding="utf-8") as jf:
+                    _json.dump(pymupdf_report, jf, indent=2, ensure_ascii=False)
+                add_log("🔄 Report context rebuilt from cleaned text")
+                st.session_state.audit_json_report = pymupdf_report
+            except Exception as _ctx_err:
+                logging.warning(f"Context rebuild failed (non-critical): {_ctx_err}")
+
+        # ── Step 5: Save Output ──────────────────────────────────────────────────
+        st.session_state.current_step = 4
+        st.session_state.step_status[4] = "🔄"
+        update_progress()
+
+        with open(output_path, "w", encoding="utf-8") as cf:
+            cf.write(pymupdf_clean_text)
+        add_log(f"💾 Output saved: {output_path}")
+
+        st.session_state.step_status[4] = "✅"
+        update_progress()
+
+        # ── Wrap up ──────────────────────────────────────────────────────────────
+        elapsed = time.time() - start_time
+        st.session_state.total_elapsed_secs = elapsed
+        minutes, seconds = int(elapsed // 60), int(elapsed % 60)
+        st.session_state.processing_time = f"{minutes}m {seconds}s"
+
+        session_mgr.complete_processing(session_id, output_path)
+        add_log(f"✅ PyMuPDF Extract + Clean complete in {st.session_state.processing_time}")
+
+        # Capture token/cost data
+        if hasattr(opus, 'get_token_tracker'):
+            _cost_data = opus.get_token_tracker()
+            st.session_state['_api_cost_data'] = _cost_data
+            if _cost_data['total_cost'] > 0:
+                add_log(f"💰 API Cost: ${_cost_data['total_cost']:.4f} "
+                        f"({_cost_data['total_input']:,} input + {_cost_data['total_output']:,} output tokens)")
+
+        return output_path
+
+    except Exception as e:
+        add_log(f"❌ PyMuPDF processing error: {str(e)}", "error")
+        st.error(f"❌ PyMuPDF processing error: {str(e)}")
+        logging.error(f"PyMuPDF processing error: {e}", exc_info=True)
+        return None
+
+
+def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placeholder=None, status_placeholder=None, log_placeholder=None):
+    """Process PDF using Hybrid mode: PyMuPDF text extraction + LLM chunk cleaning.
+    
+    Best for long PDFs (>7 pages). Much cheaper than image-based visual mode.
+    Pipeline: PyMuPDF extract → split into chunks → LLM clean each chunk → merge → post-process.
+    """
+    import importlib.util
+
+    start_time = time.time()
+    session_mgr = st.session_state.session_manager
+    session_folders = session_mgr.get_session_folders(session_id)
+
+    st.session_state.processing_logs = []
+
+    # 5 steps for hybrid mode (same as Extract+Clean — no GPT audit)
+    steps_labels = [
+        {"name": "Initialize Claude Opus",    "icon": "🤖"},
+        {"name": "Detect State",              "icon": "🔍"},
+        {"name": "PyMuPDF Extraction",        "icon": "📄"},
+        {"name": "Chunk + LLM Clean",         "icon": "🧹"},
+        {"name": "Save Output",              "icon": "💾"},
+    ]
+    st.session_state.step_status = {i: "⏳" for i in range(len(steps_labels))}
+
+    def add_log(message, level="info"):
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        step_idx = st.session_state.get('current_step', 0)
+        st.session_state.processing_logs.append(
+            {"time": timestamp, "message": message, "level": level, "step": step_idx}
+        )
+        logging.info(message)
+        if log_placeholder is not None:
+            with log_placeholder.container():
+                st.markdown(_build_activity_feed_html(st.session_state.processing_logs), unsafe_allow_html=True)
+
+    def update_progress():
+        if progress_placeholder:
+            with progress_placeholder.container():
+                _show_hybrid_steps(steps_labels)
+
+    def _show_hybrid_steps(steps):
+        cols = st.columns(len(steps))
+        for i, step in enumerate(steps):
+            status = st.session_state.step_status.get(i, "⏳")
+            with cols[i]:
+                st.markdown(f"<div style='text-align:center'>{status}<br><small>{step['icon']} {step['name']}</small></div>", unsafe_allow_html=True)
+
+    session_mgr.start_processing(session_id)
+    add_log("Starting Hybrid Mode (PyMuPDF + LLM chunk cleaning)...")
+
+    try:
+        # ── Load the Opus4.6 module ──────────────────────────────────────────────
+        opus_module_path = os.path.normpath(
+            os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         '..', 'Opus4.6', 'Claude_Opus_4.6_Test.py')
+        )
+        spec = importlib.util.spec_from_file_location("claude_opus_converter", opus_module_path)
+        opus = importlib.util.module_from_spec(spec)
+        _orig_stdout, _orig_stderr = sys.stdout, sys.stderr
+        spec.loader.exec_module(opus)
+        sys.stdout, sys.stderr = _orig_stdout, _orig_stderr
+
+        # Reset token tracker for this run
+        opus.reset_token_tracker()
+
+        # ── Step 1: Initialize client ────────────────────────────────────────────
+        st.session_state.current_step = 0
+        st.session_state.step_status[0] = "🔄"
+        update_progress()
+        add_log("🤖 Initializing Claude Opus 4.6 client...")
+        if status_placeholder:
+            status_placeholder.info("🤖 Initializing Claude Opus 4.6 client...")
+
+        client = opus.get_anthropic_client()
+        if not client:
+            raise Exception("Failed to initialize Anthropic client")
+
+        st.session_state.step_status[0] = "✅"
+        update_progress()
+        add_log("✅ Claude Opus client initialized")
+
+        # ── Step 2: Detect State ──────────────────────────────────────────────────
+        st.session_state.current_step = 1
+        st.session_state.step_status[1] = "🔄"
+        update_progress()
+        add_log("🔍 Detecting state from filename...")
+        if status_placeholder:
+            status_placeholder.info("🔍 Detecting state...")
+
+        detected_state = opus.detect_state_from_filename(pdf_path)
+        if detected_state:
+            add_log(f"✅ State detected from filename: {detected_state}")
+        else:
+            add_log("🔍 Analyzing PDF content to identify state via AI...")
+            detected_state = opus.detect_state_from_content(client, pdf_path)
+
+        st.session_state.detected_state = detected_state
+        if detected_state:
+            _state_name = US_STATE_NAMES.get(detected_state, detected_state)
+            add_log(f"✅ Detected state: {detected_state} — {_state_name}")
+        else:
+            add_log("⚠️ Could not detect state — using defaults", "warning")
+
+        state_config = opus.load_state_template(detected_state) if detected_state else None
+        st.session_state.step_status[1] = "✅"
+        update_progress()
+
+        # ── Step 3: PyMuPDF Extraction (for tagged text) ─────────────────────────
+        st.session_state.current_step = 2
+        st.session_state.step_status[2] = "🔄"
+        update_progress()
+        add_log("📄 Running PyMuPDF extraction with formatting detection...")
+        if status_placeholder:
+            status_placeholder.info("📄 Running PyMuPDF extraction...")
+
+        # Reset audit data
+        st.session_state.audit_excel_path = None
+        st.session_state.audit_highlighted_dir = None
+        st.session_state.audit_json_report = None
+        st.session_state.content_accuracy_report = None
+        st.session_state.gpt_audit_failed = False
+
+        from pymupdf_extractor import (
+            extract_pdf_json_report,
+            extract_pdf_with_pymupdf,
+            highlight_pdf_formatting,
+            clean_extracted_text,
+            consolidate_adjacent_tags,
+        )
+
+        # Determine state-specific marking flags
+        _mark_flags = {}
+        if state_config:
+            add_cfg = state_config.get("add_markup", {})
+            del_cfg = state_config.get("delete_markup", {})
+            _mark_flags["mark_underline"] = add_cfg.get("underline", True)
+            _mark_flags["mark_italic"] = add_cfg.get("italic", False) or del_cfg.get("italic", False)
+            _mark_flags["mark_bold"] = add_cfg.get("bold", False)
+            _mark_flags["mark_strikethrough"] = del_cfg.get("strike_out", True)
+            _mark_flags["mark_brackets"] = add_cfg.get("brackets", False) or del_cfg.get("brackets", False)
+
+        # JSON report
+        pymupdf_report = extract_pdf_json_report(pdf_path, **_mark_flags)
+        n_spans = len(pymupdf_report.get("formatted_spans", []))
+        add_log(f"📊 PyMuPDF report: {n_spans} formatted spans detected")
+
+        # Tagged text (needed for hybrid conversion)
+        pymupdf_text = extract_pdf_with_pymupdf(pdf_path, join_pages=True, **_mark_flags)
+        add_log(f"✅ PyMuPDF tagged text: {len(pymupdf_text):,} chars")
+
+        # Filter italic by section if needed
+        pymupdf_report, pymupdf_text = _filter_italic_by_section(pymupdf_report, pymupdf_text, state_config)
+
+        st.session_state.audit_json_report = pymupdf_report
+        st.session_state.step_status[2] = "✅"
+        update_progress()
+
+        # ── Step 4: Hybrid Chunk + LLM Clean ─────────────────────────────────────
+        st.session_state.current_step = 3
+        st.session_state.step_status[3] = "🔄"
+        update_progress()
+        add_log("🧹 Running hybrid chunk cleaning (splitting text → cleaning each chunk → merging)...")
+        if status_placeholder:
+            status_placeholder.info("🧹 Hybrid: splitting text into chunks and cleaning with LLM...")
+
+        # Use the Opus module's hybrid conversion function
+        converted_text = opus.convert_pdf_hybrid_text(client, pdf_path, state_config, detected_state)
+
+        if not converted_text:
+            raise Exception("Hybrid conversion returned empty result")
+
+        add_log(f"✅ Hybrid conversion complete: {len(converted_text):,} characters")
+
+        # Apply deterministic cleanup (same as visual mode)
+        converted_text = opus.deterministic_cleanup(converted_text, state_config=state_config)
+        add_log("🔧 Deterministic cleanup applied")
+
+        # Strip protected clauses
+        if state_config:
+            converted_text = opus.post_process_output(converted_text, state_config)
+        if strip_protected_tags and detected_state:
+            _before_strip = converted_text
+            converted_text = strip_protected_tags(converted_text, detected_state)
+            if converted_text != _before_strip:
+                add_log(f"🛡️ Stripped tags from protected clauses for {detected_state}")
+
+        st.session_state.step_status[3] = "✅"
+        update_progress()
+
+        # ── Step 5: Save output ──────────────────────────────────────────────────
+        st.session_state.current_step = 4
+        st.session_state.step_status[4] = "🔄"
+        update_progress()
+        add_log("💾 Saving output...")
+        if status_placeholder:
+            status_placeholder.info("💾 Saving output...")
+
+        output_filename = Path(pdf_path).stem + "_hybrid.txt"
+        output_path = os.path.join(session_folders['output_folder'], output_filename)
+        os.makedirs(session_folders['output_folder'], exist_ok=True)
+
+        if not opus.save_text_file(converted_text, output_path):
+            raise Exception(f"Failed to save output to {output_path}")
+
+        st.session_state.step_status[4] = "✅"
+        update_progress()
+        add_log(f"✅ Output saved: {output_path}")
+
+        # ── Conversion milestone ─────────────────────────────────────────────────
+        conversion_elapsed = time.time() - start_time
+        st.session_state.conversion_elapsed_secs = conversion_elapsed
+        _cm, _cs = int(conversion_elapsed // 60), int(conversion_elapsed % 60)
+        st.session_state.conversion_time = f"{_cm}m {_cs}s" if _cm > 0 else f"{_cs}s"
+        add_log(f"🏁 Hybrid conversion complete in {st.session_state.conversion_time}")
+        if status_placeholder:
+            status_placeholder.success(f"✅ Hybrid conversion complete ({st.session_state.conversion_time})")
+
+        # Reset audit data (no GPT audit in hybrid mode)
+        st.session_state.audit_excel_path = None
+        st.session_state.audit_highlighted_dir = None
+        st.session_state.gpt_audit_failed = False
+        st.session_state.content_accuracy_report = None
+
+        # ── Wrap up ──────────────────────────────────────────────────────────────
+        elapsed = time.time() - start_time
+        st.session_state.total_elapsed_secs = elapsed
+        minutes, seconds = int(elapsed // 60), int(elapsed % 60)
+        st.session_state.processing_time = f"{minutes}m {seconds}s"
+
+        session_mgr.complete_processing(session_id, output_path)
+        add_log(f"✅ Hybrid mode processing complete in {st.session_state.processing_time}")
+
+        # Capture token/cost data
+        _cost_data = opus.get_token_tracker()
+        st.session_state['_api_cost_data'] = _cost_data
+        if _cost_data['total_cost'] > 0:
+            add_log(f"💰 API Cost: ${_cost_data['total_cost']:.4f} "
+                    f"({_cost_data['total_input']:,} input + {_cost_data['total_output']:,} output tokens)")
+
+        return output_path
+
+    except Exception as e:
+        add_log(f"❌ Hybrid mode processing error: {str(e)}", "error")
+        st.error(f"❌ Hybrid mode processing error: {str(e)}")
+        logging.error(f"Hybrid mode processing error: {e}", exc_info=True)
+        return None
+
 def show_simple_ui():
     """Simple UI for single file processing with session management"""
     
@@ -2095,7 +2615,9 @@ def show_simple_ui():
                 _pdf = pdfium.PdfDocument(_bytes)
                 _pc = len(_pdf)
                 _pdf.close()
-                if _pc > MAX_PAGES:
+                # Only enforce page limit for batch uploads (>1 file).
+                # Single files are allowed through — the UI shows Hybrid/Extract+Clean buttons instead.
+                if _pc > MAX_PAGES and len(uploaded_files) > 1:
                     skipped_names.append(f"{uf.name} ({_pc} pages)")
                     continue
             except Exception:
@@ -2378,26 +2900,17 @@ def show_simple_ui():
                 if st.session_state.temp_pdf_path:
                     st.success(f"✅ File ready: {uploaded_file.name} ({format_file_size(uploaded_file.size)})")
 
-            # Block processing if PDF exceeds 15 pages
-            _page_limit_exceeded = False
+            # Determine PDF page count for mode gating
             if st.session_state.temp_pdf_path:
                 try:
                     import pypdfium2 as pdfium
                     _pdf = pdfium.PdfDocument(st.session_state.temp_pdf_path)
-                    _page_count = len(_pdf)
+                    st.session_state['_pdf_page_count'] = len(_pdf)
                     _pdf.close()
-                    if _page_count > 15:
-                        _page_limit_exceeded = True
-                        st.error(
-                            f"🚫 **Document too large ({_page_count} pages).** "
-                            f"The maximum supported page count is **15 pages**. "
-                            f"Please upload a shorter document."
-                        )
                 except Exception:
-                    pass
+                    st.session_state['_pdf_page_count'] = 0
 
-            if not _page_limit_exceeded:
-                show_single_file_processing()
+            show_single_file_processing()
     else:
         # No files in uploader — but check if we have batch results or active worker
         if st.session_state.get('batch_processing') and st.session_state.get('batch_worker'):
@@ -2687,9 +3200,19 @@ def show_results_section():
     _audit_failed = bool(st.session_state.get('gpt_audit_failed'))
 
     # ── Build tab list dynamically ─────────────────────────────────────────────
+    _method = st.session_state.get('process_method', '')
+    _skip_validation = _method in ('pymupdf_clean_only', 'hybrid')
     tab_labels = ["📊 Summary"]
-    if (_has_audit or _has_accuracy or _has_highlighted or _audit_failed) and render_inline_validation_review:
+    if not _skip_validation and (_has_audit or _has_accuracy or _has_highlighted or _audit_failed) and render_inline_validation_review:
         tab_labels.append("🔍 Validation Review")
+    # Show PDF ↔ Text Compare tab for Extract+Clean mode (or any mode with PDF available)
+    _show_pdf_compare = (
+        compare_build_viewer_html is not None
+        and st.session_state.get('temp_pdf_path')
+        and os.path.exists(st.session_state.get('temp_pdf_path', ''))
+    )
+    if _show_pdf_compare:
+        tab_labels.append("📄 PDF ↔ Text Compare")
     if st.session_state.get('processing_logs'):
         tab_labels.append("📋 Activity Log")
 
@@ -2835,7 +3358,7 @@ def show_results_section():
     # TAB 2 — Validation Review (only if audit data exists)
     # ══════════════════════════════════════════════════════════════════════════
     _tab_idx = 1
-    if (_has_audit or _has_accuracy or _has_highlighted or _audit_failed) and render_inline_validation_review:
+    if not _skip_validation and (_has_audit or _has_accuracy or _has_highlighted or _audit_failed) and render_inline_validation_review:
         with tabs[_tab_idx]:
             render_inline_validation_review(
                 excel_path=st.session_state.get('audit_excel_path') or "",
@@ -2848,7 +3371,41 @@ def show_results_section():
         _tab_idx += 1
 
     # ══════════════════════════════════════════════════════════════════════════
-    # TAB 3 — Activity Log
+    # TAB — PDF ↔ Text Compare (side-by-side viewer)
+    # ══════════════════════════════════════════════════════════════════════════
+    if _show_pdf_compare:
+        with tabs[_tab_idx]:
+            _pdf_path = st.session_state.temp_pdf_path
+            _txt_path = st.session_state.processed_file_path
+            try:
+                with open(_pdf_path, 'rb') as _pf:
+                    _pdf_bytes = _pf.read()
+                # Read the output text (prefer cached bytes)
+                _txt_data = st.session_state.get('processed_file_data')
+                if _txt_data is None:
+                    with open(_txt_path, 'r', encoding='utf-8') as _tf:
+                        _clean_text = _tf.read()
+                else:
+                    _clean_text = _txt_data.decode('utf-8', errors='replace') if isinstance(_txt_data, bytes) else _txt_data
+                _clean_lines = _clean_text.splitlines()
+
+                with st.spinner("Rendering PDF pages & mapping words…"):
+                    _images = compare_render_pdf_pages(_pdf_bytes)
+                    _words = compare_extract_word_bboxes(_pdf_bytes)
+                    _word_map = compare_build_word_level_map(_clean_lines, _words)
+
+                _viewer_html = compare_build_viewer_html(
+                    _images, _clean_lines, _word_map,
+                    filename=Path(_txt_path).name,
+                )
+                st.components.v1.html(_viewer_html, height=920, scrolling=False)
+            except Exception as _cmp_err:
+                st.error(f"❌ Could not render PDF ↔ Text Compare viewer: {_cmp_err}")
+                logging.error(f"PDF Compare viewer error: {_cmp_err}", exc_info=True)
+        _tab_idx += 1
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # TAB — Activity Log
     # ══════════════════════════════════════════════════════════════════════════
     if st.session_state.get('processing_logs'):
         with tabs[_tab_idx]:
@@ -4001,24 +4558,65 @@ def _build_batch_zip(results: list[dict]) -> bytes | None:
 
 def show_single_file_processing():
     """Show single file processing interface"""
+    # Don't show buttons if processing is already complete and results exist
+    _has_results = (
+        st.session_state.get('processed_file_path')
+        and (
+            st.session_state.get('processed_file_data') is not None
+            or os.path.exists(st.session_state.get('processed_file_path', ''))
+        )
+    )
+
     # Center the button with columns - wider button in middle
     col1, col2, col3 = st.columns([1, 2, 1])
     
+    _pdf_pages = st.session_state.get('_pdf_page_count', 0)
+
     with col2:
-        if not st.session_state.processing:
-            # Main process button - centered and prominent
-            if st.button("🚀 Process Document", 
-                        type="primary", 
+        if not st.session_state.processing and not _has_results:
+            # Main process button — only for PDFs ≤ 15 pages
+            if _pdf_pages > 15:
+                st.warning(
+                    f"⚠️ **Document has {_pdf_pages} pages.** "
+                    f"Visual conversion is limited to 15 pages. "
+                    f"Use **Hybrid Mode** or **Extract + Clean Only** below."
+                )
+            else:
+                if st.button("🚀 Process Document", 
+                            type="primary", 
+                            use_container_width=True,
+                            help="Start processing with Claude Opus 4.6 visual conversion"):
+                    st.session_state.processing = True
+                    st.session_state.current_step = 0
+                    st.session_state.processing_time = None
+                    st.session_state.chunk_stats = None
+                    st.session_state.process_method = "claude_opus"
+                    st.session_state.pop('_pymupdf_only_steps', None)
+                    st.rerun()
+            # PyMuPDF Extract + Clean only button — always available
+            if st.button("📄 Extract + Clean Only",
                         use_container_width=True,
-                        help="Start processing with Claude Opus 4.6 visual conversion"):
+                        help="PyMuPDF extraction + Claude LLM clean only (no visual conversion, no GPT audit)"):
                 st.session_state.processing = True
                 st.session_state.current_step = 0
                 st.session_state.processing_time = None
                 st.session_state.chunk_stats = None
-                st.session_state.process_method = "claude_opus"
+                st.session_state.process_method = "pymupdf_clean_only"
                 st.rerun()
-        else:
-            # Show processing status
+            # Hybrid Mode button — only for long PDFs (> 15 pages)
+            if _pdf_pages > 15:
+                if st.button("📐 Hybrid Mode (Long PDF)",
+                            use_container_width=True,
+                            help=f"PyMuPDF extraction + LLM chunk cleaning. Best for long PDFs ({_pdf_pages} pages). Much cheaper than visual mode."):
+                    st.session_state.processing = True
+                    st.session_state.current_step = 0
+                    st.session_state.processing_time = None
+                    st.session_state.chunk_stats = None
+                    st.session_state.process_method = "hybrid"
+                    st.session_state.pop('_pymupdf_only_steps', None)
+                    st.rerun()
+        elif st.session_state.processing:
+            # Show processing status only while actively processing
             st.warning("⏳ **Processing...**\n\nPlease wait while we process your document")
     
     # Commented out alternative processing methods
@@ -4098,6 +4696,24 @@ def show_single_file_processing():
             )
         elif st.session_state.process_method == "claude_opus":
             result = process_with_claude_opus(
+                st.session_state.temp_pdf_path,
+                _state,
+                st.session_state.session_id,
+                progress_placeholder,
+                status_placeholder,
+                log_placeholder
+            )
+        elif st.session_state.process_method == "pymupdf_clean_only":
+            result = process_pymupdf_clean_only(
+                st.session_state.temp_pdf_path,
+                _state,
+                st.session_state.session_id,
+                progress_placeholder,
+                status_placeholder,
+                log_placeholder
+            )
+        elif st.session_state.process_method == "hybrid":
+            result = process_with_hybrid_mode(
                 st.session_state.temp_pdf_path,
                 _state,
                 st.session_state.session_id,

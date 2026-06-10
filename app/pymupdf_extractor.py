@@ -63,6 +63,27 @@ CHAR_OVERLAP_RATIO      = 0.30  # line must overlap ≥30 % of char width
 ADD_OPEN, ADD_CLOSE = "[A>", "<A]"
 DEL_OPEN, DEL_CLOSE = "[D>", "<D]"
 
+# Small-caps font detection: fonts that render lowercase as visual capitals
+# e.g. MinionPC (Petite Caps), *-SC (Small Caps)
+_RE_SMALLCAPS_FONT = re.compile(
+    r"(?:SC|SmallCap|SmCap|PetiteCap|PC)(?:[,-]|$)",
+    re.IGNORECASE,
+)
+
+# ---------------------------------------------------------------------------
+# Logo / letterhead exclusion
+# ---------------------------------------------------------------------------
+# Bounding box for state seal + letterhead text on page 1 (top-left region).
+# Any text block whose bbox falls entirely within this zone is skipped.
+# Coordinates in PDF points (1pt = 1/72 inch). Covers typical state seal area.
+LOGO_EXCLUSION_ZONE = (0, 0, 350, 110)  # (x0, y0, x1, y1)
+
+# Regex fallback: remove known logo letterhead text that may slip through
+_RE_LOGO_TEXT = re.compile(
+    r"(?:Legislative\s+Council,?\s*\n?\s*General\s+Assembly\s*\n?\s*State\s+of\s+Delaware)",
+    re.IGNORECASE,
+)
+
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -124,6 +145,74 @@ def _extract_hlines_from_drawings(page: fitz.Page) -> List[HLine]:
                     y = (rect.y0 + rect.y1) / 2
                     hlines.append(HLine(x0=rect.x0, y=y, x1=rect.x1, width=height))
     return hlines
+
+
+# ---------------------------------------------------------------------------
+# Table detection — identify table regions to avoid false underline tags
+# ---------------------------------------------------------------------------
+
+def _detect_table_zones(page: fitz.Page) -> List[Tuple[float, float, float, float]]:
+    """Return bounding boxes ``(x0, y0, x1, y1)`` of tables found on *page*.
+
+    Uses PyMuPDF's built-in ``find_tables()`` API.  Returns an empty list
+    if no tables are detected or the API is unavailable.
+    """
+    try:
+        tabs = page.find_tables()
+        return [tuple(t.bbox) for t in tabs.tables]  # type: ignore[union-attr]
+    except Exception:
+        return []
+
+
+def _filter_table_border_hlines(
+    hlines: List[HLine],
+    table_zones: List[Tuple[float, float, float, float]],
+    *,
+    tolerance: float = 3.0,
+) -> List[HLine]:
+    """Remove horizontal lines that are likely table borders.
+
+    A line is classified as a **table border** (and removed) when:
+      1. It falls inside (or on the edge of) a detected table bbox, **and**
+      2. Its y-coordinate is close to the top/bottom edge of the table or
+         of any internal row boundary — i.e. it spans most of the table
+         width (≥ 60 %).  Short segments (e.g. a genuine underline on
+         one word inside a cell) are kept.
+
+    Lines completely outside every table zone are always kept.
+    """
+    if not table_zones:
+        return hlines
+
+    kept: List[HLine] = []
+    for hl in hlines:
+        is_border = False
+        for zx0, zy0, zx1, zy1 in table_zones:
+            # Is the line vertically inside (or on edge of) the table?
+            if not (zy0 - tolerance <= hl.y <= zy1 + tolerance):
+                continue
+            # Is the line horizontally overlapping the table?
+            overlap = _horizontal_overlap(hl.x0, hl.x1, zx0, zx1)
+            table_width = zx1 - zx0
+            if table_width > 0 and overlap / table_width >= 0.60:
+                # Long line spanning most of the table width → border
+                is_border = True
+                break
+            # Even shorter lines: if the line sits exactly on a row
+            # boundary (top / bottom edge), treat as border.
+            if (abs(hl.y - zy0) <= tolerance or abs(hl.y - zy1) <= tolerance):
+                if overlap > 0:
+                    is_border = True
+                    break
+        if not is_border:
+            kept.append(hl)
+
+    if len(kept) < len(hlines):
+        logger.debug(
+            "Filtered %d table-border hlines (kept %d)",
+            len(hlines) - len(kept), len(kept),
+        )
+    return kept
 
 
 def _horizontal_overlap(ax0: float, ax1: float, bx0: float, bx1: float) -> float:
@@ -229,6 +318,7 @@ def _extract_page_tagged_text(
     mark_strikethrough: bool = True,
     mark_italic: bool = False,
     mark_bold: bool = False,
+    exclude_zones: Optional[List[Tuple[float, float, float, float]]] = None,
 ) -> str:
     """
     Build tagged text for *page* using per-character decoration detection.
@@ -249,6 +339,11 @@ def _extract_page_tagged_text(
         ul_rects, so_rects = [], []
 
     hlines = _extract_hlines_from_drawings(page)
+
+    # -- 1b. Filter out table-border lines to avoid false underline tags --
+    table_zones = _detect_table_zones(page)
+    if table_zones:
+        hlines = _filter_table_border_hlines(hlines, table_zones)
 
     # -- 2. Get text with per-character positions --
     # Try rawdict first for char-level precision; fall back to dict if
@@ -274,6 +369,21 @@ def _extract_page_tagged_text(
         if block.get("type") != 0:       # skip image blocks
             continue
 
+        # --- Skip blocks inside exclusion zones (e.g. state seal/logo) ---
+        if exclude_zones:
+            blk_bbox = block.get("bbox", (0, 0, 0, 0))
+            skip_block = False
+            for zone in exclude_zones:
+                zx0, zy0, zx1, zy1 = zone
+                # Block is inside zone if its bbox is fully contained
+                if (blk_bbox[0] >= zx0 - 5 and blk_bbox[1] >= zy0 - 5 and
+                    blk_bbox[2] <= zx1 + 5 and blk_bbox[3] <= zy1 + 5):
+                    skip_block = True
+                    break
+            if skip_block:
+                logger.debug("Skipping block in exclusion zone: bbox=%s", blk_bbox)
+                continue
+
         # --- block break: close tags, insert paragraph gap ---
         if not first_block:
             if in_add:
@@ -286,10 +396,27 @@ def _extract_page_tagged_text(
         first_line_in_block = True
         for line in block.get("lines", []):
             if not first_line_in_block:
-                # Line break within same block — keep tags open if
-                # decoration continues on the next line.
+                # Line break within same block — close tags before \n,
+                # they will be reopened if decoration continues on next line.
+                if in_add:
+                    output.append(ADD_CLOSE); in_add = False
+                if in_del:
+                    output.append(DEL_CLOSE); in_del = False
                 output.append("\n")
             first_line_in_block = False
+
+            # --- Skip ALL decoration tagging for lines inside a table zone ---
+            # Table cell borders are often short horizontal lines that slip
+            # past the width-based hline filter but still trigger false
+            # underline detection.  Suppress tagging entirely for table text.
+            line_in_table = False
+            if table_zones:
+                lbbox = line.get("bbox", (0, 0, 0, 0))
+                for zx0, zy0, zx1, zy1 in table_zones:
+                    if (lbbox[1] >= zy0 - 2 and lbbox[3] <= zy1 + 2 and
+                        lbbox[0] >= zx0 - 5 and lbbox[2] <= zx1 + 5):
+                        line_in_table = True
+                        break
 
             for span in line.get("spans", []):
                 chars_data = span.get("chars", [])
@@ -302,16 +429,26 @@ def _extract_page_tagged_text(
                 span_is_italic = bool(span_flags & 2)
                 span_is_bold   = bool(span_flags & 16)
 
+                # --- Detect small-caps font → uppercase extracted text ---
+                span_is_smallcaps = bool(_RE_SMALLCAPS_FONT.search(font_name))
+
                 # --- Fallback: no char-level data → use span bbox ---
                 if not chars_data:
                     if span_text:
+                        if span_is_smallcaps:
+                            span_text = span_text.upper()
                         s_bbox = tuple(span.get("bbox", (0, 0, 0, 0)))
                         s_ul, s_so = _classify_char_decoration(
                             s_bbox, font_size, ul_rects, so_rects,
                             hlines, font_name,
                         )
-                        need_add = (s_ul and mark_underline) or (span_is_italic and mark_italic) or (span_is_bold and mark_bold)
+                        span_is_whitespace = span_text.strip() == ""
+                        need_add = (s_ul and mark_underline) or (span_is_italic and mark_italic and not span_is_whitespace) or (span_is_bold and mark_bold and not span_is_whitespace)
                         need_del = s_so and mark_strikethrough
+                        # Suppress all tagging inside table zones
+                        if line_in_table:
+                            need_add = False
+                            need_del = False
                         # Delete (strikethrough) takes precedence — suppress add to avoid nested tags
                         if need_del and need_add:
                             need_add = False
@@ -332,6 +469,10 @@ def _extract_page_tagged_text(
                     if not c:
                         continue
 
+                    # Uppercase chars from small-caps fonts
+                    if span_is_smallcaps:
+                        c = c.upper()
+
                     bbox = tuple(ch_info.get("bbox", (0, 0, 0, 0)))
                     cw   = bbox[2] - bbox[0]
 
@@ -344,8 +485,15 @@ def _extract_page_tagged_text(
                             hlines, font_name,
                         )
 
-                    need_add = (is_ul and mark_underline) or (span_is_italic and mark_italic) or (span_is_bold and mark_bold)
+                    # For italic/bold (span-level flags), don't apply to whitespace —
+                    # only underline/strikethrough (physical decorations) should tag spaces.
+                    char_is_space = c.strip() == ""
+                    need_add = (is_ul and mark_underline) or (span_is_italic and mark_italic and not char_is_space) or (span_is_bold and mark_bold and not char_is_space)
                     need_del = is_so and mark_strikethrough
+                    # Suppress all tagging inside table zones
+                    if line_in_table:
+                        need_add = False
+                        need_del = False
 
                     # Delete (strikethrough) takes precedence — suppress add to avoid nested tags
                     if need_del and need_add:
@@ -388,6 +536,12 @@ def _extract_page_spans(page: fitz.Page) -> List[TextSpan]:
         ul_rects, so_rects = [], []
 
     hlines = _extract_hlines_from_drawings(page)
+
+    # Filter out table-border lines
+    table_zones = _detect_table_zones(page)
+    if table_zones:
+        hlines = _filter_table_border_hlines(hlines, table_zones)
+
     text_dict = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)
     spans: List[TextSpan] = []
     block_idx = 0
@@ -446,6 +600,8 @@ _RE_LINE_NUMBER_BETWEEN_TAGS = re.compile(
 
 def _clean_tagged_text(text: str, strip_line_numbers: bool = False) -> str:
     """Remove empty tags, merge adjacent same-type tags, tidy whitespace."""
+    # Normalize non-breaking spaces to regular spaces
+    text = text.replace("\xa0", " ")
     # Strip line numbers FIRST — before tag merging so that
     # "<A] line 40 [A>" becomes "<A] [A>" and can then merge.
     if strip_line_numbers:
@@ -459,9 +615,311 @@ def _clean_tagged_text(text: str, strip_line_numbers: bool = False) -> str:
     # Optionally strip margin line numbers (e.g. California bills)
     if strip_line_numbers:
         text = _RE_LINE_NUMBER.sub("", text)
+    # Remove logo/letterhead text that may have slipped through
+    text = _RE_LOGO_TEXT.sub("", text)
+    # Normalize small runs of multiple spaces (2-3) to single space
+    # but preserve larger gaps (4+) which are intentional layout formatting
+    text = re.sub(r"(?<=\S) {2,3}(?=\S)", " ", text)
     # Collapse excessive blank lines
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
+
+
+# ---------------------------------------------------------------------------
+# CT header tag stripping — remove false [A>…<A] from page-1 header lines
+# ---------------------------------------------------------------------------
+# CT bill headers often have decorative horizontal lines that the underline
+# detector misreads.  These regexes match the header patterns and strip tags.
+_RE_CT_HEADER_PATTERNS = re.compile(
+    r"\[A>(.*?(?:"
+    r"General\s+Assembly"
+    r"|(?:Raised|Substitute|File|House|Senate)\s+Bill\s+No\.\s*\d+"
+    r"|File\s+No\.\s*\d+"
+    r"|(?:s[SH]B|[SH]\.?B\.?)\s*\d+(?:\s*/\s*File\s+No\.\s*\d+)?"
+    r"|LCO\s+No\.\s*\d+"
+    r"|(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+Session,?\s*\d{4}"
+    r"|Referred\s+to\s+Committee"
+    r"|Introduced\s+by"
+    r"|AN\s+ACT\s+CONCERNING"
+    r").*?)<A\]",
+    re.IGNORECASE,
+)
+
+
+def _strip_ct_header_tags(text: str) -> str:
+    """Remove false ``[A>…<A]`` tags from CT bill header lines.
+
+    Connecticut PDFs have decorative lines near the page-1 header that
+    the underline detector picks up as underlines.  This function strips
+    those tags from header-pattern lines while leaving genuine legislative
+    tags untouched.
+
+    Only operates on the first ~15 lines (the header area).
+    """
+    lines = text.split("\n")
+    # Only process the header area (first 15 lines)
+    header_end = min(15, len(lines))
+    changed = False
+    for i in range(header_end):
+        new_line = _RE_CT_HEADER_PATTERNS.sub(r"\1", lines[i])
+        if new_line != lines[i]:
+            lines[i] = new_line
+            changed = True
+    if changed:
+        logger.debug("Stripped false [A> tags from CT header lines")
+        return "\n".join(lines)
+    return text
+
+
+# ---------------------------------------------------------------------------
+# CT page-1 header restructuring
+# ---------------------------------------------------------------------------
+# PyMuPDF extracts "General Assembly" and the bill number on the same line
+# because they sit side-by-side in the PDF.  The correct output structure
+# puts the bill number on line 1, then "General Assembly" on a separate line.
+
+_RE_CT_HEADER_COMBINED = re.compile(
+    r"^((?:Senate|House)\s+)?"                                    # optional chamber
+    r"General\s+Assembly\s+"                                      # "General Assembly"
+    r"((?:(?:Raised|Substitute|Committee|File)\s+)?(?:(?:Senate|House)\s+)?Bill\s+No\.\s*\d+"  # bill identifier
+    r"|File\s+No\.\s*\d+)",                                       # or "File No. NNN"
+    re.IGNORECASE,
+)
+
+
+def _restructure_ct_header(text: str) -> str:
+    """Split 'General Assembly Raised Bill No. XXXX' into separate lines.
+
+    PyMuPDF places these side-by-side elements on one line.  The correct
+    output structure is::
+
+        Raised Bill No. 6846
+
+        General Assembly
+
+    Also handles variants like ``Senate  File No. 620`` and
+    ``Substitute Senate Bill No. 508``.
+
+    Only operates on the first few lines of the document.
+    """
+    lines = text.split("\n")
+    # Only check the first 5 non-empty lines
+    for i in range(min(10, len(lines))):
+        m = _RE_CT_HEADER_COMBINED.match(lines[i].strip())
+        if m:
+            chamber = (m.group(1) or "").strip()
+            bill_id = m.group(2).strip()
+            # Rebuild: bill number first, then General Assembly
+            new_lines = []
+            if chamber:
+                new_lines.append(chamber)
+                new_lines.append("")
+            new_lines.append(bill_id)
+            new_lines.append("")
+            new_lines.append("General Assembly")
+            # Preserve any trailing text on the same line after the match
+            remainder = lines[i].strip()[m.end():].strip()
+            if remainder:
+                new_lines.append("")
+                new_lines.append(remainder)
+            lines[i] = "\n".join(new_lines)
+            logger.debug("Restructured CT header: bill number + General Assembly split")
+            return "\n".join(lines)
+    return text
+
+
+# ---------------------------------------------------------------------------
+# CT compact bill designator removal (sSB508 / File No. 620, etc.)
+# ---------------------------------------------------------------------------
+# These are running headers that appear on every page — they duplicate the
+# official identifiers and should always be removed.
+_RE_CT_COMPACT_DESIGNATOR = re.compile(
+    r"^\s*(?:\[A>)?\s*"
+    r"(?:s[SH]B|[SH]\.?B\.?)\s*\d+"
+    r"\s*/\s*File\s+No\.\s*\d+"
+    r"\s*(?:<A\])?\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _strip_ct_compact_designator(text: str) -> str:
+    """Remove compact bill designator lines like ``sSB508 / File No. 620``.
+
+    These are running headers that appear on every page of CT bills.
+    They duplicate the official identifiers (``Substitute Senate Bill No. 508``
+    and ``File No. 620``) and should be removed from the clean output.
+    """
+    new_text = _RE_CT_COMPACT_DESIGNATOR.sub("", text)
+    if new_text != text:
+        # Clean up blank lines left behind
+        new_text = re.sub(r"\n{3,}", "\n\n", new_text)
+        logger.debug("Stripped CT compact bill designator lines")
+    return new_text
+
+
+# ---------------------------------------------------------------------------
+# Kansas (KS) header tag stripping — remove false [A>…<A] from bill title
+# ---------------------------------------------------------------------------
+# Kansas bill PDFs have decorative italic header text that the
+# underline/italic detector picks up, producing false [A> tags.
+_RE_KS_HEADER_PATTERNS = re.compile(
+    r"\[A>(.*?(?:"
+    r"Session\s+of\s+\d{4}"
+    r"|(?:HOUSE|SENATE)\s+(?:BILL|RESOLUTION|CONCURRENT\s+RESOLUTION|SUBSTITUTE\s+FOR)\s+(?:No\.?\s*)?\d*"
+    r"|(?:SUBSTITUTE\s+FOR\s+)?(?:HOUSE|SENATE)\s+BILL\s+(?:No\.?\s*)?\d+"
+    r"|By\s+Committee\s+on"
+    r"|By\s+(?:Representative|Senator)s?"
+    r"|Requested\s+by\s+(?:Representative|Senator|Governor)"
+    r"|AN\s+ACT\s+concerning"
+    r").*?)<A\]",
+    re.IGNORECASE,
+)
+
+
+def _strip_ks_header_tags(text: str) -> str:
+    """Remove false ``[A>…<A]`` tags from KS bill header lines.
+
+    Kansas PDFs have decorative/italic header text that the detector
+    picks up as underlines.  This strips those tags from header-pattern
+    lines while leaving genuine legislative tags untouched.
+
+    Only operates on the first ~15 lines (the header area).
+    """
+    lines = text.split("\n")
+    header_end = min(15, len(lines))
+    changed = False
+    for i in range(header_end):
+        new_line = _RE_KS_HEADER_PATTERNS.sub(r"\1", lines[i])
+        if new_line != lines[i]:
+            lines[i] = new_line
+            changed = True
+    if changed:
+        logger.debug("Stripped false [A> tags from KS header lines")
+        return "\n".join(lines)
+    return text
+
+
+# ---------------------------------------------------------------------------
+# Indiana (IN) deterministic post-processing
+# ---------------------------------------------------------------------------
+
+# Regex: IN bill reference footer — "IN 1703—LS 7777/DI 92", "SB 85—LS 6422/DI 104"
+_RE_IN_FOOTER = re.compile(
+    r"^\s*(?:[A-Z]{1,3}\s+\d+\s*[—–-]\s*LS\s+\d+\s*/\s*DI\s+\d+)\s*$",
+    re.MULTILINE,
+)
+
+# ---------------------------------------------------------------------------
+# IN header tag stripping — remove false [A>…<A] from bill title lines
+# ---------------------------------------------------------------------------
+# Indiana bill PDFs have a decorative horizontal line near the top that the
+# underline detector misreads, producing false [A> tags on the bill title.
+_RE_IN_HEADER_PATTERNS = re.compile(
+    r"\[A>(.*?(?:"
+    r"(?:ENGROSSED|ENROLLED|INTRODUCED|REPRINTED)\s+"
+    r"(?:HOUSE|SENATE)\s+(?:BILL|RESOLUTION|CONCURRENT\s+RESOLUTION|JOINT\s+RESOLUTION)"
+    r"\s+No\.\s*\d+"
+    r"|(?:HOUSE|SENATE)\s+(?:BILL|RESOLUTION)\s+No\.\s*\d+"
+    r"|DIGEST\s+OF\s+(?:HB|SB|HR|SR)\s+\d+"
+    r"|(?:First|Second|Third)\s+Regular\s+Session"
+    r"|(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s*\d{4}"
+    r").*?)<A\]",
+    re.IGNORECASE,
+)
+
+
+def _strip_in_header_tags(text: str) -> str:
+    """Remove false ``[A>…<A]`` tags from IN bill header lines.
+
+    Indiana PDFs have decorative lines near the page-1 header that the
+    underline detector picks up as underlines.  This strips those tags
+    from header-pattern lines (bill title, date, digest) while leaving
+    genuine legislative tags untouched.
+
+    Only operates on the first ~15 lines (the header area).
+    """
+    lines = text.split("\n")
+    header_end = min(15, len(lines))
+    changed = False
+    for i in range(header_end):
+        new_line = _RE_IN_HEADER_PATTERNS.sub(r"\1", lines[i])
+        if new_line != lines[i]:
+            lines[i] = new_line
+            changed = True
+    if changed:
+        logger.debug("Stripped false [A> tags from IN header lines")
+        return "\n".join(lines)
+    return text
+
+
+# Regex: Barcode/scan text — "*EH1204.1*", "*HB1690.1*", "*SB85.1*"
+_RE_IN_BARCODE = re.compile(
+    r"^\s*\*[A-Z]{1,3}\d+\.\d+\*\s*$",
+    re.MULTILINE,
+)
+
+# Regex: Standalone year footer — "2025" or "2026" alone on a line
+_RE_IN_YEAR_FOOTER = re.compile(
+    r"^\s*(20\d{2})\s*$",
+    re.MULTILINE,
+)
+
+# Regex: Decorative divider lines tagged as underline — [A>____<A] or [A>———<A]
+# These are horizontal rules in the PDF that the underline detector wraps.
+_RE_IN_DECORATIVE_LINE = re.compile(
+    r"^\s*\[A>[_\s\u2014\u2013\-]+<A\]\s*$",
+    re.MULTILINE,
+)
+
+
+def _strip_in_artifacts(text: str) -> str:
+    """Remove Indiana-specific artifacts: LS/DI footers, barcode text, year footers,
+    decorative divider lines.
+
+    These appear on every page of Indiana bills and are not legislative content.
+    """
+    # Remove barcode text first (most distinctive)
+    new_text = _RE_IN_BARCODE.sub("", text)
+
+    # Remove LS/DI footer lines
+    new_text = _RE_IN_FOOTER.sub("", new_text)
+
+    # Remove decorative divider lines ([A>_____<A])
+    new_text = _RE_IN_DECORATIVE_LINE.sub("", new_text)
+
+    # Remove standalone year lines ONLY when adjacent to where a footer was
+    # (i.e. we already removed something above). This avoids removing "2025"
+    # if it appears in actual legislative content like "effective 2025".
+    # Safe heuristic: if we already removed footer lines, also remove year lines.
+    if new_text != text:
+        new_text = _RE_IN_YEAR_FOOTER.sub("", new_text)
+
+    if new_text != text:
+        # Clean up excess blank lines left behind
+        new_text = re.sub(r"\n{3,}", "\n\n", new_text)
+        logger.debug("Stripped IN artifacts (footer/barcode/year/decorative lines)")
+
+    return new_text
+
+
+# Regex: detect false [D>] tags around parenthesized subsection markers.
+# The LLM sometimes wraps (a), (b), (j), (1) etc. with deletion tags.
+_RE_FALSE_D_SUBSECTION = re.compile(
+    r"\[D>\(([a-zA-Z0-9]{1,3})\)<D\]",
+)
+
+
+def _strip_false_subsection_d_tags(text: str) -> str:
+    """Remove false ``[D>(x)<D]`` tags around subsection markers.
+
+    The LLM sometimes wraps parenthesized labels like ``(a)``, ``(j)``,
+    ``(1)`` with ``[D>…<D]`` tags.  These are paragraph markers, not
+    legislative deletions (which use ``[square brackets]``).
+    """
+    new_text = _RE_FALSE_D_SUBSECTION.sub(r"(\1)", text)
+    if new_text != text:
+        logger.debug("Stripped false [D>] tags from subsection markers")
+    return new_text
 
 
 # Regex: match [...] that are NOT our [A>...<A] or [D>...<D] tags.
@@ -480,8 +938,26 @@ def _tag_brackets(text: str) -> str:
     Used for states (e.g. CT, WA) where square brackets denote
     proposed deletions.  Existing ``[A>…<A]`` and ``[D>…<D]`` tags
     are left untouched.
+
+    Only brackets in *untagged* segments are wrapped — brackets that
+    already sit inside a ``[D>…<D]`` or ``[A>…<A]`` span (e.g. from
+    strikethrough detection) are skipped to prevent double-nesting.
     """
-    return _RE_BRACKET_DEL.sub(r"[D>[\1]<D]", text)
+    # Split the text into (tagged-span, gap-between-spans) segments so
+    # that we only apply bracket-wrapping to the untagged gaps.
+    _tag_re = re.compile(r"\[([AD])>(.*?)<\1\]", re.DOTALL)
+    parts: list[str] = []
+    last_end = 0
+    for m in _tag_re.finditer(text):
+        # Untagged segment before this tag — wrap any bare brackets
+        segment = text[last_end : m.start()]
+        parts.append(_RE_BRACKET_DEL.sub(r"[D>[\1]<D]", segment))
+        # Keep the existing tag as-is
+        parts.append(m.group())
+        last_end = m.end()
+    # Remaining untagged tail
+    parts.append(_RE_BRACKET_DEL.sub(r"[D>[\1]<D]", text[last_end:]))
+    return "".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -554,10 +1030,12 @@ def extract_pdf_with_pymupdf(
             mark_strikethrough=mark_strikethrough,
             mark_italic=mark_italic,
             mark_bold=mark_bold,
+            exclude_zones=None,
         )
         clean = _clean_tagged_text(raw_text, strip_line_numbers=strip_line_numbers)
-        if mark_brackets:
-            clean = _tag_brackets(clean)
+        # NOTE: _tag_brackets() is NOT called here.  It runs AFTER the
+        # LLM clean step (in clean_extracted_text) so the LLM never sees
+        # confusing nested [D>[…]<D] structures.
         results.append(clean)
 
     doc.close()
@@ -584,6 +1062,24 @@ _CLEAN_SYSTEM_PROMPT_FALLBACK = """\
 You are a **legislative-document text cleaner**.  Your ONLY job is to remove
 PDF extraction artefacts from the text below while preserving **100 %** of the
 legislative content.  You must work for ANY state, ANY bill format.
+
+══════════════════════════════════════════════════════════════
+STRUCTURAL METADATA (if present at start of input)
+══════════════════════════════════════════════════════════════
+
+The input text may begin with a metadata block delimited by:
+  ═══ PDF STRUCTURAL METADATA (detected by PyMuPDF) ═══
+  ...
+  ═══ END METADATA ═══
+
+USE THIS METADATA to understand the document structure:
+- **Tables**: The metadata shows table rows and columns extracted from the PDF.
+  Render each table row on a SINGLE line with large spacing between columns.
+  Example: "Section 1          October 1, 2025          5-192f(d)"
+  Do NOT split table rows across multiple lines.
+- **Table tags**: Strip any [A>...<A] or [D>...<D] tags that appear on table
+  cell content — table borders are NOT underlines. They are false positives.
+- **Do NOT** include the metadata block itself in your output.
 
 ══════════════════════════════════════════════════════════════
 MANDATORY REMOVALS  (remove these and NOTHING else)
@@ -626,6 +1122,13 @@ ABSOLUTE PRESERVATION RULES  (never violate)
      of purpose, explanatory notes.
 🛡️  PRESERVE the bill header block on page 1 (title, bill number, etc.)
     — clean it, but do NOT delete it (even if it has [A>…<A] tags).
+🛡️  **FALSE HEADER TAGS**: Bill number lines (e.g. "HOUSE BILL No. 1690",
+     "Raised Bill No. 6846"), committee names (e.g. "Rules and Legislative
+     Procedures"), version labels (e.g. "Introduced Version"), digest headings,
+     and other header/structural elements are often bold or sit near decorative
+     lines — the extractor may falsely wrap them in [A>…<A] tags.
+     ➜  REMOVE the [A>…<A] tags from these header elements, but KEEP the text.
+     ➜  This applies to ALL pages, not just page 1.
 🛡️  PRESERVE section / subsection numbering ("Section 1.", "(a)", "(2)", …).
 🛡️  When in doubt whether something is content or artefact → **KEEP IT**.
 
@@ -637,10 +1140,117 @@ OUTPUT FORMAT
 • Reflow lines naturally into paragraphs; collapse excessive blank lines
   to a single blank line between paragraphs.
 • Do NOT reword, paraphrase, or reorder anything.
+
+══════════════════════════════════════════════════════════════
+STRUCTURAL METADATA  (if present)
+══════════════════════════════════════════════════════════════
+
+The text may begin with a metadata block delimited by
+``═══ PDF STRUCTURAL METADATA ═══`` … ``═══ END METADATA ═══``.
+
+• Use this metadata to understand table layouts, header structure, etc.
+• **Tables**: Render each table row on a SINGLE line with large spacing
+  between columns (e.g. ``Section 1          October 1, 2025          5-192f(d)``).
+  Do NOT split table rows across multiple lines.
+• **Table tags**: Strip any ``[A>…<A]`` or ``[D>…<D]`` tags that wrap table
+  cell content — table borders are NOT underlines.
+• Do NOT include the metadata block itself in your output.
 """
 
 # Directory containing state-specific clean prompts
 _PROMPTS_DIR = Path(__file__).resolve().parent.parent / "data" / "Prompts"
+
+
+# ---------------------------------------------------------------------------
+# Structured page metadata extraction
+# ---------------------------------------------------------------------------
+
+def extract_page_metadata(pdf_path: str | Path) -> str:
+    """Extract structural metadata from a PDF for LLM context.
+
+    Returns a concise text block describing:
+      • Tables found on each page (rows × cols, cell contents)
+      • Page-1 header elements detected
+
+    This metadata is prepended to the raw text sent to the LLM so it
+    can make informed decisions about layout without seeing images.
+
+    Parameters
+    ----------
+    pdf_path : str or Path
+        Path to the source PDF.
+
+    Returns
+    -------
+    str
+        Human-readable metadata block, or empty string if extraction fails.
+    """
+    pdf_path = Path(pdf_path)
+    if not pdf_path.exists():
+        return ""
+
+    try:
+        doc = fitz.open(str(pdf_path))
+    except Exception:
+        return ""
+
+    sections: List[str] = []
+
+    for page_idx in range(len(doc)):
+        page = doc[page_idx]
+        page_num = page_idx + 1
+
+        # ── Table detection ──────────────────────────────────────────
+        try:
+            tabs = page.find_tables()
+            tables = tabs.tables if tabs else []
+        except Exception:
+            tables = []
+
+        if tables:
+            for t_idx, table in enumerate(tables):
+                try:
+                    data = table.extract()  # list of rows, each row is list of cell strings
+                except Exception:
+                    continue
+                if not data:
+                    continue
+
+                rows_desc: List[str] = []
+                for row in data:
+                    # Join cells with tab-like spacing
+                    cells = [str(c).strip() if c else "" for c in row]
+                    rows_desc.append("  │ " + "  │  ".join(cells) + "  │")
+
+                sections.append(
+                    f"TABLE on page {page_num} ({len(data)} rows × {len(data[0]) if data else 0} cols):\n"
+                    + "\n".join(rows_desc)
+                )
+
+    doc.close()
+
+    if not sections:
+        return ""
+
+    metadata = (
+        "═══ PDF STRUCTURAL METADATA (detected by PyMuPDF) ═══\n"
+        + "\n\n".join(sections)
+        + "\n═══ END METADATA ═══\n\n"
+        "INSTRUCTION: Use the metadata above to understand the document structure.\n"
+        "- TABLE rows must be rendered on a SINGLE line with large spacing between columns.\n"
+        "  Example: \"Section 1          October 1, 2025          5-192f(d)\"\n"
+        "- Do NOT split table rows across multiple lines.\n"
+        "- Do NOT add [A>...<A] or [D>...<D] tags to table content — table borders\n"
+        "  are NOT underlines. Strip any tags that appear on table cell content.\n"
+        "- The raw text below may have table cells split across lines — merge them\n"
+        "  back into single-line rows using the table structure above as reference.\n\n"
+    )
+
+    logger.info(
+        "📋 Extracted page metadata: %d structural elements, %d chars",
+        len(sections), len(metadata),
+    )
+    return metadata
 
 
 def _load_state_clean_prompt(state_code: str | None) -> str:
@@ -693,12 +1303,132 @@ def _get_anthropic_client():
     raise RuntimeError("No anthropic_api_key in gateway response")
 
 
+# ---------------------------------------------------------------------------
+# LLM diff tracking — what did the LLM change?
+# ---------------------------------------------------------------------------
+
+def _generate_clean_diff_report(
+    raw_text: str,
+    cleaned_text: str,
+    *,
+    stage: str = "LLM Clean",
+) -> str:
+    """Generate a human-readable report of what changed between raw and clean.
+
+    Returns a structured text report with:
+    - Summary statistics (chars/lines removed/added)
+    - Lines REMOVED by the LLM (likely headers, footers, line numbers)
+    - Lines ADDED by the LLM (should be rare — flags potential hallucinations)
+    - Suspicious removals (legislative content words that shouldn't be removed)
+    """
+    import difflib
+
+    raw_lines = raw_text.splitlines()
+    clean_lines = cleaned_text.splitlines()
+
+    # Use SequenceMatcher for line-level diff
+    sm = difflib.SequenceMatcher(None, raw_lines, clean_lines)
+
+    removed: list[tuple[int, str]] = []   # (line_no, text)
+    added: list[tuple[int, str]] = []     # (line_no, text)
+
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag == "delete":
+            for idx in range(i1, i2):
+                removed.append((idx + 1, raw_lines[idx]))
+        elif tag == "insert":
+            for idx in range(j1, j2):
+                added.append((idx + 1, clean_lines[idx]))
+        elif tag == "replace":
+            for idx in range(i1, i2):
+                removed.append((idx + 1, raw_lines[idx]))
+            for idx in range(j1, j2):
+                added.append((idx + 1, clean_lines[idx]))
+
+    # Filter out blank/whitespace-only lines for meaningful counts
+    removed_nonblank = [(n, t) for n, t in removed if t.strip()]
+    added_nonblank = [(n, t) for n, t in added if t.strip()]
+
+    # Suspicious removals: lines containing legislative keywords
+    _SUSPICIOUS_WORDS = re.compile(
+        r"\b(?:General Assembly|Sec\.\s*\d|Section\s+\d|Be it enacted|"
+        r"\[A>|\[D>|<A\]|<D\]|AN ACT|statute|subsection|"
+        r"shall|amend|repeal|effective|enacted)\b",
+        re.IGNORECASE,
+    )
+    suspicious = [
+        (n, t) for n, t in removed_nonblank
+        if _SUSPICIOUS_WORDS.search(t)
+        and not re.match(r"^\s*---\s*Page\s+\d+\s*---\s*$", t)  # skip page markers
+    ]
+
+    # Build report
+    lines: list[str] = []
+    lines.append(f"{'=' * 70}")
+    lines.append(f"  LLM CLEAN DIFF REPORT — {stage}")
+    lines.append(f"{'=' * 70}")
+    lines.append(f"")
+    lines.append(f"  Raw input:     {len(raw_text):>8,} chars | {len(raw_lines):>5,} lines")
+    lines.append(f"  Clean output:  {len(cleaned_text):>8,} chars | {len(clean_lines):>5,} lines")
+    change_pct = ((len(raw_text) - len(cleaned_text)) / len(raw_text) * 100) if raw_text else 0
+    lines.append(f"  Reduction:     {len(raw_text) - len(cleaned_text):>8,} chars ({change_pct:.1f}%)")
+    lines.append(f"")
+    lines.append(f"  Lines removed (non-blank): {len(removed_nonblank)}")
+    lines.append(f"  Lines added   (non-blank): {len(added_nonblank)}")
+    lines.append(f"")
+
+    # ── Suspicious removals ──
+    if suspicious:
+        lines.append(f"{'─' * 70}")
+        lines.append(f"  ⚠️  SUSPICIOUS REMOVALS ({len(suspicious)} lines with legislative content):")
+        lines.append(f"{'─' * 70}")
+        for n, t in suspicious[:30]:  # cap at 30
+            lines.append(f"  LINE {n:>4d}: {t.rstrip()[:120]}")
+        if len(suspicious) > 30:
+            lines.append(f"  ... and {len(suspicious) - 30} more")
+        lines.append(f"")
+
+    # ── All removed lines ──
+    lines.append(f"{'─' * 70}")
+    lines.append(f"  REMOVED LINES ({len(removed_nonblank)} non-blank):")
+    lines.append(f"{'─' * 70}")
+    for n, t in removed_nonblank[:100]:
+        lines.append(f"  LINE {n:>4d}: {t.rstrip()[:150]}")
+    if len(removed_nonblank) > 100:
+        lines.append(f"  ... and {len(removed_nonblank) - 100} more")
+    lines.append(f"")
+
+    # ── Added lines ──
+    if added_nonblank:
+        lines.append(f"{'─' * 70}")
+        lines.append(f"  ADDED LINES ({len(added_nonblank)} non-blank):")
+        lines.append(f"{'─' * 70}")
+        for n, t in added_nonblank[:50]:
+            lines.append(f"  LINE {n:>4d}: {t.rstrip()[:150]}")
+        if len(added_nonblank) > 50:
+            lines.append(f"  ... and {len(added_nonblank) - 50} more")
+        lines.append(f"")
+
+    lines.append(f"{'=' * 70}")
+    lines.append(f"  END OF DIFF REPORT")
+    lines.append(f"{'=' * 70}")
+
+    report = "\n".join(lines)
+    logger.info(
+        "📋 Diff report: %d lines removed, %d added, %d suspicious",
+        len(removed_nonblank), len(added_nonblank), len(suspicious),
+    )
+    return report
+
+
 def clean_extracted_text(
     raw_text: str,
     *,
     state_code: str | None = None,
+    pdf_path: str | Path | None = None,
     anthropic_client=None,
     model: str = "claude-opus-4-7",
+    mark_brackets: bool = False,
 ) -> str:
     """
     Use Claude Opus 4.7 to remove PDF artefacts (headers, footers, line
@@ -708,6 +1438,10 @@ def clean_extracted_text(
     Uses **state-specific prompts** from ``data/Prompts/{ST}_Clean_Prompt.txt``
     when available, otherwise falls back to a universal prompt.
 
+    When *pdf_path* is provided, structural metadata (tables, header zones)
+    is extracted from the PDF and prepended to the text sent to the LLM,
+    giving it layout context it cannot infer from text alone.
+
     Parameters
     ----------
     raw_text : str
@@ -715,6 +1449,9 @@ def clean_extracted_text(
     state_code : str, optional
         Two-letter state code (e.g. "CT", "FL", "KS").  Used to load
         the matching prompt file.
+    pdf_path : str or Path, optional
+        Path to the source PDF.  When provided, structural metadata
+        (tables, header layout) is extracted and passed to the LLM.
     anthropic_client : anthropic.Anthropic, optional
         An existing Anthropic client.  If *None*, one is created via
         the TR AI Platform gateway.
@@ -732,9 +1469,17 @@ def clean_extracted_text(
     # Load the appropriate prompt
     system_prompt = _load_state_clean_prompt(state_code)
 
+    # ── Extract structural metadata from PDF if available ─────────
+    metadata_prefix = ""
+    if pdf_path:
+        metadata_prefix = extract_page_metadata(pdf_path)
+
+    # Build the user message: metadata (if any) + raw text
+    user_content = metadata_prefix + raw_text
+
     logger.info(
-        "🧹 Cleaning extracted text with %s (state=%s) …",
-        model, state_code or "universal",
+        "🧹 Cleaning extracted text with %s (state=%s, metadata=%d chars) …",
+        model, state_code or "universal", len(metadata_prefix),
     )
 
     import time as _time
@@ -746,7 +1491,7 @@ def clean_extracted_text(
                 max_tokens=16384,
                 system=system_prompt,
                 messages=[
-                    {"role": "user", "content": raw_text},
+                    {"role": "user", "content": user_content},
                 ],
             )
             break
@@ -765,13 +1510,51 @@ def clean_extracted_text(
 
     cleaned = response.content[0].text.strip()
 
+    # Expose usage data for callers that want cost tracking
+    _usage = getattr(response, 'usage', None)
+    clean_extracted_text._last_usage = {
+        "input_tokens": getattr(_usage, 'input_tokens', 0) if _usage else 0,
+        "output_tokens": getattr(_usage, 'output_tokens', 0) if _usage else 0,
+        "model": model,
+    }
+
+    # ── Generate diff report BEFORE any post-processing ──────────────
+    # This captures what the LLM itself changed (not Python post-processing).
+    diff_report = _generate_clean_diff_report(raw_text, cleaned, stage="LLM Clean")
+
     logger.info(
         "✅ Cleaned text: %d → %d chars",
         len(raw_text), len(cleaned),
     )
 
-    # ── consolidate adjacent tags split by PDF line breaks ────────────
+    # ── bracket-to-[D>] tagging (runs AFTER LLM to avoid confusing it) ──
+    if mark_brackets:
+        cleaned = _tag_brackets(cleaned)
+
+    # ── strip false header tags for CT ────────────────────────────────
+    if state_code and state_code.upper() == "CT":
+        cleaned = _strip_ct_header_tags(cleaned)
+        cleaned = _strip_ct_compact_designator(cleaned)
+        cleaned = _strip_false_subsection_d_tags(cleaned)
+        cleaned = _restructure_ct_header(cleaned)
+
+    # ── strip IN-specific artifacts (footers, barcodes, false headers) ─
+    if state_code and state_code.upper() == "IN":
+        cleaned = _strip_in_header_tags(cleaned)
+        cleaned = _strip_in_artifacts(cleaned)
+
+    # ── strip KS-specific false header tags ────────────────────────
+    if state_code and state_code.upper() == "KS":
+        cleaned = _strip_ks_header_tags(cleaned)
+
+    # ── consolidate, clean, and split tagged blocks ───────────────────
     cleaned = consolidate_adjacent_tags(cleaned)
+    cleaned = remove_nested_tags(cleaned)
+    cleaned = merge_split_tags(cleaned)
+    cleaned = split_tagged_subsections(cleaned)
+
+    # Store the diff report for the caller to retrieve and save
+    clean_extracted_text._last_diff_report = diff_report
 
     return cleaned
 
@@ -789,16 +1572,229 @@ def consolidate_adjacent_tags(text: str) -> str:
         →  [A>three utility commissioners, each of whom shall be…<A]
 
     Repeats until no more merges remain (handles 3+ consecutive tags).
+
+    Uses a two-phase approach:
+
+    **Phase 1** — same-line merging (space-separated, no newlines): always
+    merge.  Same-line splits only happen from decoration changes within a
+    PDF line, never from subsection boundaries.
+
+    **Phase 2** — cross-line merging (newline-separated): merge UNLESS the
+    next tag starts with a sub-item or section marker:
+
+    - period-style: ``a. ``, ``1. ``, ``A. ``
+    - parenthesized: ``(a) ``, ``(1) ``, ``(iv) ``
+    - section header: ``Sec.``, ``SECTION``
+    - statute number: ``72-3404.`` (digit-dash-digit pattern)
     """
     import re as _re
-    # Merge adjacent [A>…<A] tags
-    _adj_a = _re.compile(r'<A\]\s+\[A>')
-    while _adj_a.search(text):
-        text = _adj_a.sub(' ', text)
-    # Merge adjacent [D>…<D] tags
-    _adj_d = _re.compile(r'<D\]\s+\[D>')
-    while _adj_d.search(text):
-        text = _adj_d.sub(' ', text)
+    # All markers (for cross-line protection)
+    # Sec\. has no trailing \s so it also blocks [A>Sec.<A] (end-of-tag)
+    # \d+-\d+ matches statute numbers like "72-3404." that follow "read as follows:"
+    _NO_MERGE = r'(?![a-cA-C1-9]\.\s|\([a-zA-Z0-9]{1,4}\)\s|Sec\.|SECTION\s|\d+-\d)'
+    # Strong section starters only (for same-line protection)
+    _NO_MERGE_INLINE = r'(?!Sec\.|SECTION\s)'
+
+    # ── Phase 0: fix orphaned "Sec." tags ─────────────────────────────
+    # PyMuPDF sometimes splits "Sec." into its own tag ([A>Sec.<A])
+    # followed by the section number in the next tag ([A>1. As used…<A]).
+    # Re-join them BEFORE merging so Phase 2 sees the complete section.
+    # Also handles "Sec.\n8.7." where PyMuPDF put a newline inside the tag.
+    _orphan_sec_a = _re.compile(r'Sec\.\s*<A\]\s*\n?\s*\[A>')
+    text = _orphan_sec_a.sub('Sec. ', text)
+    _orphan_sec_d = _re.compile(r'Sec\.\s*<D\]\s*\n?\s*\[D>')
+    text = _orphan_sec_d.sub('Sec. ', text)
+    # Also fix "Sec.\nNUMBER" within a single tag (newline inside content)
+    text = _re.sub(r'Sec\.\s*\n\s*(\d)', r'Sec. \1', text)
+
+    # ── Phase 0b: rejoin "Sec. X.Y." with following "(a)" subsection ──
+    # When PyMuPDF splits:  [A>Sec. 8.7.<A]  [A>(a) As used…<A]
+    # The "(a)" is the first subsection label of that section and must
+    # stay with "Sec. 8.7." — it is NOT a standalone subsection break.
+    _orphan_sec_num_a = _re.compile(r'(Sec\.\s+[\d.]+)<A\]\s*\n?\s*\[A>')
+    text = _orphan_sec_num_a.sub(r'\1 ', text)
+    _orphan_sec_num_d = _re.compile(r'(Sec\.\s+[\d.]+)<D\]\s*\n?\s*\[D>')
+    text = _orphan_sec_num_d.sub(r'\1 ', text)
+
+    # ── Phase 1a: same-line merging — merge unless Sec./SECTION ───────
+    # Parenthesized refs like (5) on the same line are inline, not
+    # subsection markers, so they should still merge.
+    _adj_a_inline = _re.compile(r'<A\][ \t]+\[A>' + _NO_MERGE_INLINE)
+    while _adj_a_inline.search(text):
+        text = _adj_a_inline.sub(' ', text)
+    _adj_d_inline = _re.compile(r'<D\][ \t]+\[D>' + _NO_MERGE_INLINE)
+    while _adj_d_inline.search(text):
+        text = _adj_d_inline.sub(' ', text)
+
+    # ── Phase 1b: same-line split — break Sec./SECTION onto new lines ─
+    # When PyMuPDF places e.g. "Chapter...<A] [A>Sec. 1..." on the
+    # same line, split them with a blank line instead of merging.
+    _split_a = _re.compile(r'(<A\])[ \t]+(\[A>(?:Sec\.|SECTION\s))')
+    text = _split_a.sub(r'\1\n\n\2', text)
+    _split_d = _re.compile(r'(<D\])[ \t]+(\[D>(?:Sec\.|SECTION\s))')
+    text = _split_d.sub(r'\1\n\n\2', text)
+
+    # ── Phase 2: cross-line merging (has newline), respecting markers ─
+    _adj_a_cross = _re.compile(r'<A\]\s*\n\s*\[A>' + _NO_MERGE)
+    while _adj_a_cross.search(text):
+        text = _adj_a_cross.sub(' ', text)
+    _adj_d_cross = _re.compile(r'<D\]\s*\n\s*\[D>' + _NO_MERGE)
+    while _adj_d_cross.search(text):
+        text = _adj_d_cross.sub(' ', text)
+
+    # ── Phase 3: ensure blank line before subsection boundaries ───────
+    # After merging, adjacent tags separated by a single \n that start
+    # with a marker should have a blank line (\n\n) for readability.
+    _MARKER = r'(\([a-zA-Z0-9]{1,4}\)\s|[a-cA-C1-9]\.\s|Sec\.\s|SECTION\s|\d+-\d)'
+    _gap_a = _re.compile(r'(<A\])\n(\[A>' + _MARKER + r')')
+    text = _gap_a.sub(r'\1\n\n\2', text)
+    _gap_d = _re.compile(r'(<D\])\n(\[D>' + _MARKER + r')')
+    text = _gap_d.sub(r'\1\n\n\2', text)
+
+    return text
+
+
+def remove_nested_tags(text: str) -> str:
+    """Remove nested/duplicate opening tags within the same tag type.
+
+    Example::
+
+        [A>text one[A>text two<A]  →  [A>text one text two<A]
+    """
+    for tag_type in ['A', 'D']:
+        open_tag = '[' + tag_type + '>'
+        close_tag = '<' + tag_type + ']'
+        changed = True
+        while changed:
+            changed = False
+            result = []
+            depth = 0
+            i = 0
+            while i < len(text):
+                if text[i:i+len(open_tag)] == open_tag:
+                    if depth == 0:
+                        result.append(open_tag)
+                        depth = 1
+                    else:
+                        changed = True
+                    i += len(open_tag)
+                elif text[i:i+len(close_tag)] == close_tag:
+                    result.append(close_tag)
+                    depth = max(0, depth - 1)
+                    i += len(close_tag)
+                else:
+                    result.append(text[i])
+                    i += 1
+            text = ''.join(result)
+    return text
+
+
+def merge_split_tags(text: str) -> str:
+    """Merge adjacent same-type tags split mid-sentence.
+
+    Merges ``[A>text<A] [A>continuation<A]`` into ``[A>text continuation<A]``
+    ONLY when the second tag does **not** start with a subsection marker.
+    """
+    for tag_type in ['A', 'D']:
+        _no_sub = (
+            r'(?!\s*\(\d+\))'
+            r'(?!\s*\([A-Z]+\))'
+            r'(?!\s*\([a-z]+\))'
+            r'(?!\s*[a-z]\.\d*\.?\s)'
+            r'(?!\s*\d+\.\s)'
+        )
+        # 0) Inline joins: <T][T>text on same line — always merge
+        inline_cont = r'<' + tag_type + r'\]\[' + tag_type + r'>' + _no_sub
+        text = re.sub(inline_cont, '', text)
+        # 0b) Inline subsection boundary: <T][T>(1) → <T]\n\n[T>(1)
+        inline_sub = r'<' + tag_type + r'\]\[' + tag_type + r'>'
+        text = re.sub(inline_sub, '<' + tag_type + ']\n\n[' + tag_type + '>', text)
+        # 1) Continuations: \n<T][T>text (NOT a subsection) → merge
+        same_cont = r'\n<' + tag_type + r'\]\[' + tag_type + r'>' + _no_sub
+        text = re.sub(same_cont, ' ', text)
+        # 2) Subsection boundaries: \n<T][T>(1) → <T]\n\n[T>(1)
+        same_sub = r'\n<' + tag_type + r'\]\[' + tag_type + r'>'
+        text = re.sub(same_sub, '<' + tag_type + ']\n\n[' + tag_type + '>', text)
+        # 3) Cross-line joins: <T]\n[T> continuation
+        cross_line = (
+            r'<' + tag_type + r'\]'
+            r'(\s*\n\s*)'
+            r'\[' + tag_type + r'>' + _no_sub
+        )
+        text = re.sub(cross_line, ' ', text)
+    return text
+
+
+def split_tagged_subsections(text: str) -> str:
+    """Split long tagged blocks at subsection markers.
+
+    Only splits at markers after sentence-ending punctuation (``.``, ``;``,
+    ``:``) or after ``and``/``or``, avoiding false splits on inline
+    references like "seventy-two (72) hour".
+
+    Inline-list blocks (items separated by ``;`` rather than ``.``) are
+    kept intact.
+    """
+    subsection_re = re.compile(
+        r'(?:(?<=[.:;])|(?<=\band\b)|(?<=\bor\b))\s*'
+        r'('
+        r'\(\d+\)[a-z]\.\d*\.?'
+        r'|\(\d+\)|\([A-Z]+\)|\([a-z]+\)'
+        r'|[a-z]\.\d*\.?'
+        r'|\d+\.'
+        r')(?:\s|$)',
+        re.IGNORECASE,
+    )
+    _nosplit_re = re.compile(
+        r'(?:^|\n)\s*(?:Sec|Section|Art|Article)\.\s*$'
+        r'|(?<!\$)(?<!\d)(?:\d{2,}\.\d*\.?\s*)$',
+        re.IGNORECASE,
+    )
+
+    def _is_inline_list(content, markers):
+        if not markers:
+            return False
+        list_sep_count = 0
+        period_count = 0
+        for m in markers:
+            preceding = content[:m.start()].rstrip()
+            if preceding.endswith(';'):
+                list_sep_count += 1
+            elif preceding.endswith(('.', ':')):
+                period_count += 1
+            else:
+                list_sep_count += 1
+        return list_sep_count > period_count
+
+    def _split_block(match):
+        tag_open = match.group(1)
+        content = match.group(2)
+        tag_close = match.group(3)
+        markers = list(subsection_re.finditer(content))
+        if len(markers) < 1:
+            return match.group(0)
+        markers = [m for m in markers
+                   if not _nosplit_re.search(content[:m.start()])]
+        if len(markers) < 1:
+            return match.group(0)
+        if _is_inline_list(content, markers):
+            return match.group(0)
+        pieces = []
+        prev_end = 0
+        for m in markers:
+            split_at = m.start()
+            before = content[prev_end:split_at].rstrip()
+            if before:
+                pieces.append(before)
+            prev_end = split_at
+        last = content[prev_end:].strip()
+        if last:
+            pieces.append(last)
+        tagged_pieces = [f"{tag_open}{p.strip()}{tag_close}" for p in pieces]
+        return '\n\n'.join(tagged_pieces)
+
+    text = re.sub(r'(\[A>)(.*?)(<A\])', _split_block, text, flags=re.DOTALL)
+    text = re.sub(r'(\[D>)(.*?)(<D\])', _split_block, text, flags=re.DOTALL)
     return text
 
 
@@ -901,6 +1897,11 @@ def extract_pdf_json_report(
         except Exception:
             ul_rects, so_rects = [], []
         hlines = _extract_hlines_from_drawings(page)
+
+        # --- filter out table-border lines ---
+        table_zones = _detect_table_zones(page)
+        if table_zones:
+            hlines = _filter_table_border_hlines(hlines, table_zones)
 
         # --- text with per-character positions (rawdict → dict fallback) ---
         text_dict = page.get_text("rawdict", flags=fitz.TEXT_PRESERVE_WHITESPACE)

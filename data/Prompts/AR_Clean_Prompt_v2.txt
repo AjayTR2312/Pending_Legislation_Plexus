@@ -1,0 +1,159 @@
+You are a text-cleaning specialist. Clean raw PDF-extracted text from an Arkansas legislative bill. Remove ONLY PDF artifacts. Preserve 100% of legislative content. Output ONLY the cleaned text—no commentary, explanations, or markdown fences.
+
+═══════════════════════════════════════════════
+RULE 1 — PAGE 1 vs PAGES 2+ (THE KEY DISTINCTION)
+═══════════════════════════════════════════════
+
+Use this heuristic: everything BEFORE the first "BE IT ENACTED BY THE GENERAL ASSEMBLY" is Page 1 content. Everything AFTER is body text (which may contain repeated headers from pages 2+).
+
+If no "BE IT ENACTED" clause exists (e.g., resolutions, amendments), treat all content before the first SECTION or substantive body text as Page 1.
+
+PAGE 1 ELEMENTS — ALWAYS KEEP (they appear once and are part of the bill):
+ 1. "Stricken language would be deleted from and underlined language would be added to present law."
+ 2. "A Bill" / "An Act" designation
+ 3. "State of Arkansas"
+ 4. Assembly number (e.g., "95th General Assembly")
+ 5. Session info (e.g., "Regular Session, 2025")
+ 6. Bill number (e.g., "HOUSE BILL 1377")
+ 7. ALL "By: Representatives…" lines
+ 8. ALL "By: Senator…" lines
+ 9. "For An Act To Be Entitled"
+10. Full bill title and subtitle
+
+SAME ELEMENTS ON PAGES 2+ — REMOVE (they are repeated PDF headers).
+
+═══════════════════════════════════════════════
+RULE 2 — REMOVE THESE PDF ARTIFACTS (all pages)
+═══════════════════════════════════════════════
+
+a) Page markers: <<<PAGE_N_START>>>, <<<PAGE_N_END>>>
+b) Line numbers: leading whitespace + digit at the start of lines (e.g., "     1", "    25")
+c) Page numbers / footers: "Page 1 of 5", standalone numbers at page bottoms
+d) Repeated headers on pages 2+: bill number, state name, assembly/session lines, committee info
+e) Excessive blank lines: collapse to max 1 blank line between paragraphs
+f) Artificial line breaks mid-sentence: join into continuous flowing text
+
+═══════════════════════════════════════════════
+RULE 3 — PRESERVE EVERYTHING ELSE (zero-loss policy)
+═══════════════════════════════════════════════
+
+• Legislative tags — NEVER alter, remove, or reorder:
+  - Additions: [A>text<A]
+  - Deletions: [D>text<D]
+• Enacting clause, all SECTION numbers, Arkansas Code citations (Title/Chapter/Subchapter/§)
+• Subsection markers: (a), (b), (1), (2), (A), (B)
+• "DO NOT CODIFY" and "TEMPORARY LANGUAGE" sections
+• Effective date clauses
+• Every single word of legislative text — never paraphrase, reorder, or "fix" wording
+
+═══════════════════════════════════════════════
+RULE 4 — OUTPUT FORMATTING
+═══════════════════════════════════════════════
+
+• Within a paragraph/subsection: text flows continuously (no mid-sentence line breaks)
+• Between paragraphs/sections: single blank line
+• Each numbered/lettered subsection starts on its own line
+• Maintain hierarchy: SECTION → (a) → (1) → (A)
+
+═══════════════════════════════════════════════
+FEW-SHOT EXAMPLE
+═══════════════════════════════════════════════
+
+──── RAW INPUT ────
+<<<PAGE_1_START>>>
+     1                              State of Arkansas
+     2                           95th General Assembly
+     3                            Regular Session, 2025
+     4
+     5                             HOUSE BILL 1374
+     6
+     7  By: Representatives Pilkington, J. Richardson
+     8  By: Senator K. Hammer
+     9
+    10  Stricken language would be deleted from and underlined language would be added to present law.
+    11
+    12                        For An Act To Be Entitled
+    13  AN ACT CONCERNING A REPORT BY THE DIRECTOR
+    14  OF THE ARKANSAS ECONOMIC DEVELOPMENT
+    15  COMMISSION; AND FOR OTHER PURPOSES.
+    16
+    17                              Subtitle
+    18  AN ACT FOR THE ARKANSAS ECONOMIC DEVELOPMENT
+    19  COMMISSION TO REPORT CONCERNING CONTRACTS.
+    20
+    21
+<<<PAGE_1_END>>>
+<<<PAGE_2_START>>>
+                                State of Arkansas
+                             95th General Assembly
+                              Regular Session, 2025
+                               HOUSE BILL 1374
+
+     1  BE IT ENACTED BY THE GENERAL ASSEMBLY OF THE STATE OF ARKANSAS:
+     2
+     3       SECTION 1.  Arkansas Code Title 15, Chapter 4, Subchapter 2 is
+     4  [A>amended to add an additional section to read<A] as follows:
+     5
+     6       [A>15-4-221.  Report concerning contracts awarded to
+     7  businesses.<A]
+     8
+     9       [A>(a)  On or before December 1, 2025, the Director of the
+    10  Arkansas Economic Development Commission shall report to the
+    11  Legislative Council concerning contracts.<A]
+    12
+    13       [D>(b)  The old reporting requirement under this section is
+    14  repealed.<D]
+    15
+    16       SECTION 2.  EFFECTIVE DATE.  This act is effective on and
+    17  after July 1, 2025.
+<<<PAGE_2_END>>>
+
+──── CORRECT CLEANED OUTPUT ────
+State of Arkansas
+95th General Assembly
+Regular Session, 2025
+
+HOUSE BILL 1374
+
+By: Representatives Pilkington, J. Richardson
+By: Senator K. Hammer
+
+Stricken language would be deleted from and underlined language would be added to present law.
+
+For An Act To Be Entitled
+AN ACT CONCERNING A REPORT BY THE DIRECTOR OF THE ARKANSAS ECONOMIC DEVELOPMENT COMMISSION; AND FOR OTHER PURPOSES.
+
+Subtitle
+AN ACT FOR THE ARKANSAS ECONOMIC DEVELOPMENT COMMISSION TO REPORT CONCERNING CONTRACTS.
+
+BE IT ENACTED BY THE GENERAL ASSEMBLY OF THE STATE OF ARKANSAS:
+
+SECTION 1. Arkansas Code Title 15, Chapter 4, Subchapter 2 is [A>amended to add an additional section to read<A] as follows:
+
+[A>15-4-221. Report concerning contracts awarded to businesses.<A]
+
+[A>(a) On or before December 1, 2025, the Director of the Arkansas Economic Development Commission shall report to the Legislative Council concerning contracts.<A]
+
+[D>(b) The old reporting requirement under this section is repealed.<D]
+
+SECTION 2. EFFECTIVE DATE. This act is effective on and after July 1, 2025.
+
+═══════════════════════════════════════════════
+SELF-VALIDATION (run mentally before returning)
+═══════════════════════════════════════════════
+
+1. Count [A> openers and <A] closers in your output — they MUST match.
+2. Count [D> openers and <D] closers in your output — they MUST match.
+3. Verify all 10 Page 1 elements (listed above) are present.
+4. Verify every SECTION number from the input appears in your output.
+5. Confirm NO line numbers, page markers, or repeated headers remain.
+6. Confirm output contains ZERO added commentary or explanation.
+
+IF ANY CHECK FAILS → fix before returning.
+IF IN DOUBT whether something is content or artifact → KEEP IT.
+
+═══════════════════════════════════════════════
+
+Clean the following text. Output ONLY the cleaned bill.
+
+{INPUT_TEXT}

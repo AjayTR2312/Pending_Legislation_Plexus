@@ -11,16 +11,19 @@ import fitz  # PyMuPDF
 import base64
 import json
 import re
+import os
 from typing import List, Dict, Tuple
 
-st.set_page_config(
-    page_title="PDF ↔ Text Comparator",
-    page_icon="📄",
-    layout="wide",
-    initial_sidebar_state="collapsed",
-)
+# Only set page config when running as standalone (not when imported)
+if __name__ == "__main__":
+    st.set_page_config(
+        page_title="PDF ↔ Text Comparator",
+        page_icon="📄",
+        layout="wide",
+        initial_sidebar_state="collapsed",
+    )
 
-PDF_RENDER_DPI = 150
+PDF_RENDER_DPI = 400
 
 
 # ── Caching helpers ──────────────────────────────────────────────────────────
@@ -39,16 +42,52 @@ def render_pdf_pages(pdf_bytes: bytes, dpi: int = PDF_RENDER_DPI) -> List[str]:
 
 @st.cache_data
 def extract_word_bboxes(pdf_bytes: bytes) -> List[dict]:
+    """Extract words from PDF pages; uses OCR for scanned/image-only pages."""
+    import os
+    # Set up Tesseract path for OCR fallback
+    _tess_dir = r"C:\Users\C302602\AppData\Local\Programs\Tesseract-OCR"
+    _tessdata = os.path.join(_tess_dir, "tessdata")
+    if os.path.isdir(_tessdata):
+        os.environ.setdefault("TESSDATA_PREFIX", _tessdata)
+
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     words_all = []
+    ocr_pages = []
     for pi in range(len(doc)):
-        for w in doc[pi].get_text("words"):
-            words_all.append(dict(
-                text=w[4], page=pi,
-                x0=w[0], y0=w[1], x1=w[2], y1=w[3],
-                block=w[5], line=w[6], word=w[7],
-            ))
+        page = doc[pi]
+        native_words = page.get_text("words")
+        if len(native_words) >= 5:
+            # Enough native text — use it directly
+            for w in native_words:
+                words_all.append(dict(
+                    text=w[4], page=pi,
+                    x0=w[0], y0=w[1], x1=w[2], y1=w[3],
+                    block=w[5], line=w[6], word=w[7],
+                ))
+        else:
+            # Few or no words — likely scanned; try OCR
+            try:
+                tp = page.get_textpage_ocr(flags=0, full=True)
+                ocr_words = page.get_text("words", textpage=tp)
+                for w in ocr_words:
+                    words_all.append(dict(
+                        text=w[4], page=pi,
+                        x0=w[0], y0=w[1], x1=w[2], y1=w[3],
+                        block=w[5], line=w[6], word=w[7],
+                    ))
+                if ocr_words:
+                    ocr_pages.append(pi + 1)
+            except Exception:
+                # OCR unavailable — fall back to whatever native text exists
+                for w in native_words:
+                    words_all.append(dict(
+                        text=w[4], page=pi,
+                        x0=w[0], y0=w[1], x1=w[2], y1=w[3],
+                        block=w[5], line=w[6], word=w[7],
+                    ))
     doc.close()
+    if ocr_pages:
+        st.info(f"🔍 OCR applied on page(s): {', '.join(map(str, ocr_pages))}")
     return words_all
 
 
@@ -189,30 +228,32 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,san
 .cz{position:absolute;cursor:pointer;z-index:4;border:1px solid transparent;transition:all .12s}
 .cz:hover{border-color:rgba(9,105,218,.3);background:rgba(9,105,218,.06)}
 
-.text-wrap{padding:2px 0}
+.text-wrap{padding:0;min-height:calc(100vh - 90px);background:var(--bg)}
 .tl{
-  padding:1px 12px 1px 0;
+  padding:0 16px 0 0;
   font-family:'Cascadia Code','JetBrains Mono','Fira Code',Consolas,monospace;
-  font-size:13px;line-height:1.7;
+  font-size:13px;line-height:1.75;
   border-left:3px solid transparent;
   white-space:pre-wrap;word-wrap:break-word;display:flex;
-  transition:background .1s;
+  transition:background .08s;cursor:text;
 }
 .tl:hover{background:var(--hover)}
 .tl.active{background:var(--hl)!important;border-left-color:var(--hl-border)}
+.tl.editor-active{background:rgba(9,105,218,.04)!important;border-left-color:var(--accent)!important}
+.tl.editor-active .ln{opacity:1;color:var(--text)}
 
 .ln{
-  display:inline-block;min-width:36px;text-align:right;padding-right:10px;
-  color:var(--text2);opacity:.4;font-size:11px;user-select:none;flex-shrink:0;
+  display:inline-block;min-width:48px;text-align:right;padding:0 12px 0 8px;
+  color:var(--text2);opacity:.45;font-size:12px;user-select:none;flex-shrink:0;
+  background:var(--surface);border-right:1px solid var(--border);margin-right:10px;
 }
-.lc{display:inline;} /* line content wrapper — keeps words inline */
+.lc{display:inline;flex:1;min-width:0;outline:none} /* line content wrapper */
+.lc[contenteditable="true"]{caret-color:var(--accent)}
+.lc[contenteditable="true"]:focus{outline:none}
 .lc .tg-a + .tw .tg-a,
 .lc .tg-d + .tw .tg-d {margin-left:-1px}
 
 .tw{border-radius:2px;padding:0 1px}
-.tw[data-m="0"]{background:#fff3cd;border-bottom:2px dashed #d4a017;border-radius:2px}
-.tw[data-m="0"] .tg-a{background:#fde68a}
-.tw[data-m="0"] .tg-d{background:#fde68a}
 .tw.sel{background:var(--hl);outline:1px solid var(--hl-border)}
 ::selection{background:rgba(59,130,246,.3)}
 
@@ -223,15 +264,63 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,san
       text-decoration-color:var(--red);text-decoration-thickness:1.5px}
 .tag-marker{}
 
-/* Edit mode */
-.edit-area{
-  display:none;width:100%;height:calc(100vh - 86px);
-  font-family:'Cascadia Code',Consolas,monospace;font-size:13px;line-height:1.7;
-  padding:8px 12px;border:none;outline:none;resize:none;
-  background:var(--bg);color:var(--text);
+.text-wrap.editing .tl{cursor:text}
+.text-wrap.editing .ln{pointer-events:none}
+
+/* Focus on changes — fade unchanged lines */
+.text-wrap.focus .tl:not(.has-change){opacity:.3}
+.text-wrap.focus .tl.has-change{opacity:1}
+
+/* Collapse block */
+.collapse-bar{
+  padding:4px 12px;font-size:12px;color:var(--text2);background:var(--surface);
+  border:1px dashed var(--border);border-radius:4px;margin:2px 12px 2px 46px;
+  cursor:pointer;text-align:center;user-select:none;transition:background .15s;
 }
-.edit-area.vis{display:block}
-.text-wrap.hid{display:none}
+.collapse-bar:hover{background:#e8ecf0}
+
+/* PDF controls */
+.pdf-controls{
+  display:flex;align-items:center;gap:6px;padding:4px 8px;
+  background:var(--surface);border-bottom:1px solid var(--border);
+  position:sticky;top:0;z-index:12;
+}
+.pdf-controls .zbtn{
+  font-size:14px;width:28px;height:28px;border-radius:4px;border:1px solid var(--border);
+  background:var(--bg);cursor:pointer;display:flex;align-items:center;justify-content:center;
+}
+.pdf-controls .zbtn:hover{background:var(--surface);border-color:var(--accent)}
+.pdf-controls .zlbl{font-size:11px;color:var(--text2);min-width:40px;text-align:center}
+.pdf-controls .page-nav{margin-left:auto;display:flex;align-items:center;gap:4px}
+.pdf-controls .page-nav .plbl{font-size:11px;color:var(--text2)}
+
+/* Semantic diff badges */
+.sem-badge{
+  display:inline-block;font-size:9px;font-weight:600;padding:1px 5px;border-radius:3px;
+  margin:0 2px;vertical-align:middle;letter-spacing:.3px;font-family:monospace;
+}
+.sem-badge.ins{background:#c6f0c6;color:#0d5d0d;border:1px solid #82d882}
+.sem-badge.del{background:#f8d0d0;color:#8b1a1a;border:1px solid #e08080}
+
+/* Text editor toolbar */
+.text-toolbar{
+  display:flex;align-items:center;gap:6px;padding:4px 10px;
+  background:var(--surface);border-bottom:1px solid var(--border);flex-wrap:wrap;
+  position:sticky;top:33px;z-index:9;
+}
+.text-toolbar .tbtn{
+  font-size:11px;padding:3px 10px;border-radius:4px;
+  border:1px solid var(--border);background:var(--bg);cursor:pointer;
+  display:flex;align-items:center;gap:3px;font-weight:600;
+  transition:all .15s;white-space:nowrap;
+}
+.text-toolbar .tbtn:hover{border-color:var(--accent);background:var(--surface)}
+.text-toolbar .tbtn.tag-a{color:var(--green);border-color:rgba(26,127,55,.3)}
+.text-toolbar .tbtn.tag-a:hover{background:var(--green-bg);border-color:var(--green)}
+.text-toolbar .tbtn.tag-d{color:var(--red);border-color:rgba(207,34,46,.3)}
+.text-toolbar .tbtn.tag-d:hover{background:var(--red-bg);border-color:var(--red)}
+.text-toolbar .tsep{width:1px;height:18px;background:var(--border)}
+.text-toolbar .tlbl{font-size:10px;color:var(--text2);font-weight:500}
 
 ::-webkit-scrollbar{width:7px}
 ::-webkit-scrollbar-track{background:transparent}
@@ -244,23 +333,43 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,san
 <div class="top-bar">
   <span class="logo">📄 PDF ↔ Text Comparator</span>
   <span class="sep"></span>
-  <span class="hint">Click or drag words to highlight on PDF · Click PDF regions to jump to text</span>
+  <button class="btn" onclick="navDiff(-1)" title="Previous diff">◀</button>
+  <button class="btn" onclick="navDiff(1)" title="Next diff">▶</button>
+  <label style="font-size:12px;color:var(--text2);display:flex;align-items:center;gap:4px;margin-left:8px;cursor:pointer">
+    <input type="checkbox" id="focusCb" onchange="toggleFocus(this.checked)"> Focus on changes
+  </label>
+  <label style="font-size:12px;color:var(--text2);display:flex;align-items:center;gap:4px;margin-left:4px;cursor:pointer">
+    <input type="checkbox" id="collapseCb" onchange="toggleCollapse(this.checked)"> Collapse unchanged
+  </label>
   <span class="stat" id="statBar">Ready</span>
-  <button class="btn" id="editBtn" onclick="toggleEdit()">✏️ Edit</button>
-  <button class="btn" id="saveBtn" onclick="saveEdit()" style="display:none">💾 Save</button>
-  <button class="btn" id="cancelBtn" onclick="cancelEdit()" style="display:none">❌ Cancel</button>
   <button class="btn" id="dlBtn" onclick="downloadText()">⬇️ Download</button>
 </div>
 
 <div class="panels">
   <div class="panel panel-pdf" id="pdfPanel">
-    <div class="ph"><span>ORIGINAL PDF</span><span class="badge" id="pageBadge"></span></div>
+    <div class="pdf-controls">
+      <button class="zbtn" onclick="zoomPdf(-1)">−</button>
+      <span class="zlbl" id="zoomLbl">Fit</span>
+      <button class="zbtn" onclick="zoomPdf(1)">+</button>
+      <button class="zbtn" onclick="zoomPdf(0)" title="Fit to width">Fit</button>
+      <div class="page-nav">
+        <button class="zbtn" onclick="navPage(-1)">◀</button>
+        <span class="plbl" id="pageLbl">1 / --</span>
+        <button class="zbtn" onclick="navPage(1)">▶</button>
+      </div>
+    </div>
     <div class="pdf-wrap" id="pdfWrap"></div>
   </div>
   <div class="panel panel-text" id="textPanel">
     <div class="ph"><span>PYMUPDF CLEAN TEXT</span><span class="badge" id="lineBadge"></span></div>
+    <div class="text-toolbar">
+      <button class="tbtn tag-a" onclick="wrapTag('a')" title="Wrap selected text with [A>...<A] tag">[A&gt;</button>
+      <button class="tbtn tag-d" onclick="wrapTag('d')" title="Wrap selected text with [D>...<D] tag">[D&gt;</button>
+      <span class="tsep"></span>
+      <button class="tbtn" onclick="splitAtCursor()" title="Split line at cursor position">✂ Split</button>
+      <button class="tbtn" onclick="mergeWithPrevious()" title="Merge current line with the line above">⊕ Merge ↑</button>
+    </div>
     <div class="text-wrap" id="textWrap">__TEXT_BLOCK__</div>
-    <textarea class="edit-area" id="editArea"></textarea>
   </div>
 </div>
 
@@ -269,6 +378,8 @@ var pageImages=[__IMGS_JS__];
 var wordMap=__WORDMAP_JS__;
 var S=__SCALE__;
 var originalLines=__LINES_JS__;
+var changeLines=__CHANGELINES_JS__;
+var diffsCount=0;
 
 // Build PDF pages
 var wrap=document.getElementById('pdfWrap'),containers=[];
@@ -278,9 +389,131 @@ pageImages.forEach(function(b64,idx){
   var i=document.createElement('img');i.src='data:image/png;base64,'+b64;i.id='img_'+idx;
   c.appendChild(l);c.appendChild(i);wrap.appendChild(c);containers.push(c);
 });
-document.getElementById('pageBadge').textContent=pageImages.length+' pages';
-var tw=document.querySelectorAll('.tw').length;
-document.getElementById('lineBadge').textContent=Object.keys(wordMap).length+'/'+tw+' words mapped';
+
+// Recompute and mark changed lines
+function refreshChangeMeta(){
+  changeLines=[];
+  document.querySelectorAll('.tl').forEach(function(tl){
+    tl.classList.remove('has-change');
+    var li=parseInt(tl.dataset.li||'-1');
+    var txt=(tl.querySelector('.lc')?tl.querySelector('.lc').textContent:'');
+    if(txt.indexOf('[A>')>=0||txt.indexOf('[D>')>=0||txt.indexOf('<A]')>=0||txt.indexOf('<D]')>=0){
+      tl.classList.add('has-change');
+      if(li>=0)changeLines.push(li);
+    }
+  });
+  diffsCount=changeLines.length;
+}
+refreshChangeMeta();
+
+// Diff navigation
+var currentDiffIdx=-1;
+function navDiff(dir){
+  if(!changeLines.length){document.getElementById('statBar').textContent='No diffs found';return;}
+  currentDiffIdx+=dir;
+  if(currentDiffIdx<0)currentDiffIdx=changeLines.length-1;
+  if(currentDiffIdx>=changeLines.length)currentDiffIdx=0;
+  var li=changeLines[currentDiffIdx];
+  // Clear previous highlights
+  clearHL();
+  var tl=document.querySelector('.tl[data-li="'+li+'"]');
+  if(tl){
+    tl.classList.add('active');
+    tl.scrollIntoView({behavior:'smooth',block:'center'});
+    // Also highlight on PDF
+    tl.querySelectorAll('.tw').forEach(function(t){
+      t.classList.add('sel');
+      var k=t.dataset.li+'_'+t.dataset.wi,wd=wordMap[k];
+      if(wd)hlWord(wd,t.dataset.li);
+    });
+    flushHL();
+  }
+  document.getElementById('statBar').textContent='Diff '+(currentDiffIdx+1)+' / '+changeLines.length+' (Line '+(li+1)+')';
+}
+
+var tw_count=document.querySelectorAll('.tw').length;
+document.getElementById('lineBadge').textContent=Object.keys(wordMap).length+'/'+tw_count+' words mapped';
+
+// Page nav
+var totalPages=pageImages.length;
+document.getElementById('pageLbl').textContent='1 / '+totalPages;
+var pdfPanel=document.getElementById('pdfPanel');
+pdfPanel.addEventListener('scroll',function(){
+  var scrollTop=pdfPanel.scrollTop;
+  var best=0;
+  containers.forEach(function(c,i){if(c.offsetTop-60<=scrollTop)best=i;});
+  document.getElementById('pageLbl').textContent=(best+1)+' / '+totalPages;
+});
+function navPage(dir){
+  var cur=parseInt(document.getElementById('pageLbl').textContent.split('/')[0].trim())-1;
+  var next=Math.max(0,Math.min(totalPages-1,cur+dir));
+  containers[next].scrollIntoView({behavior:'smooth',block:'start'});
+}
+
+// Zoom
+var zoomLevel=0; // 0=fit, else percentage steps
+var zoomSteps=[50,75,100,125,150,200];
+function zoomPdf(dir){
+  var imgs=document.querySelectorAll('.page-ctr img');
+  if(dir===0){zoomLevel=0;imgs.forEach(function(img){img.style.width='100%';});
+    document.getElementById('zoomLbl').textContent='Fit';
+  } else {
+    if(zoomLevel===0)zoomLevel=100;
+    var idx=zoomSteps.indexOf(zoomLevel);
+    if(idx===-1)idx=2;
+    idx=Math.max(0,Math.min(zoomSteps.length-1,idx+dir));
+    zoomLevel=zoomSteps[idx];
+    imgs.forEach(function(img){img.style.width=zoomLevel+'%';});
+    document.getElementById('zoomLbl').textContent=zoomLevel+'%';
+  }
+  setTimeout(function(){clearHL();buildZones();},200);
+}
+
+// Focus on changes
+function toggleFocus(on){
+  document.getElementById('textWrap').classList.toggle('focus',on);
+}
+
+// Collapse unchanged blocks
+var collapseActive=false;
+function toggleCollapse(on){
+  collapseActive=on;
+  var tw=document.getElementById('textWrap');
+  // Remove old collapse bars
+  tw.querySelectorAll('.collapse-bar').forEach(function(b){b.remove();});
+  if(!on){
+    // Show all lines
+    tw.querySelectorAll('.tl').forEach(function(tl){tl.style.display='';});
+    return;
+  }
+  // Hide unchanged lines and insert collapse bars
+  var lines=tw.querySelectorAll('.tl');
+  var i=0;
+  while(i<lines.length){
+    if(!lines[i].classList.contains('has-change')){
+      var start=i;
+      while(i<lines.length&&!lines[i].classList.contains('has-change'))i++;
+      var count=i-start;
+      if(count>2){
+        // Keep first and last, hide middle
+        for(var j=start;j<i;j++) lines[j].style.display='none';
+        var bar=document.createElement('div');
+        bar.className='collapse-bar';
+        bar.textContent='▸ Expand '+count+' unchanged lines';
+        bar.dataset.start=start;bar.dataset.end=i;
+        bar.onclick=function(){
+          var s=parseInt(this.dataset.start),e=parseInt(this.dataset.end);
+          for(var k=s;k<e;k++)lines[k].style.display='';
+          this.remove();
+        };
+        lines[start].parentNode.insertBefore(bar,lines[start]);
+      }
+    } else {
+      lines[i].style.display='';
+      i++;
+    }
+  }
+}
 
 // Group by line for PDF click zones
 var lg={};
@@ -401,30 +634,38 @@ function clickPdfLine(li){
   document.getElementById('statBar').textContent='PDF → Line '+(parseInt(li)+1);
 }
 
-// Edit mode
-function toggleEdit(){
-  var tw=document.getElementById('textWrap'),ea=document.getElementById('editArea');
-  ea.value=originalLines.join('\n');
-  tw.classList.add('hid');ea.classList.add('vis');
-  document.getElementById('editBtn').style.display='none';
-  document.getElementById('saveBtn').style.display='';
-  document.getElementById('cancelBtn').style.display='';
+// Always-on inline editing with auto-apply
+var autoApplyTimer=null;
+function scheduleAutoApply(){
+  if(autoApplyTimer)clearTimeout(autoApplyTimer);
   document.getElementById('statBar').textContent='Editing…';
+  autoApplyTimer=setTimeout(function(){applyInlineEdits();},700);
 }
-function saveEdit(){
-  var ea=document.getElementById('editArea');
-  var newText=ea.value;
-  originalLines=newText.split('\n');
-  // Rebuild the text panel WITH tag styling
+function enableInlineEditing(){
   var tw=document.getElementById('textWrap');
-  tw.innerHTML=renderLinesWithTags(originalLines);
-  tw.classList.remove('hid');
-  document.getElementById('editArea').classList.remove('vis');
-  document.getElementById('editBtn').style.display='';
-  document.getElementById('saveBtn').style.display='none';
-  document.getElementById('cancelBtn').style.display='none';
-  document.getElementById('statBar').textContent='✅ Changes applied';
+  tw.classList.add('editing');
+  tw.querySelectorAll('.lc').forEach(function(lc){
+    lc.contentEditable='true';
+    lc.spellcheck=false;
+    lc.addEventListener('input',scheduleAutoApply);
+  });
 }
+function applyInlineEdits(){
+  var tw=document.getElementById('textWrap');
+  var lines=[];
+  tw.querySelectorAll('.tl').forEach(function(tl){
+    var lc=tl.querySelector('.lc');
+    lines.push(lc?lc.textContent:'');
+  });
+  originalLines=lines;
+  tw.innerHTML=renderLinesWithTags(originalLines);
+  refreshChangeMeta();
+  enableInlineEditing();
+  if(document.getElementById('focusCb').checked)toggleFocus(true);
+  if(document.getElementById('collapseCb').checked)toggleCollapse(true);
+  document.getElementById('statBar').textContent='✅ Auto-updated';
+}
+enableInlineEditing();
 // Render lines with [A>...<A] and [D>...<D] tag styling
 function renderLinesWithTags(lines){
   var html='',inA=false,inD=false;
@@ -509,14 +750,289 @@ function downloadText(){
   URL.revokeObjectURL(a.href);
   document.getElementById('statBar').textContent='Downloaded';
 }
-function cancelEdit(){
-  document.getElementById('textWrap').classList.remove('hid');
-  document.getElementById('editArea').classList.remove('vis');
-  document.getElementById('editBtn').style.display='';
-  document.getElementById('saveBtn').style.display='none';
-  document.getElementById('cancelBtn').style.display='none';
-  document.getElementById('statBar').textContent='Edit cancelled';
+
+// ── Wrap Selected Text in Tags ────────────────────────────────
+function buildTagIndices(){/* no-op — counts removed */}
+
+function wrapTag(type){
+  var sel=window.getSelection();
+  if(!sel||sel.isCollapsed||!sel.rangeCount){
+    document.getElementById('statBar').textContent='Select text first, then click '+(type==='a'?'[A> Wrap':'[D> Wrap');
+    return;
+  }
+  var range=sel.getRangeAt(0);
+  var lc=range.startContainer;
+  while(lc&&!(lc.classList&&lc.classList.contains('lc')))lc=lc.parentNode;
+  if(!lc){document.getElementById('statBar').textContent='Select text inside a line';return;}
+  var tl=lc.closest('.tl');if(!tl)return;
+  var li=parseInt(tl.dataset.li);
+  var text=originalLines[li]||'';
+  var startOff=getTextOffset(lc,range.startContainer,range.startOffset);
+  var endOff=getTextOffset(lc,range.endContainer,range.endOffset);
+  if(startOff===endOff){document.getElementById('statBar').textContent='Select some text first';return;}
+
+  var openA='[A>',closeA='<A]',openD='[D>',closeD='<D]';
+  var selected=text.substring(startOff,endOff);
+
+  // Check if selection is exactly inside a tag span (look for open before and close after)
+  // Expand search: find the tag boundaries around the selection
+  var before=text.substring(0,startOff),after=text.substring(endOff);
+
+  // Check if selected region has tags wrapping it or inside it
+  var hasA=selected.indexOf('[A>')>=0||selected.indexOf('<A]')>=0||
+           (before.lastIndexOf('[A>')>before.lastIndexOf('<A]')&&after.indexOf('<A]')<after.indexOf('[A>'));
+  var hasD=selected.indexOf('[D>')>=0||selected.indexOf('<D]')>=0||
+           (before.lastIndexOf('[D>')>before.lastIndexOf('<D]')&&after.indexOf('<D]')<after.indexOf('[D>'));
+
+  // Also check: does the selected region start right after an open tag and end right before close tag?
+  var aWrapsBefore=before.length>=3&&before.substring(before.length-3)==='[A>';
+  var aWrapsAfter=after.length>=3&&after.substring(0,3)==='<A]';
+  var dWrapsBefore=before.length>=3&&before.substring(before.length-3)==='[D>';
+  var dWrapsAfter=after.length>=3&&after.substring(0,3)==='<D]';
+
+  // Strip all A tags from selected text
+  function stripA(s){return s.replace(/\[A>/g,'').replace(/<A\]/g,'');}
+  function stripD(s){return s.replace(/\[D>/g,'').replace(/<D\]/g,'');}
+
+  var result,msg;
+  if(type==='a'){
+    if(aWrapsBefore&&aWrapsAfter){
+      // Toggle OFF: remove the surrounding [A>...<A]
+      result=before.substring(0,before.length-3)+selected+after.substring(3);
+      msg='[A> tag removed (Line '+(li+1)+')';
+    } else if(dWrapsBefore&&dWrapsAfter){
+      // Swap D→A: replace surrounding [D>...<D] with [A>...<A]
+      result=before.substring(0,before.length-3)+'[A>'+stripD(selected)+'<A]'+after.substring(3);
+      msg='[D> → [A> swapped (Line '+(li+1)+')';
+    } else if(selected.indexOf('[A>')>=0||selected.indexOf('<A]')>=0){
+      // Selection contains A tags — remove them (toggle off)
+      result=before+stripA(selected)+after;
+      msg='[A> tags removed (Line '+(li+1)+')';
+    } else if(selected.indexOf('[D>')>=0||selected.indexOf('<D]')>=0){
+      // Selection contains D tags — swap to A
+      result=before+'[A>'+stripD(selected)+'<A]'+after;
+      msg='[D> → [A> swapped (Line '+(li+1)+')';
+    } else {
+      // No tags — wrap with A
+      result=before+'[A>'+selected+'<A]'+after;
+      msg='[A> tag added (Line '+(li+1)+')';
+    }
+  } else {
+    if(dWrapsBefore&&dWrapsAfter){
+      // Toggle OFF: remove the surrounding [D>...<D]
+      result=before.substring(0,before.length-3)+selected+after.substring(3);
+      msg='[D> tag removed (Line '+(li+1)+')';
+    } else if(aWrapsBefore&&aWrapsAfter){
+      // Swap A→D: replace surrounding [A>...<A] with [D>...<D]
+      result=before.substring(0,before.length-3)+'[D>'+stripA(selected)+'<D]'+after.substring(3);
+      msg='[A> → [D> swapped (Line '+(li+1)+')';
+    } else if(selected.indexOf('[D>')>=0||selected.indexOf('<D]')>=0){
+      // Selection contains D tags — remove them (toggle off)
+      result=before+stripD(selected)+after;
+      msg='[D> tags removed (Line '+(li+1)+')';
+    } else if(selected.indexOf('[A>')>=0||selected.indexOf('<A]')>=0){
+      // Selection contains A tags — swap to D
+      result=before+'[D>'+stripA(selected)+'<D]'+after;
+      msg='[A> → [D> swapped (Line '+(li+1)+')';
+    } else {
+      // No tags — wrap with D
+      result=before+'[D>'+selected+'<D]'+after;
+      msg='[D> tag added (Line '+(li+1)+')';
+    }
+  }
+  originalLines[li]=result;
+  rebuildEditor();
+  document.getElementById('statBar').textContent=msg;
 }
+
+// ── Active Line Tracking ────────────────────────────────────
+var activeEditorLine=null;
+function setActiveLine(tl){
+  if(activeEditorLine)activeEditorLine.classList.remove('editor-active');
+  activeEditorLine=tl;if(tl)tl.classList.add('editor-active');
+}
+document.getElementById('textWrap').addEventListener('click',function(e){
+  var tl=e.target.closest('.tl');if(tl)setActiveLine(tl);
+});
+document.getElementById('textWrap').addEventListener('focusin',function(e){
+  var tl=e.target.closest('.tl');if(tl)setActiveLine(tl);
+});
+
+// ── Text Offset Helpers ─────────────────────────────────────
+function getTextOffset(container,node,offset){
+  if(container===node)return offset;
+  var walker=document.createTreeWalker(container,NodeFilter.SHOW_TEXT);
+  var total=0;
+  while(walker.nextNode()){
+    if(walker.currentNode===node)return total+offset;
+    total+=walker.currentNode.length;
+  }
+  return total;
+}
+function placeCursorAtOffset(container,targetOffset){
+  var walker=document.createTreeWalker(container,NodeFilter.SHOW_TEXT);
+  var total=0;
+  while(walker.nextNode()){
+    var nd=walker.currentNode;
+    if(total+nd.length>=targetOffset){
+      var r=document.createRange();r.setStart(nd,targetOffset-total);r.collapse(true);
+      var s=window.getSelection();s.removeAllRanges();s.addRange(r);return;
+    }
+    total+=nd.length;
+  }
+}
+
+// ── Tag State Helper ──────────────────────────────────────────
+function getTagStateAtOffset(text,off){
+  var inA=false,inD=false,i=0;
+  while(i<off&&i<text.length){
+    if(text.substr(i,3)==='[A>'){inA=true;i+=3;}
+    else if(text.substr(i,3)==='<A]'){inA=false;i+=3;}
+    else if(text.substr(i,3)==='[D>'){inD=true;i+=3;}
+    else if(text.substr(i,3)==='<D]'){inD=false;i+=3;}
+    else i++;
+  }
+  return {inA:inA,inD:inD};
+}
+
+// ── Tag-Aware Split ─────────────────────────────────────────
+function doSplitAt(li,off){
+  var text=originalLines[li]||'';
+  var left=text.substring(0,off),right=text.substring(off);
+  var state=getTagStateAtOffset(text,off);
+  var rightLi;
+  if(state.inA){
+    left=left.replace(/\s+$/,'')+'<A]';
+    right='[A>'+right.replace(/^\s+/,'');
+    originalLines.splice(li,1,left,'',right);
+    rightLi=li+2;
+  } else if(state.inD){
+    left=left.replace(/\s+$/,'')+'<D]';
+    right='[D>'+right.replace(/^\s+/,'');
+    originalLines.splice(li,1,left,'',right);
+    rightLi=li+2;
+  } else {
+    originalLines.splice(li,1,left,right);
+    rightLi=li+1;
+  }
+  rebuildEditor();
+  return rightLi;
+}
+
+function splitAtCursor(){
+  var sel=window.getSelection();
+  if(!sel||!sel.rangeCount){document.getElementById('statBar').textContent='Place cursor in a line to split';return;}
+  var range=sel.getRangeAt(0);
+  var lc=range.startContainer;
+  while(lc&&!(lc.classList&&lc.classList.contains('lc')))lc=lc.parentNode;
+  if(!lc){document.getElementById('statBar').textContent='Click inside a text line first';return;}
+  var tl=lc.closest('.tl');if(!tl)return;
+  var li=parseInt(tl.dataset.li);
+  var off=getTextOffset(lc,range.startContainer,range.startOffset);
+  var rightLi=doSplitAt(li,off);
+  document.getElementById('statBar').textContent='\u2702 Split line '+(li+1)+' \u2192 lines '+(li+1)+' & '+(rightLi+1);
+}
+
+// ── Tag-Aware Merge ─────────────────────────────────────────
+function mergeWithPrevious(){
+  var tl=activeEditorLine;
+  if(!tl){document.getElementById('statBar').textContent='Click a line first';return;}
+  var li=parseInt(tl.dataset.li);
+  if(li===0){document.getElementById('statBar').textContent='Cannot merge \u2014 already first line';return;}
+  // Find previous non-blank line (skip blank lines between)
+  var prevLi=li-1;
+  while(prevLi>=0&&originalLines[prevLi].trim()==='')prevLi--;
+  if(prevLi<0){
+    // Only blank lines above \u2014 just remove them
+    originalLines.splice(0,li);
+    rebuildEditor();return;
+  }
+  var prev=originalLines[prevLi],curr=originalLines[li],merged;
+  // Detect matching tag boundaries: prev ends with <A] and curr starts with [A> (or same for [D>)
+  var prevEndsA=/<A\]\s*$/.test(prev),currStartsA=/^\s*\[A>/.test(curr);
+  var prevEndsD=/<D\]\s*$/.test(prev),currStartsD=/^\s*\[D>/.test(curr);
+  if(prevEndsA&&currStartsA){
+    // Same [A> tag \u2014 remove close from prev + open from curr, join with space
+    var lp=prev.replace(/<A\]\s*$/,'').replace(/\s+$/,'');
+    var rp=curr.replace(/^\s*\[A>/,'').replace(/^\s+/,'');
+    merged=lp+' '+rp;
+  } else if(prevEndsD&&currStartsD){
+    // Same [D> tag \u2014 remove close from prev + open from curr, join with space
+    var lp=prev.replace(/<D\]\s*$/,'').replace(/\s+$/,'');
+    var rp=curr.replace(/^\s*\[D>/,'').replace(/^\s+/,'');
+    merged=lp+' '+rp;
+  } else {
+    // No matching tags \u2014 simple merge
+    merged=prev;
+    if(merged.length>0&&curr.length>0&&!merged.endsWith(' ')&&!curr.startsWith(' '))merged+=' ';
+    merged+=curr;
+  }
+  // Replace from prevLi to li (inclusive), removing any blank lines between
+  originalLines.splice(prevLi,li-prevLi+1,merged);
+  rebuildEditor();
+  var newTl=document.querySelector('.tl[data-li="'+prevLi+'"]');
+  if(newTl)setActiveLine(newTl);
+  document.getElementById('statBar').textContent='\u2295 Merged \u2192 line '+(prevLi+1);
+}
+
+// ── Rebuild editor after split/merge ────────────────────────
+function rebuildEditor(){
+  var tw=document.getElementById('textWrap');
+  var panel=document.getElementById('textPanel');
+  var scrollTop=panel?panel.scrollTop:0;
+  tw.innerHTML=renderLinesWithTags(originalLines);
+  refreshChangeMeta();enableInlineEditing();buildTagIndices();
+  if(document.getElementById('focusCb').checked)toggleFocus(true);
+  if(document.getElementById('collapseCb').checked)toggleCollapse(true);
+  if(panel)panel.scrollTop=scrollTop;
+}
+
+// ── Enhanced keyboard: Enter=tag-aware split, Backspace@0=simple merge ──
+document.getElementById('textWrap').addEventListener('keydown',function(e){
+  var sel=window.getSelection();
+  if(!sel||!sel.rangeCount)return;
+  var range=sel.getRangeAt(0);
+  var lc=range.startContainer;
+  while(lc&&!(lc.classList&&lc.classList.contains('lc')))lc=lc.parentNode;
+  if(!lc)return;
+  var tl=lc.closest('.tl');if(!tl)return;
+  var li=parseInt(tl.dataset.li);
+  if(e.key==='Enter'){
+    e.preventDefault();
+    var panel=document.getElementById('textPanel');
+    var scrollBefore=panel?panel.scrollTop:0;
+    var off=getTextOffset(lc,range.startContainer,range.startOffset);
+    var rightLi=doSplitAt(li,off);
+    // Restore scroll then focus new line without scrolling
+    if(panel)panel.scrollTop=scrollBefore;
+    var nTl=document.querySelector('.tl[data-li="'+rightLi+'"]');
+    if(nTl){
+      setActiveLine(nTl);var nLc=nTl.querySelector('.lc');
+      if(nLc){
+        nLc.focus({preventScroll:true});
+        var r=document.createRange();r.setStart(nLc,0);r.collapse(true);
+        sel.removeAllRanges();sel.addRange(r);
+      }
+    }
+  } else if(e.key==='Backspace'&&sel.isCollapsed&&!e.ctrlKey){
+    var off=getTextOffset(lc,range.startContainer,range.startOffset);
+    if(off===0&&li>0){
+      e.preventDefault();
+      var panel=document.getElementById('textPanel');
+      var scrollBefore=panel?panel.scrollTop:0;
+      var prevText=originalLines[li-1],cursorPos=prevText.length;
+      originalLines[li-1]=prevText+originalLines[li];
+      originalLines.splice(li,1);
+      rebuildEditor();
+      if(panel)panel.scrollTop=scrollBefore;
+      var pTl=document.querySelector('.tl[data-li="'+(li-1)+'"]');
+      if(pTl){
+        setActiveLine(pTl);var pLc=pTl.querySelector('.lc');
+        if(pLc){pLc.focus({preventScroll:true});placeCursorAtOffset(pLc,cursorPos);}
+      }
+    }
+  }
+});
 </script>
 </body>
 </html>"""
@@ -648,13 +1164,21 @@ def build_viewer_html(
     wordmap_js = json.dumps(word_map)
     lines_js = json.dumps(clean_lines)
 
+    # Compute change lines and stats
+    change_lines = []
+    for li, line in enumerate(clean_lines):
+        if '[A>' in line or '[D>' in line or '<A]' in line or '<D]' in line:
+            change_lines.append(li)
+    diffs_count = len(change_lines)
+
     return (_TEMPLATE
             .replace("__TEXT_BLOCK__", text_block)
             .replace("__IMGS_JS__", imgs_js)
             .replace("__WORDMAP_JS__", wordmap_js)
             .replace("__LINES_JS__", lines_js)
             .replace("__SCALE__", str(scale))
-            .replace("__FILENAME__", filename))
+            .replace("__FILENAME__", filename)
+            .replace("__CHANGELINES_JS__", json.dumps(change_lines)))
 
 
 # ── Streamlit app ────────────────────────────────────────────────────────────
@@ -662,20 +1186,62 @@ def build_viewer_html(
 def main():
     st.markdown("""<style>
         #MainMenu, header, footer, .stDeployButton { visibility: hidden; }
-        .block-container { padding: 0.5rem 1rem 0; max-width: 100%; }
+        .block-container { padding: 0 !important; max-width: 100% !important; }
+        html, body, [class*="css"] { font-size: 13px; }
+        h1, h2, h3, h4 { font-size: 1rem !important; margin: 0 !important; padding: 0 !important; }
+        .appview-container { padding-top: 0 !important; }
+        [data-testid="stAppViewBlockContainer"] { padding: 0 !important; }
+        iframe { border: none !important; }
+        /* Clean drop zone styling */
+        .drop-zone-row .stFileUploader label { display: none !important; }
+        .drop-zone-row [data-testid="stFileUploaderDropzone"] {
+            border: 2px dashed #555 !important;
+            border-radius: 8px !important;
+            background: #1e1e2e !important;
+            min-height: 300px !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+        }
+        .drop-zone-row [data-testid="stFileUploaderDropzone"] * {
+            color: #ccc !important;
+        }
+        .drop-zone-row [data-testid="stFileUploaderDropzone"] button {
+            background: #333 !important;
+            border: 1px solid #555 !important;
+            color: #eee !important;
+            border-radius: 4px !important;
+        }
+        .stAlert { padding: 0.3rem 0.5rem !important; font-size: 12px !important; }
     </style>""", unsafe_allow_html=True)
 
-    st.markdown("## 📄 PDF ↔ PyMuPDF Clean Text Comparator")
-
-    c1, c2 = st.columns(2)
-    with c1:
-        pdf_file = st.file_uploader("Upload PDF", type=["pdf"], key="pdf")
-    with c2:
-        txt_file = st.file_uploader("Upload PyMuPDF Clean Text (.txt)", type=["txt"], key="txt")
+    # Check if files are already uploaded
+    pdf_file = st.session_state.get("pdf")
+    txt_file = st.session_state.get("txt")
 
     if not pdf_file or not txt_file:
-        st.info("Upload both a **PDF** and the corresponding **\\_pymupdf\\_clean.txt** to begin.")
-        return
+        # Show two drop zones side by side
+        st.markdown("""
+        <div style="text-align:center;padding:10px 0 6px;font-size:14px;font-weight:600;color:#333;">
+            📄 PDF ↔ Text Comparator — Drop files below
+        </div>
+        """, unsafe_allow_html=True)
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown('<div class="drop-zone-row">', unsafe_allow_html=True)
+            pdf_file = st.file_uploader("PDF", type=["pdf"], key="pdf", label_visibility="collapsed")
+            st.markdown("</div>", unsafe_allow_html=True)
+            if not pdf_file:
+                st.caption("⬆️ Drop PDF here")
+        with c2:
+            st.markdown('<div class="drop-zone-row">', unsafe_allow_html=True)
+            txt_file = st.file_uploader("TXT", type=["txt"], key="txt", label_visibility="collapsed")
+            st.markdown("</div>", unsafe_allow_html=True)
+            if not txt_file:
+                st.caption("⬆️ Drop .txt file here")
+
+        if not pdf_file or not txt_file:
+            return
 
     pdf_bytes = pdf_file.read()
     clean_text = txt_file.read().decode("utf-8", errors="replace")
@@ -698,14 +1264,8 @@ def main():
     with st.spinner("Mapping words…"):
         word_map = build_word_level_map(display_lines, words)
 
-    st.success(
-        "✅  {} pages · {} PDF words · {} text words mapped".format(
-            len(images), len(words), len(word_map)
-        )
-    )
-
     html = build_viewer_html(images, display_lines, word_map, filename=txt_file.name)
-    st.components.v1.html(html, height=850)
+    st.components.v1.html(html, height=920, scrolling=False)
 
 
 if __name__ == "__main__":

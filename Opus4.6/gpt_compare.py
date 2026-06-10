@@ -1111,7 +1111,22 @@ def gpt_compare_tags(
     ) as stream:
         for text in stream.text_stream:
             raw_response += text
+        final_msg = stream.get_final_message()
     raw_response = raw_response.strip()
+
+    # ── Track tokens if tracker is available ────────────────────────
+    try:
+        import sys as _sys
+        _main_mod = _sys.modules.get('__main__')
+        if _main_mod and hasattr(_main_mod, '_track_usage'):
+            _main_mod._track_usage("GPT Validation Report", final_msg.usage, model)
+        else:
+            raise AttributeError("no tracker")
+    except Exception:
+        if hasattr(final_msg, 'usage') and final_msg.usage:
+            u = final_msg.usage
+            log.info("💰 [GPT Validation Report] Tokens: %s in / %s out",
+                     getattr(u, 'input_tokens', '?'), getattr(u, 'output_tokens', '?'))
 
     # ── Parse JSON ──────────────────────────────────────────────────
     if raw_response.startswith("```"):
