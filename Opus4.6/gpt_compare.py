@@ -145,50 +145,74 @@ def _build_checklist(pymupdf_text: str,
         """Find the page of a tag by locating it in the raw pymupdf text.
         Uses surrounding plain text (from the clean text) to disambiguate
         identical short spans. Returns the page number or None.
+
+        Collects ALL candidate matches across pages and picks the one with
+        the best context score.  Always advances the search offset on the
+        winning page so the same position is not re-matched for the next
+        identical span.
         """
         if not _raw_page_chunks:
             return None
 
-        # Get a short context snippet from surrounding text (before + after tag)
-        # to help disambiguate identical tags on different pages.
-        # Use 40 chars before and after the tag in the surrounding text.
         surr_lower = surrounding.lower() if surrounding else ""
+        surr_norm = re.sub(r'\s+', ' ', surr_lower) if surr_lower else ""
+        tag_lower = tag_text.lower()
 
-        # Try each page in order, preferring forward progress
-        best_page = None
+        # Collect all candidate matches: (context_score, page, pos, rtxt_plain)
+        candidates = []
         for rpg, rtxt in _raw_page_chunks:
-            # Search from last consumed position on this page
             search_from = _raw_search_offsets.get(rpg, 0)
-            # Strip tags from raw chunk for plain-text search
             rtxt_plain = re.sub(r'\[([AD])>(.*?)<\1\]', r'\2', rtxt, flags=re.DOTALL)
-            pos = rtxt_plain.lower().find(tag_text.lower(), search_from)
-            if pos >= 0:
-                # Verify with surrounding context
-                if surr_lower:
-                    # Get surrounding text in raw chunk
-                    raw_surr = rtxt_plain[max(0, pos-60):pos+len(tag_text)+60].lower()
-                    raw_surr_norm = re.sub(r'\s+', ' ', raw_surr)
-                    surr_norm = re.sub(r'\s+', ' ', surr_lower)
-                    # Check overlap: at least 15 chars of surrounding should match
-                    # Use the last 20 chars before the tag
-                    before_tag = surr_norm[:surr_norm.find(tag_text.lower())] if tag_text.lower() in surr_norm else ""
-                    if before_tag and len(before_tag) >= 10:
-                        check_frag = before_tag[-20:].strip()
-                        if check_frag and check_frag in raw_surr_norm:
-                            _raw_search_offsets[rpg] = pos + len(tag_text)
-                            return rpg
-                    else:
-                        # No good surrounding text, accept first positional match
-                        _raw_search_offsets[rpg] = pos + len(tag_text)
-                        return rpg
-                else:
-                    _raw_search_offsets[rpg] = pos + len(tag_text)
-                    return rpg
-                # Track as fallback if context didn't match
-                if best_page is None:
-                    best_page = rpg
+            pos = rtxt_plain.lower().find(tag_lower, search_from)
+            if pos < 0:
+                continue
 
-        return best_page
+            ctx_score = 0.0
+            if surr_norm and tag_lower in surr_norm:
+                raw_surr = rtxt_plain[max(0, pos-60):pos+len(tag_text)+60].lower()
+                raw_surr_norm = re.sub(r'\s+', ' ', raw_surr)
+                before_tag = surr_norm[:surr_norm.find(tag_lower)]
+                after_tag_start = surr_norm.find(tag_lower) + len(tag_lower)
+                after_tag = surr_norm[after_tag_start:]
+
+                # Score before-context
+                if before_tag and len(before_tag) >= 10:
+                    check_frag = before_tag[-25:].strip()
+                    if check_frag and check_frag in raw_surr_norm:
+                        ctx_score += 1.0
+                    elif len(check_frag) >= 8 and check_frag[-12:] in raw_surr_norm:
+                        ctx_score += 0.5
+
+                # Score after-context
+                if after_tag and len(after_tag) >= 10:
+                    check_frag_after = after_tag[:25].strip()
+                    if check_frag_after and check_frag_after in raw_surr_norm:
+                        ctx_score += 1.0
+                    elif len(check_frag_after) >= 8 and check_frag_after[:12] in raw_surr_norm:
+                        ctx_score += 0.5
+
+            candidates.append((rpg, pos, ctx_score))
+
+        if not candidates:
+            return None
+
+        # Pick the best candidate: highest context score, then first page
+        candidates.sort(key=lambda c: (-c[2], c[0]))
+        best_pg, best_pos, best_score = candidates[0]
+
+        # If ALL candidates scored 0.0 (no context matched anywhere),
+        # don't guess — return None so the neighbor-smoothing pass
+        # can infer the correct page from surrounding items.
+        if best_score == 0.0 and len(candidates) > 1:
+            log.debug(
+                "📄 _find_page_from_raw: all %d candidates for '%s' scored 0 — skipping",
+                len(candidates), tag_text[:30]
+            )
+            return None
+
+        # Always advance the search offset on the winning page
+        _raw_search_offsets[best_pg] = best_pos + len(tag_text)
+        return best_pg
 
     # Pre-index report spans by (page, stripped_text) for fast lookup.
     # Falls back to text-only match if page differs (LLM cleaning may shift pages).
@@ -375,9 +399,16 @@ def _build_checklist(pymupdf_text: str,
                 candidates.append((-ctx_sc, same_page, index_dist, page_dist, i, rs))
         if candidates:
             candidates.sort()
-            _, _, _, _, best_i, best_rs = candidates[0]
+            best_ctx_sc, _, _, _, best_i, best_rs = candidates[0]
+            best_ctx_sc = -best_ctx_sc  # un-negate
             used_report[best_i] = True
             _last_matched_idx[0] = best_i
+            # If context score is poor, the report span is likely from a
+            # different location. Generate context from the clean text instead.
+            if best_ctx_sc < 0.3 and tag_offset >= 0:
+                surr = _surrounding_text(tag_offset, radius=80)
+                fallback_ctx = f"…{surr}…"
+                return fallback_ctx, best_rs["page"], best_rs.get("bill_line")
             return best_rs["context"], best_rs["page"], best_rs.get("bill_line")
 
         # Pass 4: partial match (containment), any page — CONTEXT-VERIFIED
@@ -400,9 +431,14 @@ def _build_checklist(pymupdf_text: str,
                     candidates.append((-ctx_sc, same_page, index_dist, page_dist, i, rs))
         if candidates:
             candidates.sort()
-            _, _, _, _, best_i, best_rs = candidates[0]
+            best_ctx_sc, _, _, _, best_i, best_rs = candidates[0]
+            best_ctx_sc = -best_ctx_sc  # un-negate
             used_report[best_i] = True
             _last_matched_idx[0] = best_i
+            if best_ctx_sc < 0.3 and tag_offset >= 0:
+                surr = _surrounding_text(tag_offset, radius=80)
+                fallback_ctx = f"…{surr}…"
+                return fallback_ctx, best_rs["page"], best_rs.get("bill_line")
             return best_rs["context"], best_rs["page"], best_rs.get("bill_line")
 
         return "", page, None
@@ -478,6 +514,63 @@ def _build_checklist(pymupdf_text: str,
                 "bill_line": bill_line,
                 "context": ctx,
             })
+    # ── Post-process: fix page numbers using monotonicity + neighbors ──
+    # Tags are extracted in document order, so page numbers must be
+    # non-decreasing overall.  A page that jumps ahead of all subsequent
+    # items, or falls behind all preceding items, is likely wrong.
+    #
+    # Strategy: two passes.
+    #  Pass 1 (forward): if an item's page jumps ahead then the NEXT item
+    #    drops back, the jump was wrong — clamp to previous page.
+    #  Pass 2 (median window): catch remaining outliers by comparing each
+    #    item to the median of its ±5 neighbors.
+    if len(items) > 2:
+        pages = [it["page"] for it in items]
+        n = len(pages)
+
+        # ── Pass 1: forward monotonicity ──
+        # If page[i] > page[i-1] AND page[i] > page[i+1], it jumped
+        # ahead incorrectly.  Clamp it to max(prev, next).
+        for i in range(1, n - 1):
+            prev_p = pages[i - 1]
+            curr_p = pages[i]
+            next_p = pages[i + 1]
+            if curr_p > prev_p and curr_p > next_p and (curr_p - prev_p) >= 1:
+                # Also check i+2 to confirm it's a spike, not a real transition
+                next2_p = pages[i + 2] if i + 2 < n else next_p
+                if curr_p > next2_p:
+                    fixed = max(prev_p, next_p)
+                    log.info(
+                        "📄 Monotonicity fix: item %d '%s' page %d → %d (spike)",
+                        items[i]["id"], items[i]["text"][:30], curr_p, fixed
+                    )
+                    pages[i] = fixed
+                    items[i]["page"] = fixed
+
+        # ── Pass 2: median-window outlier fix ──
+        for i in range(n):
+            window = []
+            for j in range(max(0, i - 5), min(n, i + 6)):
+                if j != i:
+                    window.append(pages[j])
+            if not window:
+                continue
+
+            curr = pages[i]
+            window.sort()
+            median_pg = window[len(window) // 2]
+
+            if abs(curr - median_pg) > 1:
+                # Pick replacement: median reflects the local cluster
+                replacement = median_pg
+                log.info(
+                    "📄 Page fix: item %d '%s' page %d → %d (median=%d)",
+                    items[i]["id"], items[i]["text"][:30], curr,
+                    replacement, median_pg
+                )
+                pages[i] = replacement
+                items[i]["page"] = replacement
+
     return items
 
 
