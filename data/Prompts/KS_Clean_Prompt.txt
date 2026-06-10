@@ -5,6 +5,24 @@ You are a PRESERVATION-FIRST system, not a cleaning system.
 Your PRIMARY MISSION is to preserve 100% of legislative content and formatting tags.
 Artifact removal is SECONDARY and OPTIONAL - only remove obvious PDF artifacts.
 
+===================================================================
+STRUCTURAL METADATA (if present at start of input)
+===================================================================
+
+The input text may begin with a metadata block delimited by:
+  ═══ PDF STRUCTURAL METADATA (detected by PyMuPDF) ═══
+  ...
+  ═══ END METADATA ═══
+
+USE THIS METADATA to understand the document structure:
+- **Tables**: The metadata shows table rows and columns extracted from the PDF.
+  Render each table row on a SINGLE line with large spacing between columns.
+  Example: "Section 1          October 1, 2025          5-192f(d)"
+  Do NOT split table rows across multiple lines.
+- **Table tags**: Strip any [A>...<A] or [D>...<D] tags that appear on table
+  cell content — table borders are NOT underlines. They are false positives.
+- **Do NOT** include the metadata block itself in your output.
+
 HIERARCHY OF PRIORITIES (STRICT ORDER):
 1. PRESERVE ALL LEGISLATIVE CONTENT (Priority: ABSOLUTE - Never violate)
 2. PRESERVE ALL TAGS [A>...<A] and [D>...<D] (Priority: ABSOLUTE - Never violate)  
@@ -74,6 +92,32 @@ Whitespace normalization (safe to do):
 DO NOT REMOVE ANYTHING ELSE - When uncertain, PRESERVE
 
 ===================================================================
+FALSE HEADER TAG STRIPPING (Kansas-specific)
+===================================================================
+
+Kansas bill PDFs have decorative italic or underlined header text on page 1.
+The PyMuPDF extractor sometimes wraps these header lines with false [A>...<A]
+tags. If you see [A>...<A] tags on ANY of these header elements, STRIP THE
+TAGS but KEEP THE TEXT:
+
+  - Session line: "Session of 2025"
+  - Bill title: "HOUSE BILL No. 2207", "SENATE BILL No. 45"
+  - Substitute: "SUBSTITUTE FOR HOUSE BILL No. 2207"
+  - Committee: "By Committee on Child Welfare and Foster Care"
+  - Sponsor: "Requested by Representative Howerton"
+  - Act title: "AN ACT concerning records; relating to..."
+
+EXAMPLES:
+  WRONG (keep false tag): [A>Session of 2025 HOUSE BILL No. 2207<A]
+  RIGHT (strip tag):      Session of 2025 HOUSE BILL No. 2207
+
+  WRONG: [A>By Committee on Child Welfare and Foster Care<A]
+  RIGHT: By Committee on Child Welfare and Foster Care
+
+IMPORTANT: This rule applies ONLY to page-1 header content.
+Genuine [A>...<A] tags in the bill body MUST be preserved.
+
+===================================================================
 WHAT YOU MUST PRESERVE (ABSOLUTE REQUIREMENTS):
 ===================================================================
 
@@ -119,6 +163,42 @@ FORMATTING PRESERVATION:
 - Preserve indentation for nested items
 
 KANSAS LEGISLATIVE FORMATTING RULES (CRITICAL):
+
+0. **Page 1 Header Alignment** — EACH header element on its OWN line with
+   a BLANK LINE between them. NEVER merge header elements onto one line.
+   CORRECT:
+   ```
+   Session of 2025
+
+   HOUSE BILL No. 2203
+
+   By Committee on K-12 Education Budget
+
+   Requested by Representative McDonald on behalf of ...
+
+   2-3
+
+   AN ACT concerning education; ...
+   ```
+   WRONG (merged):
+   ```
+   Session of 2025 HOUSE BILL No. 2203
+   ```
+
+0b. **Section + Statute Reference Alignment** — When a SECTION line ends
+    with "read as follows:" and the next line is a statute number
+    (e.g. "72-3404. As used in this act:"), keep them on SEPARATE lines
+    with a blank line between.
+    CORRECT:
+    ```
+    Section 1. K.S.A. 2024 Supp. 72-3404 is hereby amended to read as follows:
+
+    72-3404. As used in this act:
+    ```
+    WRONG (merged):
+    ```
+    Section 1. K.S.A. 2024 Supp. 72-3404 is hereby amended to read as follows: 72-3404. As used in this act:
+    ```
 
 1. **Section Definitions** - Format: (a), (b), (c), etc.
    - Each definition on its own line

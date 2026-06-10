@@ -16,6 +16,8 @@ Options:
                      Disabled by default for faster runtime.
     --self-correct   Enable self-correction pass that re-examines images vs output
                      to catch missed/false tags. Adds one extra API call.
+    --hybrid         Use PyMuPDF text extraction + LLM text-chunk cleaning.
+                     Best for long PDFs (>7 pages). No images needed, much cheaper.
  
 Examples:
     python simple_pdf_to_text.py document.pdf
@@ -25,6 +27,11 @@ Examples:
     python simple_pdf_to_text.py document.pdf FL --reconcile
     python simple_pdf_to_text.py document.pdf FL --self-correct
     python simple_pdf_to_text.py document.pdf FL output.txt --self-correct --reconcile
+    python simple_pdf_to_text.py document.pdf FL --hybrid
+
+Modes:
+    --hybrid         Use PyMuPDF text extraction + LLM text-chunk cleaning.
+                     Best for long PDFs (>7 pages). No images needed, much cheaper.
 """
  
 import anthropic
@@ -66,7 +73,13 @@ try:
     from pymupdf_extractor import (
         extract_pdf_json_report, extract_pdf_with_pymupdf,
         highlight_pdf_formatting, clean_extracted_text,
-        consolidate_adjacent_tags,
+        consolidate_adjacent_tags, _load_state_clean_prompt,
+        _tag_brackets, _generate_clean_diff_report,
+        _strip_ct_header_tags, _strip_ct_compact_designator,
+        _strip_false_subsection_d_tags, _restructure_ct_header,
+        _strip_in_artifacts, _strip_in_header_tags,
+        _strip_ks_header_tags,
+        remove_nested_tags, merge_split_tags, split_tagged_subsections,
     )
     _HAS_PYMUPDF = True
 except ImportError:
@@ -96,6 +109,104 @@ AVAILABLE_STATES = {
     "VT": "Vermont", "WI": "Wisconsin", "WY": "Wyoming"
 }
  
+# ── Token & Cost Tracking ─────────────────────────────────────────────
+MODEL_PRICING = {
+    "claude-opus-4-6": {"input_cost_per_1k": 0.005, "output_cost_per_1k": 0.025},
+    "claude-opus-4-7": {"input_cost_per_1k": 0.005, "output_cost_per_1k": 0.025},
+}
+
+_TOKEN_TRACKER = {
+    "calls": [],          # list of {step, input_tokens, output_tokens, cost}
+    "total_input": 0,
+    "total_output": 0,
+    "total_cost": 0.0,
+}
+
+def _calculate_cost(input_tokens, output_tokens, model="claude-opus-4-6"):
+    pricing = MODEL_PRICING.get(model, MODEL_PRICING["claude-opus-4-6"])
+    input_cost = (input_tokens / 1000) * pricing["input_cost_per_1k"]
+    output_cost = (output_tokens / 1000) * pricing["output_cost_per_1k"]
+    return input_cost + output_cost
+
+def _track_usage(step_name, usage, model="claude-opus-4-6"):
+    """Record token usage from an API call."""
+    inp = getattr(usage, 'input_tokens', 0) if usage else 0
+    out = getattr(usage, 'output_tokens', 0) if usage else 0
+    cost = _calculate_cost(inp, out, model)
+    _TOKEN_TRACKER["calls"].append({
+        "step": step_name,
+        "input_tokens": inp,
+        "output_tokens": out,
+        "cost": cost,
+    })
+    _TOKEN_TRACKER["total_input"] += inp
+    _TOKEN_TRACKER["total_output"] += out
+    _TOKEN_TRACKER["total_cost"] += cost
+    logging.info(f"💰 [{step_name}] Tokens: {inp:,} in / {out:,} out | Cost: ${cost:.4f}")
+
+def reset_token_tracker():
+    """Reset the token tracker for a fresh processing run."""
+    _TOKEN_TRACKER["calls"].clear()
+    _TOKEN_TRACKER["total_input"] = 0
+    _TOKEN_TRACKER["total_output"] = 0
+    _TOKEN_TRACKER["total_cost"] = 0.0
+
+def get_token_tracker():
+    """Return a copy of the current token tracker data."""
+    import copy
+    return copy.deepcopy(_TOKEN_TRACKER)
+
+def print_token_summary(num_pages=None):
+    """Print a formatted summary of all API calls and total cost."""
+    t = _TOKEN_TRACKER
+    print("\n" + "="*70)
+    print("💰 TOKEN USAGE & COST SUMMARY")
+    print("="*70)
+    print(f"{'Step':<30} {'Input':>10} {'Output':>10} {'Cost':>10}")
+    print("-"*62)
+    for call in t["calls"]:
+        print(f"{call['step']:<30} {call['input_tokens']:>10,} {call['output_tokens']:>10,} ${call['cost']:>9.4f}")
+    print("-"*62)
+    print(f"{'TOTAL':<30} {t['total_input']:>10,} {t['total_output']:>10,} ${t['total_cost']:>9.4f}")
+    print(f"\n📊 Total tokens: {t['total_input'] + t['total_output']:,}")
+    print(f"💵 Total cost:   ${t['total_cost']:.4f}")
+
+    # ── Per-page & volume projections ─────────────────────────────
+    if num_pages and num_pages > 0:
+        cost_per_page = t['total_cost'] / num_pages
+        tokens_per_page = (t['total_input'] + t['total_output']) / num_pages
+        print(f"\n{'─'*62}")
+        print(f"📄 PER-PAGE & VOLUME PROJECTIONS  ({num_pages} pages in this document)")
+        print(f"{'─'*62}")
+        print(f"   Cost per page:          ${cost_per_page:.4f}")
+        print(f"   Tokens per page:        {tokens_per_page:,.0f}")
+        print()
+        print(f"   {'Volume':<28} {'Pages':>8} {'Est. Cost':>12}")
+        print(f"   {'─'*50}")
+        for docs, avg_pages, label in [
+            (10,   num_pages, "10 docs (same size)"),
+            (50,   num_pages, "50 docs (same size)"),
+            (100,  num_pages, "100 docs (same size)"),
+            (500,  num_pages, "500 docs (same size)"),
+            (1000, num_pages, "1,000 docs (same size)"),
+            (100,  5,  "100 docs × 5 pg avg"),
+            (100,  10, "100 docs × 10 pg avg"),
+            (100,  20, "100 docs × 20 pg avg"),
+            (500,  5,  "500 docs × 5 pg avg"),
+            (500,  10, "500 docs × 10 pg avg"),
+            (500,  20, "500 docs × 20 pg avg"),
+            (1000, 5,  "1,000 docs × 5 pg avg"),
+            (1000, 10, "1,000 docs × 10 pg avg"),
+            (1000, 20, "1,000 docs × 20 pg avg"),
+        ]:
+            total_pages = docs * avg_pages
+            est_cost = total_pages * cost_per_page
+            print(f"   {label:<28} {total_pages:>8,} ${est_cost:>11.2f}")
+        print()
+        print(f"   ⚠️  Estimates assume similar page density. Actual cost varies")
+        print(f"      with text length, formatting complexity, and image size.")
+    print("="*70)
+
 # Cached prompts from markdown file
 _PROMPTS_CACHE = None
  
@@ -368,6 +479,7 @@ Respond with ONLY the 2-letter state code (e.g., "KS", "FL", "CO"). If you canno
                 ],
             }]
         )
+        _track_usage("State Detection", message.usage)
  
         response = message.content[0].text.strip().upper()
        
@@ -849,6 +961,8 @@ def convert_pdf_to_text(client, pdf_path, prompt, batch_size=None, dpi=400):
                 ) as stream:
                     for text in stream.text_stream:
                         converted_text += text
+                    final_msg = stream.get_final_message()
+                    _track_usage("Visual Conversion", final_msg.usage)
                 break  # success — exit retry loop
             except Exception as e:
                 err_str = str(e).lower()
@@ -932,6 +1046,8 @@ def convert_pdf_document_mode(client, pdf_path, prompt):
         ) as stream:
             for text in stream.text_stream:
                 converted_text += text
+            final_msg = stream.get_final_message()
+            _track_usage("Document Mode", final_msg.usage)
 
         logging.info(f"✅ Document mode complete:{len(converted_text)} characters")
         return converted_text
@@ -991,6 +1107,8 @@ def reconcile_outputs(client, visual_text, doc_text):
         ) as stream:
             for text in stream.text_stream:
                 reconciled += text
+            final_msg = stream.get_final_message()
+            _track_usage("Reconciliation", final_msg.usage)
  
         logging.info(f"✅ Reconciliation complete:{len(reconciled)} characters")
         return reconciled
@@ -1094,6 +1212,8 @@ def self_correction_pass(client, converted_text, page_images, state_config=None)
         ) as stream:
             for text in stream.text_stream:
                 corrected += text
+            final_msg = stream.get_final_message()
+            _track_usage("Self-Correction", final_msg.usage)
 
         if corrected and len(corrected) > len(converted_text) * 0.5:
             # Sanity check: corrected output should be roughly similar in length
@@ -1110,6 +1230,372 @@ def self_correction_pass(client, converted_text, page_images, state_config=None)
     except Exception as e:
         logging.error(f"⚠️  Self-correction pass failed: {e}")
         return converted_text  # Fall back to original
+
+
+def _split_text_into_chunks(text, max_chars=40000, overlap_chars=2000):
+    """
+    Split extracted text into chunks at section/paragraph boundaries.
+    
+    Prefers splitting at:
+      1. Section headers (SECTION N, Sec. N, § N)
+      2. Double newlines (paragraph breaks)
+      3. Single newlines (line breaks)
+    
+    Each chunk includes `overlap_chars` characters from the end of the
+    previous chunk so the LLM has boundary context for clean merging.
+
+    Args:
+        text (str): Full extracted text
+        max_chars (int): Target max characters per chunk (~10K tokens)
+        overlap_chars (int): Characters of overlap between chunks
+
+    Returns:
+        list[str]: Text chunks with overlap
+    """
+    if len(text) <= max_chars:
+        return [text]
+
+    # Regex for section-level split points
+    section_re = re.compile(
+        r'\n(?=\s*(?:SECTION|Section|Sec\.|SEC\.|ARTICLE|Article|§)\s*\d)',
+    )
+
+    chunks = []
+    pos = 0
+    while pos < len(text):
+        end = min(pos + max_chars, len(text))
+        if end >= len(text):
+            chunks.append(text[pos:])
+            break
+
+        # Find the best split point working backward from `end`
+        window = text[pos + max_chars - 5000 : end]  # last 5K chars
+        split_at = None
+
+        # Try section boundary first
+        for m in section_re.finditer(window):
+            split_at = pos + max_chars - 5000 + m.start()
+        # Fall back to double newline
+        if split_at is None:
+            dn = window.rfind('\n\n')
+            if dn != -1:
+                split_at = pos + max_chars - 5000 + dn
+        # Fall back to single newline
+        if split_at is None:
+            sn = window.rfind('\n')
+            if sn != -1:
+                split_at = pos + max_chars - 5000 + sn
+        # Last resort: hard cut
+        if split_at is None or split_at <= pos:
+            split_at = end
+
+        chunks.append(text[pos:split_at])
+        # Next chunk starts `overlap_chars` before the split point
+        pos = max(split_at - overlap_chars, pos + 1)
+
+    logging.info(f"📐 Split text ({len(text):,} chars) into {len(chunks)} chunks "
+                 f"(max {max_chars:,}, overlap {overlap_chars:,})")
+    return chunks
+
+
+def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None):
+    """
+    Hybrid conversion: PyMuPDF text extraction + LLM cleaning in chunks.
+    
+    This approach works well for long PDFs because:
+    - PyMuPDF extracts ALL text with formatting tags ([A>…<A], [D>…<D])
+    - Text is split into manageable chunks at section boundaries
+    - Each chunk is cleaned by Claude (remove headers/footers/line numbers)
+    - Chunks are stitched together with overlap deduplication
+    - Much cheaper than image-based (text tokens << image tokens)
+    - No chunk-merge accuracy issues since we split at natural boundaries
+    
+    Args:
+        client: Anthropic client instance
+        pdf_path (str): Path to PDF file
+        state_config (dict): State config from template, or None
+        state_code (str): Two-letter state code, or None
+    
+    Returns:
+        str: Converted and cleaned text, or None if failed
+    """
+    if not _HAS_PYMUPDF:
+        logging.error("❌ PyMuPDF extractor not available for hybrid mode")
+        return None
+
+    try:
+        start_time = time.time()
+        logging.info(f"🔄 HYBRID MODE: PyMuPDF extract + LLM text-chunk cleaning: {pdf_path}")
+
+        # ── Step 1: PyMuPDF extraction with formatting tags ──────────
+        flags = _pymupdf_flags_from_state(state_config)
+        active = [k.replace("mark_", "") for k, v in flags.items() if v and k.startswith("mark_")]
+        logging.info(f"   Detecting formats: {', '.join(active) if active else 'none'}")
+
+        raw_text = extract_pdf_with_pymupdf(pdf_path, join_pages=True, **flags)
+        if not raw_text or len(raw_text.strip()) < 50:
+            logging.error("❌ PyMuPDF extraction returned empty/minimal text")
+            return None
+
+        logging.info(f"   ✅ PyMuPDF extracted {len(raw_text):,} characters")
+
+        # Save raw PyMuPDF output for reference
+        raw_path = str(Path(pdf_path).with_suffix('')) + "_hybrid_raw.txt"
+        with open(raw_path, "w", encoding="utf-8") as f:
+            f.write(raw_text)
+        logging.info(f"   💾 Raw PyMuPDF saved to: {raw_path}")
+
+        # ── Step 2: Split into chunks ────────────────────────────────
+        chunks = _split_text_into_chunks(raw_text, max_chars=40000, overlap_chars=2000)
+        total_chunks = len(chunks)
+        logging.info(f"   📐 Split into {total_chunks} chunk(s)")
+
+        # ── Step 3: Clean each chunk with LLM ────────────────────────
+        system_prompt = _load_state_clean_prompt(state_code)
+
+        cleaned_chunks = []
+        max_retries = 5
+
+        for i, chunk in enumerate(chunks, 1):
+            logging.info(f"   🧹 Cleaning chunk {i}/{total_chunks} ({len(chunk):,} chars)...")
+            print(f"   🧹 Cleaning chunk {i}/{total_chunks} ({len(chunk):,} chars)...")
+
+            # Add chunk context to help LLM understand position
+            chunk_header = ""
+            if total_chunks > 1:
+                chunk_header = (
+                    f"[This is chunk {i} of {total_chunks} of a legislative document. "
+                )
+                if i == 1:
+                    chunk_header += "This is the BEGINNING of the document. Preserve the bill header.]\n\n"
+                elif i == total_chunks:
+                    chunk_header += "This is the END of the document.]\n\n"
+                else:
+                    chunk_header += "This is a MIDDLE section. Do NOT add any header — just clean and return the text.]\n\n"
+
+            user_message = chunk_header + chunk
+
+            for attempt in range(1, max_retries + 1):
+                try:
+                    cleaned = ""
+                    with client.messages.stream(
+                        model="claude-opus-4-6",
+                        max_tokens=64000,
+                        timeout=600.0,  # 10-minute timeout for large chunks
+                        system=system_prompt,
+                        messages=[{"role": "user", "content": user_message}],
+                    ) as stream:
+                        for text in stream.text_stream:
+                            cleaned += text
+                        final_msg = stream.get_final_message()
+                        _track_usage(f"Hybrid Chunk {i}/{total_chunks}", final_msg.usage)
+                    break
+                except Exception as api_err:
+                    err_str = str(api_err).lower()
+                    if any(k in err_str for k in ("overloaded", "529", "500", "502", "503", "timeout", "timed out", "readtimeout", "connection", "disconnected")) and attempt < max_retries:
+                        wait = min(2 ** attempt * 5, 180)
+                        logging.warning(f"   ⏳ API error (attempt {attempt}/{max_retries}): {err_str[:120]}. Retrying in {wait}s...")
+                        print(f"   ⏳ Retry {attempt}/{max_retries} in {wait}s...")
+                        time.sleep(wait)
+                    else:
+                        raise
+
+            cleaned_chunks.append(cleaned.strip())
+            logging.info(f"   ✅ Chunk {i}: {len(chunk):,} → {len(cleaned):,} chars")
+
+        # ── Step 4: Merge cleaned chunks ─────────────────────────────
+        if len(cleaned_chunks) == 1:
+            merged = cleaned_chunks[0]
+        else:
+            merged = _merge_cleaned_chunks(cleaned_chunks)
+
+        # ── Step 5: Post-processing (same as visual mode) ────────────
+        # Generate diff report: what did the LLM change?
+        diff_report = _generate_clean_diff_report(raw_text, merged, stage="Hybrid LLM Clean")
+        convert_pdf_hybrid_text._last_diff_report = diff_report
+
+        # Bracket tagging runs AFTER LLM to avoid confusing it with
+        # nested [D>[…]<D] structures.
+        if flags.get("mark_brackets"):
+            merged = _tag_brackets(merged)
+
+        # CT-specific deterministic fixes
+        if state_code and state_code.upper() == "CT":
+            merged = _strip_ct_header_tags(merged)
+            merged = _strip_ct_compact_designator(merged)
+            merged = _strip_false_subsection_d_tags(merged)
+            merged = _restructure_ct_header(merged)
+
+        # IN-specific: strip false headers, footers, barcodes, year lines
+        if state_code and state_code.upper() == "IN":
+            merged = _strip_in_header_tags(merged)
+            merged = _strip_in_artifacts(merged)
+
+        # KS-specific: strip false header tags
+        if state_code and state_code.upper() == "KS":
+            merged = _strip_ks_header_tags(merged)
+
+        merged = consolidate_adjacent_tags(merged)
+        merged = remove_nested_tags(merged)
+        merged = merge_split_tags(merged)
+        merged = split_tagged_subsections(merged)
+
+        total_time = time.time() - start_time
+        minutes = int(total_time // 60)
+        seconds = int(total_time % 60)
+        logging.info(f"✅ Hybrid conversion complete: {len(merged):,} characters")
+        logging.info(f"⏱️  Total runtime: {minutes}m {seconds}s")
+        print(f"   ✅ Hybrid conversion complete: {len(merged):,} chars in {minutes}m {seconds}s")
+
+        return merged
+
+    except Exception as e:
+        logging.error(f"❌ Hybrid conversion failed: {e}", exc_info=True)
+        return None
+
+
+def _merge_cleaned_chunks(chunks):
+    """
+    Merge cleaned text chunks by deduplicating overlap regions.
+    
+    Strategy: find the longest common substring between the end of chunk N
+    and the start of chunk N+1 (from the overlap), then join at that point.
+    Falls back to simple concatenation if no overlap is found.
+    
+    Args:
+        chunks (list[str]): Cleaned text chunks in order
+    
+    Returns:
+        str: Merged text
+    """
+    if not chunks:
+        return ""
+    
+    merged = chunks[0]
+    
+    for i in range(1, len(chunks)):
+        next_chunk = chunks[i]
+        
+        # Look for overlap: compare end of merged with start of next_chunk
+        # Check up to 3000 chars for overlap match
+        best_overlap = 0
+        search_window = min(3000, len(merged), len(next_chunk))
+        
+        tail = merged[-search_window:]
+        head = next_chunk[:search_window]
+        
+        # Find the longest suffix of `tail` that is a prefix of `head`
+        for length in range(min(len(tail), len(head)), 20, -1):
+            # Normalize whitespace for comparison
+            tail_segment = ' '.join(tail[-length:].split())
+            head_segment = ' '.join(head[:length].split())
+            if tail_segment == head_segment:
+                best_overlap = length
+                break
+        
+        if best_overlap > 50:
+            # Found meaningful overlap — skip the duplicated part
+            logging.info(f"   🔗 Chunk {i+1}: found {best_overlap}-char overlap, deduplicating")
+            merged = merged + next_chunk[best_overlap:]
+        else:
+            # No clear overlap found — use paragraph-boundary heuristic
+            # Find a common line between the tail and head
+            tail_lines = merged[-2000:].split('\n')
+            head_lines = next_chunk[:2000].split('\n')
+            
+            join_at = None
+            for tl_idx in range(len(tail_lines) - 1, max(len(tail_lines) - 30, -1), -1):
+                tl = tail_lines[tl_idx].strip()
+                if len(tl) < 15:
+                    continue
+                for hl_idx, hl in enumerate(head_lines[:30]):
+                    if hl.strip() == tl:
+                        join_at = hl_idx
+                        break
+                if join_at is not None:
+                    break
+            
+            if join_at is not None:
+                logging.info(f"   🔗 Chunk {i+1}: line-match overlap at head line {join_at}")
+                remaining = '\n'.join(head_lines[join_at + 1:])
+                # Re-append the rest of next_chunk after the matched region
+                after_head = next_chunk[next_chunk.find('\n'.join(head_lines[join_at:])):]
+                skip = len(head_lines[join_at]) + 1
+                merged = merged + '\n' + next_chunk[next_chunk.find(head_lines[join_at].strip()) + len(head_lines[join_at].strip()):]
+            else:
+                logging.warning(f"   ⚠️  Chunk {i+1}: no overlap found, concatenating with separator")
+                merged = merged + '\n\n' + next_chunk
+    
+    return merged
+
+
+def fix_overlapping_cross_tags(text):
+    """
+    Fix overlapping tags between different types (A and D).
+
+    When an [A> tag contains a [D>...<D] inside it (or vice versa),
+    split them so they don't overlap:
+        [A>added text[D>deleted text<D] more added<A]
+    becomes:
+        [A>added text<A][D>deleted text<D] [A>more added<A]
+
+    Similarly for [D> containing [A>...<A].
+    """
+    result = []
+    i = 0
+    stack = []  # track which tag type is currently open: 'A' or 'D'
+
+    while i < len(text):
+        # Check for opening tags
+        if text[i:i+3] == '[A>' or text[i:i+3] == '[D>':
+            tag_type = text[i+1]  # 'A' or 'D'
+            other = 'D' if tag_type == 'A' else 'A'
+
+            if stack and stack[-1] == other:
+                # We're inside the other type — close it first, then open this one
+                result.append(f'<{other}]')
+                stack.pop()
+                result.append(f'[{tag_type}>')
+                stack.append(tag_type)
+                # Mark that we need to reopen the other type after this tag closes
+                stack.append(f'reopen_{other}')
+            else:
+                result.append(text[i:i+3])
+                stack.append(tag_type)
+            i += 3
+
+        # Check for closing tags
+        elif text[i:i+3] == '<A]' or text[i:i+3] == '<D]':
+            tag_type = text[i+1]  # 'A' or 'D'
+            result.append(text[i:i+3])
+
+            # Remove from stack
+            # First check if there's a reopen marker above
+            new_stack = []
+            found = False
+            reopen = None
+            for s in reversed(stack):
+                if not found and s == tag_type:
+                    found = True
+                    continue
+                if not found and s.startswith('reopen_'):
+                    reopen = s
+                    continue
+                new_stack.insert(0, s)
+            stack = new_stack
+
+            # If we had a reopen marker, reopen that tag type
+            if reopen:
+                reopen_type = reopen.split('_')[1]
+                # Only reopen if there's content before the next close
+                result.append(f' [{reopen_type}>')
+                stack.append(reopen_type)
+            i += 3
+        else:
+            result.append(text[i])
+            i += 1
+
+    return ''.join(result)
 
 
 def restore_special_symbols(claude_text, pymupdf_text):
@@ -1387,240 +1873,130 @@ def deterministic_cleanup(text, state_config=None):
     return text
 
 
-def fix_overlapping_cross_tags(text):
-    """
-    Fix overlapping tags between different types (A and D).
+# ── remove_nested_tags, merge_split_tags, split_tagged_subsections ────
+# Canonical versions live in pymupdf_extractor.py and are imported above.
+# Full definitions are kept here as fallback when pymupdf_extractor is
+# not available (e.g. standalone CLI usage without the app/ directory).
+if not _HAS_PYMUPDF:
 
-    When an [A> tag contains a [D>...<D] inside it (or vice versa),
-    split them so they don't overlap:
-        [A>added text[D>deleted text<D] more added<A]
-    becomes:
-        [A>added text<A][D>deleted text<D] [A>more added<A]
-
-    Similarly for [D> containing [A>...<A].
-    """
-    result = []
-    i = 0
-    stack = []  # track which tag type is currently open: 'A' or 'D'
-
-    while i < len(text):
-        # Check for opening tags
-        if text[i:i+3] == '[A>' or text[i:i+3] == '[D>':
-            tag_type = text[i+1]  # 'A' or 'D'
-            other = 'D' if tag_type == 'A' else 'A'
-
-            if stack and stack[-1] == other:
-                # We're inside the other type — close it first, then open this one
-                result.append(f'<{other}]')
-                stack.pop()
-                result.append(f'[{tag_type}>')
-                stack.append(tag_type)
-                # Mark that we need to reopen the other type after this tag closes
-                stack.append(f'reopen_{other}')
-            else:
-                result.append(text[i:i+3])
-                stack.append(tag_type)
-            i += 3
-
-        # Check for closing tags
-        elif text[i:i+3] == '<A]' or text[i:i+3] == '<D]':
-            tag_type = text[i+1]  # 'A' or 'D'
-            result.append(text[i:i+3])
-
-            # Remove from stack
-            # First check if there's a reopen marker above
-            new_stack = []
-            found = False
-            reopen = None
-            for s in reversed(stack):
-                if not found and s == tag_type:
-                    found = True
-                    continue
-                if not found and s.startswith('reopen_'):
-                    reopen = s
-                    continue
-                new_stack.insert(0, s)
-            stack = new_stack
-
-            # If we had a reopen marker, reopen that tag type
-            if reopen:
-                reopen_type = reopen.split('_')[1]
-                # Only reopen if there's content before the next close
-                result.append(f' [{reopen_type}>')
-                stack.append(reopen_type)
-            i += 3
-        else:
-            result.append(text[i])
-            i += 1
-
-    return ''.join(result)
-
-
-def remove_nested_tags(text):
-    """
-    Remove nested/duplicate opening tags that occur when Claude sees a
-    formatting change (e.g. bold → bold+italic) within the same tag type.
-
-    Example:
-        [A>text one[A>text two<A]  →  [A>text one text two<A]
-        [A>text[A>, more text[A>;<A]  →  [A>text, more text;<A]
-    """
-    for tag_type in ['A', 'D']:
-        open_tag = '[' + tag_type + '>'
-        close_tag = '<' + tag_type + ']'
-        # Iteratively remove nested opens: find [T>...[T> and strip the inner [T>
-        # Keep looping until no more nested opens remain
-        changed = True
-        while changed:
-            changed = False
-            result = []
-            depth = 0
-            i = 0
-            while i < len(text):
-                # Check for opening tag
-                if text[i:i+len(open_tag)] == open_tag:
-                    if depth == 0:
-                        result.append(open_tag)
-                        depth = 1
+    def remove_nested_tags(text):
+        """Remove nested/duplicate opening tags within the same tag type."""
+        for tag_type in ['A', 'D']:
+            open_tag = '[' + tag_type + '>'
+            close_tag = '<' + tag_type + ']'
+            changed = True
+            while changed:
+                changed = False
+                result = []
+                depth = 0
+                i = 0
+                while i < len(text):
+                    if text[i:i+len(open_tag)] == open_tag:
+                        if depth == 0:
+                            result.append(open_tag)
+                            depth = 1
+                        else:
+                            changed = True
+                        i += len(open_tag)
+                    elif text[i:i+len(close_tag)] == close_tag:
+                        result.append(close_tag)
+                        depth = max(0, depth - 1)
+                        i += len(close_tag)
                     else:
-                        # Nested open — skip it (don't add to result)
-                        changed = True
-                    i += len(open_tag)
-                # Check for closing tag
-                elif text[i:i+len(close_tag)] == close_tag:
-                    result.append(close_tag)
-                    depth = max(0, depth - 1)
-                    i += len(close_tag)
+                        result.append(text[i])
+                        i += 1
+                text = ''.join(result)
+        return text
+
+    def merge_split_tags(text):
+        """Merge adjacent same-type tags split mid-sentence."""
+        for tag_type in ['A', 'D']:
+            _no_sub = (
+                r'(?!\s*\(\d+\))'
+                r'(?!\s*\([A-Z]+\))'
+                r'(?!\s*\([a-z]+\))'
+                r'(?!\s*[a-z]\.\d*\.?\s)'
+                r'(?!\s*\d+\.\s)'
+            )
+            inline_cont = r'<' + tag_type + r'\]\[' + tag_type + r'>' + _no_sub
+            text = re.sub(inline_cont, '', text)
+            inline_sub = r'<' + tag_type + r'\]\[' + tag_type + r'>'
+            text = re.sub(inline_sub, '<' + tag_type + ']\n\n[' + tag_type + '>', text)
+            same_cont = r'\n<' + tag_type + r'\]\[' + tag_type + r'>' + _no_sub
+            text = re.sub(same_cont, ' ', text)
+            same_sub = r'\n<' + tag_type + r'\]\[' + tag_type + r'>'
+            text = re.sub(same_sub, '<' + tag_type + ']\n\n[' + tag_type + '>', text)
+            cross_line = (
+                r'<' + tag_type + r'\]'
+                r'(\s*\n\s*)'
+                r'\[' + tag_type + r'>' + _no_sub
+            )
+            text = re.sub(cross_line, ' ', text)
+        return text
+
+    def split_tagged_subsections(text):
+        """Split long tagged blocks at subsection markers."""
+        subsection_re = re.compile(
+            r'(?:(?<=[.:;])|(?<=\band\b)|(?<=\bor\b))\s*'
+            r'('
+            r'\(\d+\)[a-z]\.\d*\.?'
+            r'|\(\d+\)|\([A-Z]+\)|\([a-z]+\)'
+            r'|[a-z]\.\d*\.?'
+            r'|\d+\.'
+            r')(?:\s|$)',
+            re.IGNORECASE,
+        )
+        _nosplit_re = re.compile(
+            r'(?:^|\n)\s*(?:Sec|Section|Art|Article)\.\s*$'
+            r'|(?<!\$)(?<!\d)(?:\d{2,}\.\d*\.?\s*)$',
+            re.IGNORECASE,
+        )
+
+        def _is_inline_list(content, markers):
+            if not markers:
+                return False
+            list_sep_count = 0
+            period_count = 0
+            for m in markers:
+                preceding = content[:m.start()].rstrip()
+                if preceding.endswith(';'):
+                    list_sep_count += 1
+                elif preceding.endswith(('.', ':')):
+                    period_count += 1
                 else:
-                    result.append(text[i])
-                    i += 1
-            text = ''.join(result)
-    return text
+                    list_sep_count += 1
+            return list_sep_count > period_count
 
+        def _split_block(match):
+            tag_open = match.group(1)
+            content = match.group(2)
+            tag_close = match.group(3)
+            markers = list(subsection_re.finditer(content))
+            if len(markers) < 1:
+                return match.group(0)
+            markers = [m for m in markers
+                       if not _nosplit_re.search(content[:m.start()])]
+            if len(markers) < 1:
+                return match.group(0)
+            if _is_inline_list(content, markers):
+                return match.group(0)
+            pieces = []
+            prev_end = 0
+            for m in markers:
+                split_at = m.start()
+                before = content[prev_end:split_at].rstrip()
+                if before:
+                    pieces.append(before)
+                prev_end = split_at
+            last = content[prev_end:].strip()
+            if last:
+                pieces.append(last)
+            tagged_pieces = [f"{tag_open}{p.strip()}{tag_close}" for p in pieces]
+            return '\n\n'.join(tagged_pieces)
 
-def merge_split_tags(text):
-    """
-    Merge adjacent same-type tags that were incorrectly split mid-sentence.
-
-    Merges [A>text<A] followed by [A>continuation<A] into [A>text continuation<A]
-    ONLY when the second tag does NOT start with a subsection marker like (1), (A), (a).
-    Same logic for [D>...<D] tags.
-
-    Example:
-        [A>for purposes of this<A]
-        [A>chapter, means the following:<A]
-        →
-        [A>for purposes of this chapter, means the following:<A]
-    """
-    for tag_type in ['A', 'D']:
-        # Negative lookaheads for subsection markers:
-        #   (1), (A), (a) — parenthesized
-        #   b. c.1. — letter-dot
-        #   1. 2. 3. — number-dot
-        _no_sub = (
-            r'(?!\s*\(\d+\))'
-            r'(?!\s*\([A-Z]+\))'
-            r'(?!\s*\([a-z]+\))'
-            r'(?!\s*[a-z]\.\d*\.?\s)'
-            r'(?!\s*\d+\.\s)'
-        )
-
-        # 0) Inline joins: <T][T>text on same line (no newline) — always merge
-        #    e.g.  "[A>a <A][A>condition..."  →  "[A>a condition..."
-        #    Skip subsection markers so they stay as separate tags.
-        inline_cont = r'<' + tag_type + r'\]\[' + tag_type + r'>' + _no_sub
-        text = re.sub(inline_cont, '', text)
-
-        # 0b) Inline subsection boundary: <T][T>(1) → <T]\n\n[T>(1)
-        inline_sub = r'<' + tag_type + r'\]\[' + tag_type + r'>'
-        text = re.sub(inline_sub, '<' + tag_type + ']\n\n[' + tag_type + '>', text)
-
-        # 1) Continuations: \n<T][T>text (NOT a subsection marker) → merge
-        same_cont = r'\n<' + tag_type + r'\]\[' + tag_type + r'>' + _no_sub
-        text = re.sub(same_cont, ' ', text)
-
-        # 2) Subsection boundaries: \n<T][T>(1)  →  <T]\n\n[T>(1)
-        same_sub = r'\n<' + tag_type + r'\]\[' + tag_type + r'>'
-        text = re.sub(same_sub, '<' + tag_type + ']\n\n[' + tag_type + '>', text)
-
-        # 3) Cross-line joins:  <T]\n[T>  (continuation, not subsection)
-        cross_line = (
-            r'<' + tag_type + r'\]'
-            r'(\s*\n\s*)'
-            r'\[' + tag_type + r'>' + _no_sub
-        )
-        text = re.sub(cross_line, ' ', text)
-    return text
-
-
-def split_tagged_subsections(text):
-    """
-    Split long [A>...<A] and [D>...<D] blocks that contain multiple subsection
-    markers like (1), (2), (A), (B), (a), (b) into separate tagged lines.
-
-    Only splits at markers that appear after sentence-ending punctuation
-    (. ; :) or after 'and'/'or', avoiding false splits on inline references
-    like "seventy-two (72) hour" or "(as defined in IC 12-7-2-135.6)".
-
-    Example:
-        [A>Sec. 12.5. ... means the following: (1) Info... (2) Other...<A]
-        →
-        [A>Sec. 12.5. ... means the following:<A]
-        [A>(1) Info...<A]
-        [A>(2) Other...<A]
-    """
-    # Subsection marker after sentence-ending punctuation or after "and"/"or"
-    # Matches: (1) (A) (a) — parenthesized markers
-    #          b. c.1. 1. 2. 3. — period-style markers (Delaware, etc.)
-    subsection_re = re.compile(
-        r'(?:(?<=[.:;])|(?<=\band\b)|(?<=\bor\b))\s+'
-        r'('
-        r'\(\d+\)[a-z]\.\d*\.?'                  # composite: (3)a. (1)b.1.
-        r'|\(\d+\)|\([A-Z]+\)|\([a-z]+\)'        # parenthesized: (1), (A), (a), (ii), (iii), (AA)
-        r'|[a-z]\.\d*\.?'                         # letter-dot: b. c.1.
-        r'|\d+\.'                                 # number-dot: 1. 2. 3.
-        r')(?:\s|$)'                              # trailing space OR end of content
-        , re.IGNORECASE
-    )
-
-    # Patterns that should NOT be split (e.g., "Sec. 2." or "Section 1.")
-    # Avoid matching "this section." or "under section." — require Sec/Section
-    # to appear at start of text or after a newline (i.e., as a heading prefix)
-    _nosplit_re = re.compile(
-        r'(?:^|\n)\s*(?:Sec|Section|Art|Article)\.\s*$', re.IGNORECASE
-    )
-
-    def _split_block(match):
-        tag_open = match.group(1)
-        content = match.group(2)
-        tag_close = match.group(3)
-        markers = list(subsection_re.finditer(content))
-        if len(markers) < 1:
-            return match.group(0)
-        # Filter out false-positive markers preceded by "Sec." / "Section." etc.
-        markers = [m for m in markers
-                   if not _nosplit_re.search(content[:m.start()])]
-        if len(markers) < 1:
-            return match.group(0)
-        pieces = []
-        prev_end = 0
-        for m in markers:
-            split_at = m.start()
-            before = content[prev_end:split_at].rstrip()
-            if before:
-                pieces.append(before)
-            # Start next piece from the marker character (skip leading whitespace)
-            prev_end = split_at
-        last = content[prev_end:].strip()
-        if last:
-            pieces.append(last)
-        # Wrap each piece, stripping leading/trailing whitespace inside tags
-        tagged_pieces = [f"{tag_open}{p.strip()}{tag_close}" for p in pieces]
-        return '\n\n'.join(tagged_pieces)
-
-    text = re.sub(r'(\[A>)(.*?)(<A\])', _split_block, text, flags=re.DOTALL)
-    text = re.sub(r'(\[D>)(.*?)(<D\])', _split_block, text, flags=re.DOTALL)
-    return text
+        text = re.sub(r'(\[A>)(.*?)(<A\])', _split_block, text, flags=re.DOTALL)
+        text = re.sub(r'(\[D>)(.*?)(<D\])', _split_block, text, flags=re.DOTALL)
+        return text
 
 
 def post_process_output(text, state_config):
@@ -1730,10 +2106,11 @@ def main():
         print_usage()
         sys.exit(1)
  
-    # Check for --reconcile and --self-correct flags
-    args = [a for a in sys.argv[1:] if a not in ('--reconcile', '--self-correct')]
+    # Check for --reconcile, --self-correct, and --hybrid flags
+    args = [a for a in sys.argv[1:] if a not in ('--reconcile', '--self-correct', '--hybrid')]
     reconcile = '--reconcile' in sys.argv
     self_correct = '--self-correct' in sys.argv
+    hybrid_mode = '--hybrid' in sys.argv
  
     pdf_path = args[0] if len(args) > 0 else None
     state_code = args[1].upper() if len(args) > 1 else None
@@ -1781,6 +2158,7 @@ def main():
     print(f"💾 Output:       {output_path}")
     print(f"🔄 Reconcile:    {'Enabled' if reconcile else 'Disabled'}")
     print(f"🔧 Self-correct: {'Enabled' if self_correct else 'Disabled'}")
+    print(f"📐 Hybrid mode:  {'Enabled' if hybrid_mode else 'Disabled'}")
     print()
    
     # Load state template and build prompt
@@ -1803,20 +2181,29 @@ def main():
         pf.write(f"\n{'='*80}\n")
         pf.write(f"Prompt length: {len(prompt)} characters\n")
     print(f"📝 Full prompt saved to: {prompt_dump_path} ({len(prompt)} chars)")
-   
-    # Pass 1: Visual mode conversion (images)
-    print(f"🔄 Visual mode conversion...")
-    state_dpi = state_config.get("dpi", 400) if state_config else 400
-    visual_text, cached_page_images = convert_pdf_to_text(client, pdf_path, prompt, dpi=state_dpi)
- 
-    if not visual_text:
-        print("❌ Visual mode conversion failed")
-        sys.exit(1)
- 
-    converted_text = visual_text
+
+    # ── HYBRID MODE: text-based extraction + LLM cleaning ──────────
+    if hybrid_mode:
+        print(f"📐 HYBRID MODE: PyMuPDF text extraction + LLM text-chunk cleaning")
+        converted_text = convert_pdf_hybrid_text(client, pdf_path, state_config, state_code)
+        cached_page_images = None
+        if not converted_text:
+            print("❌ Hybrid mode conversion failed")
+            sys.exit(1)
+    else:
+        # Pass 1: Visual mode conversion (images)
+        print(f"🔄 Visual mode conversion...")
+        state_dpi = state_config.get("dpi", 400) if state_config else 400
+        visual_text, cached_page_images = convert_pdf_to_text(client, pdf_path, prompt, dpi=state_dpi)
+
+        if not visual_text:
+            print("❌ Visual mode conversion failed")
+            sys.exit(1)
+
+        converted_text = visual_text
  
     # Pass 2 & 3: Document mode + Reconciliation (only if --reconcile is enabled)
-    if reconcile:
+    if reconcile and not hybrid_mode:
         print(f"🔄 Document mode verification...")
         doc_prompt = get_document_mode_prompt(state_config)
         doc_text = convert_pdf_document_mode(client, pdf_path, doc_prompt)
@@ -1946,6 +2333,27 @@ def main():
                     state_code=state_code,
                     anthropic_client=client,   # reuse the Claude client from conversion
                 )
+                # Track PyMuPDF clean tokens (estimate from text lengths since
+                # clean_extracted_text doesn't return usage directly)
+                try:
+                    import tiktoken
+                    _enc = tiktoken.get_encoding("cl100k_base")
+                    _clean_in = len(_enc.encode(pymupdf_text))
+                    _clean_out = len(_enc.encode(pymupdf_clean_text))
+                except Exception:
+                    _clean_in = len(pymupdf_text) // 4
+                    _clean_out = len(pymupdf_clean_text) // 4
+                _clean_cost = _calculate_cost(_clean_in, _clean_out)
+                _TOKEN_TRACKER["calls"].append({
+                    "step": "PyMuPDF LLM Clean",
+                    "input_tokens": _clean_in,
+                    "output_tokens": _clean_out,
+                    "cost": _clean_cost,
+                })
+                _TOKEN_TRACKER["total_input"] += _clean_in
+                _TOKEN_TRACKER["total_output"] += _clean_out
+                _TOKEN_TRACKER["total_cost"] += _clean_cost
+                logging.info(f"💰 [PyMuPDF LLM Clean] Tokens: {_clean_in:,} in / {_clean_out:,} out | Cost: ${_clean_cost:.4f} (estimated)")
                 pymupdf_clean_text = consolidate_adjacent_tags(pymupdf_clean_text)
                 pymupdf_clean_text = remove_nested_tags(pymupdf_clean_text)
                 pymupdf_clean_text = merge_split_tags(pymupdf_clean_text)
@@ -2023,6 +2431,16 @@ def main():
         except Exception as e:
             print(f"⚠️  PyMuPDF extraction failed: {e}")
             logging.error(f"PyMuPDF extraction error: {e}", exc_info=True)
+
+    # ── Token & Cost Summary ─────────────────────────────────────────
+    # Determine page count for per-page projections
+    try:
+        _pdf_for_count = pdfium.PdfDocument(pdf_path)
+        _num_pages = len(_pdf_for_count)
+        _pdf_for_count.close()
+    except Exception:
+        _num_pages = None
+    print_token_summary(num_pages=_num_pages)
 
     print("\n" + "="*70)
  

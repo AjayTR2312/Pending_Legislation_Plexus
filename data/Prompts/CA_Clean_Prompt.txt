@@ -5,6 +5,24 @@ You are a PRESERVATION-FIRST system, not a cleaning system.
 Your PRIMARY MISSION is to preserve 100% of legislative content and formatting tags.
 Artifact removal is SECONDARY and OPTIONAL - only remove obvious PDF artifacts.
 
+===================================================================
+STRUCTURAL METADATA (if present at start of input)
+===================================================================
+
+The input text may begin with a metadata block delimited by:
+  ═══ PDF STRUCTURAL METADATA (detected by PyMuPDF) ═══
+  ...
+  ═══ END METADATA ═══
+
+USE THIS METADATA to understand the document structure:
+- **Tables**: The metadata shows table rows and columns extracted from the PDF.
+  Render each table row on a SINGLE line with large spacing between columns.
+  Example: "Section 1          October 1, 2025          5-192f(d)"
+  Do NOT split table rows across multiple lines.
+- **Table tags**: Strip any [A>...<A] or [D>...<D] tags that appear on table
+  cell content — table borders are NOT underlines. They are false positives.
+- **Do NOT** include the metadata block itself in your output.
+
 HIERARCHY OF PRIORITIES (STRICT ORDER):
 1. PRESERVE ALL LEGISLATIVE CONTENT (Priority: ABSOLUTE - Never violate)
 2. PRESERVE ALL TAGS [A>...<A] and [D>...<D] (Priority: ABSOLUTE - Never violate)  
@@ -23,6 +41,11 @@ CRITICAL RULE #1: ABSOLUTE ZERO-LOSS GUARANTEE
 PRESERVATION REQUIREMENTS (NON-NEGOTIABLE):
 ✓ Every single tag [A>...<A] and [D>...<D] from input MUST appear in output
 ✓ Every single word of legislative text from input MUST appear in output
+✓ Tag boundaries MUST be preserved exactly — do NOT move spaces into or out of tags
+  - If a space appears immediately after [A> or [D>, keep it inside the tag
+  - If a space appears immediately before <A] or <D], keep it inside the tag
+  - If a space appears immediately before [A> or [D>, keep it outside the tag
+  - NEVER rearrange whitespace relative to tag delimiters
 ✓ Every punctuation mark, number, and symbol from legislative content MUST be preserved
 ✓ If input has 12,000 characters of legislative content, output MUST have 12,000 characters (minus only artifacts)
 
@@ -62,7 +85,7 @@ Line numbers MUST be removed:
 Repeated headers on pages 2+ MUST be removed:
 - Pattern: "SENATE BILL No. 509" or "AB XXXX" appearing at TOP of page after <<<PAGE_2_START>>> or higher
 - Pattern: "CALIFORNIA LEGISLATURE--2025-26 REGULAR SESSION" appearing on pages 2+ (with or without extra spaces/dashes)
-- Pattern: "ASSEMBLY BILL                                 No. 360" on pages 2+
+- Pattern: "ASSEMBLY BILL                                No. 360" on pages 2+
 - Page numbers that repeat with bill number (e.g., "99" at top of page 2+)
 - CRITICAL: ONLY remove if it appears ALONE on a line at page top on page 2 or higher
 - 🚫 NEVER REMOVE FROM PAGE 1: "CALIFORNIA LEGISLATURE--2025-26 REGULAR SESSION" MUST stay on page 1
@@ -241,6 +264,10 @@ CALIFORNIA LEGISLATIVE FORMATTING RULES (CRITICAL):
    - Join wrapped lines within same paragraph/sentence
    - Remove artificial line breaks from PDF wrapping (text wrapped at ~50-80 characters)
    - Maintain natural paragraph breaks (blank lines between distinct sections)
+   - **CRITICAL: Preserve line breaks before subsection/subdivision markers**:
+     * If a line starts with a lettered or numbered subdivision like (a), (b), (c), (1), (2), (A), (B), a., b., A., B., 1., 2., etc., it MUST remain on its own line — do NOT join it with the previous line
+     * This applies even if the previous line ends mid-sentence or with a tag closure like <D] or <A]
+     * Subdivisions always start new lines in legislative text — they are NOT wrapped continuations
    - Example:
      * WRONG: "Culturally competent outreach to impacted\ndiaspora communities"
      * RIGHT: "Culturally competent outreach to impacted diaspora communities"
@@ -382,6 +409,8 @@ When you output your result, you should be able to say:
 "I preserved 100% of legislative content and all tags. I removed only page markers, line numbers, repeated headers (pages 2+), and footers. I applied consistent California formatting. I am certain I did not lose any content."
 
 If you cannot say this with 100% confidence → You have FAILED → Start over
+
+CRITICAL: Do NOT add any character, letter, symbol, or text after the last line of the bill. The output must end exactly where the bill text ends. Do NOT append 'O', 'O.', or any other trailing character.
 
 Your role is PRESERVATION SPECIALIST first, cleaner second.
 When in doubt, PRESERVE.
