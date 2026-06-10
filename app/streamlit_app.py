@@ -77,6 +77,11 @@ except ImportError:
     detect_pdf_type = None
     logging.warning("⚠️ pdf_type_detector module not found — scanned PDF detection disabled")
 try:
+    from pdf_margin_cropper import auto_crop_if_needed
+except ImportError:
+    auto_crop_if_needed = None
+    logging.warning("⚠️ pdf_margin_cropper module not found — broad-margin auto-crop disabled")
+try:
     from pdf_compare_viewer import (
         render_pdf_pages as compare_render_pdf_pages,
         extract_word_bboxes as compare_extract_word_bboxes,
