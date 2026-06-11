@@ -702,14 +702,37 @@ _RE_EMPTY_ADD = re.compile(r"\[A>\s*<A\]")
 _RE_EMPTY_DEL = re.compile(r"\[D>\s*<D\]")
 # Merge adjacent same-type tags that are separated only by intra-paragraph
 # whitespace (spaces, tabs, or a single soft line wrap).  CRITICALLY this
-# pattern must NOT eat a paragraph break (\n\n) — two italic paragraphs that
-# happen to sit adjacent in a digest must remain separate, not be welded
-# together into one giant [A>…<A] span.
+# pattern must NOT eat:
+#   • a paragraph break (\n\n) — two italic paragraphs that happen to sit
+#     adjacent in a digest must remain separate, not be welded together
+#     into one giant [A>…<A] span.
+#   • a single \n that precedes a fresh list-marker tag like [A>(2)<A],
+#     [A>(F)<A], [A>(iv)<A].  In that case the \n is a real list-item
+#     transition (e.g. "(F) body of F.<A]\n[A>(2)<A] body of 2…") and
+#     merging would weld two unrelated list items into one.  This is the
+#     pattern that emerges in Kansas amendment text where each list item
+#     marker is typeset in italic by the bill author.
 #
-# Matches: "<A] [A>", "<A]\t[A>", "<A]\n[A>" (with optional surrounding spaces)
-# Rejects: "<A]\n\n[A>"  (paragraph boundary — left alone)
-_RE_MERGE_ADD = re.compile(r"<A\][ \t]*\n?[ \t]*\[A>")
-_RE_MERGE_DEL = re.compile(r"<D\][ \t]*\n?[ \t]*\[D>")
+# Matches: "<A] [A>", "<A]\t[A>"            (inline — same physical row)
+#          "<A]\n[A>foo<A]"                  (cross-line, body text continues)
+# Rejects: "<A]\n\n[A>"                     (paragraph break)
+#          "<A]\n[A>(2)<A]" / "<A]\n[A>(F)<A]" (cross-line, fresh list item)
+_RE_MERGE_ADD = re.compile(
+    r"<A\]"
+    r"(?:"
+    r"[ \t]+\[A>"                                       # inline (same row)
+    r"|"
+    r"[ \t]*\n[ \t]*\[A>(?!\([A-Za-z0-9]{1,6}\))"        # cross-line, NOT list marker
+    r")"
+)
+_RE_MERGE_DEL = re.compile(
+    r"<D\]"
+    r"(?:"
+    r"[ \t]+\[D>"
+    r"|"
+    r"[ \t]*\n[ \t]*\[D>(?!\([A-Za-z0-9]{1,6}\))"
+    r")"
+)
 # Matches margin line numbers at start of a line.
 # IMPORTANT: trailing class is [ \t]* (NOT \s*) so it doesn't consume the
 # trailing newlines.  Eating newlines would collapse paragraph breaks that

@@ -203,13 +203,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,san
 .panel-text{background:var(--bg)}
 
 .ph{
-  position:sticky;top:0;z-index:10;padding:8px 14px;font-size:12px;font-weight:600;
-  letter-spacing:.3px;display:flex;align-items:center;gap:8px;
+  position:sticky;top:0;z-index:10;padding:8px 14px;font-size:13px;font-weight:600;
+  display:flex;align-items:center;gap:8px;
   background:rgba(246,248,250,.95);backdrop-filter:blur(8px);
-  border-bottom:1px solid var(--border);text-transform:uppercase;color:var(--text2);
+  border-bottom:1px solid var(--border);color:var(--text);
 }
-.ph .badge{font-size:10px;padding:2px 7px;border-radius:8px;font-weight:500;
-           background:var(--surface);border:1px solid var(--border);color:var(--text2)}
 
 .pdf-wrap{padding:10px}
 .page-ctr{position:relative;margin-bottom:12px;background:#fff;border-radius:4px;
@@ -361,7 +359,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,san
     <div class="pdf-wrap" id="pdfWrap"></div>
   </div>
   <div class="panel panel-text" id="textPanel">
-    <div class="ph"><span>PYMUPDF CLEAN TEXT</span><span class="badge" id="lineBadge"></span></div>
+    <div class="ph"><span>CONVERTED TEXT</span></div>
     <div class="text-toolbar">
       <button class="tbtn tag-a" onclick="wrapTag('a')" title="Wrap selected text with [A>...<A] tag">[A&gt;</button>
       <button class="tbtn tag-d" onclick="wrapTag('d')" title="Wrap selected text with [D>...<D] tag">[D&gt;</button>
@@ -430,9 +428,6 @@ function navDiff(dir){
   }
   document.getElementById('statBar').textContent='Diff '+(currentDiffIdx+1)+' / '+changeLines.length+' (Line '+(li+1)+')';
 }
-
-var tw_count=document.querySelectorAll('.tw').length;
-document.getElementById('lineBadge').textContent=Object.keys(wordMap).length+'/'+tw_count+' words mapped';
 
 // Page nav
 var totalPages=pageImages.length;

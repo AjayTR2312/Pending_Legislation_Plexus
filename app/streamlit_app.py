@@ -1845,7 +1845,6 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
         from pymupdf_extractor import (
             extract_pdf_json_report,
             extract_pdf_with_pymupdf,
-            highlight_pdf_formatting,
             clean_extracted_text,
             consolidate_adjacent_tags,
         )
@@ -1886,12 +1885,11 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
         # Filter italic by section if needed
         pymupdf_report, pymupdf_text = _filter_italic_by_section(pymupdf_report, pymupdf_text, state_config)
 
-        # Highlighted images
-        highlight_dir = Path(output_path).parent / f"{Path(pdf_path).stem}_highlighted"
-        hi_imgs = highlight_pdf_formatting(pdf_path, report=pymupdf_report, output_dir=highlight_dir, **_mark_flags)
-        add_log(f"✅ {len(hi_imgs)} highlighted page images saved")
+        # NOTE: Highlighted page images are intentionally NOT generated in
+        # Extract+Clean mode — they're only required by the Visual-mode
+        # Validation Review tab.  Skipping the render step keeps this
+        # pipeline fast and avoids writing dozens of PNGs per bill.
 
-        st.session_state.audit_highlighted_dir = str(highlight_dir)
         st.session_state.audit_json_report = pymupdf_report
         st.session_state.step_status[2] = "✅"
         update_progress()
@@ -2120,7 +2118,6 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
         from pymupdf_extractor import (
             extract_pdf_json_report,
             extract_pdf_with_pymupdf,
-            highlight_pdf_formatting,
             clean_extracted_text,
             consolidate_adjacent_tags,
         )
@@ -2147,6 +2144,10 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
 
         # Filter italic by section if needed
         pymupdf_report, pymupdf_text = _filter_italic_by_section(pymupdf_report, pymupdf_text, state_config)
+
+        # NOTE: Highlighted page images are intentionally NOT generated in
+        # Hybrid mode — they're only required by the Visual-mode
+        # Validation Review tab.
 
         st.session_state.audit_json_report = pymupdf_report
         st.session_state.step_status[2] = "✅"
@@ -4731,10 +4732,11 @@ def show_single_file_processing():
                     st.session_state._auto_started_file_id = None
                     st.rerun()
 
-        elif st.session_state.processing:
-            # Show processing status only while actively processing
-            st.warning("⏳ **Processing...**\n\nPlease wait while we process your document")
-    
+        # While `st.session_state.processing` is True, the activity-feed
+        # progress display (step icons + progress bar + live activity log)
+        # below this section already conveys "we're working on it" — no
+        # need for an extra yellow "Please wait" banner here.
+
     # Commented out alternative processing methods
     # with col1:
     #     if not st.session_state.processing:
@@ -4778,15 +4780,14 @@ def show_single_file_processing():
     
     # Processing progress
     if st.session_state.processing:
-        # Create a placeholder for dynamic updates
-        progress_placeholder = st.empty()
+        # No step-icon row / "Step N/M" progress bar at the top — the
+        # Activity Log expander below already shows live, timestamped
+        # progress with the same information.  Keep only the inline
+        # status banner and the activity log itself.
         status_placeholder = st.empty()
         log_container = st.expander("📋 Activity Log", expanded=True)
         log_placeholder = log_container.empty()  # live-updating slot inside the expander
-        
-        with progress_placeholder.container():
-            show_processing_steps()
-        
+
         # Display any logs already collected (e.g. from a previous partial run)
         with log_placeholder.container():
             if st.session_state.processing_logs:
@@ -4799,7 +4800,7 @@ def show_single_file_processing():
                 st.session_state.temp_pdf_path,
                 _state,
                 st.session_state.session_id,
-                progress_placeholder,
+                None,                       # progress_placeholder — disabled
                 status_placeholder
             )
         elif st.session_state.process_method == "tag_then_clean":
@@ -4807,7 +4808,7 @@ def show_single_file_processing():
                 st.session_state.temp_pdf_path,
                 _state,
                 st.session_state.session_id,
-                progress_placeholder,
+                None,                       # progress_placeholder — disabled
                 status_placeholder
             )
         elif st.session_state.process_method == "claude_opus":
@@ -4815,7 +4816,7 @@ def show_single_file_processing():
                 st.session_state.temp_pdf_path,
                 _state,
                 st.session_state.session_id,
-                progress_placeholder,
+                None,                       # progress_placeholder — disabled
                 status_placeholder,
                 log_placeholder
             )
@@ -4824,7 +4825,7 @@ def show_single_file_processing():
                 st.session_state.temp_pdf_path,
                 _state,
                 st.session_state.session_id,
-                progress_placeholder,
+                None,                       # progress_placeholder — disabled
                 status_placeholder,
                 log_placeholder
             )
@@ -4833,7 +4834,7 @@ def show_single_file_processing():
                 st.session_state.temp_pdf_path,
                 _state,
                 st.session_state.session_id,
-                progress_placeholder,
+                None,                       # progress_placeholder — disabled
                 status_placeholder,
                 log_placeholder
             )
@@ -4843,7 +4844,7 @@ def show_single_file_processing():
                 st.session_state.temp_pdf_path,
                 _state,
                 st.session_state.session_id,
-                progress_placeholder,
+                None,                       # progress_placeholder — disabled
                 status_placeholder,
                 log_placeholder
             )
