@@ -1911,8 +1911,16 @@ def split_tagged_subsections(text: str) -> str:
         re.IGNORECASE,
     )
     _nosplit_re = re.compile(
+        # ① "Sec.", "Section", etc. alone at the end of preceding line
         r'(?:^|\n)\s*(?:Sec|Section|Art|Article)\.\s*$'
-        r'|(?<!\$)(?<!\d)(?:\d{2,}\.\d*\.?\s*)$',
+        # ② Multi-digit code-section reference at end (e.g. "234.")
+        r'|(?<!\$)(?<!\d)(?:\d{2,}\.\d*\.?\s*)$'
+        # ③ Fractional section/article number — protects the right half of
+        #    "SEC. 3.5.", "Article 5.7.", "Sec. 1.10." from being mis-detected
+        #    as a new list marker.  Without this, the lookbehind on the
+        #    period after "3" would fool the splitter into treating "5." as
+        #    a fresh subsection marker.
+        r'|(?:^|\W)(?:Sec|Section|Art|Article)\.?\s+\d+\.\s*$',
         re.IGNORECASE,
     )
 
@@ -1982,12 +1990,19 @@ def split_renumber_paragraph_breaks(text: str) -> str:
         [D>SEC. 5.<D]                       ← deleted SEC. number
         [A>SEC. 8.<A] Section 7334 of the Business and Professions Code …
 
+    Or for **statute number renumbering** (when a code section number is
+    shifted because earlier sections were inserted/removed)::
+
+        [D>2182.<D]                         ← deleted statute number
+        [A>2183.<A] This chapter shall become operative …
+
     The pre-clean step preserves this layout (``\\n\\n`` between the two
     tags), but the LLM cleanup pass tends to **collapse** the gap into a
     single space::
 
         [D>(7)<D] [A>(8)<A] "Malice" means …
         [D>SEC. 5.<D] [A>SEC. 8.<A] Section 7334 of …
+        [D>2182.<D] [A>2183.<A] This chapter shall become operative …
 
     This function detects that pattern and **restores the paragraph
     break** (``\\n\\n``) between the markers, so the output mirrors the
@@ -1996,8 +2011,9 @@ def split_renumber_paragraph_breaks(text: str) -> str:
     Detection criteria (ALL must hold):
 
     1. A deletion tag containing **only** a recognised marker:
-       - parenthesised: ``(7)``, ``(ii)``, ``(B)``
+       - parenthesised:  ``(7)``, ``(ii)``, ``(B)``
        - section header: ``SEC. 5.``, ``SECTION 1.`` (with trailing period)
+       - statute number: ``2182.``, ``2181.5.`` (bare digits with trailing period)
     2. Followed by spaces/tabs only (no newline) — i.e. the LLM has
        already collapsed the original ``\\n\\n``.
     3. Followed by an addition tag containing **only** a recognised marker.
@@ -2019,9 +2035,11 @@ def split_renumber_paragraph_breaks(text: str) -> str:
     # Marker patterns (alternation):
     #   • Parenthesised ID: (1)  (10)  (a)  (B)  (i)  (vii)  (iii)
     #   • Section header:   SEC. 5.   SEC. 10.   SECTION 1.
+    #   • Statute number:   2182.   5301.   2181.5.   (bare digits + trailing dot)
     marker_paren   = r"\(\s*[a-zA-Z0-9]{1,6}\s*\)"
     marker_section = r"(?:SEC\.|SECTION)\s+\d{1,4}\.?"
-    marker = r"(?:" + marker_paren + r"|" + marker_section + r")"
+    marker_statute = r"\d{1,5}(?:\.\d{1,4})?\."
+    marker = r"(?:" + marker_paren + r"|" + marker_section + r"|" + marker_statute + r")"
 
     pattern = re.compile(
         r"(\[D>\s*" + marker + r"\s*<D\])"   # \1: [D>(marker)<D]
