@@ -1515,7 +1515,9 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
                 pymupdf_clean_text = clean_extracted_text(
                     pymupdf_text,
                     state_code=detected_state,
+                    pdf_path=pdf_path,
                     anthropic_client=client,
+                    mark_brackets=_mark_flags.get("mark_brackets", False),
                 )
                 pymupdf_clean_text = consolidate_adjacent_tags(pymupdf_clean_text)
                 pymupdf_clean_text = opus.remove_nested_tags(pymupdf_clean_text)
@@ -1533,6 +1535,14 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
                 with open(pymupdf_clean_path, "w", encoding="utf-8") as cf:
                     cf.write(pymupdf_clean_text)
                 add_log(f"✅ Clean text saved: {len(pymupdf_text):,} → {len(pymupdf_clean_text):,} chars")
+
+                # Save LLM diff report (what did the LLM remove/change?)
+                _diff_report = getattr(clean_extracted_text, '_last_diff_report', None)
+                if _diff_report:
+                    diff_path = pymupdf_clean_path.replace("_pymupdf_clean.txt", "_clean_diff.txt")
+                    with open(diff_path, "w", encoding="utf-8") as df:
+                        df.write(_diff_report)
+                    add_log(f"📋 LLM diff report saved: {diff_path}")
 
                 # Rebuild report context using cleaned text for better anchor matching
                 if pymupdf_report:
@@ -1868,7 +1878,9 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
         pymupdf_clean_text = clean_extracted_text(
             pymupdf_text,
             state_code=detected_state,
+            pdf_path=pdf_path,
             anthropic_client=client,
+            mark_brackets=_mark_flags.get("mark_brackets", False),
         )
 
         # Track LLM usage from the clean call
@@ -1895,6 +1907,14 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
         st.session_state.step_status[3] = "✅"
         update_progress()
         add_log(f"✅ Clean text: {len(pymupdf_text):,} → {len(pymupdf_clean_text):,} chars")
+
+        # Save LLM diff report (what did the LLM remove/change?)
+        _diff_report = getattr(clean_extracted_text, '_last_diff_report', None)
+        if _diff_report:
+            diff_path = pymupdf_json_path.replace("_pymupdf_report.json", "_clean_diff.txt")
+            with open(diff_path, "w", encoding="utf-8") as df:
+                df.write(_diff_report)
+            add_log(f"📋 LLM diff report saved")
 
         # Rebuild report context using cleaned text for better anchor matching
         if pymupdf_report:
@@ -2149,6 +2169,14 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
 
         if not opus.save_text_file(converted_text, output_path):
             raise Exception(f"Failed to save output to {output_path}")
+
+        # Save LLM diff report for hybrid mode
+        _diff_report = getattr(opus.convert_pdf_hybrid_text, '_last_diff_report', None)
+        if _diff_report:
+            diff_path = output_path.replace("_hybrid.txt", "_clean_diff.txt")
+            with open(diff_path, "w", encoding="utf-8") as df:
+                df.write(_diff_report)
+            add_log(f"📋 LLM diff report saved: {diff_path}")
 
         st.session_state.step_status[4] = "✅"
         update_progress()
@@ -2530,58 +2558,77 @@ def show_simple_ui():
     )
 
     if _has_results and (_is_single_done or _is_batch_done):
-        # ── Compact info bar for completed results ────────────────────────
-        if _is_batch_done:
-            _n_total = len(st.session_state.get('batch_pdf_paths', st.session_state.batch_results))
-            _n_ok = sum(1 for r in st.session_state.batch_results if r.get('status') == 'success')
-            st.markdown(
-                f'<div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; '
-                f'padding:12px 20px; display:flex; align-items:center; gap:12px; margin-bottom:8px; '
-                f'box-shadow:0 1px 4px rgba(0,0,0,.04);">'
-                f'<span style="font-size:1.2rem;">📦</span>'
-                f'<span style="font-weight:600; color:#1e293b;">Batch: {_n_total} files</span>'
-                f'<span style="margin-left:auto; color:#16a34a; font-weight:600; font-size:0.85rem;">'
-                f'✅ {_n_ok}/{_n_total} Processed</span>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-        elif st.session_state.get('temp_pdf_path'):
-            _fname = st.session_state.get('last_uploaded_file_id', '').rsplit('_', 1)[0] or Path(st.session_state.temp_pdf_path).name
-            _state_code = st.session_state.get('detected_state', '')
-            _state_name = US_STATE_NAMES.get(_state_code, '') if _state_code else ''
-            _state_badge = (
-                f'<span style="background:#e0e7ff; color:#3730a3; padding:2px 10px; '
-                f'border-radius:12px; font-size:0.78rem; font-weight:600; margin-left:8px;">'
-                f'🏛️ {_state_code} — {_state_name}</span>'
-            ) if _state_code else ''
-            st.markdown(
-                f'<div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; '
-                f'padding:12px 20px; display:flex; align-items:center; gap:12px; margin-bottom:8px; '
-                f'box-shadow:0 1px 4px rgba(0,0,0,.04);">'
-                f'<span style="font-size:1.2rem;">📄</span>'
-                f'<span style="font-weight:600; color:#1e293b;">{_fname}</span>'
-                f'{_state_badge}'
-                f'<span style="margin-left:auto; color:#16a34a; font-weight:600; font-size:0.85rem;">✅ Processed</span>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-        # File uploader — always visible for uploading new files
-        # Key is auto-bumped when batch completes, so uploader starts fresh
-        st.markdown(
-            '<p style="font-size:0.88rem; font-weight:600; color:#475569; margin:12px 0 4px;">'
-            '📁 Upload new file(s)</p>',
-            unsafe_allow_html=True,
-        )
+        # ── Clean results header — hide upload clutter ────────────────────
+        _col_info, _col_btn = st.columns([5, 1])
+        with _col_info:
+            if _is_batch_done:
+                _n_total = len(st.session_state.get('batch_pdf_paths', st.session_state.batch_results))
+                _n_ok = sum(1 for r in st.session_state.batch_results if r.get('status') == 'success')
+                st.markdown(
+                    f'<div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; '
+                    f'padding:12px 20px; display:flex; align-items:center; gap:12px; margin-bottom:8px; '
+                    f'box-shadow:0 1px 4px rgba(0,0,0,.04);">'
+                    f'<span style="font-size:1.2rem;">📦</span>'
+                    f'<span style="font-weight:600; color:#1e293b;">Batch: {_n_total} files</span>'
+                    f'<span style="margin-left:auto; color:#16a34a; font-weight:600; font-size:0.85rem;">'
+                    f'✅ {_n_ok}/{_n_total} Processed</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+            elif st.session_state.get('temp_pdf_path'):
+                _fname = st.session_state.get('last_uploaded_file_id', '').rsplit('_', 1)[0] or Path(st.session_state.temp_pdf_path).name
+                _state_code = st.session_state.get('detected_state', '')
+                _state_name = US_STATE_NAMES.get(_state_code, '') if _state_code else ''
+                _state_badge = (
+                    f'<span style="background:#e0e7ff; color:#3730a3; padding:2px 10px; '
+                    f'border-radius:12px; font-size:0.78rem; font-weight:600; margin-left:8px;">'
+                    f'🏛️ {_state_code} — {_state_name}</span>'
+                ) if _state_code else ''
+                st.markdown(
+                    f'<div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; '
+                    f'padding:12px 20px; display:flex; align-items:center; gap:12px; margin-bottom:8px; '
+                    f'box-shadow:0 1px 4px rgba(0,0,0,.04);">'
+                    f'<span style="font-size:1.2rem;">📄</span>'
+                    f'<span style="font-weight:600; color:#1e293b;">{_fname}</span>'
+                    f'{_state_badge}'
+                    f'<span style="margin-left:auto; color:#16a34a; font-weight:600; font-size:0.85rem;">✅ Processed</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+        with _col_btn:
+            if st.button("📄 New Document", type="primary", use_container_width=True):
+                # Reset all processing state so user can upload a fresh file
+                st.session_state.processed_file_path = None
+                st.session_state.temp_pdf_path = None
+                st.session_state.last_uploaded_file_id = None
+                st.session_state.processed_file_data = None
+                st.session_state.processing_logs = []
+                st.session_state.step_timings = {}
+                st.session_state.total_elapsed_secs = 0
+                st.session_state.conversion_elapsed_secs = 0
+                st.session_state.audit_excel_path = None
+                st.session_state.audit_highlighted_dir = None
+                st.session_state.audit_json_report = None
+                st.session_state.content_accuracy_report = None
+                st.session_state.gpt_audit_failed = False
+                st.session_state.batch_results = []
+                st.session_state.batch_processing = False
+                st.session_state.batch_current_idx = 0
+                st.session_state.batch_pdf_paths = []
+                st.session_state.batch_file_names = []
+                st.session_state.batch_selected_file = 0
+                st.session_state.batch_upload_id = None
+                st.session_state.uploader_key_counter = st.session_state.get('uploader_key_counter', 0) + 1
+                st.session_state.batch_worker = None
+                for _vri_key in ("vri_fixed_ids", "vri_ignored_ids", "vri_undo_history",
+                                 "vri_selected_item", "vri_current_page", "vri_filter_mode",
+                                 "vri_last_sel", "vri_edit_mode", "vri_file_key",
+                                 "vri_per_file_state"):
+                    st.session_state.pop(_vri_key, None)
+                st.rerun()
 
-        _uploader_key = f"pdf_uploader_{st.session_state.uploader_key_counter}"
-        uploaded_files = st.file_uploader(
-            "Choose PDF file(s) to process",
-            type=['pdf'],
-            accept_multiple_files=True,
-            key=_uploader_key,
-            help="Upload one or more PDF files (max 15 pages each)",
-            label_visibility="collapsed",
-        )
+        # No file uploader shown — results take full space
+        uploaded_files = []
     else:
         # Full upload section — before processing
         st.header("📁 Upload PDF Files")
@@ -2888,18 +2935,6 @@ def show_simple_ui():
                                 st.session_state.temp_pdf_path = None
                                 st.session_state.last_uploaded_file_id = None
                                 st.stop()
-                        # ── Broad-margin auto-crop ────────────────────────────
-                        if auto_crop_if_needed is not None:
-                            with st.spinner("📐 Checking PDF margins..."):
-                                cropped_path = auto_crop_if_needed(temp_path)
-                            if cropped_path != temp_path:
-                                # Replace temp with cropped version
-                                try:
-                                    os.remove(temp_path)
-                                except Exception:
-                                    pass
-                                temp_path = cropped_path
-                                st.info("✂️ PDF had broad margins — auto-cropped for better extraction.")
                         # ──────────────────────────────────────────────────────
                         st.session_state.temp_pdf_path = temp_path
                         st.session_state.last_uploaded_file_id = current_file_id
@@ -2929,13 +2964,16 @@ def show_simple_ui():
 
             show_single_file_processing()
     else:
-        # No files in uploader — but check if we have batch results or active worker
-        if st.session_state.get('batch_processing') and st.session_state.get('batch_worker'):
+        # No files in uploader — but check if we have results or active worker
+        if _has_results and _is_single_done:
+            # Results already exist — show them directly (upload hidden by "New Document" UI)
+            show_single_file_processing()
+        elif st.session_state.get('batch_processing') and st.session_state.get('batch_worker'):
             # Worker still running (uploader was cleared by key bump) — show live UI
             show_batch_processing()
-        elif st.session_state.get('batch_results'):
-            n_files = len(st.session_state.batch_pdf_paths)
-            if len(st.session_state.batch_results) >= n_files and n_files > 0:
+        elif st.session_state.get('batch_results') or (_has_results and _is_batch_done):
+            n_files = len(st.session_state.batch_pdf_paths) if st.session_state.get('batch_pdf_paths') else len(st.session_state.get('batch_results', []))
+            if st.session_state.get('batch_results') and len(st.session_state.batch_results) >= n_files and n_files > 0:
                 show_batch_results_section()
             else:
                 # Partial results exist but worker stopped — show what we have
@@ -3797,7 +3835,9 @@ class BatchWorker:
                 pymupdf_clean_text = clean_extracted_text(
                     pymupdf_text,
                     state_code=detected_state,
+                    pdf_path=pdf_path,
                     anthropic_client=client,
+                    mark_brackets=_mark_flags.get("mark_brackets", False),
                 )
                 pymupdf_clean_text = consolidate_adjacent_tags(pymupdf_clean_text)
                 pymupdf_clean_text = opus.remove_nested_tags(pymupdf_clean_text)
@@ -3816,6 +3856,14 @@ class BatchWorker:
                 with open(pymupdf_clean_path, "w", encoding="utf-8") as cf:
                     cf.write(pymupdf_clean_text)
                 add_log(f"✅ Clean text saved: {len(pymupdf_text):,} → {len(pymupdf_clean_text):,} chars")
+
+                # Save LLM diff report
+                _diff_report = getattr(clean_extracted_text, '_last_diff_report', None)
+                if _diff_report:
+                    diff_path = pymupdf_clean_path.replace("_pymupdf_clean.txt", "_clean_diff.txt")
+                    with open(diff_path, "w", encoding="utf-8") as df:
+                        df.write(_diff_report)
+                    add_log(f"📋 LLM diff report saved")
 
                 # Rebuild report context using cleaned text for better anchor matching
                 if pymupdf_report:

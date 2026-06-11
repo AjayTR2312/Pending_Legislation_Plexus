@@ -59,9 +59,30 @@ STRIKETHROUGH_TOL_PT    = 3.0   # line within N pt of vertical centre
 HORIZONTAL_SLOPE_TOL    = 0.5   # max abs(dy) for a line to count as horizontal
 CHAR_OVERLAP_RATIO      = 0.30  # line must overlap ≥30 % of char width
 
+# --- Geometric paragraph-break detection (within a single text block) ------
+# PyMuPDF often groups every line on a page into a single block, destroying
+# paragraph boundaries.  We recover them by looking at the left-x of each
+# line: in legislative PDFs, the FIRST line of a paragraph is "first-line
+# indented" by ~3 ems relative to the wrapped continuation lines.
+#
+# A line is treated as a paragraph start if its left-x exceeds the block's
+# continuation baseline by more than PARA_INDENT_DELTA_PT points.
+PARA_INDENT_DELTA_PT     = 20.0  # min jump (pt) above continuation x for a new para
+LINE_NUMBER_MAX_WIDTH_PT = 50.0  # narrow lines (e.g. "line 12") that aren't text
+# When PyMuPDF splits ONE physical PDF line into two `tl` dicts because of a
+# big horizontal gap (e.g. "5200.<gap>(a) Not less than…"), the two dicts
+# share the same y-coordinate.  We treat consecutive lines whose y-mids
+# differ by ≤ SAME_ROW_Y_TOL points as a single physical row.
+SAME_ROW_Y_TOL_PT        = 2.0   # max y-mid delta for same-physical-row
+
 # Tag delimiters (match the project convention)
 ADD_OPEN, ADD_CLOSE = "[A>", "<A]"
 DEL_OPEN, DEL_CLOSE = "[D>", "<D]"
+
+# California margin line-number marker, e.g. "line 1", " line 27"
+# Used to skip these narrow lines entirely during paragraph-break detection
+# so they don't pollute the continuation-x baseline calculation.
+_RE_CA_LINE_MARKER = re.compile(r"^\s*line\s+\d+\s*$", re.IGNORECASE)
 
 # Small-caps font detection: fonts that render lowercase as visual capitals
 # e.g. MinionPC (Petite Caps), *-SC (Small Caps)
@@ -393,17 +414,109 @@ def _extract_page_tagged_text(
             output.append("\n\n")
         first_block = False
 
+        # ── Determine this block's "continuation x" baseline ─────────────
+        # Wrapped lines align at the block's leftmost x; the first line of
+        # a paragraph is indented ~30pt to the right.  We compute the
+        # baseline from the lines that LOOK like wrapped continuations:
+        # full-width (so they are real text, not narrow line-number
+        # markers) and not a California margin marker.
+        block_lines = block.get("lines", [])
+        candidate_xs: List[float] = []
+        for _ln in block_lines:
+            _lbb = _ln.get("bbox", (0, 0, 0, 0))
+            _lwidth = _lbb[2] - _lbb[0]
+            if _lwidth < LINE_NUMBER_MAX_WIDTH_PT:
+                continue  # skip narrow margin markers
+            # Collect text from BOTH rawdict (chars) and dict (text) so
+            # the marker regex works regardless of which mode was used.
+            _ltxt = ""
+            for _s in _ln.get("spans", []):
+                _cd = _s.get("chars", [])
+                if _cd:
+                    _ltxt += "".join(c.get("c", "") for c in _cd)
+                else:
+                    _ltxt += _s.get("text", "")
+            if _RE_CA_LINE_MARKER.match(_ltxt):
+                continue  # skip "line N" markers
+            candidate_xs.append(_lbb[0])
+        # Continuation baseline = minimum left-x of the real text lines.
+        # If a block has no qualifying lines (e.g. a single-line header),
+        # the threshold will never trigger and behaviour matches the old
+        # \n-only path.
+        continuation_x = min(candidate_xs) if candidate_xs else None
+        para_indent_threshold = (
+            continuation_x + PARA_INDENT_DELTA_PT
+            if continuation_x is not None else None
+        )
+
         first_line_in_block = True
-        for line in block.get("lines", []):
+        prev_line_y_mid: Optional[float] = None
+        for line in block_lines:
+            lbbox_full = line.get("bbox", (0, 0, 0, 0))
+            line_x0 = lbbox_full[0]
+            line_width = lbbox_full[2] - lbbox_full[0]
+            line_y_mid = (lbbox_full[1] + lbbox_full[3]) / 2
+
+            # --- Skip California margin "line N" markers entirely ---
+            # They sit on the same y-row as the real text line they
+            # number, so emitting them would (a) double the line count
+            # and (b) destroy the paragraph-indent signal for the line
+            # that follows on the same row.
+            #
+            # IMPORTANT: collect text from BOTH rawdict (chars) AND dict
+            # (span text) so the marker regex works regardless of which
+            # mode was used.  In rawdict, span["text"] is empty.
+            line_raw_text = ""
+            for _sp in line.get("spans", []):
+                _cd = _sp.get("chars", [])
+                if _cd:
+                    line_raw_text += "".join(c.get("c", "") for c in _cd)
+                else:
+                    line_raw_text += _sp.get("text", "")
+            if (line_width < LINE_NUMBER_MAX_WIDTH_PT
+                    and _RE_CA_LINE_MARKER.match(line_raw_text)):
+                continue
+
             if not first_line_in_block:
-                # Line break within same block — close tags before \n,
-                # they will be reopened if decoration continues on next line.
-                if in_add:
-                    output.append(ADD_CLOSE); in_add = False
-                if in_del:
-                    output.append(DEL_CLOSE); in_del = False
-                output.append("\n")
+                # Detect same-physical-row split: PyMuPDF sometimes splits
+                # ONE PDF line into multiple `tl` dicts when there's a
+                # large horizontal gap between text runs (e.g. "5200."
+                # followed by a wide indent then "(a) Not less than…").
+                # Both dicts share the same y-coordinate but have very
+                # different x-coordinates.  We must NOT treat the second
+                # one as a new paragraph — it's literally the same line.
+                same_physical_row = (
+                    prev_line_y_mid is not None
+                    and abs(line_y_mid - prev_line_y_mid) <= SAME_ROW_Y_TOL_PT
+                )
+
+                if same_physical_row:
+                    # Close tags + emit a single space.  The downstream
+                    # `consolidate_adjacent_tags` (Phase 1a) will merge
+                    # the resulting "<T] [T>" pair into one tag span.
+                    if in_add:
+                        output.append(ADD_CLOSE); in_add = False
+                    if in_del:
+                        output.append(DEL_CLOSE); in_del = False
+                    output.append(" ")
+                else:
+                    # Decide separator BEFORE emitting this line.
+                    # A first-line-indented line starts a NEW paragraph
+                    # (\n\n); otherwise it's a wrapped continuation of
+                    # the prior line (single \n, same as before).
+                    is_para_start = (
+                        para_indent_threshold is not None
+                        and line_x0 >= para_indent_threshold
+                    )
+                    # Close tags before the break — they will be reopened
+                    # if the decoration continues on the next line.
+                    if in_add:
+                        output.append(ADD_CLOSE); in_add = False
+                    if in_del:
+                        output.append(DEL_CLOSE); in_del = False
+                    output.append("\n\n" if is_para_start else "\n")
             first_line_in_block = False
+            prev_line_y_mid = line_y_mid
 
             # --- Skip ALL decoration tagging for lines inside a table zone ---
             # Table cell borders are often short horizontal lines that slip
@@ -587,14 +700,26 @@ def _extract_page_spans(page: fitz.Page) -> List[TextSpan]:
 
 _RE_EMPTY_ADD = re.compile(r"\[A>\s*<A\]")
 _RE_EMPTY_DEL = re.compile(r"\[D>\s*<D\]")
-_RE_MERGE_ADD = re.compile(r"<A\]\s*\[A>")
-_RE_MERGE_DEL = re.compile(r"<D\]\s*\[D>")
-# Matches margin line numbers at start of a line
-_RE_LINE_NUMBER = re.compile(r"^\s*line\s+\d+\s*", re.MULTILINE)
+# Merge adjacent same-type tags that are separated only by intra-paragraph
+# whitespace (spaces, tabs, or a single soft line wrap).  CRITICALLY this
+# pattern must NOT eat a paragraph break (\n\n) — two italic paragraphs that
+# happen to sit adjacent in a digest must remain separate, not be welded
+# together into one giant [A>…<A] span.
+#
+# Matches: "<A] [A>", "<A]\t[A>", "<A]\n[A>" (with optional surrounding spaces)
+# Rejects: "<A]\n\n[A>"  (paragraph boundary — left alone)
+_RE_MERGE_ADD = re.compile(r"<A\][ \t]*\n?[ \t]*\[A>")
+_RE_MERGE_DEL = re.compile(r"<D\][ \t]*\n?[ \t]*\[D>")
+# Matches margin line numbers at start of a line.
+# IMPORTANT: trailing class is [ \t]* (NOT \s*) so it doesn't consume the
+# trailing newlines.  Eating newlines would collapse paragraph breaks that
+# the extractor emits as \n\n right after a "line N" marker line.
+_RE_LINE_NUMBER = re.compile(r"^[ \t]*line[ \t]+\d+[ \t]*", re.MULTILINE)
 # Matches margin line numbers sandwiched between tag boundaries
 # e.g.  "<A] line 40 [A>"  or  "<A]\n line 6\n"  (across lines)
+# Same rationale as above: keep [ \t]* on the right to preserve \n.
 _RE_LINE_NUMBER_BETWEEN_TAGS = re.compile(
-    r"(<[AD]\])\s*line\s+\d+\s*", re.MULTILINE
+    r"(<[AD]\])[ \t]*line[ \t]+\d+[ \t]*", re.MULTILINE
 )
 
 
@@ -1474,8 +1599,32 @@ def clean_extracted_text(
     if pdf_path:
         metadata_prefix = extract_page_metadata(pdf_path)
 
-    # Build the user message: metadata (if any) + raw text
-    user_content = metadata_prefix + raw_text
+    # ── Pre-clean raw text BEFORE sending to LLM ──────────────────
+    # The raw _pymupdf.txt may contain:
+    #   • Margin line numbers ("line 1", "line 2", …) for CA bills
+    #   • Adjacent same-type tags split across line wraps:
+    #       [A>SECTION 1.<A]\n line 2 [A>to read:<A]
+    # The LLM is unreliable at merging these split tags — it sometimes
+    # drops the second tag entirely (case observed: AB 502 page 3 lost
+    # the `[A>to read:<A]` wrapper).  By pre-merging deterministically
+    # with `_clean_tagged_text`, the LLM only sees:
+    #       [A>SECTION 1. ... to read:<A]
+    # which it just has to preserve verbatim.
+    #
+    # This is safe for ALL states — `_RE_LINE_NUMBER` only matches the
+    # literal "line N" pattern (CA-specific) and is a no-op elsewhere.
+    # The tag-merge regexes only collapse adjacent same-type tags
+    # separated by a single newline (within-paragraph), preserving
+    # paragraph breaks (\n\n).
+    pre_cleaned = _clean_tagged_text(raw_text, strip_line_numbers=True)
+    if pre_cleaned != raw_text:
+        logger.info(
+            "🧹 Pre-cleaned raw text before LLM: %d → %d chars (line numbers stripped, split tags merged)",
+            len(raw_text), len(pre_cleaned),
+        )
+
+    # Build the user message: metadata (if any) + pre-cleaned text
+    user_content = metadata_prefix + pre_cleaned
 
     logger.info(
         "🧹 Cleaning extracted text with %s (state=%s, metadata=%d chars) …",
@@ -1519,12 +1668,15 @@ def clean_extracted_text(
     }
 
     # ── Generate diff report BEFORE any post-processing ──────────────
-    # This captures what the LLM itself changed (not Python post-processing).
-    diff_report = _generate_clean_diff_report(raw_text, cleaned, stage="LLM Clean")
+    # This captures what the LLM itself changed.  Compare against the
+    # pre-cleaned text (what the LLM actually saw), not the original raw
+    # text — that way the report measures only the LLM's edits, not the
+    # deterministic line-number/tag-merge cleanup.
+    diff_report = _generate_clean_diff_report(pre_cleaned, cleaned, stage="LLM Clean")
 
     logger.info(
-        "✅ Cleaned text: %d → %d chars",
-        len(raw_text), len(cleaned),
+        "✅ Cleaned text: %d → %d → %d chars (raw → pre-cleaned → LLM)",
+        len(raw_text), len(pre_cleaned), len(cleaned),
     )
 
     # ── bracket-to-[D>] tagging (runs AFTER LLM to avoid confusing it) ──
@@ -1552,6 +1704,10 @@ def clean_extracted_text(
     cleaned = remove_nested_tags(cleaned)
     cleaned = merge_split_tags(cleaned)
     cleaned = split_tagged_subsections(cleaned)
+    # Restore paragraph breaks at renumber-only [D>(N)<D] [A>(M)<A] pairs
+    # that the LLM tends to collapse onto a single line.  See the docstring
+    # of `split_renumber_paragraph_breaks` for the detection rules.
+    cleaned = split_renumber_paragraph_breaks(cleaned)
 
     # Store the diff report for the caller to retrieve and save
     clean_extracted_text._last_diff_report = diff_report
@@ -1635,10 +1791,16 @@ def consolidate_adjacent_tags(text: str) -> str:
     text = _split_d.sub(r'\1\n\n\2', text)
 
     # ── Phase 2: cross-line merging (has newline), respecting markers ─
-    _adj_a_cross = _re.compile(r'<A\]\s*\n\s*\[A>' + _NO_MERGE)
+    # IMPORTANT: pattern is [ \t]*\n[ \t]*  (exactly ONE newline) — NOT
+    # \s*\n\s* which would also match paragraph breaks (\n\n) and weld
+    # together two adjacent digest paragraphs (e.g. the italic LCD digest
+    # in California bills where every paragraph starts with "Existing law…"
+    # or "This bill would…" — neither matches _NO_MERGE, so they would all
+    # collapse into one giant [A>…<A] block without this guard).
+    _adj_a_cross = _re.compile(r'<A\][ \t]*\n[ \t]*\[A>' + _NO_MERGE)
     while _adj_a_cross.search(text):
         text = _adj_a_cross.sub(' ', text)
-    _adj_d_cross = _re.compile(r'<D\]\s*\n\s*\[D>' + _NO_MERGE)
+    _adj_d_cross = _re.compile(r'<D\][ \t]*\n[ \t]*\[D>' + _NO_MERGE)
     while _adj_d_cross.search(text):
         text = _adj_d_cross.sub(' ', text)
 
@@ -1716,9 +1878,12 @@ def merge_split_tags(text: str) -> str:
         same_sub = r'\n<' + tag_type + r'\]\[' + tag_type + r'>'
         text = re.sub(same_sub, '<' + tag_type + ']\n\n[' + tag_type + '>', text)
         # 3) Cross-line joins: <T]\n[T> continuation
+        # IMPORTANT: gap is [ \t]*\n[ \t]* (exactly ONE newline) — NOT
+        # \s*\n\s* which would also swallow paragraph breaks (\n\n) and
+        # merge two distinct same-type paragraphs into one block.
         cross_line = (
             r'<' + tag_type + r'\]'
-            r'(\s*\n\s*)'
+            r'([ \t]*\n[ \t]*)'
             r'\[' + tag_type + r'>' + _no_sub
         )
         text = re.sub(cross_line, ' ', text)
@@ -1746,8 +1911,16 @@ def split_tagged_subsections(text: str) -> str:
         re.IGNORECASE,
     )
     _nosplit_re = re.compile(
+        # ① "Sec.", "Section", etc. alone at the end of preceding line
         r'(?:^|\n)\s*(?:Sec|Section|Art|Article)\.\s*$'
-        r'|(?<!\$)(?<!\d)(?:\d{2,}\.\d*\.?\s*)$',
+        # ② Multi-digit code-section reference at end (e.g. "234.")
+        r'|(?<!\$)(?<!\d)(?:\d{2,}\.\d*\.?\s*)$'
+        # ③ Fractional section/article number — protects the right half of
+        #    "SEC. 3.5.", "Article 5.7.", "Sec. 1.10." from being mis-detected
+        #    as a new list marker.  Without this, the lookbehind on the
+        #    period after "3" would fool the splitter into treating "5." as
+        #    a fresh subsection marker.
+        r'|(?:^|\W)(?:Sec|Section|Art|Article)\.?\s+\d+\.\s*$',
         re.IGNORECASE,
     )
 
@@ -1796,6 +1969,87 @@ def split_tagged_subsections(text: str) -> str:
     text = re.sub(r'(\[A>)(.*?)(<A\])', _split_block, text, flags=re.DOTALL)
     text = re.sub(r'(\[D>)(.*?)(<D\])', _split_block, text, flags=re.DOTALL)
     return text
+
+
+def split_renumber_paragraph_breaks(text: str) -> str:
+    """
+    Restore paragraph breaks at renumber-only deletion/addition pairs.
+
+    California legislative bills often have **paragraph numbering changes**
+    where the original paragraph marker is shown as deleted (strikethrough)
+    on its own line, followed by the new paragraph marker as an addition
+    (italic) at the start of the renumbered paragraph::
+
+        [D>(7)<D]                           ← deleted marker, alone on line
+                                            ← (blank line in PDF layout)
+        [A>(8)<A] "Malice" means …          ← new paragraph
+
+    Or for **section renumbering** (when entire SEC. blocks are inserted
+    or removed, shifting subsequent SEC. numbers)::
+
+        [D>SEC. 5.<D]                       ← deleted SEC. number
+        [A>SEC. 8.<A] Section 7334 of the Business and Professions Code …
+
+    Or for **statute number renumbering** (when a code section number is
+    shifted because earlier sections were inserted/removed)::
+
+        [D>2182.<D]                         ← deleted statute number
+        [A>2183.<A] This chapter shall become operative …
+
+    The pre-clean step preserves this layout (``\\n\\n`` between the two
+    tags), but the LLM cleanup pass tends to **collapse** the gap into a
+    single space::
+
+        [D>(7)<D] [A>(8)<A] "Malice" means …
+        [D>SEC. 5.<D] [A>SEC. 8.<A] Section 7334 of …
+        [D>2182.<D] [A>2183.<A] This chapter shall become operative …
+
+    This function detects that pattern and **restores the paragraph
+    break** (``\\n\\n``) between the markers, so the output mirrors the
+    PDF's visual layout — exactly what the user sees on the printed page.
+
+    Detection criteria (ALL must hold):
+
+    1. A deletion tag containing **only** a recognised marker:
+       - parenthesised:  ``(7)``, ``(ii)``, ``(B)``
+       - section header: ``SEC. 5.``, ``SECTION 1.`` (with trailing period)
+       - statute number: ``2182.``, ``2181.5.`` (bare digits with trailing period)
+    2. Followed by spaces/tabs only (no newline) — i.e. the LLM has
+       already collapsed the original ``\\n\\n``.
+    3. Followed by an addition tag containing **only** a recognised marker.
+    4. Followed by at least one non-whitespace character (paragraph
+       content must follow).
+
+    Inline phrase replacements are **not** affected because their tags
+    contain full phrases (not just markers), e.g.::
+
+        Fiscal committee: [D>yes <D][A>no<A].
+        ↑ tag contents "yes "/"no" — no match
+
+        paragraph[D> (2) or (3).<D] [A>(2).<A]
+        ↑ deletion has trailing text "or (3)." after marker — no match
+
+        Introduced by Assembly[D> Member Pellerin<D] [A>Members …<A]
+        ↑ deletion is a multi-word phrase — no match
+    """
+    # Marker patterns (alternation):
+    #   • Parenthesised ID: (1)  (10)  (a)  (B)  (i)  (vii)  (iii)
+    #   • Section header:   SEC. 5.   SEC. 10.   SECTION 1.
+    #   • Statute number:   2182.   5301.   2181.5.   (bare digits + trailing dot)
+    marker_paren   = r"\(\s*[a-zA-Z0-9]{1,6}\s*\)"
+    marker_section = r"(?:SEC\.|SECTION)\s+\d{1,4}\.?"
+    marker_statute = r"\d{1,5}(?:\.\d{1,4})?\."
+    marker = r"(?:" + marker_paren + r"|" + marker_section + r"|" + marker_statute + r")"
+
+    pattern = re.compile(
+        r"(\[D>\s*" + marker + r"\s*<D\])"   # \1: [D>(marker)<D]
+        r"[ \t]+"                             # spaces/tabs only — no newline
+        r"(\[A>\s*" + marker + r"\s*<A\])"   # \2: [A>(marker)<A]
+        r"[ \t]+"                             # whitespace before content
+        r"(?=\S)"                             # at least one non-ws char follows
+    )
+
+    return pattern.sub(r"\1\n\n\2 ", text)
 
 
 def extract_pdf_summary(pdf_path: str | Path) -> dict:

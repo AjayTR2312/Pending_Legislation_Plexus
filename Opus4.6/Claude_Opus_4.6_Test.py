@@ -80,6 +80,7 @@ try:
         _strip_in_artifacts, _strip_in_header_tags,
         _strip_ks_header_tags,
         remove_nested_tags, merge_split_tags, split_tagged_subsections,
+        split_renumber_paragraph_breaks,
     )
     _HAS_PYMUPDF = True
 except ImportError:
@@ -1439,6 +1440,10 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         merged = remove_nested_tags(merged)
         merged = merge_split_tags(merged)
         merged = split_tagged_subsections(merged)
+        # Restore paragraph breaks at renumber-only [D>(N)<D] [A>(M)<A] /
+        # [D>SEC. N.<D] [A>SEC. M.<A] / [D>2182.<D] [A>2183.<A] pairs that
+        # the chunk-level LLM clean tends to collapse onto a single line.
+        merged = split_renumber_paragraph_breaks(merged)
 
         total_time = time.time() - start_time
         minutes = int(total_time // 60)
