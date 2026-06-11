@@ -1708,6 +1708,35 @@ def clean_extracted_text(
     # that the LLM tends to collapse onto a single line.  See the docstring
     # of `split_renumber_paragraph_breaks` for the detection rules.
     cleaned = split_renumber_paragraph_breaks(cleaned)
+    # ── KS-specific: re-join LLM-inserted paragraph breaks between a
+    #    "K.S.A. <num> is hereby amended to read as follows:" intro and
+    #    the statute body that immediately follows.  The PDF/raw PyMuPDF
+    #    text has these on the same paragraph; the LLM tends to split
+    #    them.  Scoped to KS only because the function relies on KS
+    #    statute-numbering conventions; running it elsewhere would be a
+    #    no-op but the explicit guard keeps state-specific logic in one
+    #    obvious place (mirrors the `_strip_ks_header_tags` pattern
+    #    above).  See `rejoin_amendment_intro_breaks` for details.
+    if state_code and state_code.upper() == "KS":
+        cleaned = rejoin_amendment_intro_breaks(cleaned)
+
+    # ── IA / DE / IN-specific: re-join LLM-inserted paragraph breaks
+    #    between [D>marker<D] and [A>marker<A] when the addition
+    #    marker is followed by inline content on the same line.
+    #    Iowa (numeric subsection renumbers like [D>1.<D] [A>2.<A]),
+    #    Delaware (parenthesised paragraph renumbers like
+    #    [D>(6)<D] [A>(4)<A]), and Indiana (parenthesised list
+    #    renumbers like [D>(14)<D] [A>(15)<A] or roman-numeral
+    #    [D>(i)<D] [A>(A)<A]) all keep their renumber pair on the
+    #    same paragraph as the body prose; the LLM sometimes
+    #    misreads this as a header line and adds a false \n\n.
+    #    Scoped to these states only because California uses the
+    #    opposite convention (renumber sits alone on a header line)
+    #    and we explicitly create that layout via
+    #    `split_renumber_paragraph_breaks` for CA bills.  See
+    #    `rejoin_inline_renumber_list_breaks` for details.
+    if state_code and state_code.upper() in {"IA", "DE", "IN"}:
+        cleaned = rejoin_inline_renumber_list_breaks(cleaned)
 
     # Store the diff report for the caller to retrieve and save
     clean_extracted_text._last_diff_report = diff_report
@@ -2123,6 +2152,184 @@ def split_renumber_paragraph_breaks(text: str) -> str:
         return f"{m.group(1)}\n\n{m.group(2)} "
 
     return pattern.sub(_maybe_split, text)
+
+
+def rejoin_amendment_intro_breaks(text: str) -> str:
+    """
+    Re-join LLM-inserted paragraph breaks between a **Kansas** amendment
+    intro phrase and the statute body that follows.
+
+    Background
+    ----------
+    Kansas bills introduce a code section being modified with a phrase
+    like::
+
+        Sec. 3. K.S.A. 40-2,118 is hereby amended to read as follows:
+        40-2,118. (a) For purposes of this act ...
+
+    In the PDF (and in the raw PyMuPDF extraction) these two parts sit
+    on consecutive **lines of the same paragraph** — the second line is
+    just a soft wrap, not a paragraph break.  But when Claude's clean
+    pass reformats the text, it often *misreads* the structure and
+    inserts a real paragraph break (``\\n\\n``) before the statute
+    number, producing::
+
+        Sec. 3. K.S.A. 40-2,118 is hereby amended to read as follows:
+
+        40-2,118. (a) For purposes of this act ...
+
+    That extra blank line breaks the visual flow and doesn't match the
+    PDF.
+
+    Scope: Kansas only
+    ------------------
+    This function is **deliberately scoped to Kansas-style intros** so
+    that it cannot disturb the existing, working output for California,
+    Connecticut or any other state.  The two KS-specific anchors are:
+
+    1. The token ``"K.S.A."`` (Kansas Statutes Annotated) must appear in
+       the same line as ``"amended to read"`` — that is the canonical
+       way every KS bill identifies the section being amended.
+    2. The statute number that follows must be in **KS hyphenated
+       format** ``\\d+-\\d+(?:,\\d+)?(?:[a-z])?\\.`` — for example
+       ``40-2,118.``, ``65-1501.``, ``65-1509a.`` or ``72-3404.``.
+       CA-style decimal numbers like ``234.7.`` or ``2181.5.`` are
+       intentionally **not** matched.
+
+    Detection
+    ---------
+    The pattern requires **all** of:
+
+    1. ``K.S.A.`` somewhere on the same line as the intro phrase.
+    2. ``"amended (and reenacted) to read [as follows]:"`` (case-
+       insensitive) at the end of that line.
+    3. A paragraph break (``\\n\\n``, possibly with surrounding
+       whitespace).
+    4. A KS-format statute number (hyphenated, mandatory trailing
+       ``.``).
+    5. A single whitespace (so the body must have content after the
+       statute number — we never merge into an empty line).
+
+    Replacement: collapse ``"…follows:\\n\\n40-2,118. ..."`` →
+    ``"…follows: 40-2,118. ..."`` (single space).
+
+    Why this is safe for non-Kansas output
+    --------------------------------------
+    - California / Connecticut / federal bills do **not** use
+      ``K.S.A.`` — that token is a Kansas exclusive.
+    - The statute-number regex requires a hyphen, which CA decimal
+      numbers (``234.7.``) don't have.
+    - Both anchors must match *together* — there is no realistic way
+      for a non-KS document to satisfy both.
+    """
+    pattern = re.compile(
+        # KS-specific intro anchor: "K.S.A." appears on the same line
+        # as the "amended to read..." phrase, ending in a colon.
+        r'(K\.S\.A\.[^\n]*?'
+        r'amended\s+(?:and\s+reenacted\s+)?to\s+read'
+        r'(?:\s+as\s+follows)?\s*:)'
+        # The false paragraph break we want to remove.
+        r'\s*\n\s*\n\s*'
+        # KS-style statute number — hyphenated, mandatory trailing ".".
+        # Examples: 40-2,118.  65-1501.  65-1509a.  72-3404.
+        # CA-style decimal numbers like 234.7. are intentionally NOT
+        # matched (no hyphen).
+        r'(\d{1,4}-\d{1,4}[a-zA-Z]?(?:,\d{1,4})?\.)(\s)',
+        re.IGNORECASE,
+    )
+    return pattern.sub(r'\1 \2\3', text)
+
+
+def rejoin_inline_renumber_list_breaks(text: str) -> str:
+    """
+    Re-join LLM-inserted false paragraph breaks between a deletion-marker
+    tag (``[D>…<D]``) and an addition-marker tag (``[A>…<A]``) when the
+    addition marker is followed by **inline content** on the same line.
+
+    Used by states whose drafting convention keeps the renumber pair on
+    the same line as the body prose:
+
+    - **Iowa** — numeric subsection renumbers like ``[D>1.<D] [A>2.<A]``.
+    - **Delaware** — parenthesised paragraph renumbers like
+      ``[D>(6)<D] [A>(4)<A]`` or ``[D>(b)<D] [A>(c)<A]``.
+
+    Background
+    ----------
+    Both Iowa and Delaware bills place the renumber pair *inline* with
+    the running text::
+
+        Raw PyMuPDF (correct, IA):
+            [D>1.<D] [A>2.<A] A person who is the parent, guardian, …
+
+        Raw PyMuPDF (correct, DE):
+            [D>(6)<D] [A>(4)<A] Reimbursement of any unreimbursed costs, …
+
+    The LLM clean pass routinely misreads these tag pairs as header
+    lines and inserts a real paragraph break (``\\n\\n``)::
+
+        After LLM (wrong):
+            [D>1.<D]
+
+            [A>2.<A] A person who is the parent, guardian, …
+
+            [D>(6)<D]
+
+            [A>(4)<A] Reimbursement of any unreimbursed costs, …
+
+    Detection
+    ---------
+    The pattern matches **only** when:
+
+    1. ``[D>…<D]`` containing either:
+       * purely-numeric marker  ``\\d+\\.``                e.g. ``1.``
+       * parenthesised marker   ``\\(…\\)`` (1-4 alphanumeric chars)
+                                                            e.g. ``(6)``,
+                                                            ``(b)``, ``(iv)``
+    2. A paragraph break (``\\n\\n``).
+    3. ``[A>…<A]`` with the **same** marker shape (numeric *or*
+       parenthesised — they don't have to match each other; e.g.
+       ``[D>(6)<D]\\n\\n[A>(4)<A]`` is a legitimate DE renumber).
+    4. **Inline** whitespace and content immediately follow — i.e. the
+       lookahead ``(?=[ \\t]+\\S)`` requires a space/tab plus a non-
+       whitespace character on the same line.
+
+    The lookahead is the key safety property.  It distinguishes inline
+    list renumbers from California-style standalone code-section
+    renumbers::
+
+        [D>2182.<D]
+
+        [A>2183.<A] This chapter shall become …
+
+    where the layout in the source PDF puts the section number on its
+    own header line and a blank line separates the addition tag from
+    the body.  But the lookahead alone wouldn't be sufficient — when
+    inline parenthesised renumbers like ``[D>(c)<D]\\n\\n[A>(d)<A] A``
+    appear in a CA file, the regex would match.  That's why the **call
+    site is also gated** by ``state_code in {"IA", "DE"}`` — the
+    function is never even invoked for CA text.  Belt-and-suspenders.
+
+    Why state-scoping matters
+    -------------------------
+    California uses the *opposite* convention: each renumber pair sits
+    alone on its own paragraph above the body (created on purpose by
+    ``split_renumber_paragraph_breaks``).  Running this rejoin against
+    CA / TX / CT bills would silently undo that layout.  IA and DE are
+    the two states that keep the renumber pair inline; we add other
+    states only after empirical confirmation.
+    """
+    # Marker shapes (alternation):
+    #   • Numeric:        1.  10.  42.            (IA convention)
+    #   • Parenthesised:  (a)  (b)  (6)  (iv)     (DE convention)
+    marker = r'(?:\d+\.|\(\s*[a-zA-Z0-9]{1,4}\s*\))'
+
+    pattern = re.compile(
+        r'(\[D>\s*' + marker + r'\s*<D\])'   # \1: deletion marker tag
+        r'\s*\n\s*\n\s*'                      # paragraph break to remove
+        r'(\[A>\s*' + marker + r'\s*<A\])'   # \2: addition marker tag
+        r'(?=[ \t]+\S)',                      # lookahead: inline whitespace + content
+    )
+    return pattern.sub(r'\1 \2', text)
 
 
 def extract_pdf_summary(pdf_path: str | Path) -> dict:
