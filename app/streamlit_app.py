@@ -205,6 +205,40 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
+
+# ─────────────────────────────────────────────────────────────────────────
+# Local-development detection
+# ─────────────────────────────────────────────────────────────────────────
+def _is_local_dev() -> bool:
+    """Return ``True`` when the app is running on a developer machine
+    (i.e. NOT inside a Kubernetes pod or Docker container).
+
+    Used to gate operational/debug-only UI such as the *Session Info*
+    sidebar — useful for developers but noise for end users.
+
+    Detection order
+    ---------------
+    1. Explicit override via ``STREAMLIT_LOCAL_DEV`` env var
+       (``1``/``true``/``yes`` → local; ``0``/``false``/``no`` → prod).
+    2. Kubernetes always sets ``KUBERNETES_SERVICE_HOST`` in pods → prod.
+    3. Docker containers expose ``/.dockerenv`` → prod.
+    4. Default: assume local.
+    """
+    _env = os.environ.get("STREAMLIT_LOCAL_DEV", "").strip().lower()
+    if _env in ("1", "true", "yes"):
+        return True
+    if _env in ("0", "false", "no"):
+        return False
+    if os.environ.get("KUBERNETES_SERVICE_HOST"):
+        return False
+    if os.path.exists("/.dockerenv"):
+        return False
+    return True
+
+
+IS_LOCAL_DEV = _is_local_dev()
+
+
 # Initialize session state with SessionManager with error handling
 try:
     if 'session_id' not in st.session_state:
@@ -2470,21 +2504,29 @@ def show_simple_ui():
     st.markdown('<h1 style="text-align: center;">📄 Pending Legislative Processor</h1>', unsafe_allow_html=True)
     st.markdown('<p class="subtitle" style="text-align: center;">AI-powered text extraction and verification for legislative documents</p>', unsafe_allow_html=True)
     
-    # Session info sidebar
+    # ── Sidebar ────────────────────────────────────────────────────────
+    # Session info (Session ID, Status, Created, System Stats) is a
+    # developer/debug aid — useful when running locally but noise for
+    # end users in production.  We only show it when the app detects
+    # it is running on a local developer machine; in Kubernetes /
+    # Docker deployments only the "New Session" reset button is shown.
     with st.sidebar:
-        st.header("🔧 Session Info")
-        session_info = st.session_state.session_manager.get_session_info(st.session_state.session_id)
-        if session_info:
-            st.text(f"Session ID: {st.session_state.session_id[:8]}...")
-            st.text(f"Status: {session_info['status']}")
-            st.text(f"Created: {session_info['created_at'].strftime('%H:%M:%S')}")
-            
-            # Show session stats
-            stats = st.session_state.session_manager.get_session_stats()
-            st.subheader("📊 System Stats")
-            st.metric("Active Sessions", stats['active_sessions'])
-            st.metric("Processing", stats['processing_sessions'])
-            
+        if IS_LOCAL_DEV:
+            st.header("🔧 Session Info")
+            session_info = st.session_state.session_manager.get_session_info(st.session_state.session_id)
+            if session_info:
+                st.text(f"Session ID: {st.session_state.session_id[:8]}...")
+                st.text(f"Status: {session_info['status']}")
+                st.text(f"Created: {session_info['created_at'].strftime('%H:%M:%S')}")
+
+                # Show session stats
+                stats = st.session_state.session_manager.get_session_stats()
+                st.subheader("📊 System Stats")
+                st.metric("Active Sessions", stats['active_sessions'])
+                st.metric("Processing", stats['processing_sessions'])
+        else:
+            st.header("⚙️ Session")
+
         if st.button("🆕 New Session", help="Start fresh session"):
             # Get old session ID before creating new one
             old_session_id = st.session_state.session_id
@@ -2917,16 +2959,14 @@ def show_simple_ui():
                             with st.spinner("🔍 Analyzing PDF type (scanned vs digital)..."):
                                 pdf_analysis = detect_pdf_type(temp_path)
                             if pdf_analysis and pdf_analysis['type'] == 'scanned':
-                                st.error(
-                                    f"🚫 **Scanned PDF Detected — Cannot Process**\n\n"
+                                st.info(
+                                    f"🛠️ **Scanned PDF Support — Coming Soon**\n\n"
                                     f"The uploaded file **{uploaded_file.name}** appears to be a "
                                     f"**scanned (image-based) PDF**.\n\n"
-                                    f"- **Pages:** {pdf_analysis['total_pages']}\n"
-                                    f"- **Image pages:** {pdf_analysis['image_pages']} "
-                                    f"({pdf_analysis['image_ratio']}%)\n"
-                                    f"- **Avg characters/page:** {pdf_analysis['average_chars_per_page']}\n\n"
-                                    f"This application only supports **digital (text-based) PDFs**. "
-                                    f"Please upload a digital PDF or run OCR on this file first."
+                                    f"Support for scanned PDFs (with OCR) is currently under "
+                                    f"development and will be available in a future release. "
+                                    f"For now, please upload a **digital (text-based) PDF** to "
+                                    f"continue."
                                 )
                                 try:
                                     os.remove(temp_path)
@@ -3255,28 +3295,66 @@ def show_results_section():
     _audit_failed = bool(st.session_state.get('gpt_audit_failed'))
 
     # ── Build tab list dynamically ─────────────────────────────────────────────
+    # Default tab order: PDF ↔ Text Compare first (when available), then Summary,
+    # Validation Review, Activity Log. PDF Compare is the most useful immediate
+    # view after processing completes, so we surface it as the landing tab.
     _method = st.session_state.get('process_method', '')
     _skip_validation = _method in ('pymupdf_clean_only', 'hybrid')
-    tab_labels = ["📊 Summary"]
-    if not _skip_validation and (_has_audit or _has_accuracy or _has_highlighted or _audit_failed) and render_inline_validation_review:
-        tab_labels.append("🔍 Validation Review")
-    # Show PDF ↔ Text Compare tab for Extract+Clean mode (or any mode with PDF available)
     _show_pdf_compare = (
         compare_build_viewer_html is not None
         and st.session_state.get('temp_pdf_path')
         and os.path.exists(st.session_state.get('temp_pdf_path', ''))
     )
+    tab_labels = []
     if _show_pdf_compare:
         tab_labels.append("📄 PDF ↔ Text Compare")
+    tab_labels.append("📊 Summary")
+    if not _skip_validation and (_has_audit or _has_accuracy or _has_highlighted or _audit_failed) and render_inline_validation_review:
+        tab_labels.append("🔍 Validation Review")
     if st.session_state.get('processing_logs'):
         tab_labels.append("📋 Activity Log")
 
     tabs = st.tabs(tab_labels)
+    _tab_idx = 0
 
     # ══════════════════════════════════════════════════════════════════════════
-    # TAB 1 — Summary + Download
+    # TAB — PDF ↔ Text Compare (default landing tab when available)
     # ══════════════════════════════════════════════════════════════════════════
-    with tabs[0]:
+    if _show_pdf_compare:
+        with tabs[_tab_idx]:
+            _pdf_path = st.session_state.temp_pdf_path
+            _txt_path = st.session_state.processed_file_path
+            try:
+                with open(_pdf_path, 'rb') as _pf:
+                    _pdf_bytes = _pf.read()
+                # Read the output text (prefer cached bytes)
+                _txt_data = st.session_state.get('processed_file_data')
+                if _txt_data is None:
+                    with open(_txt_path, 'r', encoding='utf-8') as _tf:
+                        _clean_text = _tf.read()
+                else:
+                    _clean_text = _txt_data.decode('utf-8', errors='replace') if isinstance(_txt_data, bytes) else _txt_data
+                _clean_lines = _clean_text.splitlines()
+
+                with st.spinner("Rendering PDF pages & mapping words…"):
+                    _images = compare_render_pdf_pages(_pdf_bytes)
+                    _words = compare_extract_word_bboxes(_pdf_bytes)
+                    _word_map = compare_build_word_level_map(_clean_lines, _words)
+
+                _viewer_html = compare_build_viewer_html(
+                    _images, _clean_lines, _word_map,
+                    filename=Path(_txt_path).name,
+                )
+                st.components.v1.html(_viewer_html, height=920, scrolling=False)
+            except Exception as _cmp_err:
+                st.error(f"❌ Could not render PDF ↔ Text Compare viewer: {_cmp_err}")
+                logging.error(f"PDF Compare viewer error: {_cmp_err}", exc_info=True)
+        _tab_idx += 1
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # TAB — Summary + Download
+    # ══════════════════════════════════════════════════════════════════════════
+    with tabs[_tab_idx]:
         # ── Summary data ───────────────────────────────────────────────────
         _state_label = ""
         if st.session_state.get('detected_state'):
@@ -3408,11 +3486,11 @@ def show_results_section():
                     """, unsafe_allow_html=True)
             except Exception:
                 pass  # audit metrics are nice-to-have; don't break Summary tab
+    _tab_idx += 1
 
     # ══════════════════════════════════════════════════════════════════════════
-    # TAB 2 — Validation Review (only if audit data exists)
+    # TAB — Validation Review (only if audit data exists)
     # ══════════════════════════════════════════════════════════════════════════
-    _tab_idx = 1
     if not _skip_validation and (_has_audit or _has_accuracy or _has_highlighted or _audit_failed) and render_inline_validation_review:
         with tabs[_tab_idx]:
             render_inline_validation_review(
@@ -3423,40 +3501,6 @@ def show_results_section():
                 accuracy_report=st.session_state.get('content_accuracy_report'),
                 gpt_audit_failed=_audit_failed,
             )
-        _tab_idx += 1
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # TAB — PDF ↔ Text Compare (side-by-side viewer)
-    # ══════════════════════════════════════════════════════════════════════════
-    if _show_pdf_compare:
-        with tabs[_tab_idx]:
-            _pdf_path = st.session_state.temp_pdf_path
-            _txt_path = st.session_state.processed_file_path
-            try:
-                with open(_pdf_path, 'rb') as _pf:
-                    _pdf_bytes = _pf.read()
-                # Read the output text (prefer cached bytes)
-                _txt_data = st.session_state.get('processed_file_data')
-                if _txt_data is None:
-                    with open(_txt_path, 'r', encoding='utf-8') as _tf:
-                        _clean_text = _tf.read()
-                else:
-                    _clean_text = _txt_data.decode('utf-8', errors='replace') if isinstance(_txt_data, bytes) else _txt_data
-                _clean_lines = _clean_text.splitlines()
-
-                with st.spinner("Rendering PDF pages & mapping words…"):
-                    _images = compare_render_pdf_pages(_pdf_bytes)
-                    _words = compare_extract_word_bboxes(_pdf_bytes)
-                    _word_map = compare_build_word_level_map(_clean_lines, _words)
-
-                _viewer_html = compare_build_viewer_html(
-                    _images, _clean_lines, _word_map,
-                    filename=Path(_txt_path).name,
-                )
-                st.components.v1.html(_viewer_html, height=920, scrolling=False)
-            except Exception as _cmp_err:
-                st.error(f"❌ Could not render PDF ↔ Text Compare viewer: {_cmp_err}")
-                logging.error(f"PDF Compare viewer error: {_cmp_err}", exc_info=True)
         _tab_idx += 1
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -4632,54 +4676,66 @@ def show_single_file_processing():
         )
     )
 
-    # Center the button with columns - wider button in middle
+    # Center the layout with columns
     col1, col2, col3 = st.columns([1, 2, 1])
-    
+
     _pdf_pages = st.session_state.get('_pdf_page_count', 0)
 
+    # ── Auto-trigger processing on upload ──────────────────────────────
+    # No more "🚀 Process Document" / "Extract + Clean" / "Hybrid Mode"
+    # buttons.  The pipeline is chosen automatically:
+    #   • ≤ 15 pages  → PyMuPDF Extract + Clean (cheap, fast, no visual)
+    #   • > 15 pages  → Hybrid Mode (PyMuPDF + chunked LLM cleaning)
+    # We track the file ID we auto-started so processing failures don't
+    # cause an infinite re-trigger loop.  On failure the user sees a
+    # single explicit "Retry" button as a recovery affordance.
+    _current_file_id = st.session_state.get('last_uploaded_file_id')
+    _auto_started_for = st.session_state.get('_auto_started_file_id')
+    _already_triggered = (_auto_started_for == _current_file_id)
+
     with col2:
-        if not st.session_state.processing and not _has_results:
-            # Main process button — only for PDFs ≤ 15 pages
-            if _pdf_pages > 15:
-                st.warning(
-                    f"⚠️ **Document has {_pdf_pages} pages.** "
-                    f"Visual conversion is limited to 15 pages. "
-                    f"Use **Hybrid Mode** or **Extract + Clean Only** below."
-                )
-            else:
-                if st.button("🚀 Process Document", 
-                            type="primary", 
-                            use_container_width=True,
-                            help="Start processing with Claude Opus 4.6 visual conversion"):
-                    st.session_state.processing = True
-                    st.session_state.current_step = 0
-                    st.session_state.processing_time = None
-                    st.session_state.chunk_stats = None
-                    st.session_state.process_method = "claude_opus"
-                    st.session_state.pop('_pymupdf_only_steps', None)
-                    st.rerun()
-            # PyMuPDF Extract + Clean only button — always available
-            if st.button("📄 Extract + Clean Only",
-                        use_container_width=True,
-                        help="PyMuPDF extraction + Claude LLM clean only (no visual conversion, no GPT audit)"):
+        if (not st.session_state.processing
+                and not _has_results
+                and st.session_state.get('temp_pdf_path')
+                and _current_file_id):
+
+            if not _already_triggered:
+                # First time we see this file with no results → kick off
+                # the right pipeline based on page count.
+                if _pdf_pages > 15:
+                    st.session_state.process_method = "hybrid"
+                    _msg = f"📐 Long PDF detected ({_pdf_pages} pages) — running **Hybrid Mode**"
+                else:
+                    st.session_state.process_method = "pymupdf_clean_only"
+                    _msg = "📄 Running **Extract + Clean** pipeline"
+
                 st.session_state.processing = True
                 st.session_state.current_step = 0
                 st.session_state.processing_time = None
                 st.session_state.chunk_stats = None
-                st.session_state.process_method = "pymupdf_clean_only"
+                st.session_state.pop('_pymupdf_only_steps', None)
+                st.session_state._auto_started_file_id = _current_file_id
+
+                logging.info(
+                    f"Auto-triggered {st.session_state.process_method} "
+                    f"for {_pdf_pages}-page PDF"
+                )
+                st.info(_msg)
                 st.rerun()
-            # Hybrid Mode button — only for long PDFs (> 15 pages)
-            if _pdf_pages > 15:
-                if st.button("📐 Hybrid Mode (Long PDF)",
-                            use_container_width=True,
-                            help=f"PyMuPDF extraction + LLM chunk cleaning. Best for long PDFs ({_pdf_pages} pages). Much cheaper than visual mode."):
-                    st.session_state.processing = True
-                    st.session_state.current_step = 0
-                    st.session_state.processing_time = None
-                    st.session_state.chunk_stats = None
-                    st.session_state.process_method = "hybrid"
-                    st.session_state.pop('_pymupdf_only_steps', None)
+            else:
+                # We already attempted processing for this file but it
+                # didn't produce results.  Show a single recovery button.
+                st.error("❌ Processing did not complete for this document.")
+                if st.button(
+                    "🔄 Retry Processing",
+                    type="primary",
+                    use_container_width=True,
+                    help="Re-run the pipeline for the same document",
+                ):
+                    # Force re-trigger on next rerun
+                    st.session_state._auto_started_file_id = None
                     st.rerun()
+
         elif st.session_state.processing:
             # Show processing status only while actively processing
             st.warning("⏳ **Processing...**\n\nPlease wait while we process your document")

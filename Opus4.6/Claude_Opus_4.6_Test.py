@@ -80,7 +80,8 @@ try:
         _strip_in_artifacts, _strip_in_header_tags,
         _strip_ks_header_tags,
         remove_nested_tags, merge_split_tags, split_tagged_subsections,
-        split_renumber_paragraph_breaks,
+        split_renumber_paragraph_breaks, rejoin_amendment_intro_breaks,
+        rejoin_inline_renumber_list_breaks,
     )
     _HAS_PYMUPDF = True
 except ImportError:
@@ -1444,6 +1445,24 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         # [D>SEC. N.<D] [A>SEC. M.<A] / [D>2182.<D] [A>2183.<A] pairs that
         # the chunk-level LLM clean tends to collapse onto a single line.
         merged = split_renumber_paragraph_breaks(merged)
+        # KS-specific: re-join LLM-inserted false paragraph breaks between
+        # a "K.S.A. <num> ... amended to read as follows:" intro and the
+        # statute body that follows.  Scoped to KS only (mirrors the
+        # `_strip_ks_header_tags` block above) so we never disturb output
+        # for CA / CT / IN / etc.
+        if state_code and state_code.upper() == "KS":
+            merged = rejoin_amendment_intro_breaks(merged)
+
+        # IA / DE / IN-specific: re-join LLM-inserted false paragraph
+        # breaks between [D>marker<D] and [A>marker<A] for Iowa
+        # numeric subsection renumbers, Delaware parenthesised
+        # paragraph renumbers, and Indiana parenthesised list
+        # renumbers (all keep their markers on the same paragraph as
+        # the body prose).  Scoped to IA + DE + IN only — California
+        # uses the opposite convention (renumber on its own header
+        # line).
+        if state_code and state_code.upper() in {"IA", "DE", "IN"}:
+            merged = rejoin_inline_renumber_list_breaks(merged)
 
         total_time = time.time() - start_time
         minutes = int(total_time // 60)
