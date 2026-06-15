@@ -246,8 +246,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,san
   background:var(--surface);border-right:1px solid var(--border);margin-right:10px;
 }
 .lc{display:inline;flex:1;min-width:0;outline:none} /* line content wrapper */
-.lc[contenteditable="true"]{caret-color:var(--accent)}
-.lc[contenteditable="true"]:focus{outline:none}
+/* contentEditable is now on the parent #textWrap (not per-.lc) so that
+   selection can span multiple lines.  Caret styling applies whenever
+   the parent is in editing mode.                                      */
+.text-wrap.editing{caret-color:var(--accent);outline:none}
+.text-wrap.editing:focus{outline:none}
+.text-wrap.editing .lc{outline:none}
 .lc .tg-a + .tw .tg-a,
 .lc .tg-d + .tw .tg-d {margin-left:-1px}
 
@@ -639,11 +643,82 @@ function scheduleAutoApply(){
 function enableInlineEditing(){
   var tw=document.getElementById('textWrap');
   tw.classList.add('editing');
-  tw.querySelectorAll('.lc').forEach(function(lc){
-    lc.contentEditable='true';
-    lc.spellcheck=false;
-    lc.addEventListener('input',scheduleAutoApply);
+  // ── Single editable host on the parent ─────────────────────────────
+  // Per-`.lc` contentEditable creates separate editable regions and
+  // browsers refuse to drag-select across them.  Hosting on the parent
+  // gives us ONE editable region → multi-line selection works.
+  tw.contentEditable='true';
+  tw.spellcheck=false;
+  // Protect the gutter (line numbers) from being edited or selected
+  tw.querySelectorAll('.ln').forEach(function(ln){
+    ln.contentEditable='false';
   });
+  // Strip any leftover per-`.lc` contentEditable (avoids nested-host quirks)
+  tw.querySelectorAll('.lc').forEach(function(lc){
+    if(lc.hasAttribute('contenteditable')) lc.removeAttribute('contenteditable');
+    lc.spellcheck=false;
+  });
+  // Bind listeners once, on the parent (re-binds are guarded by flags)
+  if(!tw._inputBound){
+    tw.addEventListener('input',scheduleAutoApply);
+    tw._inputBound=true;
+  }
+  // ── Keyboard interception ─────────────────────────────────────────
+  // With parent-level contentEditable the browser's default Enter
+  // behaviour creates a stray <div> that breaks our `.tl` structure.
+  // Intercept Enter (split current line) and Backspace-at-start
+  // (merge with previous) so editing stays consistent with our
+  // line-based data model.
+  if(!tw._keyBound){
+    tw.addEventListener('keydown',function(e){
+      // Enter — split line at caret
+      if(e.key==='Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey){
+        e.preventDefault();
+        if(typeof splitAtCursor==='function') splitAtCursor();
+        return;
+      }
+      // Backspace at offset 0 of a line — merge with previous
+      if(e.key==='Backspace' && !e.ctrlKey && !e.metaKey && !e.altKey){
+        var sel=window.getSelection();
+        if(!sel||!sel.rangeCount||!sel.isCollapsed) return; // let default delete a non-collapsed selection
+        var range=sel.getRangeAt(0);
+        var lc=range.startContainer;
+        while(lc && !(lc.classList && lc.classList.contains('lc'))) lc=lc.parentNode;
+        if(!lc) return;
+        var off=getTextOffset(lc, range.startContainer, range.startOffset);
+        if(off===0){
+          // At line start — intercept and merge with previous
+          var tl=lc.closest('.tl'); if(!tl) return;
+          var li=parseInt(tl.dataset.li);
+          if(li>0){
+            e.preventDefault();
+            // Set activeEditorLine so mergeWithPrevious knows which line
+            if(typeof setActiveLine==='function') setActiveLine(tl);
+            if(typeof mergeWithPrevious==='function') mergeWithPrevious();
+          }
+        }
+      }
+    });
+    tw._keyBound=true;
+  }
+  // ── Selection-change tracking for active line highlight ───────────
+  // With parent contentEditable the per-line `focusin` doesn't fire on
+  // every caret move, so we listen to selectionchange globally and
+  // update activeEditorLine based on where the caret/anchor lives.
+  if(!document._selBound){
+    document.addEventListener('selectionchange',function(){
+      var sel=window.getSelection();
+      if(!sel||!sel.rangeCount) return;
+      var n=sel.getRangeAt(0).startContainer;
+      var tl=null;
+      while(n){
+        if(n.classList && n.classList.contains('tl')){tl=n;break;}
+        n=n.parentNode;
+      }
+      if(tl && typeof setActiveLine==='function') setActiveLine(tl);
+    });
+    document._selBound=true;
+  }
 }
 function applyInlineEdits(){
   var tw=document.getElementById('textWrap');
@@ -749,6 +824,50 @@ function downloadText(){
 // ── Wrap Selected Text in Tags ────────────────────────────────
 function buildTagIndices(){/* no-op — counts removed */}
 
+// Helper: find the `.tl` (line wrapper) that owns a given selection
+// endpoint container.  Returns {tl, lc, li, off} or null.
+//
+// `isEnd` controls fallback behaviour: when the endpoint is NOT inside
+// a text node (e.g. the user dragged out of the .lc, into the gutter,
+// or released on empty whitespace at end-of-line) we snap to either
+// the START of the nearest line (isEnd=false) or the END (isEnd=true).
+function _resolveSelectionEndpoint(container, offset, isEnd){
+  // Case 1 + 2: walk up looking for an enclosing .lc
+  var lc=container;
+  while(lc && lc.nodeType && !(lc.classList && lc.classList.contains('lc'))){
+    lc=lc.parentNode;
+  }
+  if(lc && lc.classList && lc.classList.contains('lc')){
+    var tl=lc.closest('.tl');
+    if(!tl) return null;
+    var li=parseInt(tl.dataset.li);
+    if(isNaN(li)) return null;
+    var off;
+    if(container === lc){
+      // Endpoint IS the .lc element (no text node) — snap to start/end of line.
+      // lc.textContent is the raw text (including tag markers like [A>),
+      // matching the indexing used for originalLines[li].
+      off = isEnd ? (lc.textContent || '').length : 0;
+    } else {
+      off = getTextOffset(lc, container, offset);
+    }
+    return {tl:tl, lc:lc, li:li, off:off};
+  }
+  // Case 3: endpoint is OUTSIDE any .lc (gutter .ln, wrapper .tl, body, etc.)
+  // — walk up to the nearest .tl and snap.
+  var tl=container;
+  while(tl && tl.nodeType && !(tl.classList && tl.classList.contains('tl'))){
+    tl=tl.parentNode;
+  }
+  if(!tl || !tl.classList || !tl.classList.contains('tl')) return null;
+  lc = tl.querySelector('.lc');
+  if(!lc) return null;
+  var li=parseInt(tl.dataset.li);
+  if(isNaN(li)) return null;
+  var off = isEnd ? (lc.textContent || '').length : 0;
+  return {tl:tl, lc:lc, li:li, off:off};
+}
+
 function wrapTag(type){
   var sel=window.getSelection();
   if(!sel||sel.isCollapsed||!sel.rangeCount){
@@ -756,14 +875,92 @@ function wrapTag(type){
     return;
   }
   var range=sel.getRangeAt(0);
-  var lc=range.startContainer;
-  while(lc&&!(lc.classList&&lc.classList.contains('lc')))lc=lc.parentNode;
-  if(!lc){document.getElementById('statBar').textContent='Select text inside a line';return;}
-  var tl=lc.closest('.tl');if(!tl)return;
-  var li=parseInt(tl.dataset.li);
+  var startEP=_resolveSelectionEndpoint(range.startContainer, range.startOffset, false);
+  var endEP=_resolveSelectionEndpoint(range.endContainer, range.endOffset, true);
+  if(!startEP || !endEP){
+    document.getElementById('statBar').textContent='Select text inside a line';
+    return;
+  }
+
+  // Ensure start <= end (selection might be backwards)
+  if(startEP.li > endEP.li || (startEP.li === endEP.li && startEP.off > endEP.off)){
+    var tmp=startEP; startEP=endEP; endEP=tmp;
+  }
+
+  // ── Single-line path: full existing behaviour (toggle / swap / wrap) ──
+  if(startEP.li === endEP.li){
+    _wrapTagSingleLine(type, startEP.li, startEP.off, endEP.off);
+    return;
+  }
+
+  // ── Multi-line path: span selection across N lines ───────────────────
+  // Strategy: emit ONE tag pair spanning all affected lines.
+  //   • On the FIRST line:  insert [A> (or [D>) at startEP.off
+  //   • On the LAST line:   insert <A] (or <D]) at endEP.off
+  //   • Intermediate lines: left unchanged — they sit inside the open tag
+  // After write-back, the line-renderer's per-line tag-state tracker
+  // (inA / inD threaded through lines.forEach in renderLinesWithTags)
+  // will correctly colour all spanned lines until it hits the closer.
+  if(startEP.off === endEP.off && endEP.li - startEP.li === 0){
+    document.getElementById('statBar').textContent='Select some text first';
+    return;
+  }
+  var openMark = (type==='a') ? '[A>' : '[D>';
+  var closeMark = (type==='a') ? '<A]' : '<D]';
+
+  // ── Detect "selection already wrapped" → toggle OFF instead of nesting ──
+  // Check: does the char-triple BEFORE startEP.off on the first line equal
+  // openMark, AND the char-triple at endEP.off on the last line equal closeMark?
+  var firstLineText = originalLines[startEP.li] || '';
+  var lastLineText  = originalLines[endEP.li]  || '';
+  var beforeStart = firstLineText.substring(Math.max(0, startEP.off - 3), startEP.off);
+  var afterEnd    = lastLineText.substring(endEP.off, endEP.off + 3);
+
+  if(beforeStart === openMark && afterEnd === closeMark){
+    // TOGGLE OFF — remove the existing wrap
+    originalLines[startEP.li] =
+        firstLineText.substring(0, startEP.off - 3) +
+        firstLineText.substring(startEP.off);
+    if(startEP.li !== endEP.li){
+      var lastText2 = originalLines[endEP.li];
+      originalLines[endEP.li] =
+          lastText2.substring(0, endEP.off) +
+          lastText2.substring(endEP.off + 3);
+    } else {
+      // (defensive — shouldn't happen because single-line path branched earlier)
+      originalLines[startEP.li] =
+          originalLines[startEP.li].substring(0, endEP.off - 3) +
+          originalLines[startEP.li].substring(endEP.off);
+    }
+    rebuildEditor();
+    var nLines = endEP.li - startEP.li + 1;
+    document.getElementById('statBar').textContent =
+        (type==='a'?'[A>':'[D>')+' tag removed (Lines '+(startEP.li+1)+'\u2013'+(endEP.li+1)+', '+nLines+' lines)';
+    return;
+  }
+
+  // Otherwise: WRAP across lines
+  originalLines[startEP.li] =
+      firstLineText.substring(0, startEP.off) + openMark +
+      firstLineText.substring(startEP.off);
+  // Re-read last line because if startEP.li === endEP.li we'd have updated it
+  // (but we already branched on single-line above, so li values differ here)
+  lastLineText = originalLines[endEP.li];
+  originalLines[endEP.li] =
+      lastLineText.substring(0, endEP.off) + closeMark +
+      lastLineText.substring(endEP.off);
+  rebuildEditor();
+  var nLines2 = endEP.li - startEP.li + 1;
+  document.getElementById('statBar').textContent =
+      openMark+' tag added across '+nLines2+' lines ('+(startEP.li+1)+'\u2013'+(endEP.li+1)+')';
+}
+
+// Original single-line wrap/toggle/swap logic, factored out so the
+// multi-line wrapper can delegate to it when both endpoints are on the
+// same line.  startOff / endOff are character offsets into the
+// originalLines[li] string (NOT the DOM positions).
+function _wrapTagSingleLine(type, li, startOff, endOff){
   var text=originalLines[li]||'';
-  var startOff=getTextOffset(lc,range.startContainer,range.startOffset);
-  var endOff=getTextOffset(lc,range.endContainer,range.endOffset);
   if(startOff===endOff){document.getElementById('statBar').textContent='Select some text first';return;}
 
   var openA='[A>',closeA='<A]',openD='[D>',closeD='<D]';

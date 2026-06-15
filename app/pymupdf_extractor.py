@@ -2457,16 +2457,24 @@ def consolidate_adjacent_tags(text: str) -> str:
     text = _split_d.sub(r'\1\n\n\2', text)
 
     # ── Phase 2: cross-line merging (has newline), respecting markers ─
-    # IMPORTANT: pattern is [ \t]*\n[ \t]*  (exactly ONE newline) — NOT
-    # \s*\n\s* which would also match paragraph breaks (\n\n) and weld
-    # together two adjacent digest paragraphs (e.g. the italic LCD digest
-    # in California bills where every paragraph starts with "Existing law…"
-    # or "This bill would…" — neither matches _NO_MERGE, so they would all
-    # collapse into one giant [A>…<A] block without this guard).
-    _adj_a_cross = _re.compile(r'<A\][ \t]*\n[ \t]*\[A>' + _NO_MERGE)
+    # IMPORTANT: pattern is [ \t]*\n[ \t]{0,15}  (exactly ONE newline,
+    # AT MOST 15 chars of indent) — NOT \s*\n\s* which would also match
+    # paragraph breaks (\n\n) and weld together two adjacent digest
+    # paragraphs (e.g. the italic LCD digest in California bills where
+    # every paragraph starts with "Existing law…" or "This bill would…"
+    # — neither matches _NO_MERGE, so they would all collapse into one
+    # giant [A>…<A] block without this guard).
+    #
+    # Indent cap of 15 chars also protects column-aligned TABLE CELLS
+    # whose continuation lines indent to a column (e.g. Florida 921.0022
+    # offence-severity chart description column at offset 66): the
+    # 66-space indent exceeds the {0,15} bound so the cross-line regex
+    # does NOT match, leaving each visual line with its OWN tag pair.
+    # Normal paragraph wrapping (≤ 8 spaces) still merges as before.
+    _adj_a_cross = _re.compile(r'<A\][ \t]*\n[ \t]{0,15}\[A>' + _NO_MERGE)
     while _adj_a_cross.search(text):
         text = _adj_a_cross.sub(' ', text)
-    _adj_d_cross = _re.compile(r'<D\][ \t]*\n[ \t]*\[D>' + _NO_MERGE)
+    _adj_d_cross = _re.compile(r'<D\][ \t]*\n[ \t]{0,15}\[D>' + _NO_MERGE)
     while _adj_d_cross.search(text):
         text = _adj_d_cross.sub(' ', text)
 
@@ -2544,12 +2552,21 @@ def merge_split_tags(text: str) -> str:
         same_sub = r'\n<' + tag_type + r'\]\[' + tag_type + r'>'
         text = re.sub(same_sub, '<' + tag_type + ']\n\n[' + tag_type + '>', text)
         # 3) Cross-line joins: <T]\n[T> continuation
-        # IMPORTANT: gap is [ \t]*\n[ \t]* (exactly ONE newline) — NOT
-        # \s*\n\s* which would also swallow paragraph breaks (\n\n) and
-        # merge two distinct same-type paragraphs into one block.
+        # IMPORTANT: gap is [ \t]*\n[ \t]{0,15} (exactly ONE newline,
+        # AT MOST 15 chars of indent) — NOT \s*\n\s* which would also
+        # swallow paragraph breaks (\n\n) and merge two distinct
+        # same-type paragraphs into one block.
+        #
+        # Indent cap of 15 chars also protects column-aligned TABLE
+        # CELLS whose continuation lines indent to a column (e.g.
+        # Florida offence-severity chart description column at offset
+        # 66): the 66-space indent exceeds the {0,15} bound so the
+        # cross-line regex does NOT match, leaving each visual line
+        # with its OWN tag pair.  Normal paragraph wrapping (≤ 8
+        # spaces) still merges as before.
         cross_line = (
             r'<' + tag_type + r'\]'
-            r'([ \t]*\n[ \t]*)'
+            r'([ \t]*\n[ \t]{0,15})'
             r'\[' + tag_type + r'>' + _no_sub
         )
         text = re.sub(cross_line, ' ', text)

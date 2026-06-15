@@ -349,6 +349,21 @@ def detect_pdf_type(pdf_path, min_text_threshold=50):
                 # Has large images but low text extraction = scanned
                 pdf_type = "scanned"
                 logging.info(f"Scanned detection (large images + low text): large_images={total_large_images}, avg_chars={avg_chars:.1f}")
+            elif (avg_text_quality >= 80
+                  and avg_fonts_per_page > 0
+                  and image_ratio < 0.3):
+                # Few large images on an otherwise text-heavy digital
+                # PDF (e.g. a decorative letterhead/seal on the cover
+                # page).  All native text extracts cleanly and there's
+                # real font diversity, so this is a digital PDF — no
+                # OCR needed.
+                pdf_type = "digital"
+                logging.info(
+                    f"Digital detection (text + decorative large images): "
+                    f"large_images={total_large_images}, image_ratio={image_ratio:.1%}, "
+                    f"quality={avg_text_quality:.1f}, fonts={avg_fonts_per_page:.1f}, "
+                    f"avg_chars={avg_chars:.1f}"
+                )
             else:
                 # Has large images and decent text = hybrid
                 pdf_type = "hybrid"
@@ -361,6 +376,22 @@ def detect_pdf_type(pdf_path, min_text_threshold=50):
                 # Low text extraction with high DPI images = scanned
                 pdf_type = "scanned"
                 logging.info(f"Scanned detection (high DPI + low text): high_dpi={total_high_dpi_images}, avg_chars={avg_chars:.1f}")
+            elif (avg_text_quality >= 80
+                  and avg_fonts_per_page > 0
+                  and image_ratio < 0.3):
+                # High-DPI image on an otherwise text-heavy digital PDF.
+                # Real OCR-derived text layers always have zero embedded
+                # fonts (text comes from an invisible CID-mapped layer);
+                # if we see real font diversity AND high text quality
+                # AND most pages are pure text, the image is decorative
+                # (e.g. an embedded letterhead/seal raster).
+                pdf_type = "digital"
+                logging.info(
+                    f"Digital detection (text + decorative high-DPI image): "
+                    f"high_dpi={total_high_dpi_images}, image_ratio={image_ratio:.1%}, "
+                    f"quality={avg_text_quality:.1f}, fonts={avg_fonts_per_page:.1f}, "
+                    f"avg_chars={avg_chars:.1f}"
+                )
             else:
                 # High DPI images with good text = hybrid (scanned with good OCR)
                 pdf_type = "hybrid"

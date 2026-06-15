@@ -2277,9 +2277,13 @@ if not _HAS_PYMUPDF:
             text = re.sub(same_cont, ' ', text)
             same_sub = r'\n<' + tag_type + r'\]\[' + tag_type + r'>'
             text = re.sub(same_sub, '<' + tag_type + ']\n\n[' + tag_type + '>', text)
+            # Cross-line: cap indent at 15 chars so column-aligned table
+            # cells (e.g. FL 921.0022 description column at offset 66)
+            # are NOT merged across visual lines.  Mirrors the canonical
+            # implementation in pymupdf_extractor.py.
             cross_line = (
                 r'<' + tag_type + r'\]'
-                r'(\s*\n\s*)'
+                r'([ \t]*\n[ \t]{0,15})'
                 r'\[' + tag_type + r'>' + _no_sub
             )
             text = re.sub(cross_line, ' ', text)
