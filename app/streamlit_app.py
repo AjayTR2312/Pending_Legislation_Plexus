@@ -234,6 +234,112 @@ def _is_local_dev() -> bool:
 IS_LOCAL_DEV = _is_local_dev()
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# Fast (API-free) state detection at upload time
+# ─────────────────────────────────────────────────────────────────────────
+# Strong page-1 text markers we look for to identify the bill's state.
+# Each pattern is matched case-insensitively against the first 4000 chars
+# of page 1.  The list is ordered most-specific → least-specific so that
+# unique tokens (e.g. "STATE OF COLORADO") win over generic ones (e.g.
+# "Colorado") when multiple states' names happen to appear (rare, but
+# can happen in interstate-compact bills).
+_STATE_TEXT_MARKERS: dict[str, tuple[str, ...]] = {
+    # Highly distinctive patterns first
+    "CO": (
+        "STATE OF COLORADO",
+        "COLORADO GENERAL ASSEMBLY",
+        "COLORADO LEGISLATURE",
+        "LLS NO.",
+        "Colorado",
+    ),
+    "CT": (
+        "General Assembly Raised Bill",
+        "General Assembly Committee Bill",
+        "General Assembly Substitute Bill",
+        "LCO No.",
+        "Connecticut",
+    ),
+    "IA": (
+        "GENERAL ASSEMBLY OF THE STATE OF IOWA",
+        "House File",
+        "Senate File",
+        "Iowa",
+    ),
+    "DE": (
+        "GENERAL ASSEMBLY OF THE STATE OF DELAWARE",
+        "Delaware",
+    ),
+    "IN": (
+        "DIGEST OF INTRODUCED BILL",
+        "Indiana Code",
+        "Indiana General Assembly",
+        "Indiana",
+    ),
+    "KS": (
+        "K.S.A.",
+        "STATE OF KANSAS",
+        "Kansas Legislature",
+        "Kansas",
+    ),
+    "CA": (
+        "LEGISLATURE OF THE STATE OF CALIFORNIA",
+        "California Legislature",
+        "California",
+    ),
+    "AR": (
+        "State of Arkansas",
+        "Arkansas General Assembly",
+        "Arkansas",
+    ),
+}
+
+
+def _detect_state_fast(pdf_path: str) -> str | None:
+    """Detect the bill's US-state code from page-1 text — no API call.
+
+    Strategy
+    --------
+    1. Open the PDF with PyMuPDF (already a project dependency).
+    2. Pull the first 4 000 characters of plain text from page 1.
+    3. Walk through ``_STATE_TEXT_MARKERS`` in dict order; the first
+       state whose marker substring is found in the text wins.
+
+    Returns
+    -------
+    Two-letter state code (e.g. ``"CO"``) or ``None`` if no marker
+    matched.  When ``None`` is returned, the downstream pipeline will
+    fall back to its existing Vision-API content-detection step.
+    """
+    try:
+        import pymupdf  # local import: keeps module-load path quick
+    except Exception:
+        return None
+    try:
+        doc = pymupdf.open(pdf_path)
+        if len(doc) == 0:
+            doc.close()
+            return None
+        page1_text = doc[0].get_text("text")[:4000]
+        doc.close()
+    except Exception as exc:
+        logging.debug("Fast state detection failed to read page 1: %s", exc)
+        return None
+    if not page1_text:
+        return None
+
+    text_upper = page1_text.upper()
+    for code, markers in _STATE_TEXT_MARKERS.items():
+        for m in markers:
+            if m.upper() in text_upper:
+                logging.info(
+                    "🔍 Fast state detection matched %s via marker %r",
+                    code, m,
+                )
+                return code
+    return None
+
+
+
 # Initialize session state with SessionManager with error handling
 try:
     if 'session_id' not in st.session_state:
@@ -1342,16 +1448,23 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
         if status_placeholder:
             status_placeholder.info("🔍 Detecting state from filename...")
 
-        # Try filename pattern first (fast, no API call)
-        detected_state = opus.detect_state_from_filename(pdf_path)
-        if detected_state:
-            add_log(f"✅ State detected from filename: {detected_state}")
+        # Reuse the state detected at upload time (page-1 text scan) if we
+        # have one — saves a redundant filename + Vision-API round-trip.
+        _pre_detected = st.session_state.get('detected_state')
+        if _pre_detected:
+            detected_state = _pre_detected
+            add_log(f"✅ Using pre-detected state from upload: {detected_state}")
         else:
-            # Fall back to Claude visual analysis of first page
-            add_log("🔍 Analyzing PDF content to identify state via AI...")
-            if status_placeholder:
-                status_placeholder.info("🔍 Analyzing PDF content to identify state via AI...")
-            detected_state = opus.detect_state_from_content(client, pdf_path)
+            # Try filename pattern first (fast, no API call)
+            detected_state = opus.detect_state_from_filename(pdf_path)
+            if detected_state:
+                add_log(f"✅ State detected from filename: {detected_state}")
+            else:
+                # Fall back to Claude visual analysis of first page
+                add_log("🔍 Analyzing PDF content to identify state via AI...")
+                if status_placeholder:
+                    status_placeholder.info("🔍 Analyzing PDF content to identify state via AI...")
+                detected_state = opus.detect_state_from_content(client, pdf_path)
 
         # Store and display the detected state
         st.session_state.detected_state = detected_state
@@ -1447,88 +1560,119 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
         if status_placeholder:
             status_placeholder.success(f"✅ Conversion complete ({st.session_state.conversion_time}) — now generating validation report…")
 
-        # ── Step 6: PyMuPDF Extraction ───────────────────────────────────────────
-        st.session_state.current_step = 5
-        st.session_state.step_status[5] = "🔄"
-        update_progress()
-        add_log("📄 Running PyMuPDF extraction (JSON report + tagged text + highlighted images)...")
-        if status_placeholder:
-            status_placeholder.info("📄 Running PyMuPDF extraction...")
+        # ── Validation gate ───────────────────────────────────────────────
+        # Per product requirements, certain states do NOT need the
+        # PyMuPDF/GPT validation pipeline (it's expensive and not useful
+        # for them).  For those states we skip Steps 6-8 entirely and go
+        # straight to the "Wrap up" stage.  The downstream "Step 7: Claude
+        # LLM Clean", "Content Accuracy Check" and "Step 8: GPT Audit"
+        # blocks are already guarded by ``if pymupdf_text``,
+        # ``if pymupdf_clean_text``, etc., so leaving those unset here is
+        # enough to make them all skip cleanly.
+        _skip_validation_states = {"CO"}
+        _skip_audit = (detected_state or "").upper() in _skip_validation_states
 
-        # Reset audit data
-        st.session_state.audit_excel_path = None
-        st.session_state.audit_highlighted_dir = None
-        st.session_state.audit_json_report = None
-        st.session_state.content_accuracy_report = None
-        st.session_state.gpt_audit_failed = False
+        # Default values that downstream steps will use if Step 6 is skipped
+        pymupdf_text = None
+        pymupdf_report = None
+        pymupdf_clean_text = None
+        highlight_dir = None
 
-        # Reset validation review fixed/ignored state from any previous run
-        for _vri_key in ("vri_fixed_ids", "vri_ignored_ids", "vri_undo_history",
-                         "vri_selected_item", "vri_current_page", "vri_filter_mode",
-                         "vri_last_sel", "vri_edit_mode", "vri_file_key",
-                         "vri_per_file_state"):
-            st.session_state.pop(_vri_key, None)
-
-        try:
-            from pymupdf_extractor import (
-                extract_pdf_json_report,
-                extract_pdf_with_pymupdf,
-                highlight_pdf_formatting,
-                clean_extracted_text,
-                consolidate_adjacent_tags,
+        if _skip_audit:
+            _state_lbl = US_STATE_NAMES.get(detected_state, detected_state)
+            add_log(
+                f"⏭️ Validation report skipped — {_state_lbl} ({detected_state}) "
+                f"uses Visual mode without audit"
             )
+            # Mark optional steps complete so the UI doesn't show "in progress"
+            for _s_idx in (5, 6, 7):
+                if _s_idx in st.session_state.get('step_status', {}):
+                    st.session_state.step_status[_s_idx] = "⏭️"
+            update_progress()
 
-            # Determine state-specific marking flags
-            _mark_flags = {}
-            if state_config:
-                add_cfg = state_config.get("add_markup", {})
-                del_cfg = state_config.get("delete_markup", {})
-                _mark_flags["mark_underline"] = add_cfg.get("underline", True)
-                _mark_flags["mark_italic"] = add_cfg.get("italic", False) or del_cfg.get("italic", False)
-                _mark_flags["mark_bold"] = add_cfg.get("bold", False)
-                _mark_flags["mark_strikethrough"] = del_cfg.get("strike_out", True)
-                _mark_flags["mark_brackets"] = add_cfg.get("brackets", False) or del_cfg.get("brackets", False)
+        # ── Step 6: PyMuPDF Extraction ───────────────────────────────────────────
+        if not _skip_audit:
+            st.session_state.current_step = 5
+            st.session_state.step_status[5] = "🔄"
+            update_progress()
+            add_log("📄 Running PyMuPDF extraction (JSON report + tagged text + highlighted images)...")
+            if status_placeholder:
+                status_placeholder.info("📄 Running PyMuPDF extraction...")
 
-            # 6a: JSON report
-            pymupdf_report = extract_pdf_json_report(pdf_path, **_mark_flags)
-            n_spans = len(pymupdf_report.get("formatted_spans", []))
-            add_log(f"📊 PyMuPDF JSON report: {n_spans} formatted spans detected")
+            # Reset audit data
+            st.session_state.audit_excel_path = None
+            st.session_state.audit_highlighted_dir = None
+            st.session_state.audit_json_report = None
+            st.session_state.content_accuracy_report = None
+            st.session_state.gpt_audit_failed = False
 
-            # Save JSON report alongside output
-            pymupdf_json_path = output_path.replace(".txt", "_pymupdf_report.json") if isinstance(output_path, str) else str(output_path).replace(".txt", "_pymupdf_report.json")
-            import json as _json
-            with open(pymupdf_json_path, "w", encoding="utf-8") as jf:
-                _json.dump(pymupdf_report, jf, indent=2, ensure_ascii=False)
-            add_log(f"✅ JSON report saved: {pymupdf_json_path}")
+            # Reset validation review fixed/ignored state from any previous run
+            for _vri_key in ("vri_fixed_ids", "vri_ignored_ids", "vri_undo_history",
+                             "vri_selected_item", "vri_current_page", "vri_filter_mode",
+                             "vri_last_sel", "vri_edit_mode", "vri_file_key",
+                             "vri_per_file_state"):
+                st.session_state.pop(_vri_key, None)
 
-            # 6b: Tagged text
-            pymupdf_text = extract_pdf_with_pymupdf(pdf_path, join_pages=True, **_mark_flags)
-            pymupdf_txt_path = output_path.replace(".txt", "_pymupdf.txt") if isinstance(output_path, str) else str(output_path).replace(".txt", "_pymupdf.txt")
-            with open(pymupdf_txt_path, "w", encoding="utf-8") as tf:
-                tf.write(pymupdf_text)
-            add_log(f"✅ PyMuPDF tagged text saved: {len(pymupdf_text):,} chars")
+            try:
+                from pymupdf_extractor import (
+                    extract_pdf_json_report,
+                    extract_pdf_with_pymupdf,
+                    highlight_pdf_formatting,
+                    clean_extracted_text,
+                    consolidate_adjacent_tags,
+                )
 
-            # 6b.1: Filter italic spans by section scope (e.g. Indiana PRINTING CODE only)
-            pymupdf_report, pymupdf_text = _filter_italic_by_section(pymupdf_report, pymupdf_text, state_config)
-            _n_after = len(pymupdf_report.get("formatted_spans", [])) if pymupdf_report else 0
-            if _n_after != n_spans:
-                add_log(f"🔍 Italic section filter: {n_spans} → {_n_after} spans (removed {n_spans - _n_after} out-of-scope italic spans)")
+                # Determine state-specific marking flags
+                _mark_flags = {}
+                if state_config:
+                    add_cfg = state_config.get("add_markup", {})
+                    del_cfg = state_config.get("delete_markup", {})
+                    _mark_flags["mark_underline"] = add_cfg.get("underline", True)
+                    _mark_flags["mark_italic"] = add_cfg.get("italic", False) or del_cfg.get("italic", False)
+                    _mark_flags["mark_bold"] = add_cfg.get("bold", False)
+                    _mark_flags["mark_strikethrough"] = del_cfg.get("strike_out", True)
+                    _mark_flags["mark_brackets"] = add_cfg.get("brackets", False) or del_cfg.get("brackets", False)
 
-            # 6c: Highlighted page images
-            highlight_dir = Path(output_path).parent / f"{Path(pdf_path).stem}_highlighted"
-            hi_imgs = highlight_pdf_formatting(pdf_path, report=pymupdf_report, output_dir=highlight_dir, **_mark_flags)
-            add_log(f"✅ {len(hi_imgs)} highlighted page images saved to {highlight_dir}")
+                # 6a: JSON report
+                pymupdf_report = extract_pdf_json_report(pdf_path, **_mark_flags)
+                n_spans = len(pymupdf_report.get("formatted_spans", []))
+                add_log(f"📊 PyMuPDF JSON report: {n_spans} formatted spans detected")
 
-            st.session_state.audit_highlighted_dir = str(highlight_dir)
-            st.session_state.audit_json_report = pymupdf_report
-            st.session_state.step_status[5] = "✅"
-        except Exception as pmu_err:
-            add_log(f"⚠️ PyMuPDF extraction failed: {pmu_err}", "warning")
-            logging.error(f"PyMuPDF extraction error: {pmu_err}", exc_info=True)
-            st.session_state.step_status[5] = "⚠️"
-            pymupdf_text = None
-            pymupdf_report = None
-        update_progress()
+                # Save JSON report alongside output
+                pymupdf_json_path = output_path.replace(".txt", "_pymupdf_report.json") if isinstance(output_path, str) else str(output_path).replace(".txt", "_pymupdf_report.json")
+                import json as _json
+                with open(pymupdf_json_path, "w", encoding="utf-8") as jf:
+                    _json.dump(pymupdf_report, jf, indent=2, ensure_ascii=False)
+                add_log(f"✅ JSON report saved: {pymupdf_json_path}")
+
+                # 6b: Tagged text
+                pymupdf_text = extract_pdf_with_pymupdf(pdf_path, join_pages=True, **_mark_flags)
+                pymupdf_txt_path = output_path.replace(".txt", "_pymupdf.txt") if isinstance(output_path, str) else str(output_path).replace(".txt", "_pymupdf.txt")
+                with open(pymupdf_txt_path, "w", encoding="utf-8") as tf:
+                    tf.write(pymupdf_text)
+                add_log(f"✅ PyMuPDF tagged text saved: {len(pymupdf_text):,} chars")
+
+                # 6b.1: Filter italic spans by section scope (e.g. Indiana PRINTING CODE only)
+                pymupdf_report, pymupdf_text = _filter_italic_by_section(pymupdf_report, pymupdf_text, state_config)
+                _n_after = len(pymupdf_report.get("formatted_spans", [])) if pymupdf_report else 0
+                if _n_after != n_spans:
+                    add_log(f"🔍 Italic section filter: {n_spans} → {_n_after} spans (removed {n_spans - _n_after} out-of-scope italic spans)")
+
+                # 6c: Highlighted page images
+                highlight_dir = Path(output_path).parent / f"{Path(pdf_path).stem}_highlighted"
+                hi_imgs = highlight_pdf_formatting(pdf_path, report=pymupdf_report, output_dir=highlight_dir, **_mark_flags)
+                add_log(f"✅ {len(hi_imgs)} highlighted page images saved to {highlight_dir}")
+
+                st.session_state.audit_highlighted_dir = str(highlight_dir)
+                st.session_state.audit_json_report = pymupdf_report
+                st.session_state.step_status[5] = "✅"
+            except Exception as pmu_err:
+                add_log(f"⚠️ PyMuPDF extraction failed: {pmu_err}", "warning")
+                logging.error(f"PyMuPDF extraction error: {pmu_err}", exc_info=True)
+                st.session_state.step_status[5] = "⚠️"
+                pymupdf_text = None
+                pymupdf_report = None
+            update_progress()
 
         # ── Step 7: Claude LLM Clean ─────────────────────────────────────────────
         pymupdf_clean_text = None
@@ -2207,6 +2351,14 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
             with open(diff_path, "w", encoding="utf-8") as df:
                 df.write(_diff_report)
             add_log(f"📋 LLM diff report saved: {diff_path}")
+
+        # Save per-chunk breakdown (raw input → cleaned output for each chunk)
+        _chunks_report = getattr(opus.convert_pdf_hybrid_text, '_last_chunks_report', None)
+        if _chunks_report:
+            chunks_path = output_path.replace("_hybrid.txt", "_hybrid_chunks.txt")
+            with open(chunks_path, "w", encoding="utf-8") as cf:
+                cf.write(_chunks_report)
+            add_log(f"📦 Chunks breakdown saved: {chunks_path}")
 
         st.session_state.step_status[4] = "✅"
         update_progress()
@@ -2998,6 +3150,23 @@ def show_simple_ui():
                 except Exception:
                     st.session_state['_pdf_page_count'] = 0
 
+                # ── Fast state detection (page-1 text scan, no API call) ──
+                # We pre-detect the state at upload time so the auto-trigger
+                # logic can route per-state (e.g. CO must always use the
+                # Visual / Process Document pipeline).  The pipelines still
+                # run their own detection; this just lets us pick the right
+                # one before kicking it off.
+                try:
+                    _early_state = _detect_state_fast(st.session_state.temp_pdf_path)
+                    if _early_state:
+                        st.session_state.detected_state = _early_state
+                        logging.info(
+                            "Pre-detected state %s for %s",
+                            _early_state, Path(st.session_state.temp_pdf_path).name,
+                        )
+                except Exception as _state_err:
+                    logging.debug("Pre-upload state detection failed: %s", _state_err)
+
             show_single_file_processing()
     else:
         # No files in uploader — but check if we have results or active worker
@@ -3295,7 +3464,15 @@ def show_results_section():
     # Validation Review, Activity Log. PDF Compare is the most useful immediate
     # view after processing completes, so we surface it as the landing tab.
     _method = st.session_state.get('process_method', '')
-    _skip_validation = _method in ('pymupdf_clean_only', 'hybrid')
+    _detected_state = (st.session_state.get('detected_state') or "").upper()
+    # States that intentionally skip the validation/audit pipeline even when
+    # processed via Visual mode (claude_opus). Keep this in sync with the
+    # _skip_validation_states set inside process_with_claude_opus.
+    _state_skips_validation = _detected_state in {"CO"}
+    _skip_validation = (
+        _method in ('pymupdf_clean_only', 'hybrid')
+        or _state_skips_validation
+    )
     _show_pdf_compare = (
         compare_build_viewer_html is not None
         and st.session_state.get('temp_pdf_path')
@@ -4678,16 +4855,29 @@ def show_single_file_processing():
     _pdf_pages = st.session_state.get('_pdf_page_count', 0)
 
     # ── Auto-trigger processing on upload ──────────────────────────────
-    # No more "🚀 Process Document" / "Extract + Clean" / "Hybrid Mode"
-    # buttons.  The pipeline is chosen automatically:
-    #   • ≤ 15 pages  → PyMuPDF Extract + Clean (cheap, fast, no visual)
-    #   • > 15 pages  → Hybrid Mode (PyMuPDF + chunked LLM cleaning)
+    # The pipeline is chosen automatically based on **state first**, then
+    # page count:
+    #
+    #   1. State-specific override:
+    #        • CO  → Visual / Process Document  (Claude Opus vision)
+    #               — Colorado bills don't need PyMuPDF tagging or the
+    #                 GPT validation audit, so we go straight to Vision.
+    #
+    #   2. Default (when no state-specific rule matched):
+    #        • ≤ 15 pages  → PyMuPDF Extract + Clean (cheap, fast)
+    #        • > 15 pages  → Hybrid Mode (PyMuPDF + chunked LLM cleaning)
+    #
     # We track the file ID we auto-started so processing failures don't
     # cause an infinite re-trigger loop.  On failure the user sees a
     # single explicit "Retry" button as a recovery affordance.
     _current_file_id = st.session_state.get('last_uploaded_file_id')
     _auto_started_for = st.session_state.get('_auto_started_file_id')
     _already_triggered = (_auto_started_for == _current_file_id)
+    _early_state = (st.session_state.get('detected_state') or "").upper()
+
+    # States that must always use the Visual / Process Document pipeline,
+    # regardless of page count.  Add more state codes here as needed.
+    _VISION_ONLY_STATES = {"CO"}
 
     with col2:
         if (not st.session_state.processing
@@ -4697,8 +4887,15 @@ def show_single_file_processing():
 
             if not _already_triggered:
                 # First time we see this file with no results → kick off
-                # the right pipeline based on page count.
-                if _pdf_pages > 15:
+                # the right pipeline.  State override beats page count.
+                if _early_state in _VISION_ONLY_STATES:
+                    st.session_state.process_method = "claude_opus"
+                    _state_label = US_STATE_NAMES.get(_early_state, _early_state)
+                    _msg = (
+                        f"🏛️ {_state_label} ({_early_state}) detected — "
+                        f"running **Process Document (Visual)** pipeline"
+                    )
+                elif _pdf_pages > 15:
                     st.session_state.process_method = "hybrid"
                     _msg = f"📐 Long PDF detected ({_pdf_pages} pages) — running **Hybrid Mode**"
                 else:
@@ -4714,7 +4911,7 @@ def show_single_file_processing():
 
                 logging.info(
                     f"Auto-triggered {st.session_state.process_method} "
-                    f"for {_pdf_pages}-page PDF"
+                    f"for {_pdf_pages}-page PDF (state={_early_state or 'unknown'})"
                 )
                 st.info(_msg)
                 st.rerun()

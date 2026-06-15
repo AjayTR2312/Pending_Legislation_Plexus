@@ -1325,6 +1325,10 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         logging.error("❌ PyMuPDF extractor not available for hybrid mode")
         return None
 
+    # Reset per-run reports so callers don't read stale data from a prior run
+    convert_pdf_hybrid_text._last_diff_report = None
+    convert_pdf_hybrid_text._last_chunks_report = None
+
     try:
         start_time = time.time()
         logging.info(f"🔄 HYBRID MODE: PyMuPDF extract + LLM text-chunk cleaning: {pdf_path}")
@@ -1415,6 +1419,39 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         # Generate diff report: what did the LLM change?
         diff_report = _generate_clean_diff_report(raw_text, merged, stage="Hybrid LLM Clean")
         convert_pdf_hybrid_text._last_diff_report = diff_report
+
+        # Build per-chunk breakdown report (raw input → cleaned output for
+        # every chunk). Saved alongside the final hybrid output by the
+        # caller for diagnostic / QA purposes.
+        _total_raw_chars = sum(len(c) for c in chunks)
+        _total_cleaned_chars = sum(len(c) for c in cleaned_chunks)
+        _chunks_report_lines = [
+            "=" * 80,
+            "HYBRID MODE — CHUNK BREAKDOWN",
+            "=" * 80,
+            f"PDF:                 {pdf_path}",
+            f"State:               {state_code or '(none)'}",
+            f"Total chunks:        {total_chunks}",
+            f"Total raw chars:     {_total_raw_chars:,}",
+            f"Total cleaned chars: {_total_cleaned_chars:,}",
+            f"Max chunk size:      40,000 chars",
+            f"Overlap:             2,000 chars",
+            "=" * 80,
+        ]
+        for _idx, (_raw_chunk, _cleaned_chunk) in enumerate(zip(chunks, cleaned_chunks), 1):
+            _chunks_report_lines.extend([
+                "",
+                "─" * 80,
+                f"CHUNK {_idx} / {total_chunks} — RAW INPUT ({len(_raw_chunk):,} chars)",
+                "─" * 80,
+                _raw_chunk,
+                "",
+                "─" * 80,
+                f"CHUNK {_idx} / {total_chunks} — CLEANED OUTPUT ({len(_cleaned_chunk):,} chars)",
+                "─" * 80,
+                _cleaned_chunk,
+            ])
+        convert_pdf_hybrid_text._last_chunks_report = "\n".join(_chunks_report_lines)
 
         # Bracket tagging runs AFTER LLM to avoid confusing it with
         # nested [D>[…]<D] structures.
