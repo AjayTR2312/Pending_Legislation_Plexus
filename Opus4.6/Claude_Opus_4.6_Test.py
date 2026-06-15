@@ -1474,6 +1474,19 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         if state_code and state_code.upper() == "KS":
             merged = _strip_ks_header_tags(merged)
 
+        # ── Normalise malformed close-tags BEFORE structural passes ──────
+        # The chunk-level LLM occasionally emits `<A>` or `<D>` (mirrored
+        # opening bracket) instead of the correct `<A]` / `<D]` closer.
+        # If left in place, ``remove_nested_tags`` does NOT recognise
+        # `<A>` as a closer, so its depth counter never decrements — the
+        # next legitimate `[A>` opener is then skipped as "nested" and
+        # the matching `<A]` becomes orphaned in the output.
+        # Symptom: a closer appearing on its own line with no preceding
+        # opener (e.g. ``... or subsection (4):<A]`` on FL SB 468).
+        # Fix: rewrite mirrored closers to canonical form so depth
+        # tracking stays balanced.  Must run BEFORE remove_nested_tags.
+        merged = _fix_malformed_close_tags(merged)
+
         merged = consolidate_adjacent_tags(merged)
         merged = remove_nested_tags(merged)
         merged = merge_split_tags(merged)
@@ -1518,76 +1531,353 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
 def _merge_cleaned_chunks(chunks):
     """
     Merge cleaned text chunks by deduplicating overlap regions.
-    
-    Strategy: find the longest common substring between the end of chunk N
-    and the start of chunk N+1 (from the overlap), then join at that point.
-    Falls back to simple concatenation if no overlap is found.
-    
+
+    The chunks are produced by the hybrid pipeline (40K chars each, 2K-char
+    overlap).  Each chunk is cleaned by the LLM independently, so the
+    overlap region may have minor differences between consecutive chunks
+    (slightly different whitespace, dot-leader counts, em-dash variants,
+    etc.).  Strict character-level matching is unreliable; this function
+    therefore tries several strategies in order:
+
+      1. **Section-anchor merge** — find a section marker (``Sec. N.``,
+         ``SECTION N.``, ``§ N.``, etc.) that appears in BOTH the tail of
+         the running merge AND the head of the next chunk; cut both at
+         that anchor and stitch.  Robust against LLM rephrasing because
+         it only needs the section label itself to match.
+      2. **Exact suffix-prefix** — longest L such that
+         ``tail[-L:] == head[:L]`` after whitespace normalisation.
+      3. **Normalised line match** — find a non-trivial line in the tail
+         that appears verbatim in the head.
+      4. **Concatenate with separator** — last resort; logs a warning.
+
+    After all chunks are merged, a final pass removes any consecutive
+    duplicate paragraph runs that survived (defence in depth — catches
+    cases where step 4 fired or where the chosen anchor missed an
+    earlier duplicate).
+
     Args:
-        chunks (list[str]): Cleaned text chunks in order
-    
+        chunks (list[str]): Cleaned text chunks in order.
+
     Returns:
-        str: Merged text
+        str: Merged text.
     """
     if not chunks:
         return ""
-    
+
     merged = chunks[0]
-    
     for i in range(1, len(chunks)):
-        next_chunk = chunks[i]
-        
-        # Look for overlap: compare end of merged with start of next_chunk
-        # Check up to 3000 chars for overlap match
-        best_overlap = 0
-        search_window = min(3000, len(merged), len(next_chunk))
-        
-        tail = merged[-search_window:]
-        head = next_chunk[:search_window]
-        
-        # Find the longest suffix of `tail` that is a prefix of `head`
-        for length in range(min(len(tail), len(head)), 20, -1):
-            # Normalize whitespace for comparison
-            tail_segment = ' '.join(tail[-length:].split())
-            head_segment = ' '.join(head[:length].split())
-            if tail_segment == head_segment:
-                best_overlap = length
-                break
-        
-        if best_overlap > 50:
-            # Found meaningful overlap — skip the duplicated part
-            logging.info(f"   🔗 Chunk {i+1}: found {best_overlap}-char overlap, deduplicating")
-            merged = merged + next_chunk[best_overlap:]
-        else:
-            # No clear overlap found — use paragraph-boundary heuristic
-            # Find a common line between the tail and head
-            tail_lines = merged[-2000:].split('\n')
-            head_lines = next_chunk[:2000].split('\n')
-            
-            join_at = None
-            for tl_idx in range(len(tail_lines) - 1, max(len(tail_lines) - 30, -1), -1):
-                tl = tail_lines[tl_idx].strip()
-                if len(tl) < 15:
-                    continue
-                for hl_idx, hl in enumerate(head_lines[:30]):
-                    if hl.strip() == tl:
-                        join_at = hl_idx
-                        break
-                if join_at is not None:
-                    break
-            
-            if join_at is not None:
-                logging.info(f"   🔗 Chunk {i+1}: line-match overlap at head line {join_at}")
-                remaining = '\n'.join(head_lines[join_at + 1:])
-                # Re-append the rest of next_chunk after the matched region
-                after_head = next_chunk[next_chunk.find('\n'.join(head_lines[join_at:])):]
-                skip = len(head_lines[join_at]) + 1
-                merged = merged + '\n' + next_chunk[next_chunk.find(head_lines[join_at].strip()) + len(head_lines[join_at].strip()):]
+        merged = _stitch_two_chunks(merged, chunks[i], chunk_index=i + 1)
+
+    # Final defensive pass: drop any consecutive duplicate paragraph runs.
+    deduped = _dedupe_consecutive_duplicate_blocks(merged)
+    if deduped != merged:
+        logging.info(
+            f"   🧹 Post-merge dedup removed {len(merged) - len(deduped):,} "
+            f"chars of duplicate paragraph runs"
+        )
+    return deduped
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Section-anchor regex used by the hybrid chunk merger.
+# Matches a section header at the start of a paragraph.  Examples that
+# match:
+#     "Sec. 85."          (Iowa, Kansas)
+#     "SECTION 1."        (California, Indiana)
+#     "Section 12.5."     (with decimal)
+#     "§ 1234.5"          (Code section reference)
+#     "ARTICLE III."      (Roman numerals)
+#     "Sec. 85a."         (alphanumeric suffix)
+# The capture group is the canonical anchor label used to compare across
+# chunks (whitespace-normalised).
+# ────────────────────────────────────────────────────────────────────────────
+_RE_SECTION_ANCHOR = re.compile(
+    r'(?:^|\n)[ \t]*'
+    r'((?:'
+    r'Sec\.|SEC\.|Section|SECTION'                  # English section
+    r'|Art\.|ART\.|Article|ARTICLE'                  # Article
+    r'|§'                                            # Section symbol
+    r')\s+'
+    r'(?:'
+    r'\d+[a-zA-Z]?(?:\.\d+)?'                        # 85, 85a, 12.5
+    r'|[IVXLCDM]+'                                   # Roman numerals
+    r')'
+    r'\.?)\s',
+    re.MULTILINE,
+)
+
+
+def _section_anchors(text):
+    """Yield (label, position) for every section anchor in ``text``.
+
+    The label is canonicalised by stripping whitespace and trailing dots
+    so ``"Sec. 85"``, ``"Sec. 85."`` and ``"sec.\t85"`` all map to the
+    same key (``"sec. 85"``).
+    """
+    for m in _RE_SECTION_ANCHOR.finditer(text):
+        raw_label = m.group(1)
+        label = ' '.join(raw_label.lower().split()).rstrip('.')
+        yield label, m.start(1)
+
+
+def _stitch_two_chunks(merged, next_chunk, *, chunk_index, window=4000):
+    """Stitch ``next_chunk`` onto ``merged``, deduplicating any overlap.
+
+    Returns the new merged string.  See ``_merge_cleaned_chunks`` for the
+    strategy hierarchy.
+    """
+    # ── Strategy 1: section-anchor merge ────────────────────────────────
+    tail_window = merged[-window:]
+    head_window = next_chunk[:window]
+    tail_offset = len(merged) - len(tail_window)
+
+    head_anchors = list(_section_anchors(head_window))
+    if head_anchors:
+        # Map each head anchor label to its earliest position in head_window
+        head_anchor_first = {}
+        for label, pos in head_anchors:
+            head_anchor_first.setdefault(label, pos)
+
+        # Walk the tail anchors in REVERSE so we pick the LATEST shared
+        # anchor — that gives us the longest possible deduplication.
+        tail_anchors = list(_section_anchors(tail_window))
+        for label, tail_pos in reversed(tail_anchors):
+            if label in head_anchor_first:
+                head_pos = head_anchor_first[label]
+                global_tail_pos = tail_offset + tail_pos
+                logging.info(
+                    f"   🔗 Chunk {chunk_index}: section-anchor merge at "
+                    f"'{label}' (tail offset {global_tail_pos:,}, "
+                    f"head offset {head_pos:,})"
+                )
+                return merged[:global_tail_pos].rstrip() + '\n\n' + next_chunk[head_pos:]
+
+    # ── Strategy 2: exact suffix-prefix ─────────────────────────────────
+    # Whitespace-normalised character match.  Cheaper to compute than the
+    # original O(N²) loop because we walk the head from the longest plausible
+    # prefix backward and stop at the first match.
+    best_overlap = 0
+    search_len = min(window, len(merged), len(next_chunk))
+    tail = merged[-search_len:]
+    head = next_chunk[:search_len]
+    # Normalise once, then compare slices of the normalised strings.  This
+    # makes the comparison O(N) per length value rather than O(N) for the
+    # split() each iteration.
+    norm_tail = ' '.join(tail.split())
+    norm_head = ' '.join(head.split())
+    norm_min = min(len(norm_tail), len(norm_head))
+    for length in range(norm_min, 50, -1):
+        if norm_tail[-length:] == norm_head[:length]:
+            best_overlap = length
+            break
+    if best_overlap >= 50:
+        # We matched on normalised lengths — find the corresponding raw
+        # head length so the join is byte-accurate.  Walk forward through
+        # head, counting normalised chars until we hit `best_overlap`.
+        normed = 0
+        in_ws = False
+        raw_cut = 0
+        for j, ch in enumerate(head):
+            if ch.isspace():
+                if not in_ws:
+                    normed += 1  # collapsed whitespace counts as 1
+                    in_ws = True
             else:
-                logging.warning(f"   ⚠️  Chunk {i+1}: no overlap found, concatenating with separator")
-                merged = merged + '\n\n' + next_chunk
-    
-    return merged
+                normed += 1
+                in_ws = False
+            if normed >= best_overlap:
+                raw_cut = j + 1
+                break
+        if raw_cut > 0:
+            logging.info(
+                f"   🔗 Chunk {chunk_index}: exact suffix-prefix overlap "
+                f"({best_overlap} normalised chars, {raw_cut} raw chars)"
+            )
+            return merged + next_chunk[raw_cut:]
+
+    # ── Strategy 3: normalised line match ───────────────────────────────
+    tail_lines = tail.splitlines()
+    head_lines = head.splitlines()
+    # Index head lines by normalised content for O(1) lookup.
+    head_index = {}
+    head_running = 0
+    head_line_offsets = []  # raw byte offsets of each head line in head_window
+    for hl in head_lines:
+        head_line_offsets.append(head_running)
+        head_running += len(hl) + 1  # +1 for the newline
+
+    for hl_idx, hl in enumerate(head_lines):
+        norm = ' '.join(hl.split())
+        if len(norm) >= 25:  # only index "substantial" lines
+            head_index.setdefault(norm, hl_idx)
+
+    # Walk tail lines from the bottom up; the LATEST match gives the
+    # longest possible overlap.
+    for tl_idx in range(len(tail_lines) - 1, -1, -1):
+        tl = tail_lines[tl_idx]
+        norm = ' '.join(tl.split())
+        if len(norm) < 25:
+            continue
+        if norm in head_index:
+            # Cut the head at the END of the matched line (so the line
+            # itself is not duplicated).
+            hl_idx = head_index[norm]
+            cut_offset_in_head = head_line_offsets[hl_idx] + len(head_lines[hl_idx])
+            # And cut merged at the END of the tail-side matched line.
+            tl_local_end = sum(len(line) + 1 for line in tail_lines[: tl_idx + 1]) - 1
+            global_tail_end = tail_offset + tl_local_end
+            logging.info(
+                f"   🔗 Chunk {chunk_index}: normalised line-match overlap "
+                f"at tail line {tl_idx}, head line {hl_idx}"
+            )
+            # Use the version from `merged` (cleaner because earlier pipeline
+            # state) and append the rest of next_chunk after the match.
+            return merged[:global_tail_end].rstrip() + '\n\n' + next_chunk[cut_offset_in_head:].lstrip('\n')
+
+    # ── Strategy 4: concatenate with separator (last resort) ────────────
+    logging.warning(
+        f"   ⚠️  Chunk {chunk_index}: no overlap found "
+        f"(tail/head {search_len:,} chars each), concatenating with separator. "
+        f"The post-merge dedup pass will catch any duplicate paragraph runs."
+    )
+    return merged.rstrip() + '\n\n' + next_chunk.lstrip()
+
+
+def _dedupe_consecutive_duplicate_blocks(text, *, min_run_chars=200):
+    """Remove consecutive duplicate paragraph runs from a merged document.
+
+    Defence-in-depth pass that runs after ``_stitch_two_chunks``.  Finds
+    cases where the chunk merge concatenated two chunks and the same
+    paragraph (or run of paragraphs) was emitted by both — for example
+    the IA SF 619 ``Sec. 85. DISASTER RECOVERY HOUSING ASSISTANCE FUND``
+    block appearing twice when both adjacent chunks contain the section
+    in their cleaned output.
+
+    Algorithm
+    ---------
+    1. Split *text* on blank lines into paragraph blocks.
+    2. For each candidate run length R (largest first), look for two
+       consecutive runs ``paras[i:i+R]`` and ``paras[i+R:i+2R]`` that
+       are equivalent after whitespace/case normalisation.
+    3. If found AND the run is "substantial" (≥ ``min_run_chars`` total
+       characters in normalised form), drop the second run.
+
+    The minimum-character threshold prevents false positives on short
+    repeated phrases like ``[A>NEW SECTION<A]`` (which legitimately
+    repeats throughout a bill body).
+
+    Parameters
+    ----------
+    text : str
+        The merged document text.
+    min_run_chars : int
+        Minimum normalised-character length for a run to be considered
+        a real duplicate.  Default 200 covers the IA SF 619 case
+        (~700 chars) while protecting tiny repeated tokens.
+
+    Returns
+    -------
+    str
+        Text with duplicate paragraph runs removed.
+    """
+    # Split, keeping non-blank paragraph blocks.  We drop the original
+    # separators because we'll rebuild with consistent ``\n\n`` joins.
+    paras = [p for p in re.split(r'\n[ \t]*\n', text) if p.strip()]
+    n = len(paras)
+    if n < 2:
+        return text
+
+    norms = [' '.join(p.lower().split()) for p in paras]
+    keep = [True] * n
+
+    max_run = min(50, n // 2)
+    # Greedy from longest run length downward so a 5-paragraph duplicate
+    # is matched as a single 5-run rather than multiple 1-runs.
+    for run_len in range(max_run, 0, -1):
+        i = 0
+        while i + 2 * run_len <= n:
+            # Skip windows that already contain a deletion mark.
+            if not all(keep[j] for j in range(i, i + 2 * run_len)):
+                i += 1
+                continue
+            run1 = norms[i : i + run_len]
+            run2 = norms[i + run_len : i + 2 * run_len]
+            if run1 == run2 and sum(len(p) for p in run1) >= min_run_chars:
+                # Drop the second occurrence.
+                for j in range(i + run_len, i + 2 * run_len):
+                    keep[j] = False
+                i += 2 * run_len
+            else:
+                i += 1
+
+    return '\n\n'.join(p for p, k in zip(paras, keep) if k)
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Malformed close-tag normalisation
+# ────────────────────────────────────────────────────────────────────────────
+# Regex matches a mirrored opening bracket used as a CLOSER, e.g.:
+#     "[A>does not<A>"      ← wrong: should be "<A]"
+#     "[D>shall<D>"         ← wrong: should be "<D]"
+# The rewrite condition uses a look-behind to confirm the bracket sits at
+# the END of a tagged run (preceded by non-tag content) so we don't
+# accidentally rewrite legitimate openers like "[A>".  In practice the
+# look-behind ``(?<![\[A-Z])`` is sufficient: a real opener is preceded
+# by ``[A`` or ``[D`` (the previous char is ``A`` or ``D``); a real
+# closer is preceded by content (the previous char is anything else).
+_RE_MALFORMED_A_CLOSE = re.compile(r'(?<![\[])<A>')
+_RE_MALFORMED_D_CLOSE = re.compile(r'(?<![\[])<D>')
+
+
+def _fix_malformed_close_tags(text):
+    """Rewrite mirrored close-tags ``<A>`` / ``<D>`` to canonical ``<A]`` / ``<D]``.
+
+    Background
+    ----------
+    The chunk-level LLM occasionally emits ``<A>`` or ``<D>`` (closing
+    angle bracket reused) instead of the correct ``<A]`` / ``<D]``
+    closer.  Example from a real Florida hybrid run::
+
+        [A>does not<A> [D>shall<D]
+
+    Why this matters
+    ----------------
+    ``remove_nested_tags`` walks the text counting opener / closer
+    pairs to enforce a depth of 1.  It only recognises ``<A]`` /
+    ``<D]`` as closers, so a malformed ``<A>`` is treated as plain
+    text and the depth counter never decrements.  When the next
+    legitimate ``[A>`` opener arrives, ``depth`` is still 1 — the
+    function classifies it as nested and SILENTLY DELETES IT.  The
+    matching ``<A]`` then survives unpaired, producing the
+    user-visible symptom of an orphan closer with no opener::
+
+        (5) Except as otherwise provided, a violation of subsection
+        (1), subsection (2), subsection (3), or subsection (4):<A]
+
+    Parameters
+    ----------
+    text : str
+        Merged hybrid output, before structural tag passes.
+
+    Returns
+    -------
+    str
+        Same text with every ``<A>`` rewritten to ``<A]`` and every
+        ``<D>`` rewritten to ``<D]`` (only at positions where the
+        bracket is being used as a closer, never inside a real opener).
+    """
+    fixed_a = len(_RE_MALFORMED_A_CLOSE.findall(text))
+    fixed_d = len(_RE_MALFORMED_D_CLOSE.findall(text))
+    if fixed_a:
+        text = _RE_MALFORMED_A_CLOSE.sub('<A]', text)
+    if fixed_d:
+        text = _RE_MALFORMED_D_CLOSE.sub('<D]', text)
+    if fixed_a or fixed_d:
+        logging.info(
+            f"   🔧 Normalised malformed close-tags: "
+            f"{fixed_a} <A> → <A] | {fixed_d} <D> → <D]"
+        )
+    return text
 
 
 def fix_overlapping_cross_tags(text):

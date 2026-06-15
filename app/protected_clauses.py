@@ -12,7 +12,17 @@ import re
 # ──────────────────────────────────────────────────────────────────────────────
 PROTECTED_CLAUSES: dict[str, list[str]] = {
     "KS": [
+        # Bill enacting clause
         "Be it enacted by the Legislature of the State of Kansas:",
+        # Concurrent / proposition resolving clause (e.g. constitutional
+        # amendment Senate Concurrent Resolutions like SCR 1616)
+        "Be it resolved by the Legislature of the State of Kansas",
+        # Senate Resolution (ceremonial / honorary)
+        "Be it resolved by the Senate of the State of Kansas",
+        # House Resolution / House Concurrent Resolution
+        "Be it resolved by the House of Representatives of the State of Kansas",
+        # Additional resolving clauses inside resolutions
+        "Be it further resolved",
     ],
     "DE": [
         "SYNOPSIS",

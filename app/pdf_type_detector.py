@@ -380,9 +380,38 @@ def detect_pdf_type(pdf_path, min_text_threshold=50):
         
         # PRIORITY 5: Check for hybrid document (has text but also signatures/stamps)
         elif text_ratio >= 0.8 and total_small_images >= 3:
-            # Document has text but contains multiple small images (likely signatures)
-            pdf_type = "hybrid"
-            logging.info(f"Hybrid detection (text + signatures): text_ratio={text_ratio:.1%}, small_images={total_small_images}")
+            # Document has text and several small images.  Two scenarios:
+            #
+            #   (a) Decorative-only — text is fully extractable natively
+            #       and the small images are signatures, logos, social-
+            #       media handles (@DCSBOE), inline icons, etc.  This is
+            #       a normal digital PDF and must NOT be flagged as
+            #       hybrid.  Hallmark: high avg_text_quality, zero
+            #       large_images, zero high_dpi_images, and at least one
+            #       embedded font (real digital text).
+            #
+            #   (b) Real hybrid — some content lives only inside images
+            #       (mixed scanned + native text).  This is the case the
+            #       'hybrid' label was originally meant for.
+            #
+            # We treat case (a) as 'digital' so the standard PyMuPDF
+            # extract + clean pipeline runs cleanly, with no special
+            # OCR-aware path or misleading log line.
+            if (avg_text_quality >= 80
+                    and total_large_images == 0
+                    and total_high_dpi_images == 0
+                    and avg_fonts_per_page > 0):
+                pdf_type = "digital"
+                logging.info(
+                    f"Digital detection (text + decorative small images): "
+                    f"text_ratio={text_ratio:.1%}, quality={avg_text_quality:.1f}, "
+                    f"avg_chars={avg_chars:.1f}, fonts={avg_fonts_per_page:.1f}, "
+                    f"small_images={total_small_images} "
+                    f"(treated as signatures/logos — no OCR needed)"
+                )
+            else:
+                pdf_type = "hybrid"
+                logging.info(f"Hybrid detection (text + signatures): text_ratio={text_ratio:.1%}, small_images={total_small_images}")
         
         # PRIORITY 5b: Zero fonts = scanned PDF with OCR text layer
         # Real digital PDFs ALWAYS have embedded fonts in /Resources/Font.

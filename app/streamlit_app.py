@@ -1634,7 +1634,7 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
                     _mark_flags["mark_brackets"] = add_cfg.get("brackets", False) or del_cfg.get("brackets", False)
 
                 # 6a: JSON report
-                pymupdf_report = extract_pdf_json_report(pdf_path, **_mark_flags)
+                pymupdf_report = extract_pdf_json_report(pdf_path, state_code=detected_state, **_mark_flags)
                 n_spans = len(pymupdf_report.get("formatted_spans", []))
                 add_log(f"📊 PyMuPDF JSON report: {n_spans} formatted spans detected")
 
@@ -1646,7 +1646,7 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
                 add_log(f"✅ JSON report saved: {pymupdf_json_path}")
 
                 # 6b: Tagged text
-                pymupdf_text = extract_pdf_with_pymupdf(pdf_path, join_pages=True, **_mark_flags)
+                pymupdf_text = extract_pdf_with_pymupdf(pdf_path, join_pages=True, state_code=detected_state, **_mark_flags)
                 pymupdf_txt_path = output_path.replace(".txt", "_pymupdf.txt") if isinstance(output_path, str) else str(output_path).replace(".txt", "_pymupdf.txt")
                 with open(pymupdf_txt_path, "w", encoding="utf-8") as tf:
                     tf.write(pymupdf_text)
@@ -2010,7 +2010,7 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
         os.makedirs(session_folders['output_folder'], exist_ok=True)
 
         # JSON report
-        pymupdf_report = extract_pdf_json_report(pdf_path, **_mark_flags)
+        pymupdf_report = extract_pdf_json_report(pdf_path, state_code=detected_state, **_mark_flags)
         n_spans = len(pymupdf_report.get("formatted_spans", []))
         add_log(f"📊 PyMuPDF JSON report: {n_spans} formatted spans detected")
 
@@ -2020,7 +2020,7 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
             _json.dump(pymupdf_report, jf, indent=2, ensure_ascii=False)
 
         # Tagged text
-        pymupdf_text = extract_pdf_with_pymupdf(pdf_path, join_pages=True, **_mark_flags)
+        pymupdf_text = extract_pdf_with_pymupdf(pdf_path, join_pages=True, state_code=detected_state, **_mark_flags)
         pymupdf_txt_path = output_path.replace("_clean.txt", ".txt")
         with open(pymupdf_txt_path, "w", encoding="utf-8") as tf:
             tf.write(pymupdf_text)
@@ -2278,12 +2278,12 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
             _mark_flags["mark_brackets"] = add_cfg.get("brackets", False) or del_cfg.get("brackets", False)
 
         # JSON report
-        pymupdf_report = extract_pdf_json_report(pdf_path, **_mark_flags)
+        pymupdf_report = extract_pdf_json_report(pdf_path, state_code=detected_state, **_mark_flags)
         n_spans = len(pymupdf_report.get("formatted_spans", []))
         add_log(f"📊 PyMuPDF report: {n_spans} formatted spans detected")
 
         # Tagged text (needed for hybrid conversion)
-        pymupdf_text = extract_pdf_with_pymupdf(pdf_path, join_pages=True, **_mark_flags)
+        pymupdf_text = extract_pdf_with_pymupdf(pdf_path, join_pages=True, state_code=detected_state, **_mark_flags)
         add_log(f"✅ PyMuPDF tagged text: {len(pymupdf_text):,} chars")
 
         # Filter italic by section if needed
@@ -4007,7 +4007,7 @@ class BatchWorker:
                 _mark_flags["mark_brackets"] = add_cfg.get("brackets", False) or del_cfg.get("brackets", False)
 
             # 6a: JSON report
-            pymupdf_report = extract_pdf_json_report(pdf_path, **_mark_flags)
+            pymupdf_report = extract_pdf_json_report(pdf_path, state_code=detected_state, **_mark_flags)
             n_spans = len(pymupdf_report.get("formatted_spans", []))
             add_log(f"📊 PyMuPDF JSON report: {n_spans} formatted spans detected")
 
@@ -4019,7 +4019,7 @@ class BatchWorker:
             add_log(f"✅ JSON report saved")
 
             # 6b: Tagged text
-            pymupdf_text = extract_pdf_with_pymupdf(pdf_path, join_pages=True, **_mark_flags)
+            pymupdf_text = extract_pdf_with_pymupdf(pdf_path, join_pages=True, state_code=detected_state, **_mark_flags)
             pymupdf_txt_path = output_path.replace(".txt", "_pymupdf.txt")
             with open(pymupdf_txt_path, "w", encoding="utf-8") as tf:
                 tf.write(pymupdf_text)

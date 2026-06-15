@@ -32,6 +32,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import re
 import sys
 from dataclasses import dataclass, field
@@ -58,6 +59,27 @@ UNDERLINE_TOLERANCE_PT  = 4.0   # line within N pt below baseline
 STRIKETHROUGH_TOL_PT    = 3.0   # line within N pt of vertical centre
 HORIZONTAL_SLOPE_TOL    = 0.5   # max abs(dy) for a line to count as horizontal
 CHAR_OVERLAP_RATIO      = 0.30  # line must overlap ≥30 % of char width
+
+# --- Page-separator (header/footer rule) detection ------------------------
+# Many bills (e.g. Connecticut SB506 / File No. 619) draw a long horizontal
+# rule across the page just above the page footer (page number + bill ID).
+# That rule sits within UNDERLINE_TOLERANCE_PT of the last body-text
+# baseline and gets misread as an underline on the final word(s) of the
+# page (producing "[A>fficers.<A]" etc.).  We strip these rules before
+# the underline classifier runs.
+PAGE_SEPARATOR_ZONE_PT      = 100.0  # top/bottom margin (pt) considered header/footer
+PAGE_SEPARATOR_MIN_RATIO    = 0.40   # colinear segments must span ≥ 40 % of page width
+PAGE_SEPARATOR_Y_TOL_PT     = 1.5    # max y-delta for segments treated as colinear
+# Distinctive signature of CT decorative rules: a single visual rule is
+# emitted by the PDF authoring tool as several colinear segments separated
+# by sub-point gaps (e.g. 5 segments with 0.5 / 1.4 pt gaps).  A genuine
+# underline drawn under text is always a single continuous segment.  We
+# therefore also drop a colinear band if it has ≥ N segments AND the sum
+# of segment widths covers ≥ P of the band's total horizontal span (i.e.
+# the gaps are tiny).  This catches title-block separators (e.g. the
+# y≈202 rule on CT joint resolutions) that fall outside the margin zone.
+PAGE_SEPARATOR_MIN_SEGMENTS = 3      # min segments in band to qualify as decorative rule
+PAGE_SEPARATOR_COVERAGE     = 0.95   # min sum-of-widths / span (i.e. gaps must be tiny)
 
 # --- Geometric paragraph-break detection (within a single text block) ------
 # PyMuPDF often groups every line on a page into a single block, destroying
@@ -241,6 +263,114 @@ def _horizontal_overlap(ax0: float, ax1: float, bx0: float, bx1: float) -> float
     return max(0.0, min(ax1, bx1) - max(ax0, bx0))
 
 
+# ---------------------------------------------------------------------------
+# Page-separator (header/footer rule) filtering
+# ---------------------------------------------------------------------------
+# NOTE: this filter is currently invoked **only for Connecticut bills**.  The
+# call sites (`_extract_page_tagged_text`, `_extract_page_spans`,
+# `extract_pdf_json_report`) are gated by `state_code == "CT"` so other
+# states' extraction behaviour is unchanged.  See the call sites for the
+# guard.
+
+def _filter_page_separator_hlines(
+    hlines: List[HLine],
+    page: fitz.Page,
+    *,
+    zone_pt: float = PAGE_SEPARATOR_ZONE_PT,
+    min_extent_ratio: float = PAGE_SEPARATOR_MIN_RATIO,
+    y_tolerance: float = PAGE_SEPARATOR_Y_TOL_PT,
+    min_segments: int = PAGE_SEPARATOR_MIN_SEGMENTS,
+    coverage_ratio: float = PAGE_SEPARATOR_COVERAGE,
+) -> List[HLine]:
+    """Remove horizontal rules that delimit page headers / footers.
+
+    Many legislative PDFs (notably Connecticut bills) draw long horizontal
+    rules across the page — one above the body to separate the title
+    block (e.g. ``Substitute Senate Joint Resolution No. 52`` at
+    y≈202) and one above the page footer (page number + bill ID at
+    y≈714).  These rules sit within ``UNDERLINE_TOLERANCE_PT`` of an
+    adjacent text baseline and get misclassified as underlines by
+    :func:`_classify_char_decoration`, producing false ``[A>…<A]`` tags
+    on the bill title or final word(s) of a body page.
+
+    A colinear band of horizontal segments is treated as a separator
+    rule when **either** of these holds:
+
+    1. **Margin-zone rule.**  The band's ``y`` falls in the top
+       *zone_pt* or bottom *zone_pt* of the page **and** its combined
+       extent is ≥ *min_extent_ratio* of the page width.  Catches
+       single-segment header/footer rules near the margins.
+
+    2. **Multi-segment decorative rule.**  The band contains
+       ≥ *min_segments* colinear pieces, the sum of their widths is
+       ≥ *coverage_ratio* of the band's total horizontal span (i.e.
+       only sub-point gaps separate them), **and** that span is
+       ≥ *min_extent_ratio* of the page width.  This is the distinctive
+       signature of CT title-block / footer rules — a real underline
+       under text is always a single continuous segment, so this rule
+       cannot match genuine underlined legislative content.
+
+    Bands that fail both criteria are kept untouched.
+    """
+    if not hlines:
+        return hlines
+
+    page_height = page.rect.height
+    page_width  = page.rect.width
+    if page_height <= 0 or page_width <= 0:
+        return hlines
+
+    header_y_max = zone_pt
+    footer_y_min = page_height - zone_pt
+
+    # Group ALL hlines into colinear bands (sorted by y, glued by y_tolerance).
+    sorted_hl = sorted(hlines, key=lambda h: h.y)
+    bands: List[List[HLine]] = []
+    for hl in sorted_hl:
+        if bands and abs(hl.y - bands[-1][-1].y) <= y_tolerance:
+            bands[-1].append(hl)
+        else:
+            bands.append([hl])
+
+    drop_ids: set = set()
+    for band in bands:
+        x_min = min(h.x0 for h in band)
+        x_max = max(h.x1 for h in band)
+        span  = x_max - x_min
+        if span <= 0:
+            continue
+        width_ratio = span / page_width
+        if width_ratio < min_extent_ratio:
+            continue   # too short to be a separator regardless of position
+
+        band_y = band[0].y
+        in_margin = (band_y <= header_y_max) or (band_y >= footer_y_min)
+
+        # Criterion 1: wide rule in margin zone
+        is_separator = in_margin
+
+        # Criterion 2: multi-segment decorative rule (anywhere on page)
+        if not is_separator and len(band) >= min_segments:
+            sum_widths = sum(h.x1 - h.x0 for h in band)
+            if sum_widths / span >= coverage_ratio:
+                is_separator = True
+
+        if is_separator:
+            for h in band:
+                drop_ids.add(id(h))
+
+    if not drop_ids:
+        return hlines
+
+    kept = [hl for hl in hlines if id(hl) not in drop_ids]
+    if len(kept) < len(hlines):
+        logger.debug(
+            "Filtered %d page-separator hlines (header/footer/title rules) — kept %d",
+            len(hlines) - len(kept), len(kept),
+        )
+    return kept
+
+
 def _extract_annot_rects(page: fitz.Page) -> Tuple[List[fitz.Rect], List[fitz.Rect]]:
     """Return (underline_rects, strikeout_rects) from PDF annotations."""
     ul_rects: List[fitz.Rect] = []
@@ -340,6 +470,7 @@ def _extract_page_tagged_text(
     mark_italic: bool = False,
     mark_bold: bool = False,
     exclude_zones: Optional[List[Tuple[float, float, float, float]]] = None,
+    state_code: Optional[str] = None,
 ) -> str:
     """
     Build tagged text for *page* using per-character decoration detection.
@@ -365,6 +496,14 @@ def _extract_page_tagged_text(
     table_zones = _detect_table_zones(page)
     if table_zones:
         hlines = _filter_table_border_hlines(hlines, table_zones)
+
+    # -- 1c. CT-only: filter page header/footer separator rules --
+    # CT bills draw a long rule above the page footer that sits within
+    # underline tolerance of the last body line and gets misread as an
+    # underline on the final word of the page (e.g. "o[A>fficers.<A]").
+    # Other states don't exhibit this pattern, so the filter is skipped.
+    if state_code and state_code.upper() == "CT":
+        hlines = _filter_page_separator_hlines(hlines, page)
 
     # -- 2. Get text with per-character positions --
     # Try rawdict first for char-level precision; fall back to dict if
@@ -632,14 +771,33 @@ def _extract_page_tagged_text(
     if in_del:
         output.append(DEL_CLOSE)
 
-    return "".join(output)
+    result_text = "".join(output)
+
+    # ─── DC-only: recover chairman signature line from raster image ───
+    # DC SBOE bills bake the chairman's signature + "Chairman Phil
+    # Mendelson" into a raster image block on the bill page, sitting
+    # just above the "at the request of the State Board of Education"
+    # text.  Native text extraction can't see image content, so the
+    # chairman line is otherwise lost.  The helper OCRs the image
+    # region (best-effort — silently no-ops if Tesseract is absent or
+    # no matching layout is found) and splices the recovered line into
+    # the output just above the anchor text.
+    if state_code and state_code.upper() == "DC":
+        chairman_line = _recover_dc_chairman_from_image(page)
+        if chairman_line:
+            result_text = _splice_dc_chairman_line(result_text, chairman_line)
+            logger.debug(
+                "DC: recovered chairman line via OCR — %r", chairman_line
+            )
+
+    return result_text
 
 
 # ---------------------------------------------------------------------------
 # Span-level extraction (kept for summary / diagnostics)
 # ---------------------------------------------------------------------------
 
-def _extract_page_spans(page: fitz.Page) -> List[TextSpan]:
+def _extract_page_spans(page: fitz.Page, state_code: Optional[str] = None) -> List[TextSpan]:
     """
     Span-level extraction — used only for ``extract_pdf_summary()``.
     """
@@ -654,6 +812,10 @@ def _extract_page_spans(page: fitz.Page) -> List[TextSpan]:
     table_zones = _detect_table_zones(page)
     if table_zones:
         hlines = _filter_table_border_hlines(hlines, table_zones)
+
+    # CT-only: filter page header/footer separator rules
+    if state_code and state_code.upper() == "CT":
+        hlines = _filter_page_separator_hlines(hlines, page)
 
     text_dict = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)
     spans: List[TextSpan] = []
@@ -906,18 +1068,354 @@ def _strip_ct_compact_designator(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# District of Columbia (DC) letterhead-footer removal
+# ---------------------------------------------------------------------------
+# DC State Board of Education bills are formatted as a transmittal letter
+# whose page-1 footer (a 3-line letterhead with address / phone / website /
+# email / Twitter handle) sits at y≈745 on a 792-pt page.  PyMuPDF returns
+# this footer as the FIRST text block on the page, so the converted text
+# starts with the letterhead instead of the actual letter date.  Removing
+# this block also drops the false [A>sboe.dc.gov<A] / [A>sboe@dc.gov<A]
+# hyperlink tags that come with it.
+#
+# Real-world example (from SBOE transmittal letter for the "Universal
+# Public School Nurses for Safer Students Amendment Act of 2025"):
+#
+#   District of Columbia State Board of Education
+#   441 4th Street NW, Suites 530S & 723N | Washington, DC 20001
+#
+#   (202) 741-0888 | [A>sboe.dc.gov<A] | [A>sboe@dc.gov<A] | @DCSBOE
+#
+# We anchor the regex on "District of Columbia State Board of Education"
+# so other DC bill formats remain untouched.
+_RE_DC_LETTERHEAD_BLOCK = re.compile(
+    r"^[ \t]*District\s+of\s+Columbia\s+State\s+Board\s+of\s+Education[ \t]*\n"
+    r"(?:.*\n){0,4}?"                       # 0–4 follow-up lines (address, phone)
+    r".*?@DCSBOE[ \t]*\n",                  # always ends with the @DCSBOE handle
+    re.IGNORECASE,
+)
+
+
+def _strip_dc_letterhead_footer(text: str) -> str:
+    """Remove the DC State Board of Education letterhead block.
+
+    DC SBOE transmittal letters embed a footer-style letterhead block
+    (organisation name, address, phone, website, email, ``@DCSBOE``)
+    that PyMuPDF places at the top of the converted text because the
+    PDF emits that block first, even though it sits at y≈745 on the
+    page.  This function strips the entire block — its content is
+    document metadata, not legislative language, and it should never
+    appear in the final output.
+
+    Operates on the whole document; the regex anchor makes it a no-op
+    for any text that doesn't contain ``District of Columbia State
+    Board of Education`` followed (within a few lines) by ``@DCSBOE``.
+    """
+    new_text = _RE_DC_LETTERHEAD_BLOCK.sub("", text)
+    if new_text != text:
+        # Tidy excessive blank lines left behind
+        new_text = re.sub(r"\n{3,}", "\n\n", new_text)
+        new_text = new_text.lstrip("\n")
+        logger.debug("Stripped DC SBOE letterhead-footer block")
+    return new_text
+
+
+# ---------------------------------------------------------------------------
+# DC hyperlink-underline tag stripping
+# ---------------------------------------------------------------------------
+# DC SBOE letters embed hyperlinks (mailto: and http(s)://) that the PDF
+# renders as underlined text.  The underline detector treats those rule
+# lines as "added text" decorations, producing false [A>…<A] tags around
+# every email address and URL in the document.  Hyperlink underlines are
+# never legislative additions, so we strip those tags whenever the tag
+# content matches an email or URL shape.
+#
+# Patterns matched (inside a [A>…<A] tag):
+#   • email:  user@host.tld         (e.g. bernice.butler@dc.gov)
+#   • domain: host.tld              (e.g. sboe.dc.gov)
+#   • URL:    http://… or https://…
+_RE_DC_LINK_TAG = re.compile(
+    r"\[A>\s*("
+    r"(?:https?://\S+)"
+    r"|(?:[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})"
+    r"|(?:[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+){1,3}\.(?:gov|com|org|net|edu|us))"
+    r")\s*<A\]"
+)
+
+
+def _strip_dc_link_underline_tags(text: str) -> str:
+    """Strip ``[A>…<A]`` tags whose content is an email address or URL.
+
+    DC bills underline hyperlinks in the source PDF; the underline is
+    purely a hyperlink rendering convention, not a legislative addition.
+    The regex above matches only tag contents whose shape is clearly an
+    email, bare domain, or full URL, so genuine underlined legislative
+    text containing "@" or "." (extremely rare) is unaffected.
+
+    Scoped to DC because other states use underlined text legitimately
+    for legislative additions; DC bills do not, and any underline that
+    matches a hyperlink shape is always a false positive there.
+    """
+    new_text = _RE_DC_LINK_TAG.sub(r"\1", text)
+    if new_text != text:
+        logger.debug("Stripped DC hyperlink-underline [A>…<A] tags")
+    return new_text
+
+
+# ---------------------------------------------------------------------------
+# DC chairman-signature OCR recovery
+# ---------------------------------------------------------------------------
+# DC SBOE bills bake the chairman's signature + printed name into a raster
+# IMAGE block at the top of the bill page (typically page 2), sitting just
+# above the "at the request of the State Board of Education" text line.
+# PyMuPDF can extract the surrounding native text but not the image, so the
+# chairman line ("Chairman Phil Mendelson") is dropped from the output
+# entirely.
+#
+# Layout we anchor on:
+#   ┌──────────────────────────────────────────────┐
+#   │  [IMAGE: signature scribble + "Chairman Phil │
+#   │          Mendelson" baked into one bitmap]   │
+#   │  at the request of the State Board of Edu... │
+#   │  A BILL                                      │
+#   └──────────────────────────────────────────────┘
+#
+# Strategy:
+#   1. Find the y-coordinate of "at the request of the State Board of
+#      Education" via page.search_for().
+#   2. Locate a wide image block sitting directly above it.
+#   3. Run page-level OCR (PyMuPDF's get_textpage_ocr → Tesseract).
+#   4. Filter OCR words by bbox-membership inside the image rect.
+#   5. Group surviving words into y-bands → reconstruct lines.
+#   6. Find the line beginning with "Chairman" or "airman" — the leading
+#      "Ch" is often clipped by the overlapping handwritten signature
+#      scribble, so we accept either prefix and normalise to "Chairman".
+#
+# The whole helper is best-effort: any failure (Tesseract missing, OCR
+# error, no candidate image, no chairman match) becomes a no-op so the
+# extractor's behaviour degrades gracefully to today's output.
+
+# Standard Tesseract install path on Windows used elsewhere in the app
+# (mirrors pdf_compare_viewer.extract_word_bboxes).
+_DC_TESSERACT_DIR = r"C:\Users\C302602\AppData\Local\Programs\Tesseract-OCR"
+_DC_OCR_TESSERACT_CONFIGURED = False
+
+# Anchor for splice — matches the "at the request of the State Board of
+# Education" line at the start of a line (allowing leading whitespace).
+_RE_DC_REQUEST_LINE = re.compile(
+    r"^([ \t]*)at\s+the\s+request\s+of\s+the\s+State\s+Board\s+of\s+Education",
+    re.MULTILINE | re.IGNORECASE,
+)
+
+# Match either the canonical "Chairman" prefix or the OCR-clipped "airman"
+# prefix at the start of a line.  Used both to recognise the chairman
+# line in OCR output and to normalise it back to "Chairman".
+_RE_DC_AIRMAN_PREFIX = re.compile(r"^(?:Ch)?airman\b", re.IGNORECASE)
+
+
+def _ensure_tesseract_path() -> bool:
+    """Configure Tesseract environment variables for the current process.
+
+    Sets ``TESSDATA_PREFIX`` and prepends the Tesseract install dir to
+    ``PATH`` so PyMuPDF's :func:`Page.get_textpage_ocr` can locate the
+    binary and language data.  Idempotent — runs at most once per
+    process.
+
+    Returns ``True`` if a Tesseract install was located, ``False``
+    otherwise (in which case OCR will not be attempted).
+    """
+    global _DC_OCR_TESSERACT_CONFIGURED
+    if _DC_OCR_TESSERACT_CONFIGURED:
+        return True
+    if os.path.isdir(_DC_TESSERACT_DIR):
+        os.environ.setdefault(
+            "TESSDATA_PREFIX",
+            os.path.join(_DC_TESSERACT_DIR, "tessdata"),
+        )
+        if _DC_TESSERACT_DIR not in os.environ.get("PATH", ""):
+            os.environ["PATH"] = (
+                _DC_TESSERACT_DIR + os.pathsep + os.environ.get("PATH", "")
+            )
+        _DC_OCR_TESSERACT_CONFIGURED = True
+        return True
+    return False
+
+
+def _ocr_words_inside_bbox(
+    page: "fitz.Page",
+    bbox: Tuple[float, float, float, float],
+    *,
+    dpi: int = 300,
+    y_band_pt: float = 5.0,
+) -> List[str]:
+    """Run OCR on *page* and return text lines reconstructed from words
+    whose centres fall inside *bbox*.
+
+    Lines are sorted top-to-bottom; words inside each line are sorted
+    left-to-right.  Single-character non-letter tokens are discarded as
+    OCR noise (these are typically signature-scribble artefacts).
+
+    Returns ``[]`` on any failure (Tesseract missing, OCR error, etc.).
+    """
+    if not _ensure_tesseract_path():
+        return []
+    try:
+        tp = page.get_textpage_ocr(flags=0, full=True, dpi=dpi)
+        words = page.get_text("words", textpage=tp)
+    except Exception as e:                                 # pragma: no cover
+        logger.debug("DC OCR failed on page %s: %s", page.number, e)
+        return []
+
+    bx0, by0, bx1, by1 = bbox
+    bands: Dict[int, List[Tuple[float, str]]] = {}
+    for w in words:
+        x0, y0, x1, y1, text = w[0], w[1], w[2], w[3], w[4]
+        cx = (x0 + x1) / 2.0
+        cy = (y0 + y1) / 2.0
+        if not (bx0 <= cx <= bx1 and by0 <= cy <= by1):
+            continue
+        # Discard junk tokens (lone punctuation / single non-letter chars)
+        if len(text) <= 1 and not text.isalpha():
+            continue
+        key = int(round(y0 / y_band_pt) * y_band_pt)
+        bands.setdefault(key, []).append((x0, text))
+
+    out_lines: List[str] = []
+    for y in sorted(bands.keys()):
+        line_words = [w for _, w in sorted(bands[y])]
+        out_lines.append(" ".join(line_words))
+    return out_lines
+
+
+def _recover_dc_chairman_from_image(page: "fitz.Page") -> Optional[str]:
+    """Recover the chairman-signature line from a DC SBOE raster image.
+
+    Returns the cleaned chairman line (e.g. ``"Chairman Phil Mendelson"``)
+    on success, or ``None`` if no matching pattern is found / OCR fails.
+
+    The page must contain the literal text "at the request of the State
+    Board of Education" AND a wide image block directly above that line;
+    otherwise this function is a no-op.
+    """
+    request_hits = page.search_for("at the request of the State Board of Education")
+    if not request_hits:
+        return None
+    request_y_top = min(r.y0 for r in request_hits)
+
+    # Find candidate image blocks above the request line, wide & tall
+    # enough to contain a printed signature line.
+    raw = page.get_text("rawdict")
+    candidates: List[Tuple[float, float, float, float]] = []
+    for blk in raw.get("blocks", []):
+        if blk.get("type") != 1:               # 1 = image block
+            continue
+        bbox = tuple(blk.get("bbox", (0, 0, 0, 0)))
+        x0, y0, x1, y1 = bbox
+        width  = x1 - x0
+        height = y1 - y0
+        if width < 80 or height < 20:
+            continue
+        if y1 > request_y_top:                 # must sit above the line
+            continue
+        if (request_y_top - y1) > 80:          # must be near it (≤ 80 pt)
+            continue
+        candidates.append(bbox)
+
+    if not candidates:
+        return None
+
+    # Largest candidate first (signature image is the dominant one)
+    candidates.sort(
+        key=lambda b: (b[2] - b[0]) * (b[3] - b[1]),
+        reverse=True,
+    )
+    sig_bbox = candidates[0]
+
+    lines = _ocr_words_inside_bbox(page, sig_bbox, dpi=300)
+    if not lines:
+        return None
+
+    # Look for a line starting with "Chairman" or "airman" (Ch clipped by
+    # the overlapping handwritten signature).  Normalise to "Chairman".
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not _RE_DC_AIRMAN_PREFIX.match(line):
+            continue
+        return _RE_DC_AIRMAN_PREFIX.sub("Chairman", line, count=1)
+
+    return None
+
+
+def _splice_dc_chairman_line(text: str, chairman_line: str) -> str:
+    """Insert *chairman_line* into *text* immediately before the first
+    line containing "at the request of the State Board of Education".
+
+    Returns *text* unchanged if no anchor match is found.  The anchor's
+    own indentation is preserved on the new line.
+    """
+    m = _RE_DC_REQUEST_LINE.search(text)
+    if not m:
+        return text
+    indent = m.group(1) or ""
+    insert_at = m.start()
+    return text[:insert_at] + f"{indent}{chairman_line} \n" + text[insert_at:]
+
+
+# ---------------------------------------------------------------------------
 # Kansas (KS) header tag stripping — remove false [A>…<A] from bill title
 # ---------------------------------------------------------------------------
-# Kansas bill PDFs have decorative italic header text that the
-# underline/italic detector picks up, producing false [A> tags.
+# Kansas bill PDFs have decorative italic / bold-italic header text on page 1
+# that the underline/italic detector picks up, producing false [A> tags.
+#
+# These header elements must NEVER carry [A>…<A] tags even when they appear
+# in bold/italic in the source PDF — they are document metadata, not added
+# legislative language.  The regex below covers every header variant we have
+# seen in real Kansas bills:
+#
+#   Session line ............. "Session of 2025"
+#   Amendment status ......... "As Amended by House Committee"
+#                              "As Amended by Senate Committee"
+#   Engrossed prefix ......... "ENGROSSED HOUSE BILL No. 1204"
+#                              "ENGROSSED SENATE BILL No. 13"
+#   Substitute prefix ........ "SUBSTITUTE FOR HOUSE BILL No. 2207"
+#                              "SUBSTITUTE FOR SENATE BILL No. 45"
+#                              "HOUSE SUBSTITUTE FOR SENATE BILL No. 113"
+#                              "SENATE SUBSTITUTE FOR HOUSE BILL No. 113"
+#   Bill identifier .......... "HOUSE BILL No. 2207" / "SENATE BILL No. 45"
+#   Resolution identifier .... "HOUSE RESOLUTION No. 5042"
+#                              "SENATE RESOLUTION No. 1234"
+#   Concurrent resolution .... "HOUSE CONCURRENT RESOLUTION No. 5042"
+#                              "SENATE CONCURRENT RESOLUTION No. 1604"
+#   Committee origin ......... "By Committee on Child Welfare and Foster Care"
+#   Sponsor line ............. "By Representative Howerton"
+#                              "By Representatives Smith and Jones"
+#                              "By Senator Lee" / "By Senators ..."
+#   Requester line ........... "Requested by Representative McDonald"
+#                              "Requested by Senator …" / "Requested by Governor …"
+#   Act title ................ "AN ACT concerning records; relating to..."
 _RE_KS_HEADER_PATTERNS = re.compile(
     r"\[A>(.*?(?:"
+    # Session line: "Session of 2025"
     r"Session\s+of\s+\d{4}"
-    r"|(?:HOUSE|SENATE)\s+(?:BILL|RESOLUTION|CONCURRENT\s+RESOLUTION|SUBSTITUTE\s+FOR)\s+(?:No\.?\s*)?\d*"
-    r"|(?:SUBSTITUTE\s+FOR\s+)?(?:HOUSE|SENATE)\s+BILL\s+(?:No\.?\s*)?\d+"
+    # Amendment status line on page 1
+    r"|As\s+Amended\s+by\s+(?:House|Senate)\s+Committee"
+    # Engrossed bill / resolution prefix
+    r"|Engrossed\s+(?:HOUSE|SENATE)\s+(?:BILL|(?:CONCURRENT\s+)?RESOLUTION)"
+    # House Substitute for Senate ... / Senate Substitute for House ...
+    r"|(?:HOUSE|SENATE)\s+SUBSTITUTE\s+FOR\s+(?:HOUSE|SENATE)\s+(?:BILL|(?:CONCURRENT\s+)?RESOLUTION)"
+    # Substitute for House/Senate bill or resolution
+    r"|SUBSTITUTE\s+FOR\s+(?:HOUSE|SENATE)\s+(?:BILL|(?:CONCURRENT\s+)?RESOLUTION)"
+    # House/Senate (Concurrent) Resolution No. XXXX
+    r"|(?:HOUSE|SENATE)\s+(?:CONCURRENT\s+)?RESOLUTION(?:\s+(?:No\.?\s*)?\d+)?"
+    # House/Senate Bill No. XXXX
+    r"|(?:HOUSE|SENATE)\s+BILL(?:\s+(?:No\.?\s*)?\d+)?"
+    # Committee origin
     r"|By\s+Committee\s+on"
+    # Sponsor line
     r"|By\s+(?:Representative|Senator)s?"
+    # Requester line
     r"|Requested\s+by\s+(?:Representative|Senator|Governor)"
+    # Act title
     r"|AN\s+ACT\s+concerning"
     r").*?)<A\]",
     re.IGNORECASE,
@@ -927,11 +1425,19 @@ _RE_KS_HEADER_PATTERNS = re.compile(
 def _strip_ks_header_tags(text: str) -> str:
     """Remove false ``[A>…<A]`` tags from KS bill header lines.
 
-    Kansas PDFs have decorative/italic header text that the detector
-    picks up as underlines.  This strips those tags from header-pattern
-    lines while leaving genuine legislative tags untouched.
+    Kansas PDFs have decorative bold / italic / bold-italic header text
+    that the formatting detector picks up as added language, producing
+    false ``[A>…<A]`` tags around the bill identifier, session line,
+    committee line, sponsor line, etc.  These are document metadata and
+    must never carry add-language tags — same treatment as
+    ``"Session of 2025"`` regardless of how they are rendered in the PDF.
 
-    Only operates on the first ~15 lines (the header area).
+    This function strips those tags from header-pattern lines (keeping
+    the text intact) while leaving genuine legislative tags untouched.
+
+    Only operates on the first ~15 lines (the header area).  Body text
+    further down the document is processed by the LLM clean step and
+    other deterministic post-processors.
     """
     lines = text.split("\n")
     header_end = min(15, len(lines))
@@ -945,6 +1451,93 @@ def _strip_ks_header_tags(text: str) -> str:
         logger.debug("Stripped false [A> tags from KS header lines")
         return "\n".join(lines)
     return text
+
+
+# ---------------------------------------------------------------------------
+# Kansas (KS) resolving / enacting clause tag stripping
+# ---------------------------------------------------------------------------
+# Kansas bills, resolutions, and concurrent resolutions all introduce their
+# operative section with a standard enacting / resolving clause.  These are
+# document boilerplate, NOT added legislative language, so they MUST never
+# carry [A>…<A] tags even when the source PDF renders them in italic / bold-
+# italic (which is the standard typographic convention for these clauses).
+#
+# Variants covered:
+#
+#   Bill enacting clause:
+#     "Be it enacted by the Legislature of the State of Kansas:"
+#
+#   Senate Concurrent Resolution (constitutional amendment form):
+#     "Be it resolved by the Legislature of the State of Kansas, two-thirds
+#      of the members elected (or appointed) and qualified to the Senate and
+#      two-thirds of the members elected (or appointed) and qualified to the
+#      House of Representatives concurring therein:"
+#
+#   House Concurrent Resolution:
+#     "Be it resolved by the House of Representatives of the State of
+#      Kansas, the Senate concurring therein:"
+#
+#   Senate Resolution (ceremonial / honorary):
+#     "Be it resolved by the Senate of the State of Kansas: That ..."
+#
+#   House Resolution:
+#     "Be it resolved by the House of Representatives of the State of
+#      Kansas: That ..."
+#
+#   Additional resolving clauses inside resolutions:
+#     "Be it further resolved: That ..."
+#     "Be it further resolved by the Senate of the State of Kansas: That ..."
+#
+# All variants share the structure:
+#     Be it [further ] (enacted | resolved) [by ...] : [body...]
+#
+# The regex matches an entire [A>…<A] tag whose content begins (after
+# optional leading whitespace) with this clause structure, then strips the
+# tag wrapper while preserving the clause text verbatim.  The character
+# class [^\[\]] prevents the match from crossing into adjacent tags.
+_RE_KS_RESOLVING_CLAUSE = re.compile(
+    r"\[A>"                                            # opening [A>
+    r"(\s*Be\s+it\s+(?:further\s+)?(?:enacted|resolved)\b"  # boilerplate start
+    r"[^\[\]]*?)"                                       # content up to <A]
+    r"<A\]",                                            # closing <A]
+    re.IGNORECASE,
+)
+
+
+def _strip_ks_resolving_clause_tags(text: str) -> str:
+    """Remove ``[A>…<A]`` tags wrapping Kansas enacting / resolving clauses.
+
+    Kansas bills, resolutions, and concurrent resolutions all begin their
+    operative section with a standard enacting / resolving clause::
+
+        Be it enacted by the Legislature of the State of Kansas:
+        Be it resolved by the Senate of the State of Kansas: That ...
+        Be it resolved by the House of Representatives of the State of
+            Kansas, the Senate concurring therein:
+        Be it resolved by the Legislature of the State of Kansas,
+            two-thirds of the members ... concurring therein:
+        Be it further resolved: That ...
+        Be it further resolved by ...: That ...
+
+    These are document boilerplate, NOT added legislative language, so they
+    must never carry ``[A>…<A]`` tags even if the source PDF renders them
+    in italic or bold-italic.  This function strips the tag wrapper while
+    keeping the clause text verbatim.
+
+    Operates on the full text (resolving clauses can appear anywhere in
+    the document — for example, "Be it further resolved" can be in the
+    middle of a resolution — unlike header lines which are first-15-lines
+    only).
+    """
+    n_matches = len(_RE_KS_RESOLVING_CLAUSE.findall(text))
+    if n_matches == 0:
+        return text
+    new_text = _RE_KS_RESOLVING_CLAUSE.sub(r"\1", text)
+    logger.debug(
+        "Stripped [A>…<A] tags from %d KS resolving/enacting clause(s)",
+        n_matches,
+    )
+    return new_text
 
 
 # ---------------------------------------------------------------------------
@@ -1124,6 +1717,7 @@ def extract_pdf_with_pymupdf(
     strip_line_numbers: bool = False,
     join_pages: bool = False,
     page_separator: str = "\n\n--- Page {n} ---\n\n",
+    state_code: Optional[str] = None,
 ) -> List[str] | str:
     """
     Extract text from a PDF, tagging underline and strikethrough spans.
@@ -1179,6 +1773,7 @@ def extract_pdf_with_pymupdf(
             mark_italic=mark_italic,
             mark_bold=mark_bold,
             exclude_zones=None,
+            state_code=state_code,
         )
         clean = _clean_tagged_text(raw_text, strip_line_numbers=strip_line_numbers)
         # NOTE: _tag_brackets() is NOT called here.  It runs AFTER the
@@ -1713,6 +2308,18 @@ def clean_extracted_text(
         cleaned = _strip_false_subsection_d_tags(cleaned)
         cleaned = _restructure_ct_header(cleaned)
 
+    # ── strip DC SBOE letterhead-footer + hyperlink-underline tags ────
+    # DC State Board of Education transmittal letters open with a
+    # 3-line letterhead block (org name / address / phone / website /
+    # email / @DCSBOE handle) that PyMuPDF places at the top of the
+    # converted text even though it sits at y≈745 on the PDF page.
+    # The same block also produces false [A>…<A] tags around the
+    # hyperlinked URL and emails (sboe.dc.gov, sboe@dc.gov,
+    # bernice.butler@dc.gov, etc.).  Both issues are scoped to DC.
+    if state_code and state_code.upper() == "DC":
+        cleaned = _strip_dc_letterhead_footer(cleaned)
+        cleaned = _strip_dc_link_underline_tags(cleaned)
+
     # ── strip IN-specific artifacts (footers, barcodes, false headers) ─
     if state_code and state_code.upper() == "IN":
         cleaned = _strip_in_header_tags(cleaned)
@@ -1721,6 +2328,13 @@ def clean_extracted_text(
     # ── strip KS-specific false header tags ────────────────────────
     if state_code and state_code.upper() == "KS":
         cleaned = _strip_ks_header_tags(cleaned)
+        # Strip false [A>…<A] tags from enacting / resolving clauses
+        # ("Be it enacted by …", "Be it resolved by …", "Be it further
+        # resolved …").  These are document boilerplate and must never
+        # be tagged as added language, even when the source PDF renders
+        # them in italic / bold-italic.  Operates on the full text since
+        # "Be it further resolved" can appear anywhere in a resolution.
+        cleaned = _strip_ks_resolving_clause_tags(cleaned)
 
     # ── consolidate, clean, and split tagged blocks ───────────────────
     cleaned = consolidate_adjacent_tags(cleaned)
@@ -2398,6 +3012,7 @@ def extract_pdf_json_report(
     mark_bold: bool = False,
     mark_brackets: bool = False,
     strip_line_numbers: bool = False,
+    state_code: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Generate a JSON-serialisable report for a PDF.
@@ -2459,6 +3074,10 @@ def extract_pdf_json_report(
         table_zones = _detect_table_zones(page)
         if table_zones:
             hlines = _filter_table_border_hlines(hlines, table_zones)
+
+        # --- CT-only: filter out page header/footer separator rules ---
+        if state_code and state_code.upper() == "CT":
+            hlines = _filter_page_separator_hlines(hlines, page)
 
         # --- text with per-character positions (rawdict → dict fallback) ---
         text_dict = page.get_text("rawdict", flags=fitz.TEXT_PRESERVE_WHITESPACE)
@@ -2722,6 +3341,7 @@ def highlight_pdf_formatting(
     mark_bold: bool = False,
     mark_brackets: bool = False,
     strip_line_numbers: bool = False,
+    state_code: Optional[str] = None,
 ) -> List[Path]:
     """
     Render each PDF page as an image and draw coloured highlight
@@ -2774,6 +3394,7 @@ def highlight_pdf_formatting(
             mark_italic=mark_italic,
             mark_bold=mark_bold,
             strip_line_numbers=strip_line_numbers,
+            state_code=state_code,
         )
 
     # Organise spans by page number
