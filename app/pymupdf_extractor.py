@@ -216,16 +216,129 @@ def _extract_hlines_from_drawings(page: fitz.Page) -> List[HLine]:
 # ---------------------------------------------------------------------------
 
 def _detect_table_zones(page: fitz.Page) -> List[Tuple[float, float, float, float]]:
-    """Return bounding boxes ``(x0, y0, x1, y1)`` of tables found on *page*.
+    """Return bounding boxes ``(x0, y0, x1, y1)`` of *real* tables found on *page*.
 
-    Uses PyMuPDF's built-in ``find_tables()`` API.  Returns an empty list
-    if no tables are detected or the API is unavailable.
+    Uses PyMuPDF's built-in ``find_tables()`` API, then **validates** each
+    detected zone by requiring evidence of actual table structure — at
+    least one stroked horizontal or vertical line segment inside (or on
+    the edge of) the zone.
+
+    Why validate?  ``find_tables()`` infers tables from text alignment
+    alone and frequently produces false positives on legislative bills
+    where definitions or numbered subsections create aligned columns of
+    text decorated only with underlines (filled rectangles, not stroked
+    lines).  Without validation, every underlined definition on such a
+    page would be misidentified as a table cell and its underline tag
+    would be suppressed by the downstream filters.
+
+    A zone is accepted only when ``get_drawings()`` reports at least one
+    **stroked** path (``item[0] == "l"``) — either a horizontal line
+    spanning ≥ 40 % of the table width, or any vertical line — whose
+    coordinates fall inside the zone's bbox (with a small tolerance).
+    Filled rectangles (``"re"`` items, the usual rendering for
+    underlines and strike-throughs) do NOT count as structural evidence
+    because they are exactly the kind of decoration the downstream
+    filters are trying to *preserve*, not suppress.
+
+    Returns an empty list if no tables are detected, no detected zones
+    pass validation, or the API is unavailable.
     """
     try:
         tabs = page.find_tables()
-        return [tuple(t.bbox) for t in tabs.tables]  # type: ignore[union-attr]
+        raw_zones = [tuple(t.bbox) for t in tabs.tables]  # type: ignore[union-attr]
     except Exception:
         return []
+
+    if not raw_zones:
+        return []
+
+    # Collect stroked-line evidence from drawings.  We look at the raw
+    # path items rather than the post-processed hlines because we need
+    # to distinguish stroked lines (real borders) from filled rectangles
+    # (underlines).
+    try:
+        drawings = page.get_drawings()
+    except Exception:
+        # If we can't introspect the drawings, fall back to the legacy
+        # behaviour (trust find_tables).
+        return raw_zones
+
+    stroked_hlines: List[Tuple[float, float, float]] = []  # (y, x0, x1)
+    stroked_vlines: List[Tuple[float, float, float]] = []  # (x, y0, y1)
+    for path in drawings:
+        for item in path.get("items", []):
+            if not item or item[0] != "l":
+                continue  # only stroked lines, not filled rects
+            try:
+                p1 = fitz.Point(item[1])
+                p2 = fitz.Point(item[2])
+            except Exception:
+                continue
+            dx = abs(p1.x - p2.x)
+            dy = abs(p1.y - p2.y)
+            if dy <= HORIZONTAL_SLOPE_TOL and dx > 2:
+                y = (p1.y + p2.y) / 2
+                x0 = min(p1.x, p2.x)
+                x1 = max(p1.x, p2.x)
+                stroked_hlines.append((y, x0, x1))
+            elif dx <= HORIZONTAL_SLOPE_TOL and dy > 2:
+                x = (p1.x + p2.x) / 2
+                y0 = min(p1.y, p2.y)
+                y1 = max(p1.y, p2.y)
+                stroked_vlines.append((x, y0, y1))
+
+    if not stroked_hlines and not stroked_vlines:
+        # No stroked geometry anywhere on the page → no zone can have
+        # structural evidence.  Treat all detected zones as false
+        # positives (typical of legislative bills whose only graphics
+        # are underline rectangles).
+        logger.debug(
+            "Rejected %d find_tables() zones: page has no stroked lines",
+            len(raw_zones),
+        )
+        return []
+
+    tol = 3.0  # pt tolerance for "inside the zone"
+    validated: List[Tuple[float, float, float, float]] = []
+    for zx0, zy0, zx1, zy1 in raw_zones:
+        zwidth = zx1 - zx0
+        has_evidence = False
+
+        # Horizontal stroke spanning ≥ 40 % of the table width and
+        # sitting within the table's vertical span.
+        if zwidth > 0:
+            for y, x0, x1 in stroked_hlines:
+                if not (zy0 - tol <= y <= zy1 + tol):
+                    continue
+                overlap = _horizontal_overlap(x0, x1, zx0, zx1)
+                if overlap / zwidth >= 0.40:
+                    has_evidence = True
+                    break
+
+        # Any vertical stroke inside the zone counts (column border).
+        if not has_evidence:
+            for x, y0, y1 in stroked_vlines:
+                if not (zx0 - tol <= x <= zx1 + tol):
+                    continue
+                # Require the vertical line to cover a meaningful
+                # fraction of the zone's height (≥ 30 %) so we don't
+                # accept stray vertical ticks (e.g. tally marks).
+                v_overlap = max(0.0, min(y1, zy1) - max(y0, zy0))
+                zheight = zy1 - zy0
+                if zheight > 0 and v_overlap / zheight >= 0.30:
+                    has_evidence = True
+                    break
+
+        if has_evidence:
+            validated.append((zx0, zy0, zx1, zy1))
+        else:
+            logger.debug(
+                "Rejected find_tables() zone (no stroked border evidence): "
+                "bbox=(%.1f, %.1f, %.1f, %.1f)",
+                zx0, zy0, zx1, zy1,
+            )
+
+    return validated
 
 
 def _filter_table_border_hlines(
@@ -2160,6 +2273,108 @@ def _normalize_ar_page1_header(text: str) -> str:
     return new_text
 
 
+# ---------------------------------------------------------------------------
+# Arkansas (AR) intra-tag paragraph splitter
+# ---------------------------------------------------------------------------
+# The Claude clean step occasionally fuses what should be two distinct
+# paragraphs into a single ``[A>...<A]`` tag.  Two patterns recur on AR
+# bills:
+#
+#   1. Statute heading welded onto its lead-in / first subsection ::
+#
+#          [A>6-81-2101. Definitions. As used in this subchapter:<A]
+#          → [A>6-81-2101. Definitions.<A]
+#            [A>As used in this subchapter:<A]
+#
+#   2. One subsection welded onto the next ::
+#
+#          [A>(b) ...educational loans. (c)(1) Before receiving...<A]
+#          → [A>(b) ...educational loans.<A]
+#            [A>(c)(1) Before receiving...<A]
+#
+# Detection requires a sentence terminator (``.!?:;``) immediately before
+# the gap, which guards against:
+#   • citation parentheses like ``§ 6-81-2104(b)`` (no terminator before
+#     the paren — never split)
+#   • inline numerics like ``one (1) eligible profession`` /
+#     ``fifteen percent (15%)`` (no terminator before the paren — never
+#     split)
+
+# Pattern A: split inside an [A>...<A] tag at a sentence-terminator
+# followed by a parenthesised subsection marker.
+_RE_AR_SPLIT_AT_SUBSECTION = re.compile(
+    r"(?<=[.!?:;])"                   # terminator before the gap
+    r"\s+"                            # whitespace consumed
+    r"(?="                            # lookahead: subsection marker
+    r"\((?:[a-zA-Z]+|\d+)\)"          # (a) / (1) / (D) / (15)
+    r"(?:\([a-zA-Z\d]+\))*"           # optional nested marker like (c)(1)
+    r"\s"                             # space after the marker
+    r")"
+)
+
+# Pattern B: at the start of a tag, statute heading like
+# "6-81-2101. Definitions." followed by a capital-letter sentence.
+# Title text must not contain internal periods (rules out citations).
+_RE_AR_SPLIT_AT_STATUTE_HEAD = re.compile(
+    r"^\s*(\d+-\d+-\d+\.\s+[A-Z][^.<>]*?\.)"  # group 1: statute heading
+    r"\s+"
+    r"([A-Z][^<]+)$"                            # group 2: trailing sentence
+)
+
+# Tag-extraction regex.  ``[^<]*?`` stops at the first ``<`` so we never
+# straddle nested ``[D>...<D]`` deletions inside additions (rare in AR).
+_RE_AR_ADD_TAG = re.compile(r"\[A>([^<]*?)<A\]")
+
+
+def _split_ar_welded_paragraphs(text: str) -> str:
+    """Split AR ``[A>...<A]`` tags that wrap multiple paragraphs.
+
+    Handles two LLM-introduced welds that are characteristic of AR
+    bills (see module-level comment for examples):
+
+    1. **Statute heading welded onto its body** — split after the
+       title's terminating period.
+    2. **Subsection welded onto the next subsection** — split before
+       a ``(a)`` / ``(1)`` / ``(c)(1)`` marker that follows a sentence
+       terminator.
+
+    Both patterns are conservative: a sentence terminator must precede
+    the split point, so citation patterns (``§ 6-81-2104(b)``) and
+    inline parentheticals (``one (1)``, ``fifteen percent (15%)``) are
+    NEVER split — there's no terminator before their parens.
+
+    The function is idempotent: running it on already-split text is a
+    no-op because each emitted tag contains a single paragraph and
+    therefore matches neither split pattern.
+    """
+
+    def _process_tag(m: re.Match[str]) -> str:
+        content = m.group(1)
+        # Pattern A: split at every sentence-terminator → subsection
+        # boundary inside the tag.  ``re.split`` keeps the segments in
+        # order; we re-wrap each non-empty segment in fresh tags.
+        parts = _RE_AR_SPLIT_AT_SUBSECTION.split(content)
+        if len(parts) > 1:
+            return "\n\n".join(
+                f"[A>{p.strip()}<A]" for p in parts if p.strip()
+            )
+        # Pattern B: statute-heading split (only fires when Pattern A
+        # found nothing — a heading welded onto a list item is already
+        # caught by Pattern A above).
+        sm = _RE_AR_SPLIT_AT_STATUTE_HEAD.match(content)
+        if sm:
+            return (
+                f"[A>{sm.group(1).strip()}<A]\n\n"
+                f"[A>{sm.group(2).strip()}<A]"
+            )
+        return m.group(0)
+
+    new_text = _RE_AR_ADD_TAG.sub(_process_tag, text)
+    if new_text != text:
+        logger.debug("Split AR welded paragraphs (heading / subsection boundaries)")
+    return new_text
+
+
 # Regex: detect false [D>] tags around parenthesized subsection markers.
 # The LLM sometimes wraps (a), (b), (j), (1) etc. with deletion tags.
 _RE_FALSE_D_SUBSECTION = re.compile(
@@ -2910,6 +3125,16 @@ def clean_extracted_text(
     if state_code and state_code.upper() in {"IA", "DE", "IN"}:
         cleaned = rejoin_inline_renumber_list_breaks(cleaned)
 
+    # ── AR-specific: split welded paragraphs from LLM clean step.
+    #    Runs LAST in the AR post-processing chain so that any cross-tag
+    #    welds that survived `merge_split_tags` (e.g. when the LLM
+    #    output two paragraphs as a single ``[A>...<A]`` tag) get
+    #    split back into one tag per paragraph.  See the docstring of
+    #    `_split_ar_welded_paragraphs` for the detection rules and the
+    #    citation / inline-numeric guards that prevent false splits.
+    if state_code and state_code.upper() == "AR":
+        cleaned = _split_ar_welded_paragraphs(cleaned)
+
     # Store the diff report for the caller to retrieve and save
     clean_extracted_text._last_diff_report = diff_report
 
@@ -3065,7 +3290,24 @@ def merge_split_tags(text: str) -> str:
 
     Merges ``[A>text<A] [A>continuation<A]`` into ``[A>text continuation<A]``
     ONLY when the second tag does **not** start with a subsection marker.
+
+    Cross-sentence guard
+    --------------------
+    A negative lookbehind ``(?<![.!?:;])`` is applied to every merging
+    pattern so we never weld two tags when the prior tag closes
+    *immediately after* a sentence terminator (``.``, ``!``, ``?``,
+    ``:``, ``;``).  Without this guard, AR section headings like
+    ``[A>6-81-2101. Definitions.<A]`` were getting fused onto the lead-in
+    paragraph ``[A>As used in this subchapter:<A]`` because the LLM
+    sometimes outputs them on adjacent lines (single ``\n``) and the
+    cross-line pattern below would silently merge them.  PDF line wraps
+    that legitimately need to be merged never end with a sentence
+    terminator (the wrap point is mid-clause), so this guard is safe.
     """
+    # 1-char fixed-width negative lookbehind: prior tag must NOT close
+    # right after a sentence/clause terminator.  Placed before <T] so it
+    # checks the last character of the prior tag's content.
+    _no_terminator = r'(?<![.!?:;])'
     for tag_type in ['A', 'D']:
         _no_sub = (
             r'(?!\s*\(\d+\))'
@@ -3074,14 +3316,24 @@ def merge_split_tags(text: str) -> str:
             r'(?!\s*[a-z]\.\d*\.?\s)'
             r'(?!\s*\d+\.\s)'
         )
-        # 0) Inline joins: <T][T>text on same line — always merge
-        inline_cont = r'<' + tag_type + r'\]\[' + tag_type + r'>' + _no_sub
+        # 0) Inline joins: <T][T>text on same line — merge unless prior
+        #    closed at a sentence boundary.
+        inline_cont = (
+            _no_terminator
+            + r'<' + tag_type + r'\]\[' + tag_type + r'>'
+            + _no_sub
+        )
         text = re.sub(inline_cont, '', text)
         # 0b) Inline subsection boundary: <T][T>(1) → <T]\n\n[T>(1)
         inline_sub = r'<' + tag_type + r'\]\[' + tag_type + r'>'
         text = re.sub(inline_sub, '<' + tag_type + ']\n\n[' + tag_type + '>', text)
         # 1) Continuations: \n<T][T>text (NOT a subsection) → merge
-        same_cont = r'\n<' + tag_type + r'\]\[' + tag_type + r'>' + _no_sub
+        #    unless the prior content ends with a sentence terminator.
+        same_cont = (
+            _no_terminator
+            + r'\n<' + tag_type + r'\]\[' + tag_type + r'>'
+            + _no_sub
+        )
         text = re.sub(same_cont, ' ', text)
         # 2) Subsection boundaries: \n<T][T>(1) → <T]\n\n[T>(1)
         same_sub = r'\n<' + tag_type + r'\]\[' + tag_type + r'>'
@@ -3099,8 +3351,14 @@ def merge_split_tags(text: str) -> str:
         # cross-line regex does NOT match, leaving each visual line
         # with its OWN tag pair.  Normal paragraph wrapping (≤ 8
         # spaces) still merges as before.
+        #
+        # The leading ``_no_terminator`` lookbehind additionally blocks
+        # cross-paragraph welds where the prior tag ends with ``.``,
+        # ``!``, ``?``, ``:`` or ``;`` (i.e. a complete sentence /
+        # clause).  Such pairs are never PDF-wrap continuations.
         cross_line = (
-            r'<' + tag_type + r'\]'
+            _no_terminator
+            + r'<' + tag_type + r'\]'
             r'([ \t]*\n[ \t]{0,15})'
             r'\[' + tag_type + r'>' + _no_sub
         )
