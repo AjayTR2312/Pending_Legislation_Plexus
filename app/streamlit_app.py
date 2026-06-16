@@ -193,6 +193,13 @@ US_STATE_NAMES = {
 }
 
 # Configure Streamlit page
+#
+# initial_sidebar_state="collapsed":
+#   The sidebar holds Session Info (ID / Status / Created / System Stats)
+#   and the "New Session" reset button.  This is debug/admin info that
+#   most users don't need by default — show only the » toggle button so
+#   the main content area gets full width.  Users can click » to expand
+#   the sidebar when they want to inspect session details.
 st.set_page_config(
     page_title="Pending Legislation Processor",
     page_icon="🤖",
@@ -2405,7 +2412,38 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
 
 def show_simple_ui():
     """Simple UI for single file processing with session management"""
-    
+
+    # ── Global chrome hide — strip Streamlit's dev-only UI ─────────────
+    # We hide ONLY the items users of this internal tool don't need:
+    #   • Deploy button (stToolbar contents)
+    #   • Hamburger menu (#MainMenu)
+    #   • Top gradient strip (stDecoration)
+    #   • Status widget / footer
+    # The header itself is left at its NATIVE size so the sidebar toggle
+    # (» / «) button stays visible and clickable.  Shrinking the header
+    # was clipping the toggle off-screen — user couldn't open the
+    # Session Info sidebar anymore.
+    st.markdown("""
+    <style>
+        /* Hide dev chrome */
+        [data-testid="stToolbar"],
+        [data-testid="stDecoration"],
+        [data-testid="stStatusWidget"],
+        #MainMenu,
+        footer {
+            display: none !important;
+            visibility: hidden !important;
+        }
+        /* Make header transparent so it blends with the page,
+           but DO NOT shrink its height — that would hide the
+           sidebar collapse/expand button.                       */
+        header[data-testid="stHeader"],
+        .stApp > header {
+            background: transparent !important;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+
     # Determine if results are showing (need wider layout for validation review)
     _has_results = (
         (st.session_state.get('processed_file_path') and
@@ -2413,18 +2451,237 @@ def show_simple_ui():
           or (st.session_state.get('processed_file_path') and os.path.exists(st.session_state.processed_file_path))))
         or bool(st.session_state.get('batch_results'))
     )
-    _max_width = '95%' if _has_results else '1200px'
+    _max_width = '98%' if _has_results else '1200px'
+    # When a document is already processed, the header (title + subtitle
+    # + file card) is just chrome — collapse padding so the PDF↔Text
+    # comparator below gets nearly the full viewport height.  Keep enough
+    # padding-top to clear the Streamlit toolbar (Deploy / menu) above.
+    _pad_top = '0.9rem' if _has_results else '2rem'
+    _pad_bot = '0.3rem' if _has_results else '2rem'
 
     # Dynamic container width (must be f-string for variable)
     st.markdown(f"""
     <style>
         .block-container {{
-            padding-top: 2rem !important;
-            padding-bottom: 2rem !important;
+            padding-top: {_pad_top} !important;
+            padding-bottom: {_pad_bot} !important;
+            padding-left: 0.6rem !important;
+            padding-right: 0.6rem !important;
             max-width: {_max_width} !important;
+        }}
+        /* Compact-mode tweaks — only active after a doc is processed */
+        .compact-header h1 {{
+            font-size: 1.1rem !important;
+            margin: 0 !important;
+            padding: 6px 0 8px 0 !important;
+            line-height: 1.4 !important;
+            text-align: left !important;
+            display: block !important;
+        }}
+        .compact-header .subtitle {{ display: none !important; }}
+        .compact-header {{
+            display: block;
+            padding: 0 0 6px 0;
+            margin-bottom: 4px;
+            min-height: 36px;
         }}
     </style>
     """, unsafe_allow_html=True)
+
+    # ── Aggressive gap-removal CSS (only when results are showing) ────
+    # Streamlit's default vertical-block layout inserts ~1rem gap between
+    # sibling elements.  When a document is processed we want the file-info
+    # card and the tabs to sit almost flush so the PDF↔Text comparator can
+    # claim the rest of the page.
+    if _has_results:
+        st.markdown("""
+        <style>
+            /* ── Hide footer / decorations ─────────────────────────────
+               Note: header[data-testid="stHeader"] is intentionally NOT
+               hidden here.  The sidebar-toggle button (»/«) lives inside
+               the header and we need it visible so users can access the
+               Session Info sidebar.  Header is slimmed (not hidden) in
+               the global CSS block at the top of show_simple_ui().      */
+            footer,
+            [data-testid="stDecoration"],
+            [data-testid="stStatusWidget"],
+            [data-testid="stToolbar"] {
+                display: none !important;
+                height: 0 !important;
+            }
+
+            /* ── Lock app to viewport so there is NO outer scroll ──────── */
+            html, body, .stApp,
+            [data-testid="stAppViewContainer"],
+            section.main, .main {
+                height: 100vh !important;
+                max-height: 100vh !important;
+                overflow: hidden !important;
+            }
+
+            /* ── Block-container is a flex column that fills viewport ──── */
+            .block-container {
+                height: 100vh !important;
+                max-height: 100vh !important;
+                overflow: hidden !important;
+                display: flex !important;
+                flex-direction: column !important;
+                padding-top: 0.5rem !important;
+                padding-bottom: 0 !important;
+                gap: 0 !important;
+            }
+
+            /* All vertical-blocks become flex columns with no gap.
+               The OUTER vertical-block (direct child of block-container)
+               is what needs flex:1 chain — but children control their own
+               grow via flex-shrink:0 (chrome) or flex:1 (the iframe row). */
+            [data-testid="stVerticalBlock"] {
+                gap: 0 !important;
+                display: flex !important;
+                flex-direction: column !important;
+                min-height: 0 !important;
+            }
+            /* Direct children of block-container's vertical block fill it */
+            .block-container > [data-testid="stVerticalBlock"],
+            .block-container [data-testid="stVerticalBlock"]:has(> [data-testid="element-container"] iframe) {
+                flex: 1 1 auto !important;
+                height: 100% !important;
+            }
+
+            /* Element-containers default to NO grow (chrome rows) */
+            [data-testid="element-container"] {
+                flex-shrink: 0 !important;
+                margin-bottom: 0 !important;
+            }
+            /* Element-container that wraps the iframe DOES grow.
+               JS in the iframe measures its own top position and
+               sizes itself + these wrappers exactly.  These rules
+               are SAFETY NETS only — min-height ensures the iframe
+               isn't squeezed; max-height is a generous cap to keep
+               it from extending wildly past viewport if JS fails. */
+            [data-testid="element-container"]:has(iframe),
+            [data-testid="element-container"]:has([data-testid="stIFrame"]),
+            [data-testid="element-container"]:has([data-testid="stCustomComponentV1Host"]) {
+                flex: 1 1 auto !important;
+                min-height: 500px !important;
+                max-height: calc(100vh - 50px) !important;
+                display: flex !important;
+                flex-direction: column !important;
+                margin-top: 0 !important;
+                padding-top: 0 !important;
+            }
+
+            /* iframe wrappers fill their parent */
+            [data-testid="stIFrame"],
+            [data-testid="stCustomComponentV1Host"] {
+                flex: 1 1 auto !important;
+                min-height: 500px !important;
+                max-height: calc(100vh - 50px) !important;
+                display: flex !important;
+                flex-direction: column !important;
+                border-radius: 8px !important;
+                overflow: hidden !important;
+                margin-top: 0 !important;
+                padding-top: 0 !important;
+            }
+            iframe {
+                flex: 1 1 auto !important;
+                /* Min/max safety nets — actual height is set by JS in
+                   the iframe via window.frameElement (measures top
+                   position dynamically and fills remaining viewport). */
+                min-height: 500px !important;
+                max-height: calc(100vh - 50px) !important;
+                width: 100% !important;
+                border: 1px solid #d0d7de !important;
+                border-radius: 8px !important;
+                box-shadow: 0 1px 4px rgba(0,0,0,.06) !important;
+                background: #ffffff !important;
+                display: block !important;
+                margin: 0 !important;
+            }
+
+            /* Horizontal block (file pill + New button) is a fixed row
+               with guaranteed height so it can't overlap the title above. */
+            div[data-testid="stHorizontalBlock"] {
+                gap: 8px !important;
+                margin-top: 0 !important;
+                margin-bottom: 6px !important;
+                align-items: center !important;
+                flex-shrink: 0 !important;
+                min-height: 38px !important;
+            }
+
+            /* ── Tabs: list at top, panel fills remaining space ──────── */
+            .stTabs {
+                margin-top: -8px !important;
+                margin-bottom: 0 !important;
+                display: flex !important;
+                flex-direction: column !important;
+                flex: 1 1 auto !important;
+                min-height: 0 !important;
+            }
+            .stTabs [data-baseweb="tab-list"] {
+                padding: 0 !important;
+                margin-bottom: 0 !important;
+                flex-shrink: 0 !important;
+                /* Remove the default 2px bottom border that adds visual
+                   space — the iframe's own border provides separation. */
+                border-bottom: none !important;
+            }
+            /* CRITICAL: only the VISIBLE panel becomes a flex column.
+               Inactive panels keep BaseWeb's display:none from [hidden].
+               Without :not([hidden]) the inactive Summary + Activity Log
+               panels would render below the active one.                 */
+            .stTabs [data-baseweb="tab-panel"]:not([hidden]) {
+                display: flex !important;
+                flex-direction: column !important;
+                flex: 1 1 auto !important;
+                min-height: 0 !important;
+                overflow: hidden !important;
+                padding: 0 !important;
+                margin: 0 !important;
+                /* Pull tab content up flush against the tab-list */
+                margin-top: -2px !important;
+            }
+            /* Pull the tab-panel's first child (the element-container
+               wrapping the iframe) flush against the tab-list above. */
+            .stTabs [data-baseweb="tab-panel"]:not([hidden]) > div:first-child,
+            .stTabs [data-baseweb="tab-panel"]:not([hidden]) [data-testid="stVerticalBlock"]:first-child {
+                margin-top: 0 !important;
+                padding-top: 0 !important;
+                gap: 0 !important;
+            }
+            /* Zero-gap on the element-container wrapping the iframe */
+            .stTabs [data-baseweb="tab-panel"]:not([hidden]) [data-testid="element-container"] {
+                margin-top: 0 !important;
+                padding-top: 0 !important;
+            }
+
+            /* Compact New-Document button (single line, file-pill height) */
+            div[data-testid="stHorizontalBlock"] .stButton > button {
+                padding: 4px 14px !important;
+                font-size: 0.85rem !important;
+                line-height: 1 !important;
+                min-height: 32px !important;
+                height: 32px !important;
+                white-space: nowrap !important;
+                width: auto !important;
+                min-width: 0 !important;
+                display: inline-flex !important;
+                align-items: center !important;
+                justify-content: center !important;
+                gap: 4px !important;
+            }
+            div[data-testid="stHorizontalBlock"] .stButton {
+                display: flex !important;
+                justify-content: flex-end !important;
+            }
+            /* Tighten any markdown caption / paragraph blocks above tabs */
+            div[data-testid="stMarkdownContainer"] p {
+                margin-bottom: 0 !important;
+            }
+        </style>
+        """, unsafe_allow_html=True)
 
     # Professional CSS styling (static — no f-string needed)
     st.markdown("""
@@ -2526,19 +2783,64 @@ def show_simple_ui():
             background-color: #27AE60 !important;
         }
         
-        /* Sidebar styling */
+        /* ── Sidebar styling ──────────────────────────────────────
+           Background is dark navy (#2C3E50) for an admin/console look.
+           EVERY text element inside the sidebar must be explicitly
+           colored light, otherwise Streamlit's global rules (which
+           paint metric values dark #2C3E50, p/span default to dark)
+           cause text to vanish into the background.                  */
         section[data-testid="stSidebar"] {
             background-color: #2C3E50 !important;
         }
-        
+
+        /* Headings, paragraphs, generic text, st.text (pre/code),
+           captions, metric labels & values, list items, links —
+           force all to a light color so they're readable on dark BG. */
+        section[data-testid="stSidebar"] h1,
         section[data-testid="stSidebar"] h2,
         section[data-testid="stSidebar"] h3,
+        section[data-testid="stSidebar"] h4,
         section[data-testid="stSidebar"] p,
         section[data-testid="stSidebar"] span,
-        section[data-testid="stSidebar"] div[class*="stText"] {
+        section[data-testid="stSidebar"] label,
+        section[data-testid="stSidebar"] li,
+        section[data-testid="stSidebar"] a,
+        section[data-testid="stSidebar"] pre,
+        section[data-testid="stSidebar"] code,
+        section[data-testid="stSidebar"] [data-testid="stText"],
+        section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"],
+        section[data-testid="stSidebar"] [data-testid="stCaptionContainer"],
+        section[data-testid="stSidebar"] [data-testid="stMetricLabel"],
+        section[data-testid="stSidebar"] [data-testid="stMetricValue"],
+        section[data-testid="stSidebar"] div[class*="stText"],
+        section[data-testid="stSidebar"] div[class*="stMarkdown"] {
             color: #ECF0F1 !important;
         }
-        
+
+        /* st.text renders a <pre> — give it a subtle dark panel so the
+           Session ID / Status / Created lines look readable & tidy. */
+        section[data-testid="stSidebar"] pre,
+        section[data-testid="stSidebar"] [data-testid="stText"] {
+            background-color: rgba(255,255,255,0.06) !important;
+            color: #ECF0F1 !important;
+            border: 1px solid rgba(255,255,255,0.12) !important;
+            border-radius: 4px !important;
+            padding: 4px 8px !important;
+            margin: 2px 0 !important;
+            font-size: 0.85rem !important;
+            white-space: pre-wrap !important;
+        }
+
+        /* Metric value (big number) — make it pop on dark BG. */
+        section[data-testid="stSidebar"] [data-testid="stMetricValue"] {
+            color: #ECF0F1 !important;
+            font-size: 1.4rem !important;
+        }
+        /* Metric label (small caption above number) */
+        section[data-testid="stSidebar"] [data-testid="stMetricLabel"] {
+            color: #BDC3C7 !important;
+        }
+
         /* Sidebar button styling */
         section[data-testid="stSidebar"] .stButton button {
             background-color: #229954 !important;
@@ -2649,8 +2951,18 @@ def show_simple_ui():
     </style>
     """, unsafe_allow_html=True)
     
-    st.markdown('<h1 style="text-align: center;">📄 Pending Legislative Processor</h1>', unsafe_allow_html=True)
-    st.markdown('<p class="subtitle" style="text-align: center;">AI-powered text extraction and verification for legislative documents</p>', unsafe_allow_html=True)
+    if _has_results:
+        # Compact header — single small inline title, no subtitle.
+        # Wrapping div lets the CSS rules above target the children.
+        st.markdown(
+            '<div class="compact-header">'
+            '<h1>📄 Pending Legislative Processor</h1>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown('<h1 style="text-align: center;">📄 Pending Legislative Processor</h1>', unsafe_allow_html=True)
+        st.markdown('<p class="subtitle" style="text-align: center;">AI-powered text extraction and verification for legislative documents</p>', unsafe_allow_html=True)
     
     # ── Sidebar ────────────────────────────────────────────────────────
     # Session info (Session ID, Status, Created, System Stats) is a
@@ -2749,18 +3061,22 @@ def show_simple_ui():
 
     if _has_results and (_is_single_done or _is_batch_done):
         # ── Clean results header — hide upload clutter ────────────────────
-        _col_info, _col_btn = st.columns([5, 1])
+        # vertical_alignment="center" keeps the small button vertically
+        # centred next to the file-info pill, so the row is one line tall.
+        # Ratio [9, 1] gives the button column ~10% width — enough for the
+        # "➕ New" label without forcing a multi-line wrap.
+        _col_info, _col_btn = st.columns([9, 1], vertical_alignment="center")
         with _col_info:
             if _is_batch_done:
                 _n_total = len(st.session_state.get('batch_pdf_paths', st.session_state.batch_results))
                 _n_ok = sum(1 for r in st.session_state.batch_results if r.get('status') == 'success')
                 st.markdown(
-                    f'<div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; '
-                    f'padding:12px 20px; display:flex; align-items:center; gap:12px; margin-bottom:8px; '
-                    f'box-shadow:0 1px 4px rgba(0,0,0,.04);">'
-                    f'<span style="font-size:1.2rem;">📦</span>'
+                    f'<div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:8px; '
+                    f'padding:6px 14px; display:flex; align-items:center; gap:10px; margin-bottom:0; '
+                    f'box-shadow:0 1px 3px rgba(0,0,0,.04); font-size:0.88rem;">'
+                    f'<span style="font-size:1.0rem;">📦</span>'
                     f'<span style="font-weight:600; color:#1e293b;">Batch: {_n_total} files</span>'
-                    f'<span style="margin-left:auto; color:#16a34a; font-weight:600; font-size:0.85rem;">'
+                    f'<span style="margin-left:auto; color:#16a34a; font-weight:600; font-size:0.78rem;">'
                     f'✅ {_n_ok}/{_n_total} Processed</span>'
                     f'</div>',
                     unsafe_allow_html=True,
@@ -2770,23 +3086,23 @@ def show_simple_ui():
                 _state_code = st.session_state.get('detected_state', '')
                 _state_name = US_STATE_NAMES.get(_state_code, '') if _state_code else ''
                 _state_badge = (
-                    f'<span style="background:#e0e7ff; color:#3730a3; padding:2px 10px; '
-                    f'border-radius:12px; font-size:0.78rem; font-weight:600; margin-left:8px;">'
+                    f'<span style="background:#e0e7ff; color:#3730a3; padding:1px 8px; '
+                    f'border-radius:10px; font-size:0.72rem; font-weight:600; margin-left:6px;">'
                     f'🏛️ {_state_code} — {_state_name}</span>'
                 ) if _state_code else ''
                 st.markdown(
-                    f'<div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; '
-                    f'padding:12px 20px; display:flex; align-items:center; gap:12px; margin-bottom:8px; '
-                    f'box-shadow:0 1px 4px rgba(0,0,0,.04);">'
-                    f'<span style="font-size:1.2rem;">📄</span>'
+                    f'<div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:8px; '
+                    f'padding:6px 14px; display:flex; align-items:center; gap:10px; margin-bottom:0; '
+                    f'box-shadow:0 1px 3px rgba(0,0,0,.04); font-size:0.88rem;">'
+                    f'<span style="font-size:1.0rem;">📄</span>'
                     f'<span style="font-weight:600; color:#1e293b;">{_fname}</span>'
                     f'{_state_badge}'
-                    f'<span style="margin-left:auto; color:#16a34a; font-weight:600; font-size:0.85rem;">✅ Processed</span>'
+                    f'<span style="margin-left:auto; color:#16a34a; font-weight:600; font-size:0.78rem;">✅ Processed</span>'
                     f'</div>',
                     unsafe_allow_html=True,
                 )
         with _col_btn:
-            if st.button("📄 New Document", type="primary", use_container_width=True):
+            if st.button("➕ New", type="primary", help="Process a new document"):
                 # Reset all processing state so user can upload a fresh file
                 st.session_state.processed_file_path = None
                 st.session_state.temp_pdf_path = None
@@ -2818,6 +3134,39 @@ def show_simple_ui():
                 st.rerun()
 
         # No file uploader shown — results take full space
+        uploaded_files = []
+    elif st.session_state.get('processing'):
+        # ── Mid-processing: hide the bulky uploader + "File ready" banner
+        # and show ONLY a slim status pill with the filename being
+        # processed.  The processing-steps + activity log below take care
+        # of the live status; the uploader UI just adds visual noise.
+        _proc_name = ''
+        if st.session_state.get('temp_pdf_path'):
+            _proc_name = Path(st.session_state.temp_pdf_path).name
+        elif st.session_state.get('batch_file_names'):
+            _bn = st.session_state.batch_file_names
+            _bi = st.session_state.get('batch_current_idx', 0)
+            if 0 <= _bi < len(_bn):
+                _proc_name = f"{_bn[_bi]}  ({_bi+1}/{len(_bn)})"
+        _proc_state_code = st.session_state.get('detected_state', '')
+        _proc_state_name = US_STATE_NAMES.get(_proc_state_code, '') if _proc_state_code else ''
+        _proc_state_badge = (
+            f'<span style="background:#e0e7ff; color:#3730a3; padding:1px 8px; '
+            f'border-radius:10px; font-size:0.72rem; font-weight:600; margin-left:6px;">'
+            f'🏛️ {_proc_state_code} — {_proc_state_name}</span>'
+        ) if _proc_state_code else ''
+        st.markdown(
+            f'<div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:8px; '
+            f'padding:6px 14px; display:flex; align-items:center; gap:10px; margin-bottom:8px; '
+            f'box-shadow:0 1px 3px rgba(0,0,0,.04); font-size:0.88rem;">'
+            f'<span style="font-size:1.0rem;">⏳</span>'
+            f'<span style="font-weight:600; color:#1e293b;">{_proc_name or "Processing…"}</span>'
+            f'{_proc_state_badge}'
+            f'<span style="margin-left:auto; color:#2563eb; font-weight:600; font-size:0.78rem;">'
+            f'🔄 Processing</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
         uploaded_files = []
     else:
         # Full upload section — before processing
@@ -3126,7 +3475,9 @@ def show_simple_ui():
                         # ──────────────────────────────────────────────────────
                         st.session_state.temp_pdf_path = temp_path
                         st.session_state.last_uploaded_file_id = current_file_id
-                        st.success(f"✅ Uploaded: {uploaded_file.name} ({format_file_size(uploaded_file.size)})")
+                        # No success banner — the slim processing pill
+                        # (or the file-ready pill once processing finishes)
+                        # makes the upload status implicit.
                     else:
                         st.error("❌ Failed to upload file - check logs for details")
                 except Exception as e:
@@ -3136,9 +3487,9 @@ def show_simple_ui():
                     with st.expander("Error Details"):
                         st.code(traceback.format_exc())
             else:
-                # File already uploaded
-                if st.session_state.temp_pdf_path:
-                    st.success(f"✅ File ready: {uploaded_file.name} ({format_file_size(uploaded_file.size)})")
+                # File already uploaded — no banner needed; the processing
+                # pill or the auto-start info message takes over.
+                pass
 
             # Determine PDF page count for mode gating
             if st.session_state.temp_pdf_path:
@@ -3172,6 +3523,12 @@ def show_simple_ui():
         # No files in uploader — but check if we have results or active worker
         if _has_results and _is_single_done:
             # Results already exist — show them directly (upload hidden by "New Document" UI)
+            show_single_file_processing()
+        elif st.session_state.get('processing'):
+            # Single-file processing is mid-run (uploader was hidden by the
+            # processing-state pill we render above).  We still need to call
+            # show_single_file_processing() so the live progress + activity
+            # log keep rendering on each rerun.
             show_single_file_processing()
         elif st.session_state.get('batch_processing') and st.session_state.get('batch_worker'):
             # Worker still running (uploader was cleared by key bump) — show live UI
@@ -3518,7 +3875,22 @@ def show_results_section():
                     _images, _clean_lines, _word_map,
                     filename=Path(_txt_path).name,
                 )
-                st.components.v1.html(_viewer_html, height=920, scrolling=False)
+                # ── Iframe height strategy ─────────────────────────
+                # The iframe is sized via THREE mechanisms in priority
+                # order:
+                #   1. CSS `max-height: calc(100vh - 130px)` (HARDEST cap)
+                #      — ensures iframe never extends past viewport bottom.
+                #   2. Dynamic CSS flex chain `flex: 1 1 auto` inside a
+                #      100vh column so the iframe grows to fill available
+                #      space (within the max-height cap).
+                #   3. Static `height=600` attribute below as fallback for
+                #      browsers without :has() support.  Sized for typical
+                #      laptop viewports; the CSS max-height clamps it
+                #      tighter on shorter screens.
+                # `scrolling=True` ensures that if anything overflows the
+                # iframe content area, the user can still scroll inside
+                # the iframe to reach the bottom.
+                st.components.v1.html(_viewer_html, height=1400, scrolling=True)
             except Exception as _cmp_err:
                 st.error(f"❌ Could not render PDF ↔ Text Compare viewer: {_cmp_err}")
                 logging.error(f"PDF Compare viewer error: {_cmp_err}", exc_info=True)

@@ -1643,6 +1643,282 @@ def _strip_in_artifacts(text: str) -> str:
     return new_text
 
 
+# ---------------------------------------------------------------------------
+# Arkansas (AR) deterministic post-processing
+# ---------------------------------------------------------------------------
+# AR bill PDFs include scan/print artifacts on every page that are NOT
+# legislative content:
+#
+#   • Scan barcode line:         *HAR003*    (or *HSR12*, *SAR123*, etc.)
+#   • Page-1 timestamp footer:   01/27/2025 11:03:27 AM HAR003
+#   • Pages 2+ running header:   2 01/27/2025 11:03:27 AM HAR003
+#                                HB1249  (bare bill-ID line)
+#
+# These appear consistently in every AR bill PDF and slip past the LLM
+# because the AR clean-prompt instructs the model to keep page-1 content,
+# so the LLM conservatively retains the timestamp/barcode block that sits
+# above the real header.
+#
+# IMPORTANT: this stripper deliberately does NOT touch the post-passage
+# stamp "Act # of the Regular Session" — that text is legitimate metadata
+# that users want to retain in the cleaned output.
+
+# AR scan barcode — short alphanumeric code wrapped in asterisks alone
+# on its own line.  Pattern: 2-4 capital letters + 2-5 digits.
+_RE_AR_BARCODE = re.compile(
+    r"^\s*\*[A-Z]{2,4}\d{2,5}\*\s*$",
+    re.MULTILINE,
+)
+
+# AR timestamp footer — "MM/DD/YYYY HH:MM:SS AM|PM <barcode>".
+# Optional leading 1-3 digit page number captures the pages-2+ running
+# header form ("2 01/27/2025 11:03:27 AM HAR003").
+_RE_AR_TIMESTAMP = re.compile(
+    r"^\s*(?:\d{1,3}\s+)?"
+    r"\d{1,2}/\d{1,2}/\d{4}\s+"
+    r"\d{1,2}:\d{2}:\d{2}\s+(?:AM|PM)\s+"
+    r"[A-Z]{2,4}\d{2,5}\s*$",
+    re.MULTILINE | re.IGNORECASE,
+)
+
+# AR bare bill-ID running header — "HB1249", "SB85", "HJR12" alone on
+# a line.  Common chamber prefixes: HB/SB (bills), HJR/SJR (joint
+# resolutions), HR/SR (resolutions), HCR/SCR (concurrent resolutions).
+# IMPORTANT: only matches when the bill ID is the ENTIRE line content;
+# inline references like "Section 5 of HB1249 shall…" are preserved.
+_RE_AR_BILL_ID_HEADER = re.compile(
+    r"^\s*(?:HB|SB|HJR|SJR|HR|SR|HCR|SCR)\s*\d{1,5}\s*$",
+    re.MULTILINE | re.IGNORECASE,
+)
+
+
+def _strip_ar_artifacts(text: str) -> str:
+    """Remove Arkansas-specific PDF/scan artifacts from cleaned text.
+
+    Strips three classes of running headers/footers that AR bill PDFs
+    embed on every page:
+
+    1. **Scan barcode line** — ``*HAR003*`` / ``*HSR###*`` / ``*SAR###*``
+    2. **Timestamp footer / running header** — ``01/27/2025 11:03:27 AM HAR003``
+       (page-1 footer) and ``2 01/27/2025 11:03:27 AM HAR003`` (pages 2+)
+    3. **Bare bill-ID running header** — ``HB1249`` / ``SB85`` when the
+       bill ID is the entire line content (inline references inside a
+       sentence are NOT stripped)
+
+    Does NOT touch ``Act # of the Regular Session`` — that's a legitimate
+    post-passage metadata stamp users want preserved.
+
+    Mirrors the pattern of :func:`_strip_in_artifacts`.
+    """
+    new_text = _RE_AR_BARCODE.sub("", text)
+    new_text = _RE_AR_TIMESTAMP.sub("", new_text)
+    new_text = _RE_AR_BILL_ID_HEADER.sub("", new_text)
+
+    if new_text != text:
+        # Collapse excess blank lines left behind by the substitutions
+        new_text = re.sub(r"\n{3,}", "\n\n", new_text)
+        logger.debug("Stripped AR artifacts (barcode/timestamp/bill-ID running headers)")
+
+    return new_text
+
+
+# ---------------------------------------------------------------------------
+# AR page-1 header normalization — reorder into canonical vertical layout
+# ---------------------------------------------------------------------------
+# AR bill PDFs place several page-1 header elements in a multi-column visual
+# layout where "A Bill" is centered and "HOUSE BILL XXXX" is right-aligned
+# next to "Regular Session, YYYY".  PyMuPDF + LLM cleaning preserves this
+# side-by-side layout with long runs of whitespace, e.g.:
+#
+#     State of Arkansas
+#     95th General Assembly                                A Bill
+#     Regular Session, 2025                          HOUSE BILL 1249
+#
+# The canonical AR cleaned-text convention puts these on separate lines in
+# a fixed vertical order.  The patterns below match each element regardless
+# of position or side-by-side concatenation; the normalizer extracts them
+# and re-emits in the canonical order.
+
+# "HOUSE BILL 1249", "SENATE BILL 85", "HOUSE JOINT RESOLUTION 12",
+# "HOUSE CONCURRENT RESOLUTION 5", "SENATE RESOLUTION 12"
+_RE_AR_HEADER_BILL_ID = re.compile(
+    r"(?:HOUSE|SENATE)\s+"
+    r"(?:BILL|JOINT\s+RESOLUTION|CONCURRENT\s+RESOLUTION|RESOLUTION)\s+"
+    r"\d+",
+    re.IGNORECASE,
+)
+
+# "A Bill" or "An Act" (must be a standalone phrase, not part of larger text)
+_RE_AR_HEADER_A_BILL = re.compile(
+    r"(?<![A-Za-z])A\s+Bill(?![A-Za-z])",
+)
+
+# "State of Arkansas"
+_RE_AR_HEADER_STATE = re.compile(
+    r"State\s+of\s+Arkansas",
+    re.IGNORECASE,
+)
+
+# "95th General Assembly", "94th General Assembly", etc.
+_RE_AR_HEADER_ASSEMBLY = re.compile(
+    r"\d{1,3}(?:st|nd|rd|th)\s+General\s+Assembly",
+    re.IGNORECASE,
+)
+
+# "Regular Session, 2025", "First Extraordinary Session, 2025",
+# "Second Extraordinary Session, 2025", "Fiscal Session, 2024"
+_RE_AR_HEADER_SESSION = re.compile(
+    r"(?:Regular|First\s+Extraordinary|Second\s+Extraordinary|Fiscal)\s+Session,?\s+\d{4}",
+    re.IGNORECASE,
+)
+
+# "Act 42 of the Regular Session" — post-passage stamp (legit content,
+# always rendered first below the "Stricken language" anchor).
+_RE_AR_HEADER_ACT_STAMP = re.compile(
+    r"Act\s+\d+\s+of\s+the\s+(?:Regular|First\s+Extraordinary|Second\s+Extraordinary|Fiscal)\s+Session",
+    re.IGNORECASE,
+)
+
+# Anchor lines: page 1 header starts at "Stricken language…" and ends at
+# the first occurrence of any of these "real content begins here" markers.
+_RE_AR_HEADER_START = re.compile(
+    r"^[ \t]*Stricken\s+language\s+would\s+be\s+deleted",
+    re.IGNORECASE | re.MULTILINE,
+)
+_RE_AR_HEADER_END = re.compile(
+    r"^[ \t]*(?:By:|For\s+An\s+Act\s+To\s+Be\s+Entitled|Subtitle|BE\s+IT\s+ENACTED)",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _normalize_ar_page1_header(text: str) -> str:
+    """Reorder AR page-1 header elements into a canonical vertical layout.
+
+    Canonical order (each element on its own line, blank lines between
+    distinct groups):
+
+        Stricken language would be deleted from and underlined…
+        <blank>
+        Act # of the Regular Session     (only if present — post-passage stamp)
+        <blank>
+        HOUSE BILL 1249                  (bill identifier)
+        A Bill                           (or "An Act")
+        <blank>
+        State of Arkansas
+        95th General Assembly
+        Regular Session, 2025
+
+    Detection bounds:
+      • Region starts after the "Stricken language…" anchor line.
+      • Region ends at the first of: "By:", "For An Act To Be Entitled",
+        "Subtitle", "BE IT ENACTED".
+      • If either anchor is missing, the function is a no-op.
+
+    Safety guarantees:
+      • Only operates on the bounded header region — body-text references
+        to bill IDs, sessions, or assemblies are untouched.
+      • Requires at least State + Assembly + Session to be present;
+        otherwise treats the text as not a recognizable AR header and
+        returns unchanged.
+      • Any non-matching text inside the header region (e.g. an unexpected
+        line the LLM produced) is preserved at the end of the canonical
+        block, so nothing is silently dropped.
+    """
+    # Locate the header region
+    start_m = _RE_AR_HEADER_START.search(text)
+    if not start_m:
+        return text
+
+    # End of the "Stricken language…" line is the splice point
+    stricken_line_end = text.find("\n", start_m.start())
+    if stricken_line_end == -1:
+        return text
+
+    end_m = _RE_AR_HEADER_END.search(text, stricken_line_end)
+    if not end_m:
+        return text
+
+    header_block = text[stricken_line_end + 1 : end_m.start()]
+
+    # Find each known element (first occurrence in the region)
+    patterns = [
+        ("act_stamp", _RE_AR_HEADER_ACT_STAMP),
+        ("bill_id",   _RE_AR_HEADER_BILL_ID),
+        ("a_bill",    _RE_AR_HEADER_A_BILL),
+        ("state",     _RE_AR_HEADER_STATE),
+        ("assembly",  _RE_AR_HEADER_ASSEMBLY),
+        ("session",   _RE_AR_HEADER_SESSION),
+    ]
+    found: dict[str, str] = {}
+    matched_spans: list[tuple[int, int]] = []
+    for key, pat in patterns:
+        m = pat.search(header_block)
+        if m:
+            found[key] = m.group(0).strip()
+            matched_spans.append((m.start(), m.end()))
+
+    # Sanity gate: only proceed if the three required core elements are
+    # present.  This avoids reordering text that doesn't look like an
+    # AR page-1 header (e.g. resolutions with a different format).
+    required = {"state", "assembly", "session"}
+    if not required.issubset(found.keys()):
+        return text
+
+    # Remove matched spans from the region (reverse order to preserve
+    # indices), then collapse whitespace-only lines to detect leftovers.
+    matched_spans.sort(reverse=True)
+    remainder = header_block
+    for s, e in matched_spans:
+        remainder = remainder[:s] + remainder[e:]
+    remainder_lines = [ln for ln in remainder.split("\n") if ln.strip()]
+    remainder_clean = "\n".join(remainder_lines)
+
+    # Build canonical block
+    canonical_lines: list[str] = []
+    if "act_stamp" in found:
+        canonical_lines.append(found["act_stamp"])
+        canonical_lines.append("")  # blank line after Act stamp
+    if "bill_id" in found:
+        canonical_lines.append(found["bill_id"])
+    if "a_bill" in found:
+        canonical_lines.append(found["a_bill"])
+    if "bill_id" in found or "a_bill" in found:
+        canonical_lines.append("")  # blank line after bill ID / A Bill group
+    canonical_lines.append(found["state"])
+    canonical_lines.append(found["assembly"])
+    canonical_lines.append(found["session"])
+
+    # Preserve any unrecognized leftover content (defensive — usually empty)
+    if remainder_clean:
+        canonical_lines.append("")
+        canonical_lines.append(remainder_clean)
+        logger.debug(
+            "AR header normalizer preserved %d unrecognized line(s) in header region",
+            len(remainder_lines),
+        )
+
+    canonical_block = "\n".join(canonical_lines)
+
+    # Splice: keep "Stricken language…" line, blank line, canonical block,
+    # blank line, then the rest of the document starting at end_m.
+    new_text = (
+        text[: stricken_line_end + 1]
+        + "\n"
+        + canonical_block
+        + "\n\n"
+        + text[end_m.start() :]
+    )
+    # Collapse any triple+ blank lines introduced by the splice
+    new_text = re.sub(r"\n{3,}", "\n\n", new_text)
+
+    if new_text != text:
+        logger.debug(
+            "Normalized AR page-1 header (elements: %s)",
+            ", ".join(found.keys()),
+        )
+    return new_text
+
+
 # Regex: detect false [D>] tags around parenthesized subsection markers.
 # The LLM sometimes wraps (a), (b), (j), (1) etc. with deletion tags.
 _RE_FALSE_D_SUBSECTION = re.compile(
@@ -2324,6 +2600,24 @@ def clean_extracted_text(
     if state_code and state_code.upper() == "IN":
         cleaned = _strip_in_header_tags(cleaned)
         cleaned = _strip_in_artifacts(cleaned)
+
+    # ── strip AR-specific artifacts (barcode, timestamp footer, bill-ID
+    #    running headers).  These are scan/print artifacts that appear on
+    #    every page of AR bill PDFs and slip past the LLM because the AR
+    #    clean-prompt instructs the model to retain page-1 content.  See
+    #    `_strip_ar_artifacts` for the full pattern list.  Preserves the
+    #    "Act # of the Regular Session" post-passage stamp.
+    if state_code and state_code.upper() == "AR":
+        cleaned = _strip_ar_artifacts(cleaned)
+        # Reorder page-1 header elements into canonical vertical layout.
+        # AR PDFs render "A Bill" / "HOUSE BILL XXXX" side-by-side with
+        # "State of Arkansas" / "##th General Assembly" / "Regular Session,
+        # YYYY" via long whitespace runs; the LLM preserves the visual
+        # layout instead of emitting them as separate lines.  This
+        # normalizer extracts the known header elements and re-emits them
+        # in canonical order.  See `_normalize_ar_page1_header` for the
+        # full algorithm and safety guarantees.
+        cleaned = _normalize_ar_page1_header(cleaned)
 
     # ── strip KS-specific false header tags ────────────────────────
     if state_code and state_code.upper() == "KS":
