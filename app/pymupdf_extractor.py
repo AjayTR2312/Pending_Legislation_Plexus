@@ -97,6 +97,27 @@ LINE_NUMBER_MAX_WIDTH_PT = 50.0  # narrow lines (e.g. "line 12") that aren't tex
 # differ by ≤ SAME_ROW_Y_TOL points as a single physical row.
 SAME_ROW_Y_TOL_PT        = 2.0   # max y-mid delta for same-physical-row
 
+# --- Superscript footnote-reference detection ----------------------------
+# Legislative bills (especially CT OFA Fiscal Notes) place footnote markers
+# as typographic superscripts: a smaller font + raised baseline.  Without
+# special handling, "$3,300²" is extracted as the digits "$3,3002", which
+# changes the meaning of the number; "fines¹" becomes "fines.1", etc.
+#
+# A span is treated as a superscript when BOTH:
+#   • its font size ≤ SUPERSCRIPT_SIZE_RATIO of the line's dominant size, AND
+#   • its bbox bottom is raised ≥ SUPERSCRIPT_RAISE_PT above the line bottom.
+#
+# The raised-bottom check distinguishes inline superscripts from footnote
+# *bodies* at the bottom of the page (where the entire line is small but
+# sits on its own baseline, so it has zero raise relative to its own line).
+#
+# Detected superscript chars are converted to Unicode superscript glyphs
+# (¹²³…) so the visual distinction is preserved in plain text — and they
+# are excluded from underline / italic / bold tagging since footnote refs
+# are pure typography, not legal content.
+SUPERSCRIPT_SIZE_RATIO   = 0.80  # span font ≤ 80 % of line dominant size
+SUPERSCRIPT_RAISE_PT     = 1.0   # span bottom ≥ 1 pt above line bottom
+
 # Tag delimiters (match the project convention)
 ADD_OPEN, ADD_CLOSE = "[A>", "<A]"
 DEL_OPEN, DEL_CLOSE = "[D>", "<D]"
@@ -457,6 +478,128 @@ def _bbox_overlaps_any_rect(bbox: Tuple[float, ...],
 
 
 # ---------------------------------------------------------------------------
+# Superscript footnote-reference helpers
+# ---------------------------------------------------------------------------
+
+# Unicode superscript translation tables.  We map digits, the lowercase
+# alphabet (sans 'q' which has no Unicode superscript), and the most
+# common math operators.  Characters without a superscript form are
+# left unchanged.
+_SUPERSCRIPT_DIGIT_MAP = str.maketrans("0123456789", "⁰¹²³⁴⁵⁶⁷⁸⁹")
+_SUPERSCRIPT_LETTER_MAP = str.maketrans(
+    "abcdefghijklmnoprstuvwxyz",
+    "ᵃᵇᶜᵈᵉᶠᵍʰⁱʲᵏˡᵐⁿᵒᵖʳˢᵗᵘᵛʷˣʸᶻ",
+)
+_SUPERSCRIPT_SYM_MAP = str.maketrans({
+    "+": "⁺", "-": "⁻", "=": "⁼", "(": "⁽", ")": "⁾",
+})
+
+# Canonical footnote-reference shapes.  We only convert a small + raised
+# span to Unicode superscripts when its text matches one of these forms:
+#   • 1-3 digits          ("1", "12", "123")
+#   • 1-3 letters         ("a", "th", "st", "nd", "rd")
+#   • 1-3 footnote symbols ("*", "**", "†", "‡", "∗", "§", "¶", "#")
+# Spans that pass the size+raise check but DON'T match the pattern (e.g.
+# "46.4%" chart labels, "$3,300" body text accidentally split into a
+# small-bbox span) are left as-is to avoid mangling legal content.
+_FOOTNOTE_REF_RE = re.compile(
+    r"^\s*("
+    r"[0-9]{1,3}"
+    r"|[a-z]{1,3}"
+    r"|[*†‡§¶#∗]{1,3}"
+    r")\s*$",
+    re.IGNORECASE,
+)
+
+
+def _to_superscript(s: str) -> str:
+    """Convert digits / lowercase letters / +-=() in *s* to Unicode
+    superscript glyphs.  Characters without a mapping are returned as-is.
+
+    Examples:
+        _to_superscript("2")   == "²"
+        _to_superscript("12")  == "¹²"
+        _to_superscript("a")   == "ᵃ"
+        _to_superscript("*")   == "*"   # no superscript form
+    """
+    return (
+        s.translate(_SUPERSCRIPT_DIGIT_MAP)
+         .translate(_SUPERSCRIPT_LETTER_MAP)
+         .translate(_SUPERSCRIPT_SYM_MAP)
+    )
+
+
+def _line_dominant_font_size(line: dict) -> float:
+    """Return the most common font size on *line* weighted by character count.
+
+    Used as the reference body-text size when deciding whether a particular
+    span is rendered as a superscript footnote reference.  Returns 12.0
+    when no text is present so callers don't divide by zero.
+    """
+    sizes: Dict[float, int] = {}
+    for sp in line.get("spans", []):
+        try:
+            sz = round(float(sp.get("size", 0) or 0), 1)
+        except (TypeError, ValueError):
+            continue
+        ntxt = len(sp.get("text", "") or "")
+        if sz > 0 and ntxt > 0:
+            sizes[sz] = sizes.get(sz, 0) + ntxt
+    if not sizes:
+        return 12.0
+    return max(sizes, key=lambda k: sizes[k])
+
+
+def _span_is_superscript(
+    span: dict,
+    line_dominant_size: float,
+    line_bbox: Tuple[float, float, float, float],
+) -> bool:
+    """Return ``True`` when *span* is rendered as a footnote-reference superscript.
+
+    A span qualifies only when **all three** conditions hold:
+
+      1. ``span.size ≤ SUPERSCRIPT_SIZE_RATIO * line_dominant_size`` — the
+         span is noticeably smaller than the surrounding body text.
+      2. ``line_bbox.y1 - span.bbox.y1 ≥ SUPERSCRIPT_RAISE_PT`` — the span's
+         bottom edge sits at least one point above the line's bottom edge,
+         i.e. it is **raised** relative to the body baseline.
+      3. The span's text matches the canonical footnote-reference shape
+         (``_FOOTNOTE_REF_RE``): a short run of digits, letters, or
+         footnote symbols.  This last guard prevents the conversion from
+         mangling chart labels like ``"46.4%"`` or accidentally-split
+         body-text fragments that happen to be small and raised.
+
+    Condition (2) is what separates an inline superscript from a footnote
+    *body* line at the bottom of a page: the body line is small in absolute
+    size but its bbox bottom equals the line bbox bottom (zero raise).
+    """
+    try:
+        sz = float(span.get("size", 0) or 0)
+    except (TypeError, ValueError):
+        return False
+    if sz <= 0 or line_dominant_size <= 0:
+        return False
+    if sz / line_dominant_size > SUPERSCRIPT_SIZE_RATIO:
+        return False
+    sbbox = span.get("bbox") or (0, 0, 0, 0)
+    if not sbbox or len(sbbox) < 4 or (sbbox[2] - sbbox[0]) <= 0:
+        return False
+    if (line_bbox[3] - sbbox[3]) < SUPERSCRIPT_RAISE_PT:
+        return False
+    # Text-shape guard: confirm the span looks like a footnote marker.
+    # Read text from `chars` (rawdict) first, falling back to `text`.
+    chars_data = span.get("chars") or []
+    if chars_data:
+        text = "".join(ch.get("c", "") for ch in chars_data)
+    else:
+        text = span.get("text", "") or ""
+    if not text or not _FOOTNOTE_REF_RE.match(text):
+        return False
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Character-level decoration classifier
 # ---------------------------------------------------------------------------
 
@@ -730,6 +873,13 @@ def _extract_page_tagged_text(
                         line_in_table = True
                         break
 
+            # --- Line-level metrics for superscript detection ---
+            # Computed once per line and reused for every span below so we
+            # only have to walk the spans-by-size once.  See
+            # SUPERSCRIPT_SIZE_RATIO / SUPERSCRIPT_RAISE_PT for thresholds.
+            line_bbox_for_super  = line.get("bbox", (0, 0, 0, 0))
+            line_dominant_size   = _line_dominant_font_size(line)
+
             for span in line.get("spans", []):
                 chars_data = span.get("chars", [])
                 font_size  = span.get("size", 12)
@@ -744,11 +894,30 @@ def _extract_page_tagged_text(
                 # --- Detect small-caps font → uppercase extracted text ---
                 span_is_smallcaps = bool(_RE_SMALLCAPS_FONT.search(font_name))
 
+                # --- Detect superscript footnote reference ---
+                # When a span's font is markedly smaller than the line's
+                # dominant size AND its bbox sits raised above the line
+                # baseline, treat it as a footnote-marker superscript.
+                # Such spans are emitted as Unicode superscripts (¹²³…)
+                # and are excluded from underline / italic / bold tagging.
+                span_is_superscript = _span_is_superscript(
+                    span, line_dominant_size, line_bbox_for_super,
+                )
+
                 # --- Fallback: no char-level data → use span bbox ---
                 if not chars_data:
                     if span_text:
                         if span_is_smallcaps:
                             span_text = span_text.upper()
+                        # Superscript footnote ref: convert to Unicode
+                        # superscripts and skip all decoration tagging.
+                        if span_is_superscript:
+                            if in_add:
+                                output.append(ADD_CLOSE); in_add = False
+                            if in_del:
+                                output.append(DEL_CLOSE); in_del = False
+                            output.append(_to_superscript(span_text))
+                            continue
                         s_bbox = tuple(span.get("bbox", (0, 0, 0, 0)))
                         s_ul, s_so = _classify_char_decoration(
                             s_bbox, font_size, ul_rects, so_rects,
@@ -784,6 +953,18 @@ def _extract_page_tagged_text(
                     # Uppercase chars from small-caps fonts
                     if span_is_smallcaps:
                         c = c.upper()
+
+                    # Superscript footnote ref: emit as Unicode superscript
+                    # and skip all decoration tagging.  Close any open tag
+                    # before the marker (it will reopen on the next char
+                    # if the surrounding decoration continues).
+                    if span_is_superscript:
+                        if in_add:
+                            output.append(ADD_CLOSE); in_add = False
+                        if in_del:
+                            output.append(DEL_CLOSE); in_del = False
+                        output.append(_to_superscript(c))
+                        continue
 
                     bbox = tuple(ch_info.get("bbox", (0, 0, 0, 0)))
                     cw   = bbox[2] - bbox[0]
@@ -3507,6 +3688,11 @@ def extract_pdf_json_report(
         for line_y, tl in line_infos:
             spans = tl.get("spans", [])
 
+            # Line-level metrics for superscript detection (see
+            # SUPERSCRIPT_SIZE_RATIO / SUPERSCRIPT_RAISE_PT for thresholds).
+            line_bbox_for_super  = tl.get("bbox", (0, 0, 0, 0))
+            line_dominant_size   = _line_dominant_font_size(tl)
+
             # Build list of (char, format_set, char_bbox) for the entire line
             char_entries: List[Tuple[str, frozenset, Tuple[float, float, float, float]]] = []
 
@@ -3518,9 +3704,22 @@ def extract_pdf_json_report(
                 sp_italic  = bool(sp_flags & 2)
                 sp_bold    = bool(sp_flags & 16)
 
+                # Footnote-reference superscript: emit characters as Unicode
+                # superscripts and drop all format flags — these are pure
+                # typography, not legal additions/deletions/italics.
+                sp_is_super = _span_is_superscript(
+                    sp, line_dominant_size, line_bbox_for_super,
+                )
+
                 if not chars_data:
                     # dict-mode fallback: classify entire span as one unit
                     s_bbox = tuple(sp.get("bbox", (0, 0, 0, 0)))
+                    if sp_is_super:
+                        for c in sp.get("text", ""):
+                            char_entries.append(
+                                (_to_superscript(c), frozenset(), s_bbox)
+                            )
+                        continue
                     s_ul, s_so = _classify_char_decoration(
                         s_bbox, font_size, ul_rects, so_rects, hlines, font_name,
                     )
@@ -3540,6 +3739,11 @@ def extract_pdf_json_report(
                     if not c:
                         continue
                     bbox = tuple(ch_info.get("bbox", (0, 0, 0, 0)))
+                    if sp_is_super:
+                        char_entries.append(
+                            (_to_superscript(c), frozenset(), bbox)
+                        )
+                        continue
                     cw = bbox[2] - bbox[0]
                     if cw < 0.5:
                         is_ul, is_so = False, False
