@@ -197,9 +197,15 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,san
 .top-bar .btn:hover{background:var(--surface);border-color:var(--accent)}
 .top-bar .btn.on{background:var(--accent);color:#fff;border-color:var(--accent)}
 
-.panels{display:flex;height:calc(100vh - 44px)}
+.panels{display:flex;height:calc(100dvh - 44px);min-height:calc(100vh - 44px)}
 .panel{flex:1;overflow-y:auto;position:relative}
-.panel-pdf{background:#fafafa;border-right:1px solid var(--border)}
+.panel-pdf{
+  background:#fafafa;border-right:1px solid var(--border);
+  /* Allow horizontal scroll when the PDF is zoomed beyond panel width.
+     overflow:auto on BOTH axes lets the user scroll right to see the
+     clipped right edge of a zoomed page.                              */
+  overflow:auto;
+}
 .panel-text{background:var(--bg)}
 
 .ph{
@@ -211,7 +217,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,san
 
 .pdf-wrap{padding:10px}
 .page-ctr{position:relative;margin-bottom:12px;background:#fff;border-radius:4px;
-          border:1px solid var(--border);overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+          border:1px solid var(--border);overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.06);
+          /* margin:auto centres each page in the panel when its width is
+             smaller than the panel.  When zoomed beyond panel width, the
+             page-ctr grows past the panel and panel's overflow:auto
+             provides a horizontal scrollbar.                          */
+          margin-left:auto;margin-right:auto}
 .page-ctr img{width:100%;display:block}
 .page-lbl{text-align:center;font-size:10px;color:var(--text2);padding:4px 0;
            background:var(--surface);border-bottom:1px solid var(--border)}
@@ -226,7 +237,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,san
 .cz{position:absolute;cursor:pointer;z-index:4;border:1px solid transparent;transition:all .12s}
 .cz:hover{border-color:rgba(9,105,218,.3);background:rgba(9,105,218,.06)}
 
-.text-wrap{padding:0;min-height:calc(100vh - 90px);background:var(--bg)}
+.text-wrap{padding:0;min-height:calc(100dvh - 90px);background:var(--bg)}
 .tl{
   padding:0 16px 0 0;
   font-family:'Cascadia Code','JetBrains Mono','Fira Code',Consolas,monospace;
@@ -246,8 +257,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,san
   background:var(--surface);border-right:1px solid var(--border);margin-right:10px;
 }
 .lc{display:inline;flex:1;min-width:0;outline:none} /* line content wrapper */
-.lc[contenteditable="true"]{caret-color:var(--accent)}
-.lc[contenteditable="true"]:focus{outline:none}
+/* contentEditable is now on the parent #textWrap (not per-.lc) so that
+   selection can span multiple lines.  Caret styling applies whenever
+   the parent is in editing mode.                                      */
+.text-wrap.editing{caret-color:var(--accent);outline:none}
+.text-wrap.editing:focus{outline:none}
+.text-wrap.editing .lc{outline:none}
 .lc .tg-a + .tw .tg-a,
 .lc .tg-d + .tw .tg-d {margin-left:-1px}
 
@@ -450,7 +465,24 @@ var zoomLevel=0; // 0=fit, else percentage steps
 var zoomSteps=[50,75,100,125,150,200];
 function zoomPdf(dir){
   var imgs=document.querySelectorAll('.page-ctr img');
-  if(dir===0){zoomLevel=0;imgs.forEach(function(img){img.style.width='100%';});
+  var containers=document.querySelectorAll('.page-ctr');
+  var panel=document.getElementById('pdfPanel');
+  // The "Fit" baseline is the panel's inner width (minus the 10px
+  // .pdf-wrap padding on each side).  Zooming N% means the page-ctr
+  // becomes (panelInnerWidth * N/100) pixels wide.  Using PIXEL widths
+  // on .page-ctr (instead of % on .img) lets the panel grow horizontally
+  // beyond its own width, which engages overflow:auto's horizontal
+  // scrollbar so the user can scroll right to see the clipped edge.
+  var panelInner = panel ? Math.max(100, panel.clientWidth - 20) : 800;
+
+  if(dir===0){
+    // FIT — clear pixel widths, image fills page-ctr at 100% of panel
+    zoomLevel=0;
+    containers.forEach(function(c){
+      c.style.width='';
+      c.style.maxWidth='100%';
+    });
+    imgs.forEach(function(img){img.style.width='100%';});
     document.getElementById('zoomLbl').textContent='Fit';
   } else {
     if(zoomLevel===0)zoomLevel=100;
@@ -458,7 +490,12 @@ function zoomPdf(dir){
     if(idx===-1)idx=2;
     idx=Math.max(0,Math.min(zoomSteps.length-1,idx+dir));
     zoomLevel=zoomSteps[idx];
-    imgs.forEach(function(img){img.style.width=zoomLevel+'%';});
+    var targetPx = Math.round(panelInner * zoomLevel / 100);
+    containers.forEach(function(c){
+      c.style.width = targetPx + 'px';
+      c.style.maxWidth = 'none';
+    });
+    imgs.forEach(function(img){img.style.width='100%';});
     document.getElementById('zoomLbl').textContent=zoomLevel+'%';
   }
   setTimeout(function(){clearHL();buildZones();},200);
@@ -639,11 +676,82 @@ function scheduleAutoApply(){
 function enableInlineEditing(){
   var tw=document.getElementById('textWrap');
   tw.classList.add('editing');
-  tw.querySelectorAll('.lc').forEach(function(lc){
-    lc.contentEditable='true';
-    lc.spellcheck=false;
-    lc.addEventListener('input',scheduleAutoApply);
+  // ── Single editable host on the parent ─────────────────────────────
+  // Per-`.lc` contentEditable creates separate editable regions and
+  // browsers refuse to drag-select across them.  Hosting on the parent
+  // gives us ONE editable region → multi-line selection works.
+  tw.contentEditable='true';
+  tw.spellcheck=false;
+  // Protect the gutter (line numbers) from being edited or selected
+  tw.querySelectorAll('.ln').forEach(function(ln){
+    ln.contentEditable='false';
   });
+  // Strip any leftover per-`.lc` contentEditable (avoids nested-host quirks)
+  tw.querySelectorAll('.lc').forEach(function(lc){
+    if(lc.hasAttribute('contenteditable')) lc.removeAttribute('contenteditable');
+    lc.spellcheck=false;
+  });
+  // Bind listeners once, on the parent (re-binds are guarded by flags)
+  if(!tw._inputBound){
+    tw.addEventListener('input',scheduleAutoApply);
+    tw._inputBound=true;
+  }
+  // ── Keyboard interception ─────────────────────────────────────────
+  // With parent-level contentEditable the browser's default Enter
+  // behaviour creates a stray <div> that breaks our `.tl` structure.
+  // Intercept Enter (split current line) and Backspace-at-start
+  // (merge with previous) so editing stays consistent with our
+  // line-based data model.
+  if(!tw._keyBound){
+    tw.addEventListener('keydown',function(e){
+      // Enter — split line at caret
+      if(e.key==='Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey){
+        e.preventDefault();
+        if(typeof splitAtCursor==='function') splitAtCursor();
+        return;
+      }
+      // Backspace at offset 0 of a line — merge with previous
+      if(e.key==='Backspace' && !e.ctrlKey && !e.metaKey && !e.altKey){
+        var sel=window.getSelection();
+        if(!sel||!sel.rangeCount||!sel.isCollapsed) return; // let default delete a non-collapsed selection
+        var range=sel.getRangeAt(0);
+        var lc=range.startContainer;
+        while(lc && !(lc.classList && lc.classList.contains('lc'))) lc=lc.parentNode;
+        if(!lc) return;
+        var off=getTextOffset(lc, range.startContainer, range.startOffset);
+        if(off===0){
+          // At line start — intercept and merge with previous
+          var tl=lc.closest('.tl'); if(!tl) return;
+          var li=parseInt(tl.dataset.li);
+          if(li>0){
+            e.preventDefault();
+            // Set activeEditorLine so mergeWithPrevious knows which line
+            if(typeof setActiveLine==='function') setActiveLine(tl);
+            if(typeof mergeWithPrevious==='function') mergeWithPrevious();
+          }
+        }
+      }
+    });
+    tw._keyBound=true;
+  }
+  // ── Selection-change tracking for active line highlight ───────────
+  // With parent contentEditable the per-line `focusin` doesn't fire on
+  // every caret move, so we listen to selectionchange globally and
+  // update activeEditorLine based on where the caret/anchor lives.
+  if(!document._selBound){
+    document.addEventListener('selectionchange',function(){
+      var sel=window.getSelection();
+      if(!sel||!sel.rangeCount) return;
+      var n=sel.getRangeAt(0).startContainer;
+      var tl=null;
+      while(n){
+        if(n.classList && n.classList.contains('tl')){tl=n;break;}
+        n=n.parentNode;
+      }
+      if(tl && typeof setActiveLine==='function') setActiveLine(tl);
+    });
+    document._selBound=true;
+  }
 }
 function applyInlineEdits(){
   var tw=document.getElementById('textWrap');
@@ -749,6 +857,50 @@ function downloadText(){
 // ── Wrap Selected Text in Tags ────────────────────────────────
 function buildTagIndices(){/* no-op — counts removed */}
 
+// Helper: find the `.tl` (line wrapper) that owns a given selection
+// endpoint container.  Returns {tl, lc, li, off} or null.
+//
+// `isEnd` controls fallback behaviour: when the endpoint is NOT inside
+// a text node (e.g. the user dragged out of the .lc, into the gutter,
+// or released on empty whitespace at end-of-line) we snap to either
+// the START of the nearest line (isEnd=false) or the END (isEnd=true).
+function _resolveSelectionEndpoint(container, offset, isEnd){
+  // Case 1 + 2: walk up looking for an enclosing .lc
+  var lc=container;
+  while(lc && lc.nodeType && !(lc.classList && lc.classList.contains('lc'))){
+    lc=lc.parentNode;
+  }
+  if(lc && lc.classList && lc.classList.contains('lc')){
+    var tl=lc.closest('.tl');
+    if(!tl) return null;
+    var li=parseInt(tl.dataset.li);
+    if(isNaN(li)) return null;
+    var off;
+    if(container === lc){
+      // Endpoint IS the .lc element (no text node) — snap to start/end of line.
+      // lc.textContent is the raw text (including tag markers like [A>),
+      // matching the indexing used for originalLines[li].
+      off = isEnd ? (lc.textContent || '').length : 0;
+    } else {
+      off = getTextOffset(lc, container, offset);
+    }
+    return {tl:tl, lc:lc, li:li, off:off};
+  }
+  // Case 3: endpoint is OUTSIDE any .lc (gutter .ln, wrapper .tl, body, etc.)
+  // — walk up to the nearest .tl and snap.
+  var tl=container;
+  while(tl && tl.nodeType && !(tl.classList && tl.classList.contains('tl'))){
+    tl=tl.parentNode;
+  }
+  if(!tl || !tl.classList || !tl.classList.contains('tl')) return null;
+  lc = tl.querySelector('.lc');
+  if(!lc) return null;
+  var li=parseInt(tl.dataset.li);
+  if(isNaN(li)) return null;
+  var off = isEnd ? (lc.textContent || '').length : 0;
+  return {tl:tl, lc:lc, li:li, off:off};
+}
+
 function wrapTag(type){
   var sel=window.getSelection();
   if(!sel||sel.isCollapsed||!sel.rangeCount){
@@ -756,15 +908,438 @@ function wrapTag(type){
     return;
   }
   var range=sel.getRangeAt(0);
-  var lc=range.startContainer;
-  while(lc&&!(lc.classList&&lc.classList.contains('lc')))lc=lc.parentNode;
-  if(!lc){document.getElementById('statBar').textContent='Select text inside a line';return;}
-  var tl=lc.closest('.tl');if(!tl)return;
-  var li=parseInt(tl.dataset.li);
+  var startEP=_resolveSelectionEndpoint(range.startContainer, range.startOffset, false);
+  var endEP=_resolveSelectionEndpoint(range.endContainer, range.endOffset, true);
+  if(!startEP || !endEP){
+    document.getElementById('statBar').textContent='Select text inside a line';
+    return;
+  }
+
+  // Ensure start <= end (selection might be backwards)
+  if(startEP.li > endEP.li || (startEP.li === endEP.li && startEP.off > endEP.off)){
+    var tmp=startEP; startEP=endEP; endEP=tmp;
+  }
+
+  // ── Single-line path: full existing behaviour (toggle / swap / wrap) ──
+  if(startEP.li === endEP.li){
+    _wrapTagSingleLine(type, startEP.li, startEP.off, endEP.off);
+    return;
+  }
+
+  // ── Multi-line path: span selection across N lines ───────────────────
+  if(startEP.off === endEP.off && endEP.li - startEP.li === 0){
+    document.getElementById('statBar').textContent='Select some text first';
+    return;
+  }
+  var openMark = (type==='a') ? '[A>' : '[D>';
+  var closeMark = (type==='a') ? '<A]' : '<D]';
+
+  // ── Toggle/Expand detection PASS 1: markers INSIDE the selection ─────
+  // The selection contains a balanced set of `[A>`/`<A]` markers.
+  // Two sub-cases distinguish what the user wants:
+  //
+  //   STRIP  — selection ≈ the wrap (no plain text outside the markers).
+  //            User is toggling OFF.  Remove the inner markers.
+  //
+  //   EXPAND — selection extends BEYOND the markers (plain text exists
+  //            before the first marker and/or after the last marker).
+  //            User wants the wrap to grow to cover the whole selection,
+  //            e.g. select whole line including `[A>;or<A]` at the end
+  //            → line becomes `[A>(4) Falsely... officer; or<A]`.
+  //            Strip the inner markers AND emit a new outer wrap.
+  var insideMarkers = _scanMarkersInRange(type, startEP.li, startEP.off, endEP.li, endEP.off);
+  if(insideMarkers.length > 0){
+    var nOpenIn = 0, nCloseIn = 0;
+    insideMarkers.forEach(function(m){if(m.isOpen)nOpenIn++;else nCloseIn++;});
+    if(nOpenIn > 0 && nOpenIn === nCloseIn){
+      // Detect "extends beyond": is there plain text in the selection
+      // BEFORE the first marker or AFTER the last marker?
+      var firstMk = insideMarkers[0];
+      var lastMk  = insideMarkers[insideMarkers.length - 1];
+      var extendsBefore =
+          (startEP.li < firstMk.li) ||
+          (startEP.li === firstMk.li && startEP.off < firstMk.off);
+      var extendsAfter =
+          (endEP.li > lastMk.li) ||
+          (endEP.li === lastMk.li && endEP.off > lastMk.off + 3);
+
+      if(extendsBefore || extendsAfter){
+        // ── EXPAND ──────────────────────────────────────────────────
+        // Count markers on the END line whose position is < endEP.off —
+        // each strip there shifts endEP.off LEFT by 3.  (Markers on the
+        // START line are all >= startEP.off because _scanMarkersInRange
+        // filtered to the selection, so startEP.off itself doesn't shift.)
+        var markersBeforeEndOff = 0;
+        for(var k = 0; k < insideMarkers.length; k++){
+          var mk = insideMarkers[k];
+          if(mk.li === endEP.li && mk.off < endEP.off) markersBeforeEndOff++;
+        }
+        // Strip all inner markers (reverse order to preserve offsets).
+        for(var im = insideMarkers.length - 1; im >= 0; im--){
+          var mm = insideMarkers[im];
+          var tt = originalLines[mm.li] || '';
+          originalLines[mm.li] = tt.substring(0, mm.off) + tt.substring(mm.off + 3);
+        }
+        // Compute adjusted end offset, then insert close on END line first
+        // (so the open insertion on START line doesn't shift end position
+        // when start === end — though we're in the multi-line path here).
+        var newEndOff = endEP.off - (markersBeforeEndOff * 3);
+        var lastLineText = originalLines[endEP.li] || '';
+        originalLines[endEP.li] =
+            lastLineText.substring(0, newEndOff) + closeMark +
+            lastLineText.substring(newEndOff);
+        var firstLineText = originalLines[startEP.li] || '';
+        originalLines[startEP.li] =
+            firstLineText.substring(0, startEP.off) + openMark +
+            firstLineText.substring(startEP.off);
+        rebuildEditor();
+        var nLinesE = endEP.li - startEP.li + 1;
+        document.getElementById('statBar').textContent =
+            openMark+' wrap expanded ('+nOpenIn+' inner pair'+(nOpenIn>1?'s':'')+
+            ' merged, now spans '+nLinesE+' line'+(nLinesE>1?'s':'')+')';
+        return;
+      }
+
+      // ── STRIP (snug-fit toggle off) ────────────────────────────────
+      for(var im2 = insideMarkers.length - 1; im2 >= 0; im2--){
+        var mm2 = insideMarkers[im2];
+        var tt2 = originalLines[mm2.li] || '';
+        originalLines[mm2.li] = tt2.substring(0, mm2.off) + tt2.substring(mm2.off + 3);
+      }
+      rebuildEditor();
+      document.getElementById('statBar').textContent =
+          openMark+' wrap removed ('+nOpenIn+' pair'+(nOpenIn>1?'s':'')+
+          ' stripped from selection)';
+      return;
+    }
+  }
+
+  // ── Toggle-OFF detection PASS 2: SURROUNDING wrap ────────────────────
+  // The selection sits INSIDE a wider wrap (markers outside endpoints).
+  // Handles: snug-fit selection, sub-selection of wrapped region, etc.
+  var existing = _findSurroundingTagWrap(type, startEP.li, startEP.off, endEP.li, endEP.off);
+  if(existing){
+    // TOGGLE OFF — splice out the opener and closer.
+    // Process in REVERSE order (closer first) so opener offsets stay valid.
+    if(existing.closeLi === existing.openLi){
+      // Both on same line — single splice
+      var t = originalLines[existing.closeLi];
+      originalLines[existing.closeLi] =
+          t.substring(0, existing.openOff) +
+          t.substring(existing.openOff + 3, existing.closeOff) +
+          t.substring(existing.closeOff + 3);
+    } else {
+      // Closer first (so opener's line index stays valid)
+      var closeText = originalLines[existing.closeLi];
+      originalLines[existing.closeLi] =
+          closeText.substring(0, existing.closeOff) +
+          closeText.substring(existing.closeOff + 3);
+      var openText = originalLines[existing.openLi];
+      originalLines[existing.openLi] =
+          openText.substring(0, existing.openOff) +
+          openText.substring(existing.openOff + 3);
+    }
+    rebuildEditor();
+    var nLinesR = existing.closeLi - existing.openLi + 1;
+    document.getElementById('statBar').textContent =
+        openMark+' wrap removed ('+nLinesR+' line'+(nLinesR>1?'s':'')+
+        ', '+(existing.openLi+1)+'\u2013'+(existing.closeLi+1)+')';
+    return;
+  }
+
+  // ── PASS 3: SPLIT or STRIP when selection relates to an OPPOSITE wrap ─
+  // _splitOppositeWrap returns:
+  //   'split' → surrounding opp wrap was split: [A>before<A][D>sel<D][A>after<A]
+  //   'strip' → snug opp wrap inside a same-type outer wrap; just remove
+  //             the inner opp markers (text is already in the outer wrap).
+  //   false   → not applicable; fall through to default WRAP below.
+  var splitRes = _splitOppositeWrap(type, startEP.li, startEP.off, endEP.li, endEP.off);
+  if(splitRes){
+    rebuildEditor();
+    var oppOpenS = (type==='a') ? '[D>' : '[A>';
+    var nLinesS = endEP.li - startEP.li + 1;
+    if(splitRes === 'strip'){
+      document.getElementById('statBar').textContent =
+          oppOpenS+' wrap removed (text already inside outer '+openMark+' wrap)';
+    } else {
+      document.getElementById('statBar').textContent =
+          openMark+' tag added (split surrounding '+oppOpenS+' wrap, '+
+          nLinesS+' line'+(nLinesS>1?'s':'')+')';
+    }
+    return;
+  }
+
+  // Otherwise: WRAP across lines
+  // Strategy: emit ONE tag pair spanning all affected lines.
+  //   • On the FIRST line:  insert [A> (or [D>) at startEP.off
+  //   • On the LAST line:   insert <A] (or <D]) at endEP.off
+  //   • Intermediate lines: left unchanged — they sit inside the open tag
+  var firstLineText = originalLines[startEP.li] || '';
+  originalLines[startEP.li] =
+      firstLineText.substring(0, startEP.off) + openMark +
+      firstLineText.substring(startEP.off);
+  // Re-read last line (in case startEP.li === endEP.li, though we branched above)
+  var lastLineText = originalLines[endEP.li];
+  originalLines[endEP.li] =
+      lastLineText.substring(0, endEP.off) + closeMark +
+      lastLineText.substring(endEP.off);
+  rebuildEditor();
+  var nLines2 = endEP.li - startEP.li + 1;
+  document.getElementById('statBar').textContent =
+      openMark+' tag added across '+nLines2+' lines ('+(startEP.li+1)+'\u2013'+(endEP.li+1)+')';
+}
+
+// ── Helper: split an enclosing opposite-type wrap around a new tag ─────
+// When the user adds a tag of one type (e.g. [D>) while the selection
+// sits inside an existing wrap of the OPPOSITE type (e.g. [A>...<A]),
+// we DON'T want to nest the new tag inside.  Instead, close the outer
+// wrap just before the selection, emit the new tag pair as a sibling,
+// then re-open the outer wrap just after.  Net transform:
+//   [A>before<A][D>selected<D][A>after<A]
+//
+// Returns:
+//   'split' — surrounding opp wrap was split into siblings around the
+//             new tag (the main case described above).
+//   'strip' — selection is a snug-fit opp wrap that itself sits inside
+//             a SAME-type outer wrap (e.g. clicking [A> on `[D>or<D]`
+//             nested inside `[A>...<A]`).  The inner opp wrap is
+//             contradictory, so we just remove the inner markers;
+//             the outer wrap already marks the text correctly.
+//   false  — not applicable (no surrounding opp wrap, OR snug-fit
+//             without an outer same-type wrap → let caller's SWAP run).
+function _splitOppositeWrap(newType, startLi, startOff, endLi, endOff){
+  var oppType = (newType === 'a') ? 'd' : 'a';
+  var opp = _findSurroundingTagWrap(oppType, startLi, startOff, endLi, endOff);
+  if(!opp) return false;
+
+  // Snug-fit detection: opp opener ends exactly at selection start AND
+  // opp closer starts exactly at selection end, all on the same line(s).
+  var isSnug =
+      (opp.openLi === startLi) &&
+      (opp.openOff + 3 === startOff) &&
+      (opp.closeLi === endLi) &&
+      (opp.closeOff === endOff);
+
+  // ── Snug-fit branch ──────────────────────────────────────────
+  // The selection exactly matches the contents of an opposite-type wrap.
+  // Two sub-cases:
+  //   (a) NO outer same-type wrap → return false so the caller's SWAP
+  //       D↔A logic runs (e.g. plain `[D>or<D]` → `[A>or<A]`).
+  //   (b) Outer SAME-type wrap exists (e.g. `[A>...[D>or<D]...<A]` and
+  //       user clicked [A>) → the inner opposite wrap is contradictory
+  //       (text marked as both added AND deleted).  The SWAP would just
+  //       create a nested duplicate wrap (`[A>...[A>or<A]...<A]`).
+  //       Instead: STRIP the inner opposite markers — the text is now
+  //       plain inside the outer wrap, which already marks it correctly.
+  if(isSnug){
+    // Check for outer SAME-type wrap around the snug opp wrap.
+    // We probe OUTSIDE the opp's open/close so the surrounding scan
+    // doesn't itself see the snug opp wrap.
+    var outerProbeStart = opp.openOff;        // position of `[D>` (just before)
+    var outerProbeEnd   = opp.closeOff + 3;   // position right after `<D]`
+    var outerSame = _findSurroundingTagWrap(
+        newType, opp.openLi, outerProbeStart, opp.closeLi, outerProbeEnd);
+    if(!outerSame) return false;  // sub-case (a) — let SWAP run
+
+    // Sub-case (b): strip the inner opp wrap (close first to preserve
+    // opener offset on the same line).
+    if(opp.closeLi === opp.openLi){
+      var ts = originalLines[opp.openLi] || '';
+      originalLines[opp.openLi] =
+          ts.substring(0, opp.openOff) +
+          ts.substring(opp.openOff + 3, opp.closeOff) +
+          ts.substring(opp.closeOff + 3);
+    } else {
+      var closeT = originalLines[opp.closeLi] || '';
+      originalLines[opp.closeLi] =
+          closeT.substring(0, opp.closeOff) +
+          closeT.substring(opp.closeOff + 3);
+      var openT = originalLines[opp.openLi] || '';
+      originalLines[opp.openLi] =
+          openT.substring(0, opp.openOff) +
+          openT.substring(opp.openOff + 3);
+    }
+    return 'strip';
+  }
+
+  // ── Non-snug branch: split the surrounding opp wrap ───────────────
+  var oppOpen  = (oppType === 'a') ? '[A>' : '[D>';
+  var oppClose = (oppType === 'a') ? '<A]' : '<D]';
+  var newOpen  = (newType === 'a') ? '[A>' : '[D>';
+  var newClose = (newType === 'a') ? '<A]' : '<D]';
+
+  // Insert at the END first so the START insert offsets stay valid
+  // (especially critical when start and end are on the SAME line).
+  if(startLi === endLi){
+    var t = originalLines[startLi] || '';
+    originalLines[startLi] =
+        t.substring(0, startOff) + oppClose + newOpen +
+        t.substring(startOff, endOff) + newClose + oppOpen +
+        t.substring(endOff);
+  } else {
+    var endText = originalLines[endLi] || '';
+    originalLines[endLi] =
+        endText.substring(0, endOff) + newClose + oppOpen +
+        endText.substring(endOff);
+    var startText = originalLines[startLi] || '';
+    originalLines[startLi] =
+        startText.substring(0, startOff) + oppClose + newOpen +
+        startText.substring(startOff);
+  }
+  return 'split';
+}
+
+// ── Helper: scan all markers of `type` WITHIN a selection range ────────
+// Returns a flat list of {li, off, isOpen} for every [A>/<A] (or [D>/<D])
+// marker whose position falls inside the [startLi/startOff, endLi/endOff)
+// selection.  Used to detect "user re-selected a wrapped region and
+// included the markers in the new selection" — in that case the inside
+// markers are balanced and we can strip them all to toggle the wrap off.
+function _scanMarkersInRange(type, startLi, startOff, endLi, endOff){
+  var openMark = (type==='a') ? '[A>' : '[D>';
+  var closeMark = (type==='a') ? '<A]' : '<D]';
+  var markers = [];
+  for(var li = startLi; li <= endLi; li++){
+    var text = originalLines[li] || '';
+    var minPos = (li === startLi) ? startOff : 0;
+    var maxPos = (li === endLi) ? endOff : text.length;
+    var pos = minPos;
+    while(pos < maxPos){
+      var oP = text.indexOf(openMark, pos);
+      var cP = text.indexOf(closeMark, pos);
+      if(oP >= maxPos) oP = -1;
+      if(cP >= maxPos) cP = -1;
+      var nextPos = -1, isOpen = false;
+      if(oP >= 0 && (cP < 0 || oP < cP)){nextPos = oP; isOpen = true;}
+      else if(cP >= 0){nextPos = cP; isOpen = false;}
+      if(nextPos < 0) break;
+      markers.push({li: li, off: nextPos, isOpen: isOpen});
+      pos = nextPos + 3;
+    }
+  }
+  return markers;
+}
+
+// ── Helper: locate an enclosing tag pair around a selection ────────────
+// Scans LEFT from the selection start through the same line and earlier
+// lines, looking for the most recent unbalanced open-marker of `type`.
+// If found, scans RIGHT from the selection end through later lines for
+// the matching close-marker.  Returns {openLi, openOff, closeLi, closeOff}
+// or null if no surrounding wrap exists.
+//
+// "Unbalanced" means: when walking backward, each closer we encounter
+// nests deeper (increments depth) and each opener decrements.  We stop
+// when depth would go below zero — that opener is the surrounding one.
+function _findSurroundingTagWrap(type, startLi, startOff, endLi, endOff){
+  var openMark = (type==='a') ? '[A>' : '[D>';
+  var closeMark = (type==='a') ? '<A]' : '<D]';
+  var L = originalLines.length;
+
+  // ── Phase 1: scan LEFT for nearest unbalanced opener ─────────────────
+  var openLi = -1, openOff = -1, depth = 0;
+  for(var li = startLi; li >= 0; li--){
+    var text = originalLines[li] || '';
+    var maxPos = (li === startLi) ? startOff : text.length;
+    // Collect all marker positions up to maxPos
+    var positions = [];
+    var pos = 0;
+    while(pos < maxPos){
+      var oP = text.indexOf(openMark, pos);
+      var cP = text.indexOf(closeMark, pos);
+      if(oP >= maxPos) oP = -1;
+      if(cP >= maxPos) cP = -1;
+      var nextPos = -1, isOpen = false;
+      if(oP >= 0 && (cP < 0 || oP < cP)){nextPos = oP; isOpen = true;}
+      else if(cP >= 0){nextPos = cP; isOpen = false;}
+      if(nextPos < 0) break;
+      positions.push({pos: nextPos, open: isOpen});
+      pos = nextPos + 3;
+    }
+    // Walk RIGHT-TO-LEFT through markers on this line
+    for(var i = positions.length - 1; i >= 0; i--){
+      if(positions[i].open){
+        if(depth === 0){
+          openLi = li;
+          openOff = positions[i].pos;
+          break;
+        }
+        depth--;
+      } else {
+        depth++;
+      }
+    }
+    if(openLi >= 0) break;
+  }
+  if(openLi < 0) return null;
+
+  // ── Phase 2: scan RIGHT from end for matching closer ─────────────────
+  var closeLi = -1, closeOff = -1;
+  depth = 0;
+  for(var li2 = endLi; li2 < L; li2++){
+    var text2 = originalLines[li2] || '';
+    var startPos = (li2 === endLi) ? endOff : 0;
+    var pos2 = startPos;
+    while(pos2 < text2.length){
+      var oP2 = text2.indexOf(openMark, pos2);
+      var cP2 = text2.indexOf(closeMark, pos2);
+      var nextPos2 = -1, isOpen2 = false;
+      if(oP2 >= 0 && (cP2 < 0 || oP2 < cP2)){nextPos2 = oP2; isOpen2 = true;}
+      else if(cP2 >= 0){nextPos2 = cP2; isOpen2 = false;}
+      if(nextPos2 < 0) break;
+      if(isOpen2){
+        depth++;
+      } else {
+        if(depth === 0){
+          closeLi = li2;
+          closeOff = nextPos2;
+          break;
+        }
+        depth--;
+      }
+      pos2 = nextPos2 + 3;
+    }
+    if(closeLi >= 0) break;
+  }
+  if(closeLi < 0) return null;
+
+  return {openLi: openLi, openOff: openOff, closeLi: closeLi, closeOff: closeOff};
+}
+
+// Original single-line wrap/toggle/swap logic, factored out so the
+// multi-line wrapper can delegate to it when both endpoints are on the
+// same line.  startOff / endOff are character offsets into the
+// originalLines[li] string (NOT the DOM positions).
+function _wrapTagSingleLine(type, li, startOff, endOff){
   var text=originalLines[li]||'';
-  var startOff=getTextOffset(lc,range.startContainer,range.startOffset);
-  var endOff=getTextOffset(lc,range.endContainer,range.endOffset);
   if(startOff===endOff){document.getElementById('statBar').textContent='Select some text first';return;}
+
+  // ── SPLIT-or-STRIP check (single-line) ───────────────────────
+  // If the selection sits inside an OPPOSITE-type wrap (e.g. user is
+  // adding [D> while inside a multi-line [A>...<A] wrap), split the
+  // outer wrap into siblings around the new tag instead of nesting.
+  //
+  // Special case: snug-fit selection inside an opp wrap that is ITSELF
+  // inside a SAME-type outer wrap (e.g. user clicks [A> on `[D>or<D]`
+  // that sits inside `[A>...<A]`).  In that case we STRIP the inner D
+  // markers — the outer A wrap already marks the text correctly, no
+  // need to swap D→A (which would create a nested [A>or<A]).
+  //
+  // _splitOppositeWrap returns 'split', 'strip', or false (snug-fit
+  // without outer same-type → fall through to existing SWAP logic).
+  var _splitRes = _splitOppositeWrap(type, li, startOff, li, endOff);
+  if(_splitRes){
+    rebuildEditor();
+    var _openMark = (type==='a') ? '[A>' : '[D>';
+    var _oppMark = (type==='a') ? '[D>' : '[A>';
+    if(_splitRes === 'strip'){
+      document.getElementById('statBar').textContent =
+          _oppMark+' wrap removed (text already inside outer '+_openMark+' wrap, Line '+(li+1)+')';
+    } else {
+      document.getElementById('statBar').textContent =
+          _openMark+' tag added (split surrounding '+_oppMark+' wrap, Line '+(li+1)+')';
+    }
+    return;
+  }
 
   var openA='[A>',closeA='<A]',openD='[D>',closeD='<D]';
   var selected=text.substring(startOff,endOff);
@@ -800,9 +1375,27 @@ function wrapTag(type){
       result=before.substring(0,before.length-3)+'[A>'+stripD(selected)+'<A]'+after.substring(3);
       msg='[D> → [A> swapped (Line '+(li+1)+')';
     } else if(selected.indexOf('[A>')>=0||selected.indexOf('<A]')>=0){
-      // Selection contains A tags — remove them (toggle off)
-      result=before+stripA(selected)+after;
-      msg='[A> tags removed (Line '+(li+1)+')';
+      // Selection contains A tags.  Two sub-cases:
+      //   EXPAND — selection extends beyond the inner markers (any
+      //            plain text before the first marker or after the
+      //            last marker).  User wants the wrap to grow to
+      //            cover the whole selection.
+      //   STRIP  — selection ≈ the markers (snug fit).  Toggle off.
+      var _firstA1=selected.indexOf('[A>'), _firstA2=selected.indexOf('<A]');
+      var _firstMk=(_firstA1<0)?_firstA2:(_firstA2<0?_firstA1:Math.min(_firstA1,_firstA2));
+      var _lastA1=selected.lastIndexOf('[A>'), _lastA2=selected.lastIndexOf('<A]');
+      var _lastMk=Math.max(_lastA1,_lastA2);
+      var _stripped=stripA(selected);
+      var _extends=(_firstMk>0)||(_lastMk+3<selected.length);
+      if(_extends && _stripped.length>0){
+        // EXPAND: strip inner markers + wrap whole selection
+        result=before+'[A>'+_stripped+'<A]'+after;
+        msg='[A> wrap expanded to selection (Line '+(li+1)+')';
+      } else {
+        // STRIP (toggle off)
+        result=before+_stripped+after;
+        msg='[A> tags removed (Line '+(li+1)+')';
+      }
     } else if(selected.indexOf('[D>')>=0||selected.indexOf('<D]')>=0){
       // Selection contains D tags — swap to A
       result=before+'[A>'+stripD(selected)+'<A]'+after;
@@ -822,9 +1415,25 @@ function wrapTag(type){
       result=before.substring(0,before.length-3)+'[D>'+stripA(selected)+'<D]'+after.substring(3);
       msg='[A> → [D> swapped (Line '+(li+1)+')';
     } else if(selected.indexOf('[D>')>=0||selected.indexOf('<D]')>=0){
-      // Selection contains D tags — remove them (toggle off)
-      result=before+stripD(selected)+after;
-      msg='[D> tags removed (Line '+(li+1)+')';
+      // Selection contains D tags.  Two sub-cases:
+      //   EXPAND — selection extends beyond the inner markers →
+      //            grow the wrap to cover the whole selection.
+      //   STRIP  — snug fit → toggle off.
+      var _firstD1=selected.indexOf('[D>'), _firstD2=selected.indexOf('<D]');
+      var _firstMk=(_firstD1<0)?_firstD2:(_firstD2<0?_firstD1:Math.min(_firstD1,_firstD2));
+      var _lastD1=selected.lastIndexOf('[D>'), _lastD2=selected.lastIndexOf('<D]');
+      var _lastMk=Math.max(_lastD1,_lastD2);
+      var _stripped=stripD(selected);
+      var _extends=(_firstMk>0)||(_lastMk+3<selected.length);
+      if(_extends && _stripped.length>0){
+        // EXPAND: strip inner markers + wrap whole selection
+        result=before+'[D>'+_stripped+'<D]'+after;
+        msg='[D> wrap expanded to selection (Line '+(li+1)+')';
+      } else {
+        // STRIP (toggle off)
+        result=before+_stripped+after;
+        msg='[D> tags removed (Line '+(li+1)+')';
+      }
     } else if(selected.indexOf('[A>')>=0||selected.indexOf('<A]')>=0){
       // Selection contains A tags — swap to D
       result=before+'[D>'+stripA(selected)+'<D]'+after;
@@ -1028,6 +1637,106 @@ document.getElementById('textWrap').addEventListener('keydown',function(e){
     }
   }
 });
+
+// ── Dynamic iframe resize ──────────────────────────────────────────
+// Streamlit's st.components.v1.html() renders this viewer inside an
+// iframe with a STATIC `height=` attribute (from Python).  When the
+// browser viewport is taller than that, content gets clipped at the
+// bottom because the iframe never grows.  Streamlit exposes a
+// `setFrameHeight` API (postMessage to parent) for declared
+// components, but `st.components.v1.html()` doesn't auto-wire it.
+// We send the message manually — Streamlit's runtime listens for
+// "streamlit:setFrameHeight" and will resize the iframe accordingly.
+//
+// We compute the desired height from the OUTER (parent) viewport,
+// not the iframe's own — the iframe should fill all space below
+// Streamlit's chrome (header / tabs / etc.).  We subtract a small
+// buffer (160px) for the title + tab bar visible above the iframe.
+function _reportIframeHeight(){
+  try{
+    // Compute desired height from the parent viewport.
+    var H;
+    try{
+      H = (window.parent && window.parent.innerHeight)
+            ? window.parent.innerHeight : window.innerHeight;
+    } catch(_){ H = window.innerHeight; }
+
+    // ── DYNAMIC top-offset measurement ───────────────────────
+    // Instead of guessing how much chrome (header, tabs, file
+    // pill) sits above the iframe, MEASURE the iframe's actual
+    // top position in the parent viewport via getBoundingClientRect.
+    // Then compute desired = visibleHeight - top - smallBottomMargin.
+    var topOffset = 130;  // fallback if measurement fails
+    var fe = null;
+    try{
+      fe = window.frameElement;
+      if(fe){
+        var rect = fe.getBoundingClientRect();
+        // rect.top is relative to the parent viewport (already
+        // accounts for scroll position).  Clamp to >= 0 in case
+        // the iframe is briefly above-fold during initial layout.
+        topOffset = Math.max(0, rect.top);
+      }
+    } catch(_){ /* keep fallback */ }
+
+    // 8px = small bottom margin so iframe doesn't kiss the
+    // viewport edge (looks cleaner and gives room for scrollbar).
+    var desired = Math.max(500, H - topOffset - 8);
+
+    // Strategy 1 — DIRECT: write the measured height onto our own
+    // <iframe> element + its wrappers in the parent document.
+    try{
+      if(fe){
+        fe.setAttribute('height', desired);
+        fe.style.height = desired + 'px';
+        fe.style.minHeight = desired + 'px';
+        fe.style.maxHeight = desired + 'px';
+        // Walk up the wrapper chain (Streamlit nests:
+        // element-container > stIFrame > iframe).
+        var wrap = fe.parentElement;
+        var depth = 0;
+        while(wrap && depth < 6){
+          if(wrap.matches && (
+             wrap.matches('[data-testid="stIFrame"]') ||
+             wrap.matches('[data-testid="stCustomComponentV1Host"]') ||
+             wrap.matches('[data-testid="element-container"]'))){
+            wrap.style.height = desired + 'px';
+            wrap.style.minHeight = desired + 'px';
+            wrap.style.maxHeight = desired + 'px';
+          }
+          wrap = wrap.parentElement;
+          depth++;
+        }
+      }
+    } catch(_){ /* cross-origin or detached — ignore */ }
+
+    // Strategy 2 — POSTMESSAGE fallback for declared-component path.
+    try{
+      window.parent.postMessage({
+        type: 'streamlit:setFrameHeight',
+        height: desired
+      }, '*');
+    } catch(_){ /* ignore */ }
+  } catch(err){ /* leave static height */ }
+}
+// Report on load, after paints, and on every resize.
+window.addEventListener('load', function(){
+  _reportIframeHeight();
+  // Re-report after PDF/text rendering has settled (layout shift).
+  setTimeout(_reportIframeHeight, 200);
+  setTimeout(_reportIframeHeight, 800);
+  setTimeout(_reportIframeHeight, 2000);
+});
+window.addEventListener('resize', _reportIframeHeight);
+// Also re-measure when the parent scrolls — chrome height can
+// change (e.g. sticky header collapses on scroll).
+try{
+  if(window.parent){
+    window.parent.addEventListener('scroll', _reportIframeHeight, {passive: true});
+  }
+} catch(_){ /* ignore */ }
+// Fire once immediately too in case 'load' has already fired.
+_reportIframeHeight();
 </script>
 </body>
 </html>"""

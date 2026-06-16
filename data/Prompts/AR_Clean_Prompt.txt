@@ -102,6 +102,17 @@ WHAT TO REMOVE (PDF Artifacts Only)
    - Multiple blank lines between sections
    - Reduce to maximum 1 blank line between paragraphs
 
+7. **AR Scan/Print Artifacts** (All pages — these are PDF chrome, NOT bill content):
+   - Scan barcode lines wrapped in asterisks: `*HAR003*`, `*HSR12*`, `*SAR123*`
+   - Timestamp footers: `01/27/2025 11:03:27 AM HAR003` (page 1)
+   - Page-N + timestamp running headers: `2 01/27/2025 11:03:27 AM HAR003` (pages 2+)
+   - Bare bill-ID running headers when ALONE on a line: `HB1249`, `SB85`, `HJR12`
+   - ⚠️ KEEP "Act # of the Regular Session" — this is a legitimate post-passage
+     metadata stamp, NOT an artifact.
+   - ⚠️ KEEP "HOUSE BILL 1249" / "SENATE BILL 85" on page 1 — those are the
+     official bill identifiers (only the compact form `HB1249` / `SB85` is
+     stripped, and only when alone on its own line).
+
 ===================================================================
 WHAT TO PRESERVE (100% - Zero Loss Policy)
 ===================================================================
@@ -183,6 +194,113 @@ WHAT TO PRESERVE (100% - Zero Loss Policy)
    - Subsection markers: (a), (b), (c) or (1), (2), (3)
    - All legal terminology and statutory language
    - Cross-references to other Arkansas statutes
+
+===================================================================
+APPROPRIATION TABLES — STRIP DECORATIVE [A>...<A] TAGS
+===================================================================
+
+⚠️ CRITICAL FOR AR APPROPRIATION BILLS:
+
+Arkansas appropriation bills (those with "AN ACT TO MAKE AN APPROPRIATION…")
+contain large salary/budget tables.  In these tables, the PDF uses
+**underline as typographic emphasis**, NOT as a legislative-addition marker.
+The extractor cannot tell the two apart, so it wraps decorative table
+content with `[A>…<A]` tags by mistake.
+
+🚫 STRIP THE [A>…<A] WRAPPER (keep the inside text) when ALL of these hold:
+
+1. **The line is part of an appropriation table or schedule**, AND
+2. **The tag wraps one of these three patterns**:
+
+   PATTERN A — Column-header row (table column titles):
+   ❌ WRONG: `[A> No.     Title     Employees     2025-2026<A]`
+   ✅ RIGHT: ` No.     Title     Employees     2025-2026`
+
+   ❌ WRONG: `[A> NO.                                       2025-2026<A]`
+   ✅ RIGHT: ` NO.                                       2025-2026`
+
+   PATTERN B — All-caps category heading row (no lowercase letters):
+   ❌ WRONG: `[A>TWELVE MONTH EDUCATIONAL AND GENERAL ADMINISTRATIVE POSITIONS<A]`
+   ✅ RIGHT: `TWELVE MONTH EDUCATIONAL AND GENERAL ADMINISTRATIVE POSITIONS`
+
+   ❌ WRONG: `[A>NINE MONTH EDUCATIONAL AND GENERAL ACADEMIC POSITIONS<A]`
+   ✅ RIGHT: `NINE MONTH EDUCATIONAL AND GENERAL ACADEMIC POSITIONS`
+
+   ❌ WRONG: `[A>TWELVE MONTH AUXILIARY ENTERPRISES POSITIONS<A]`
+   ✅ RIGHT: `TWELVE MONTH AUXILIARY ENTERPRISES POSITIONS`
+
+   PATTERN C — Bare dollar amount in an appropriation schedule row
+   (the tag wraps ONLY a number/dollar value, no surrounding prose):
+   ❌ WRONG: `(05) CONTINGENCY                          [A>      573,644<A]`
+   ✅ RIGHT: `(05) CONTINGENCY                                573,644`
+
+   ❌ WRONG: `      TOTAL AMOUNT APPROPRIATED            [A> $12,046,523<A]`
+   ✅ RIGHT: `      TOTAL AMOUNT APPROPRIATED              $12,046,523`
+
+   ❌ WRONG: `(05) DEBT SERVICE                         [A>    2,200,000<A]`
+   ✅ RIGHT: `(05) DEBT SERVICE                              2,200,000`
+
+✅ KEEP THE [A>…<A] WRAPPER UNTOUCHED in these cases (these are REAL changes):
+
+   COUNTEREXAMPLE 1 — Tag wraps prose / a phrase, not just a number:
+   ✅ KEEP: `SECTION 1. Arkansas Code Title 5 is [A>amended to add an additional section to read<A] as follows:`
+   (The tag wraps a verb phrase — that is a real legislative addition.)
+
+   COUNTEREXAMPLE 2 — Tag wraps a complete new section/clause:
+   ✅ KEEP: `[A>15-4-221.  Report concerning contracts awarded to businesses.<A]`
+   (The tag wraps a brand-new code section being inserted — keep it.)
+
+   COUNTEREXAMPLE 3 — Tag wraps an inline addition mixed with regular text:
+   ✅ KEEP: `(2) IT Pool [A>15<A] employees`
+   (Here the bill is genuinely changing the employee count to 15 — keep it.
+    But if the line were just `(2) IT Pool [A>15<A]` with the number sitting
+    in the right-hand "Employees" column of an appropriation table, that's
+    Pattern C above and the wrapper IS stripped.)
+
+🔑 RULE OF THUMB: If the [A>…<A] sits on a line that is clearly **a row of
+   a salary/appropriation table or its column/category header** AND wraps
+   ONLY column-title text, all-caps category text, or a bare numeric/dollar
+   value, strip the wrapper.  Otherwise KEEP it untouched.
+
+===================================================================
+PAGE 1 HEADER — CANONICAL VERTICAL LAYOUT
+===================================================================
+
+⚠️ AR bill PDFs visually arrange the page-1 header in a multi-column
+layout where "A Bill" is centered and "HOUSE BILL XXXX" is right-aligned
+next to "Regular Session, YYYY".  In the cleaned output, render these
+elements **vertically**, each on its own line, in this exact order:
+
+  1. Stricken language would be deleted from and underlined…  (always first)
+  2. Act # of the Regular Session                              (only if present)
+  3. HOUSE BILL XXXX  / SENATE BILL XXXX  / HOUSE JOINT RESOLUTION XXX  etc.
+  4. A Bill  (or "An Act")
+  5. State of Arkansas
+  6. ##th General Assembly  (e.g. 95th General Assembly)
+  7. Regular Session, YYYY  (or "First Extraordinary Session, YYYY", "Fiscal Session, YYYY")
+
+🚫 NEVER concatenate two of these elements on a single line with whitespace.
+   The raw PyMuPDF text will sometimes show them side-by-side like:
+
+   ❌ WRONG:
+       State of Arkansas
+       95th General Assembly                                A Bill
+       Regular Session, 2025                          HOUSE BILL 1249
+
+   ✅ RIGHT:
+       Act 42 of the Regular Session
+
+       HOUSE BILL 1249
+       A Bill
+
+       State of Arkansas
+       95th General Assembly
+       Regular Session, 2025
+
+   Treat any long horizontal whitespace run (≥ 8 spaces) inside a header
+   line as a column break — split the line at that point and re-emit the
+   right-hand fragment on its own line, then place all elements in the
+   canonical order above.
 
 ===================================================================
 FORMATTING RULES (How to Structure the Output)
@@ -334,12 +452,26 @@ Before returning your output, verify ALL of these:
 □ Page markers (<<<PAGE_X_START>>>) removed from all pages?
 □ Repeated headers removed from pages 2+ only (NOT page 1)?
 □ Page numbers and footers removed?
+□ AR scan barcodes (`*HAR003*`, `*HSR12*`) removed?
+□ AR timestamp footers (`01/27/2025 11:03:27 AM HAR003`) removed?
+□ AR bare bill-ID running headers (`HB1249` alone on a line) removed?
+□ "Act # of the Regular Session" KEPT (not an artifact)?
 
 🔍 TAG PRESERVATION:
 □ All [A>...<A] tags present and unchanged?
 □ All [D>...<D] tags present and unchanged?
 □ Tag count: [A> count = <A] count?
 □ Tag count: [D> count = <D] count?
+□ Decorative [A>...<A] wrappers stripped from appropriation table column
+  headers, all-caps category headings, and bare dollar amounts in
+  appropriation schedules (see "APPROPRIATION TABLES" section above)?
+
+🔍 PAGE 1 HEADER LAYOUT:
+□ Each header element (Act # / BILL ID / A Bill / State of Arkansas /
+  ##th General Assembly / Regular Session, YYYY) on its own line?
+□ No two header elements concatenated with whitespace on the same line
+  (e.g. `95th General Assembly                A Bill` is WRONG)?
+□ Canonical order followed: Act # → BILL ID → A Bill → State → Assembly → Session?
 
 🔍 CONTENT PRESERVATION:
 □ "BE IT ENACTED BY THE GENERAL ASSEMBLY..." clause present?

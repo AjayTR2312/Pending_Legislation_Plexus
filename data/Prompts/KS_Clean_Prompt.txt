@@ -95,27 +95,114 @@ DO NOT REMOVE ANYTHING ELSE - When uncertain, PRESERVE
 FALSE HEADER TAG STRIPPING (Kansas-specific)
 ===================================================================
 
-Kansas bill PDFs have decorative italic or underlined header text on page 1.
-The PyMuPDF extractor sometimes wraps these header lines with false [A>...<A]
-tags. If you see [A>...<A] tags on ANY of these header elements, STRIP THE
-TAGS but KEEP THE TEXT:
+Kansas bill PDFs have decorative bold / italic / bold-italic header text on
+page 1. The PyMuPDF extractor sometimes wraps these header lines with false
+[A>...<A] tags. These header items are document METADATA, not added
+legislative language — they MUST NEVER carry [A>...<A] tags even if they
+appear in bold, italic, or bold-italic in the source PDF.
 
-  - Session line: "Session of 2025"
-  - Bill title: "HOUSE BILL No. 2207", "SENATE BILL No. 45"
-  - Substitute: "SUBSTITUTE FOR HOUSE BILL No. 2207"
-  - Committee: "By Committee on Child Welfare and Foster Care"
-  - Sponsor: "Requested by Representative Howerton"
-  - Act title: "AN ACT concerning records; relating to..."
+If you see [A>...<A] tags on ANY of these header elements, STRIP THE TAGS
+but KEEP THE TEXT:
+
+  - Session line:           "Session of 2025"
+  - Amendment status:       "As Amended by House Committee"
+                            "As Amended by Senate Committee"
+  - Bill title:             "HOUSE BILL No. 2207", "SENATE BILL No. 45"
+  - Resolution title:       "HOUSE RESOLUTION No. 5042"
+                            "SENATE RESOLUTION No. 1234"
+  - Concurrent resolution:  "HOUSE CONCURRENT RESOLUTION No. 5042"
+                            "SENATE CONCURRENT RESOLUTION No. 1604"
+  - Engrossed prefix:       "ENGROSSED HOUSE BILL No. 1204"
+                            "ENGROSSED SENATE BILL No. 13"
+  - Substitute prefix:      "SUBSTITUTE FOR HOUSE BILL No. 2207"
+                            "HOUSE Substitute for SENATE BILL No. 113"
+                            "SENATE Substitute for HOUSE BILL No. 113"
+  - Committee origin:       "By Committee on Child Welfare and Foster Care"
+  - Sponsor:                "By Representative Smith"
+                            "By Senators Lee and Jones"
+  - Requester:              "Requested by Representative Howerton"
+                            "Requested by Governor ..."
+  - Act title:              "AN ACT concerning records; relating to..."
 
 EXAMPLES:
   WRONG (keep false tag): [A>Session of 2025 HOUSE BILL No. 2207<A]
   RIGHT (strip tag):      Session of 2025 HOUSE BILL No. 2207
+
+  WRONG: [A>SENATE CONCURRENT RESOLUTION No. 1604<A]
+  RIGHT: SENATE CONCURRENT RESOLUTION No. 1604
+
+  WRONG: [A>HOUSE CONCURRENT RESOLUTION No. 5042<A]
+  RIGHT: HOUSE CONCURRENT RESOLUTION No. 5042
+
+  WRONG: [A>ENGROSSED HOUSE BILL No. 1204<A]
+  RIGHT: ENGROSSED HOUSE BILL No. 1204
+
+  WRONG: [A>As Amended by Senate Committee Session of 2025 SENATE BILL No. 13<A]
+  RIGHT: As Amended by Senate Committee Session of 2025 SENATE BILL No. 13
 
   WRONG: [A>By Committee on Child Welfare and Foster Care<A]
   RIGHT: By Committee on Child Welfare and Foster Care
 
 IMPORTANT: This rule applies ONLY to page-1 header content.
 Genuine [A>...<A] tags in the bill body MUST be preserved.
+
+===================================================================
+ENACTING / RESOLVING CLAUSE TAG STRIPPING (Kansas-specific)
+===================================================================
+
+Kansas bills, resolutions, and concurrent resolutions all introduce their
+operative section with a standard enacting / resolving clause.  These are
+document BOILERPLATE, not added legislative language — they MUST NEVER be
+wrapped in [A>...<A] tags even if the source PDF renders them in italic or
+bold-italic (which is the typographic convention for these clauses).
+
+If you see [A>...<A] tags on ANY of the following clauses, STRIP THE TAGS
+but KEEP THE TEXT EXACTLY:
+
+  - Bill enacting clause:
+      "Be it enacted by the Legislature of the State of Kansas:"
+
+  - Senate Concurrent Resolution / constitutional amendment clause:
+      "Be it resolved by the Legislature of the State of Kansas, two-thirds
+       of the members elected (or appointed) and qualified to the Senate and
+       two-thirds of the members elected (or appointed) and qualified to the
+       House of Representatives concurring therein:"
+
+  - House Concurrent Resolution clause:
+      "Be it resolved by the House of Representatives of the State of
+       Kansas, the Senate concurring therein:"
+
+  - Senate Resolution (ceremonial / honorary):
+      "Be it resolved by the Senate of the State of Kansas: That ..."
+
+  - House Resolution:
+      "Be it resolved by the House of Representatives of the State of
+       Kansas: That ..."
+
+  - Additional resolving clauses inside any resolution:
+      "Be it further resolved: That ..."
+      "Be it further resolved by ...: That ..."
+
+EXAMPLES:
+  WRONG: [A>Be it resolved by the Legislature of the State of Kansas,
+          two-thirds of the members elected (or appointed) and qualified
+          to the Senate ... concurring therein:<A]
+  RIGHT: Be it resolved by the Legislature of the State of Kansas,
+         two-thirds of the members elected (or appointed) and qualified
+         to the Senate ... concurring therein:
+
+  WRONG: [A>Be it further resolved: That the Secretary of the Senate
+          shall send seven enrolled copies of this resolution.<A]
+  RIGHT: Be it further resolved: That the Secretary of the Senate shall
+         send seven enrolled copies of this resolution.
+
+  WRONG: [A>Be it enacted by the Legislature of the State of Kansas:<A]
+  RIGHT: Be it enacted by the Legislature of the State of Kansas:
+
+IMPORTANT: This rule applies to ALL Kansas document types — bills,
+resolutions, and concurrent resolutions — wherever the boilerplate clause
+appears.  Genuine [A>...<A] tags on actual legislative additions (e.g.,
+the substantive amendment text inside the resolution) MUST be preserved.
 
 ===================================================================
 WHAT YOU MUST PRESERVE (ABSOLUTE REQUIREMENTS):
@@ -143,12 +230,28 @@ PRESERVE 100% - NO EXCEPTIONS:
   - Natural paragraph breaks
   
 ✓ PAGE 1 CONTENT (CRITICAL - many systems skip this):
-  - Session information: "Session of 2025" and should not be tagged.
-  - Bill title: "HOUSE BILL No. XXXX"  
-  - Committee info: "By Committee on..."
-  - Requester: "Requested by..."
+  - Session information: "Session of 2025" — PRESERVE TEXT, do NOT tag
+    even if rendered in bold / italic / bold-italic in the PDF.
+  - Amendment status: "As Amended by House Committee" / "As Amended by
+    Senate Committee" — PRESERVE TEXT, do NOT tag.
+  - Bill title: "HOUSE BILL No. XXXX" / "SENATE BILL No. XXXX" —
+    PRESERVE TEXT, do NOT tag (same treatment as Session of 2025).
+  - Resolution title: "HOUSE RESOLUTION No. XXXX" /
+    "SENATE RESOLUTION No. XXXX" — PRESERVE TEXT, do NOT tag.
+  - Concurrent resolution: "HOUSE CONCURRENT RESOLUTION No. XXXX" /
+    "SENATE CONCURRENT RESOLUTION No. XXXX" — PRESERVE TEXT, do NOT
+    tag (same treatment as Session of 2025).
+  - Engrossed bill: "ENGROSSED HOUSE BILL No. XXXX" /
+    "ENGROSSED SENATE BILL No. XXXX" — PRESERVE TEXT, do NOT tag.
+  - Substitute prefix: "SUBSTITUTE FOR HOUSE BILL No. XXXX" /
+    "HOUSE Substitute for SENATE BILL No. XXXX" / etc. — PRESERVE
+    TEXT, do NOT tag.
+  - Committee info: "By Committee on..." — PRESERVE TEXT, do NOT tag.
+  - Sponsor info: "By Representative..." / "By Senator..." —
+    PRESERVE TEXT, do NOT tag.
+  - Requester: "Requested by..." — PRESERVE TEXT, do NOT tag.
   - Date references: "2-3" or any numbers
-  - Summary text: "AN ACT concerning..."
+  - Summary text: "AN ACT concerning..." — PRESERVE TEXT, do NOT tag.
   
 ✓ CONTINUATION TEXT (CRITICAL - this is often dropped):
   - Text that appears to be "mid-sentence" or "mid-paragraph"
