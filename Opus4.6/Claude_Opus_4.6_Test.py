@@ -1384,6 +1384,7 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
             for attempt in range(1, max_retries + 1):
                 try:
                     cleaned = ""
+                    final_msg = None
                     with client.messages.stream(
                         model="claude-opus-4-6",
                         max_tokens=64000,
@@ -1395,6 +1396,25 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
                             cleaned += text
                         final_msg = stream.get_final_message()
                         _track_usage(f"Hybrid Chunk {i}/{total_chunks}", final_msg.usage)
+                    # ── Validate stream completion ──────────────────────
+                    # ``stop_reason`` tells us WHY the model stopped.  We
+                    # treat anything other than ``end_turn`` as a hard
+                    # error so silent ``max_tokens`` truncation cannot
+                    # slip through and drop content from the output.
+                    stop_reason = getattr(final_msg, "stop_reason", None) if final_msg else None
+                    if stop_reason and stop_reason != "end_turn":
+                        msg = (
+                            f"Hybrid Chunk {i}/{total_chunks}: stream ended with "
+                            f"stop_reason={stop_reason!r} (expected 'end_turn'). "
+                            f"Output may be truncated — got {len(cleaned):,} cleaned chars "
+                            f"from {len(chunk):,} raw chars."
+                        )
+                        if attempt < max_retries:
+                            logging.warning(f"   ⏳ {msg}  Retrying...")
+                            print(f"   ⏳ Retry {attempt}/{max_retries} after stop_reason={stop_reason}")
+                            time.sleep(min(2 ** attempt * 5, 60))
+                            continue
+                        raise RuntimeError(msg)
                     break
                 except Exception as api_err:
                     err_str = str(api_err).lower()
@@ -1407,6 +1427,19 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
                         raise
 
             cleaned_chunks.append(cleaned.strip())
+            # Quality gate: warn if the cleaned chunk is suspiciously
+            # short relative to its raw input.  Real LLM cleaning
+            # typically *grows* the text (whitespace normalisation can
+            # net increase chars or stay roughly equal).  A drop below
+            # ~70% strongly suggests truncation or summarisation.
+            ratio = len(cleaned) / max(1, len(chunk))
+            if ratio < 0.70:
+                logging.warning(
+                    f"   ⚠️  Chunk {i}/{total_chunks}: cleaned output is "
+                    f"only {ratio:.0%} of raw size ({len(cleaned):,} / "
+                    f"{len(chunk):,} chars). Possible silent truncation "
+                    f"or unwanted summarisation."
+                )
             logging.info(f"   ✅ Chunk {i}: {len(chunk):,} → {len(cleaned):,} chars")
 
         # ── Step 4: Merge cleaned chunks ─────────────────────────────
@@ -1696,8 +1729,20 @@ def _stitch_two_chunks(merged, next_chunk, *, chunk_index, window=4000):
             return merged + next_chunk[raw_cut:]
 
     # ── Strategy 3: normalised line match ───────────────────────────────
-    tail_lines = tail.splitlines()
-    head_lines = head.splitlines()
+    # IMPORTANT: use ``tail_window`` / ``head_window`` (the full ``window``-
+    # sized slices computed at the top of the function) rather than the
+    # ``tail`` / ``head`` variables Strategy 2 uses.  Strategy 2's slices
+    # are sized to ``min(window, len(merged), len(next_chunk))`` so when
+    # one chunk is shorter than ``window`` (e.g. a small trailing chunk
+    # of 1.8K chars vs. a 36K main chunk) the Strategy 2 ``tail`` is
+    # *narrower* than ``tail_window`` — but ``tail_offset`` was computed
+    # for ``tail_window``.  Using the smaller ``tail`` here would make
+    # ``tail_offset + tl_local_end`` land at the WRONG byte offset in
+    # ``merged`` and slice off legitimate content (real-world bug seen
+    # on Indiana HB 1105 where the cut landed mid-Sec 14 instead of at
+    # "(Reference is to HB 1105 as introduced.)" at end of chunk 1).
+    tail_lines = tail_window.splitlines()
+    head_lines = head_window.splitlines()
     # Index head lines by normalised content for O(1) lookup.
     head_index = {}
     head_running = 0
@@ -1730,6 +1775,19 @@ def _stitch_two_chunks(merged, next_chunk, *, chunk_index, window=4000):
                 f"   🔗 Chunk {chunk_index}: normalised line-match overlap "
                 f"at tail line {tl_idx}, head line {hl_idx}"
             )
+            # Defensive sanity check: the stitched result should never be
+            # *shorter* than the larger of the two inputs.  If it is, the
+            # cut was misaligned and we'd be silently dropping content.
+            stitched_len = global_tail_end + 2 + (len(next_chunk) - cut_offset_in_head)
+            min_expected = max(len(merged), len(next_chunk))
+            if stitched_len < min_expected:
+                logging.warning(
+                    f"   ⚠️  Chunk {chunk_index}: line-match cut would shrink "
+                    f"merged from {len(merged):,} to {stitched_len:,} "
+                    f"(below max input {min_expected:,}). Falling back to "
+                    f"concatenation to preserve content."
+                )
+                break  # fall through to Strategy 4
             # Use the version from `merged` (cleaner because earlier pipeline
             # state) and append the rest of next_chunk after the match.
             return merged[:global_tail_end].rstrip() + '\n\n' + next_chunk[cut_offset_in_head:].lstrip('\n')

@@ -97,6 +97,27 @@ LINE_NUMBER_MAX_WIDTH_PT = 50.0  # narrow lines (e.g. "line 12") that aren't tex
 # differ by ≤ SAME_ROW_Y_TOL points as a single physical row.
 SAME_ROW_Y_TOL_PT        = 2.0   # max y-mid delta for same-physical-row
 
+# --- Superscript footnote-reference detection ----------------------------
+# Legislative bills (especially CT OFA Fiscal Notes) place footnote markers
+# as typographic superscripts: a smaller font + raised baseline.  Without
+# special handling, "$3,300²" is extracted as the digits "$3,3002", which
+# changes the meaning of the number; "fines¹" becomes "fines.1", etc.
+#
+# A span is treated as a superscript when BOTH:
+#   • its font size ≤ SUPERSCRIPT_SIZE_RATIO of the line's dominant size, AND
+#   • its bbox bottom is raised ≥ SUPERSCRIPT_RAISE_PT above the line bottom.
+#
+# The raised-bottom check distinguishes inline superscripts from footnote
+# *bodies* at the bottom of the page (where the entire line is small but
+# sits on its own baseline, so it has zero raise relative to its own line).
+#
+# Detected superscript chars are converted to Unicode superscript glyphs
+# (¹²³…) so the visual distinction is preserved in plain text — and they
+# are excluded from underline / italic / bold tagging since footnote refs
+# are pure typography, not legal content.
+SUPERSCRIPT_SIZE_RATIO   = 0.80  # span font ≤ 80 % of line dominant size
+SUPERSCRIPT_RAISE_PT     = 1.0   # span bottom ≥ 1 pt above line bottom
+
 # Tag delimiters (match the project convention)
 ADD_OPEN, ADD_CLOSE = "[A>", "<A]"
 DEL_OPEN, DEL_CLOSE = "[D>", "<D]"
@@ -195,16 +216,129 @@ def _extract_hlines_from_drawings(page: fitz.Page) -> List[HLine]:
 # ---------------------------------------------------------------------------
 
 def _detect_table_zones(page: fitz.Page) -> List[Tuple[float, float, float, float]]:
-    """Return bounding boxes ``(x0, y0, x1, y1)`` of tables found on *page*.
+    """Return bounding boxes ``(x0, y0, x1, y1)`` of *real* tables found on *page*.
 
-    Uses PyMuPDF's built-in ``find_tables()`` API.  Returns an empty list
-    if no tables are detected or the API is unavailable.
+    Uses PyMuPDF's built-in ``find_tables()`` API, then **validates** each
+    detected zone by requiring evidence of actual table structure — at
+    least one stroked horizontal or vertical line segment inside (or on
+    the edge of) the zone.
+
+    Why validate?  ``find_tables()`` infers tables from text alignment
+    alone and frequently produces false positives on legislative bills
+    where definitions or numbered subsections create aligned columns of
+    text decorated only with underlines (filled rectangles, not stroked
+    lines).  Without validation, every underlined definition on such a
+    page would be misidentified as a table cell and its underline tag
+    would be suppressed by the downstream filters.
+
+    A zone is accepted only when ``get_drawings()`` reports at least one
+    **stroked** path (``item[0] == "l"``) — either a horizontal line
+    spanning ≥ 40 % of the table width, or any vertical line — whose
+    coordinates fall inside the zone's bbox (with a small tolerance).
+    Filled rectangles (``"re"`` items, the usual rendering for
+    underlines and strike-throughs) do NOT count as structural evidence
+    because they are exactly the kind of decoration the downstream
+    filters are trying to *preserve*, not suppress.
+
+    Returns an empty list if no tables are detected, no detected zones
+    pass validation, or the API is unavailable.
     """
     try:
         tabs = page.find_tables()
-        return [tuple(t.bbox) for t in tabs.tables]  # type: ignore[union-attr]
+        raw_zones = [tuple(t.bbox) for t in tabs.tables]  # type: ignore[union-attr]
     except Exception:
         return []
+
+    if not raw_zones:
+        return []
+
+    # Collect stroked-line evidence from drawings.  We look at the raw
+    # path items rather than the post-processed hlines because we need
+    # to distinguish stroked lines (real borders) from filled rectangles
+    # (underlines).
+    try:
+        drawings = page.get_drawings()
+    except Exception:
+        # If we can't introspect the drawings, fall back to the legacy
+        # behaviour (trust find_tables).
+        return raw_zones
+
+    stroked_hlines: List[Tuple[float, float, float]] = []  # (y, x0, x1)
+    stroked_vlines: List[Tuple[float, float, float]] = []  # (x, y0, y1)
+    for path in drawings:
+        for item in path.get("items", []):
+            if not item or item[0] != "l":
+                continue  # only stroked lines, not filled rects
+            try:
+                p1 = fitz.Point(item[1])
+                p2 = fitz.Point(item[2])
+            except Exception:
+                continue
+            dx = abs(p1.x - p2.x)
+            dy = abs(p1.y - p2.y)
+            if dy <= HORIZONTAL_SLOPE_TOL and dx > 2:
+                y = (p1.y + p2.y) / 2
+                x0 = min(p1.x, p2.x)
+                x1 = max(p1.x, p2.x)
+                stroked_hlines.append((y, x0, x1))
+            elif dx <= HORIZONTAL_SLOPE_TOL and dy > 2:
+                x = (p1.x + p2.x) / 2
+                y0 = min(p1.y, p2.y)
+                y1 = max(p1.y, p2.y)
+                stroked_vlines.append((x, y0, y1))
+
+    if not stroked_hlines and not stroked_vlines:
+        # No stroked geometry anywhere on the page → no zone can have
+        # structural evidence.  Treat all detected zones as false
+        # positives (typical of legislative bills whose only graphics
+        # are underline rectangles).
+        logger.debug(
+            "Rejected %d find_tables() zones: page has no stroked lines",
+            len(raw_zones),
+        )
+        return []
+
+    tol = 3.0  # pt tolerance for "inside the zone"
+    validated: List[Tuple[float, float, float, float]] = []
+    for zx0, zy0, zx1, zy1 in raw_zones:
+        zwidth = zx1 - zx0
+        has_evidence = False
+
+        # Horizontal stroke spanning ≥ 40 % of the table width and
+        # sitting within the table's vertical span.
+        if zwidth > 0:
+            for y, x0, x1 in stroked_hlines:
+                if not (zy0 - tol <= y <= zy1 + tol):
+                    continue
+                overlap = _horizontal_overlap(x0, x1, zx0, zx1)
+                if overlap / zwidth >= 0.40:
+                    has_evidence = True
+                    break
+
+        # Any vertical stroke inside the zone counts (column border).
+        if not has_evidence:
+            for x, y0, y1 in stroked_vlines:
+                if not (zx0 - tol <= x <= zx1 + tol):
+                    continue
+                # Require the vertical line to cover a meaningful
+                # fraction of the zone's height (≥ 30 %) so we don't
+                # accept stray vertical ticks (e.g. tally marks).
+                v_overlap = max(0.0, min(y1, zy1) - max(y0, zy0))
+                zheight = zy1 - zy0
+                if zheight > 0 and v_overlap / zheight >= 0.30:
+                    has_evidence = True
+                    break
+
+        if has_evidence:
+            validated.append((zx0, zy0, zx1, zy1))
+        else:
+            logger.debug(
+                "Rejected find_tables() zone (no stroked border evidence): "
+                "bbox=(%.1f, %.1f, %.1f, %.1f)",
+                zx0, zy0, zx1, zy1,
+            )
+
+    return validated
 
 
 def _filter_table_border_hlines(
@@ -298,8 +432,15 @@ def _filter_page_separator_hlines(
 
     1. **Margin-zone rule.**  The band's ``y`` falls in the top
        *zone_pt* or bottom *zone_pt* of the page **and** its combined
-       extent is ≥ *min_extent_ratio* of the page width.  Catches
-       single-segment header/footer rules near the margins.
+       extent is ≥ *min_extent_ratio* of the page width **and** there
+       is no text line whose baseline sits within
+       ``UNDERLINE_TOLERANCE_PT`` directly above the band.  The
+       text-above check is critical: the last body-text line on a CT
+       bill page (e.g. line 13 of sHB5164) commonly carries a genuine
+       legislative underline that falls inside the bottom-margin zone.
+       Without this check, those underlines were incorrectly stripped
+       alongside the actual footer separator, producing missing
+       ``[A>…<A]`` tags on the final line.
 
     2. **Multi-segment decorative rule.**  The band contains
        ≥ *min_segments* colinear pieces, the sum of their widths is
@@ -308,7 +449,11 @@ def _filter_page_separator_hlines(
        ≥ *min_extent_ratio* of the page width.  This is the distinctive
        signature of CT title-block / footer rules — a real underline
        under text is always a single continuous segment, so this rule
-       cannot match genuine underlined legislative content.
+       cannot match genuine underlined legislative content.  We do not
+       apply the text-above check here because some CT footer rules
+       (e.g. SB506) are deliberately drawn within underline tolerance
+       of the last body line; the multi-segment shape is what
+       distinguishes them from real underlines.
 
     Bands that fail both criteria are kept untouched.
     """
@@ -322,6 +467,45 @@ def _filter_page_separator_hlines(
 
     header_y_max = zone_pt
     footer_y_min = page_height - zone_pt
+
+    # --- Pre-compute text-line bboxes for the text-above check.
+    # We collect every visible text line on the page so we can ask:
+    # "does any line's baseline sit within underline tolerance above
+    # this band?"  Real underlines always have such a line; footer /
+    # header separators don't (the page number / bill ID appears in a
+    # separate text line further down, not directly above the rule).
+    text_line_bboxes: List[Tuple[float, float, float, float]] = []
+    try:
+        td = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)
+        for blk in td.get("blocks", []):
+            if blk.get("type") != 0:
+                continue
+            for ln in blk.get("lines", []):
+                bb = ln.get("bbox")
+                if bb and len(bb) == 4 and (bb[2] > bb[0]) and (bb[3] > bb[1]):
+                    text_line_bboxes.append(tuple(bb))
+    except Exception:
+        # If text extraction fails, fall back to the old behaviour
+        # (margin-zone rule dropped without text-above check).
+        text_line_bboxes = []
+
+    def _text_baseline_just_above(band_y: float, band_x0: float, band_x1: float) -> bool:
+        """True if some text-line baseline sits within UNDERLINE_TOLERANCE_PT
+        directly above (or at) *band_y*, with horizontal overlap."""
+        for tx0, ty0, tx1, ty1 in text_line_bboxes:
+            # Horizontal overlap required (≥ 1pt is enough — single chars
+            # at a line's edge are still genuine underlined content).
+            if min(tx1, band_x1) - max(tx0, band_x0) < 1.0:
+                continue
+            # Baseline ≈ line bbox bottom (y1).  An underline draws at
+            # baseline ± a couple of points.  We accept any band whose
+            # y is within UNDERLINE_TOLERANCE_PT below y1 OR up to ~3pt
+            # above y1 (some fonts draw the underline slightly above
+            # the descender line).
+            dy = band_y - ty1
+            if -3.0 <= dy <= UNDERLINE_TOLERANCE_PT:
+                return True
+        return False
 
     # Group ALL hlines into colinear bands (sorted by y, glued by y_tolerance).
     sorted_hl = sorted(hlines, key=lambda h: h.y)
@@ -346,10 +530,20 @@ def _filter_page_separator_hlines(
         band_y = band[0].y
         in_margin = (band_y <= header_y_max) or (band_y >= footer_y_min)
 
-        # Criterion 1: wide rule in margin zone
-        is_separator = in_margin
+        # Criterion 1: wide rule in margin zone — but ONLY when no text
+        # line baseline sits just above the band.  Genuine underlines
+        # on the last body-text line of a page will fall inside the
+        # bottom margin zone but always have their text directly
+        # above; we must preserve them.
+        is_separator = False
+        if in_margin and not _text_baseline_just_above(band_y, x_min, x_max):
+            is_separator = True
 
         # Criterion 2: multi-segment decorative rule (anywhere on page)
+        # — applied without text-above check because CT footer rules
+        # are deliberately drawn within underline tolerance of the
+        # last body line; the multi-segment colinear shape is what
+        # distinguishes them from real underlines.
         if not is_separator and len(band) >= min_segments:
             sum_widths = sum(h.x1 - h.x0 for h in band)
             if sum_widths / span >= coverage_ratio:
@@ -394,6 +588,128 @@ def _bbox_overlaps_any_rect(bbox: Tuple[float, ...],
                 by0 < r.y1 + tolerance and by1 > r.y0 - tolerance):
             return True
     return False
+
+
+# ---------------------------------------------------------------------------
+# Superscript footnote-reference helpers
+# ---------------------------------------------------------------------------
+
+# Unicode superscript translation tables.  We map digits, the lowercase
+# alphabet (sans 'q' which has no Unicode superscript), and the most
+# common math operators.  Characters without a superscript form are
+# left unchanged.
+_SUPERSCRIPT_DIGIT_MAP = str.maketrans("0123456789", "⁰¹²³⁴⁵⁶⁷⁸⁹")
+_SUPERSCRIPT_LETTER_MAP = str.maketrans(
+    "abcdefghijklmnoprstuvwxyz",
+    "ᵃᵇᶜᵈᵉᶠᵍʰⁱʲᵏˡᵐⁿᵒᵖʳˢᵗᵘᵛʷˣʸᶻ",
+)
+_SUPERSCRIPT_SYM_MAP = str.maketrans({
+    "+": "⁺", "-": "⁻", "=": "⁼", "(": "⁽", ")": "⁾",
+})
+
+# Canonical footnote-reference shapes.  We only convert a small + raised
+# span to Unicode superscripts when its text matches one of these forms:
+#   • 1-3 digits          ("1", "12", "123")
+#   • 1-3 letters         ("a", "th", "st", "nd", "rd")
+#   • 1-3 footnote symbols ("*", "**", "†", "‡", "∗", "§", "¶", "#")
+# Spans that pass the size+raise check but DON'T match the pattern (e.g.
+# "46.4%" chart labels, "$3,300" body text accidentally split into a
+# small-bbox span) are left as-is to avoid mangling legal content.
+_FOOTNOTE_REF_RE = re.compile(
+    r"^\s*("
+    r"[0-9]{1,3}"
+    r"|[a-z]{1,3}"
+    r"|[*†‡§¶#∗]{1,3}"
+    r")\s*$",
+    re.IGNORECASE,
+)
+
+
+def _to_superscript(s: str) -> str:
+    """Convert digits / lowercase letters / +-=() in *s* to Unicode
+    superscript glyphs.  Characters without a mapping are returned as-is.
+
+    Examples:
+        _to_superscript("2")   == "²"
+        _to_superscript("12")  == "¹²"
+        _to_superscript("a")   == "ᵃ"
+        _to_superscript("*")   == "*"   # no superscript form
+    """
+    return (
+        s.translate(_SUPERSCRIPT_DIGIT_MAP)
+         .translate(_SUPERSCRIPT_LETTER_MAP)
+         .translate(_SUPERSCRIPT_SYM_MAP)
+    )
+
+
+def _line_dominant_font_size(line: dict) -> float:
+    """Return the most common font size on *line* weighted by character count.
+
+    Used as the reference body-text size when deciding whether a particular
+    span is rendered as a superscript footnote reference.  Returns 12.0
+    when no text is present so callers don't divide by zero.
+    """
+    sizes: Dict[float, int] = {}
+    for sp in line.get("spans", []):
+        try:
+            sz = round(float(sp.get("size", 0) or 0), 1)
+        except (TypeError, ValueError):
+            continue
+        ntxt = len(sp.get("text", "") or "")
+        if sz > 0 and ntxt > 0:
+            sizes[sz] = sizes.get(sz, 0) + ntxt
+    if not sizes:
+        return 12.0
+    return max(sizes, key=lambda k: sizes[k])
+
+
+def _span_is_superscript(
+    span: dict,
+    line_dominant_size: float,
+    line_bbox: Tuple[float, float, float, float],
+) -> bool:
+    """Return ``True`` when *span* is rendered as a footnote-reference superscript.
+
+    A span qualifies only when **all three** conditions hold:
+
+      1. ``span.size ≤ SUPERSCRIPT_SIZE_RATIO * line_dominant_size`` — the
+         span is noticeably smaller than the surrounding body text.
+      2. ``line_bbox.y1 - span.bbox.y1 ≥ SUPERSCRIPT_RAISE_PT`` — the span's
+         bottom edge sits at least one point above the line's bottom edge,
+         i.e. it is **raised** relative to the body baseline.
+      3. The span's text matches the canonical footnote-reference shape
+         (``_FOOTNOTE_REF_RE``): a short run of digits, letters, or
+         footnote symbols.  This last guard prevents the conversion from
+         mangling chart labels like ``"46.4%"`` or accidentally-split
+         body-text fragments that happen to be small and raised.
+
+    Condition (2) is what separates an inline superscript from a footnote
+    *body* line at the bottom of a page: the body line is small in absolute
+    size but its bbox bottom equals the line bbox bottom (zero raise).
+    """
+    try:
+        sz = float(span.get("size", 0) or 0)
+    except (TypeError, ValueError):
+        return False
+    if sz <= 0 or line_dominant_size <= 0:
+        return False
+    if sz / line_dominant_size > SUPERSCRIPT_SIZE_RATIO:
+        return False
+    sbbox = span.get("bbox") or (0, 0, 0, 0)
+    if not sbbox or len(sbbox) < 4 or (sbbox[2] - sbbox[0]) <= 0:
+        return False
+    if (line_bbox[3] - sbbox[3]) < SUPERSCRIPT_RAISE_PT:
+        return False
+    # Text-shape guard: confirm the span looks like a footnote marker.
+    # Read text from `chars` (rawdict) first, falling back to `text`.
+    chars_data = span.get("chars") or []
+    if chars_data:
+        text = "".join(ch.get("c", "") for ch in chars_data)
+    else:
+        text = span.get("text", "") or ""
+    if not text or not _FOOTNOTE_REF_RE.match(text):
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -670,6 +986,13 @@ def _extract_page_tagged_text(
                         line_in_table = True
                         break
 
+            # --- Line-level metrics for superscript detection ---
+            # Computed once per line and reused for every span below so we
+            # only have to walk the spans-by-size once.  See
+            # SUPERSCRIPT_SIZE_RATIO / SUPERSCRIPT_RAISE_PT for thresholds.
+            line_bbox_for_super  = line.get("bbox", (0, 0, 0, 0))
+            line_dominant_size   = _line_dominant_font_size(line)
+
             for span in line.get("spans", []):
                 chars_data = span.get("chars", [])
                 font_size  = span.get("size", 12)
@@ -684,11 +1007,30 @@ def _extract_page_tagged_text(
                 # --- Detect small-caps font → uppercase extracted text ---
                 span_is_smallcaps = bool(_RE_SMALLCAPS_FONT.search(font_name))
 
+                # --- Detect superscript footnote reference ---
+                # When a span's font is markedly smaller than the line's
+                # dominant size AND its bbox sits raised above the line
+                # baseline, treat it as a footnote-marker superscript.
+                # Such spans are emitted as Unicode superscripts (¹²³…)
+                # and are excluded from underline / italic / bold tagging.
+                span_is_superscript = _span_is_superscript(
+                    span, line_dominant_size, line_bbox_for_super,
+                )
+
                 # --- Fallback: no char-level data → use span bbox ---
                 if not chars_data:
                     if span_text:
                         if span_is_smallcaps:
                             span_text = span_text.upper()
+                        # Superscript footnote ref: convert to Unicode
+                        # superscripts and skip all decoration tagging.
+                        if span_is_superscript:
+                            if in_add:
+                                output.append(ADD_CLOSE); in_add = False
+                            if in_del:
+                                output.append(DEL_CLOSE); in_del = False
+                            output.append(_to_superscript(span_text))
+                            continue
                         s_bbox = tuple(span.get("bbox", (0, 0, 0, 0)))
                         s_ul, s_so = _classify_char_decoration(
                             s_bbox, font_size, ul_rects, so_rects,
@@ -724,6 +1066,18 @@ def _extract_page_tagged_text(
                     # Uppercase chars from small-caps fonts
                     if span_is_smallcaps:
                         c = c.upper()
+
+                    # Superscript footnote ref: emit as Unicode superscript
+                    # and skip all decoration tagging.  Close any open tag
+                    # before the marker (it will reopen on the next char
+                    # if the surrounding decoration continues).
+                    if span_is_superscript:
+                        if in_add:
+                            output.append(ADD_CLOSE); in_add = False
+                        if in_del:
+                            output.append(DEL_CLOSE); in_del = False
+                        output.append(_to_superscript(c))
+                        continue
 
                     bbox = tuple(ch_info.get("bbox", (0, 0, 0, 0)))
                     cw   = bbox[2] - bbox[0]
@@ -1919,6 +2273,108 @@ def _normalize_ar_page1_header(text: str) -> str:
     return new_text
 
 
+# ---------------------------------------------------------------------------
+# Arkansas (AR) intra-tag paragraph splitter
+# ---------------------------------------------------------------------------
+# The Claude clean step occasionally fuses what should be two distinct
+# paragraphs into a single ``[A>...<A]`` tag.  Two patterns recur on AR
+# bills:
+#
+#   1. Statute heading welded onto its lead-in / first subsection ::
+#
+#          [A>6-81-2101. Definitions. As used in this subchapter:<A]
+#          → [A>6-81-2101. Definitions.<A]
+#            [A>As used in this subchapter:<A]
+#
+#   2. One subsection welded onto the next ::
+#
+#          [A>(b) ...educational loans. (c)(1) Before receiving...<A]
+#          → [A>(b) ...educational loans.<A]
+#            [A>(c)(1) Before receiving...<A]
+#
+# Detection requires a sentence terminator (``.!?:;``) immediately before
+# the gap, which guards against:
+#   • citation parentheses like ``§ 6-81-2104(b)`` (no terminator before
+#     the paren — never split)
+#   • inline numerics like ``one (1) eligible profession`` /
+#     ``fifteen percent (15%)`` (no terminator before the paren — never
+#     split)
+
+# Pattern A: split inside an [A>...<A] tag at a sentence-terminator
+# followed by a parenthesised subsection marker.
+_RE_AR_SPLIT_AT_SUBSECTION = re.compile(
+    r"(?<=[.!?:;])"                   # terminator before the gap
+    r"\s+"                            # whitespace consumed
+    r"(?="                            # lookahead: subsection marker
+    r"\((?:[a-zA-Z]+|\d+)\)"          # (a) / (1) / (D) / (15)
+    r"(?:\([a-zA-Z\d]+\))*"           # optional nested marker like (c)(1)
+    r"\s"                             # space after the marker
+    r")"
+)
+
+# Pattern B: at the start of a tag, statute heading like
+# "6-81-2101. Definitions." followed by a capital-letter sentence.
+# Title text must not contain internal periods (rules out citations).
+_RE_AR_SPLIT_AT_STATUTE_HEAD = re.compile(
+    r"^\s*(\d+-\d+-\d+\.\s+[A-Z][^.<>]*?\.)"  # group 1: statute heading
+    r"\s+"
+    r"([A-Z][^<]+)$"                            # group 2: trailing sentence
+)
+
+# Tag-extraction regex.  ``[^<]*?`` stops at the first ``<`` so we never
+# straddle nested ``[D>...<D]`` deletions inside additions (rare in AR).
+_RE_AR_ADD_TAG = re.compile(r"\[A>([^<]*?)<A\]")
+
+
+def _split_ar_welded_paragraphs(text: str) -> str:
+    """Split AR ``[A>...<A]`` tags that wrap multiple paragraphs.
+
+    Handles two LLM-introduced welds that are characteristic of AR
+    bills (see module-level comment for examples):
+
+    1. **Statute heading welded onto its body** — split after the
+       title's terminating period.
+    2. **Subsection welded onto the next subsection** — split before
+       a ``(a)`` / ``(1)`` / ``(c)(1)`` marker that follows a sentence
+       terminator.
+
+    Both patterns are conservative: a sentence terminator must precede
+    the split point, so citation patterns (``§ 6-81-2104(b)``) and
+    inline parentheticals (``one (1)``, ``fifteen percent (15%)``) are
+    NEVER split — there's no terminator before their parens.
+
+    The function is idempotent: running it on already-split text is a
+    no-op because each emitted tag contains a single paragraph and
+    therefore matches neither split pattern.
+    """
+
+    def _process_tag(m: re.Match[str]) -> str:
+        content = m.group(1)
+        # Pattern A: split at every sentence-terminator → subsection
+        # boundary inside the tag.  ``re.split`` keeps the segments in
+        # order; we re-wrap each non-empty segment in fresh tags.
+        parts = _RE_AR_SPLIT_AT_SUBSECTION.split(content)
+        if len(parts) > 1:
+            return "\n\n".join(
+                f"[A>{p.strip()}<A]" for p in parts if p.strip()
+            )
+        # Pattern B: statute-heading split (only fires when Pattern A
+        # found nothing — a heading welded onto a list item is already
+        # caught by Pattern A above).
+        sm = _RE_AR_SPLIT_AT_STATUTE_HEAD.match(content)
+        if sm:
+            return (
+                f"[A>{sm.group(1).strip()}<A]\n\n"
+                f"[A>{sm.group(2).strip()}<A]"
+            )
+        return m.group(0)
+
+    new_text = _RE_AR_ADD_TAG.sub(_process_tag, text)
+    if new_text != text:
+        logger.debug("Split AR welded paragraphs (heading / subsection boundaries)")
+    return new_text
+
+
 # Regex: detect false [D>] tags around parenthesized subsection markers.
 # The LLM sometimes wraps (a), (b), (j), (1) etc. with deletion tags.
 _RE_FALSE_D_SUBSECTION = re.compile(
@@ -2669,6 +3125,16 @@ def clean_extracted_text(
     if state_code and state_code.upper() in {"IA", "DE", "IN"}:
         cleaned = rejoin_inline_renumber_list_breaks(cleaned)
 
+    # ── AR-specific: split welded paragraphs from LLM clean step.
+    #    Runs LAST in the AR post-processing chain so that any cross-tag
+    #    welds that survived `merge_split_tags` (e.g. when the LLM
+    #    output two paragraphs as a single ``[A>...<A]`` tag) get
+    #    split back into one tag per paragraph.  See the docstring of
+    #    `_split_ar_welded_paragraphs` for the detection rules and the
+    #    citation / inline-numeric guards that prevent false splits.
+    if state_code and state_code.upper() == "AR":
+        cleaned = _split_ar_welded_paragraphs(cleaned)
+
     # Store the diff report for the caller to retrieve and save
     clean_extracted_text._last_diff_report = diff_report
 
@@ -2824,7 +3290,24 @@ def merge_split_tags(text: str) -> str:
 
     Merges ``[A>text<A] [A>continuation<A]`` into ``[A>text continuation<A]``
     ONLY when the second tag does **not** start with a subsection marker.
+
+    Cross-sentence guard
+    --------------------
+    A negative lookbehind ``(?<![.!?:;])`` is applied to every merging
+    pattern so we never weld two tags when the prior tag closes
+    *immediately after* a sentence terminator (``.``, ``!``, ``?``,
+    ``:``, ``;``).  Without this guard, AR section headings like
+    ``[A>6-81-2101. Definitions.<A]`` were getting fused onto the lead-in
+    paragraph ``[A>As used in this subchapter:<A]`` because the LLM
+    sometimes outputs them on adjacent lines (single ``\n``) and the
+    cross-line pattern below would silently merge them.  PDF line wraps
+    that legitimately need to be merged never end with a sentence
+    terminator (the wrap point is mid-clause), so this guard is safe.
     """
+    # 1-char fixed-width negative lookbehind: prior tag must NOT close
+    # right after a sentence/clause terminator.  Placed before <T] so it
+    # checks the last character of the prior tag's content.
+    _no_terminator = r'(?<![.!?:;])'
     for tag_type in ['A', 'D']:
         _no_sub = (
             r'(?!\s*\(\d+\))'
@@ -2833,14 +3316,24 @@ def merge_split_tags(text: str) -> str:
             r'(?!\s*[a-z]\.\d*\.?\s)'
             r'(?!\s*\d+\.\s)'
         )
-        # 0) Inline joins: <T][T>text on same line — always merge
-        inline_cont = r'<' + tag_type + r'\]\[' + tag_type + r'>' + _no_sub
+        # 0) Inline joins: <T][T>text on same line — merge unless prior
+        #    closed at a sentence boundary.
+        inline_cont = (
+            _no_terminator
+            + r'<' + tag_type + r'\]\[' + tag_type + r'>'
+            + _no_sub
+        )
         text = re.sub(inline_cont, '', text)
         # 0b) Inline subsection boundary: <T][T>(1) → <T]\n\n[T>(1)
         inline_sub = r'<' + tag_type + r'\]\[' + tag_type + r'>'
         text = re.sub(inline_sub, '<' + tag_type + ']\n\n[' + tag_type + '>', text)
         # 1) Continuations: \n<T][T>text (NOT a subsection) → merge
-        same_cont = r'\n<' + tag_type + r'\]\[' + tag_type + r'>' + _no_sub
+        #    unless the prior content ends with a sentence terminator.
+        same_cont = (
+            _no_terminator
+            + r'\n<' + tag_type + r'\]\[' + tag_type + r'>'
+            + _no_sub
+        )
         text = re.sub(same_cont, ' ', text)
         # 2) Subsection boundaries: \n<T][T>(1) → <T]\n\n[T>(1)
         same_sub = r'\n<' + tag_type + r'\]\[' + tag_type + r'>'
@@ -2858,8 +3351,14 @@ def merge_split_tags(text: str) -> str:
         # cross-line regex does NOT match, leaving each visual line
         # with its OWN tag pair.  Normal paragraph wrapping (≤ 8
         # spaces) still merges as before.
+        #
+        # The leading ``_no_terminator`` lookbehind additionally blocks
+        # cross-paragraph welds where the prior tag ends with ``.``,
+        # ``!``, ``?``, ``:`` or ``;`` (i.e. a complete sentence /
+        # clause).  Such pairs are never PDF-wrap continuations.
         cross_line = (
-            r'<' + tag_type + r'\]'
+            _no_terminator
+            + r'<' + tag_type + r'\]'
             r'([ \t]*\n[ \t]{0,15})'
             r'\[' + tag_type + r'>' + _no_sub
         )
@@ -3447,6 +3946,11 @@ def extract_pdf_json_report(
         for line_y, tl in line_infos:
             spans = tl.get("spans", [])
 
+            # Line-level metrics for superscript detection (see
+            # SUPERSCRIPT_SIZE_RATIO / SUPERSCRIPT_RAISE_PT for thresholds).
+            line_bbox_for_super  = tl.get("bbox", (0, 0, 0, 0))
+            line_dominant_size   = _line_dominant_font_size(tl)
+
             # Build list of (char, format_set, char_bbox) for the entire line
             char_entries: List[Tuple[str, frozenset, Tuple[float, float, float, float]]] = []
 
@@ -3458,9 +3962,22 @@ def extract_pdf_json_report(
                 sp_italic  = bool(sp_flags & 2)
                 sp_bold    = bool(sp_flags & 16)
 
+                # Footnote-reference superscript: emit characters as Unicode
+                # superscripts and drop all format flags — these are pure
+                # typography, not legal additions/deletions/italics.
+                sp_is_super = _span_is_superscript(
+                    sp, line_dominant_size, line_bbox_for_super,
+                )
+
                 if not chars_data:
                     # dict-mode fallback: classify entire span as one unit
                     s_bbox = tuple(sp.get("bbox", (0, 0, 0, 0)))
+                    if sp_is_super:
+                        for c in sp.get("text", ""):
+                            char_entries.append(
+                                (_to_superscript(c), frozenset(), s_bbox)
+                            )
+                        continue
                     s_ul, s_so = _classify_char_decoration(
                         s_bbox, font_size, ul_rects, so_rects, hlines, font_name,
                     )
@@ -3480,6 +3997,11 @@ def extract_pdf_json_report(
                     if not c:
                         continue
                     bbox = tuple(ch_info.get("bbox", (0, 0, 0, 0)))
+                    if sp_is_super:
+                        char_entries.append(
+                            (_to_superscript(c), frozenset(), bbox)
+                        )
+                        continue
                     cw = bbox[2] - bbox[0]
                     if cw < 0.5:
                         is_ul, is_so = False, False
