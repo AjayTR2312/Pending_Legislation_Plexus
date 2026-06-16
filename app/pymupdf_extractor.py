@@ -298,8 +298,15 @@ def _filter_page_separator_hlines(
 
     1. **Margin-zone rule.**  The band's ``y`` falls in the top
        *zone_pt* or bottom *zone_pt* of the page **and** its combined
-       extent is ≥ *min_extent_ratio* of the page width.  Catches
-       single-segment header/footer rules near the margins.
+       extent is ≥ *min_extent_ratio* of the page width **and** there
+       is no text line whose baseline sits within
+       ``UNDERLINE_TOLERANCE_PT`` directly above the band.  The
+       text-above check is critical: the last body-text line on a CT
+       bill page (e.g. line 13 of sHB5164) commonly carries a genuine
+       legislative underline that falls inside the bottom-margin zone.
+       Without this check, those underlines were incorrectly stripped
+       alongside the actual footer separator, producing missing
+       ``[A>…<A]`` tags on the final line.
 
     2. **Multi-segment decorative rule.**  The band contains
        ≥ *min_segments* colinear pieces, the sum of their widths is
@@ -308,7 +315,11 @@ def _filter_page_separator_hlines(
        ≥ *min_extent_ratio* of the page width.  This is the distinctive
        signature of CT title-block / footer rules — a real underline
        under text is always a single continuous segment, so this rule
-       cannot match genuine underlined legislative content.
+       cannot match genuine underlined legislative content.  We do not
+       apply the text-above check here because some CT footer rules
+       (e.g. SB506) are deliberately drawn within underline tolerance
+       of the last body line; the multi-segment shape is what
+       distinguishes them from real underlines.
 
     Bands that fail both criteria are kept untouched.
     """
@@ -322,6 +333,45 @@ def _filter_page_separator_hlines(
 
     header_y_max = zone_pt
     footer_y_min = page_height - zone_pt
+
+    # --- Pre-compute text-line bboxes for the text-above check.
+    # We collect every visible text line on the page so we can ask:
+    # "does any line's baseline sit within underline tolerance above
+    # this band?"  Real underlines always have such a line; footer /
+    # header separators don't (the page number / bill ID appears in a
+    # separate text line further down, not directly above the rule).
+    text_line_bboxes: List[Tuple[float, float, float, float]] = []
+    try:
+        td = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)
+        for blk in td.get("blocks", []):
+            if blk.get("type") != 0:
+                continue
+            for ln in blk.get("lines", []):
+                bb = ln.get("bbox")
+                if bb and len(bb) == 4 and (bb[2] > bb[0]) and (bb[3] > bb[1]):
+                    text_line_bboxes.append(tuple(bb))
+    except Exception:
+        # If text extraction fails, fall back to the old behaviour
+        # (margin-zone rule dropped without text-above check).
+        text_line_bboxes = []
+
+    def _text_baseline_just_above(band_y: float, band_x0: float, band_x1: float) -> bool:
+        """True if some text-line baseline sits within UNDERLINE_TOLERANCE_PT
+        directly above (or at) *band_y*, with horizontal overlap."""
+        for tx0, ty0, tx1, ty1 in text_line_bboxes:
+            # Horizontal overlap required (≥ 1pt is enough — single chars
+            # at a line's edge are still genuine underlined content).
+            if min(tx1, band_x1) - max(tx0, band_x0) < 1.0:
+                continue
+            # Baseline ≈ line bbox bottom (y1).  An underline draws at
+            # baseline ± a couple of points.  We accept any band whose
+            # y is within UNDERLINE_TOLERANCE_PT below y1 OR up to ~3pt
+            # above y1 (some fonts draw the underline slightly above
+            # the descender line).
+            dy = band_y - ty1
+            if -3.0 <= dy <= UNDERLINE_TOLERANCE_PT:
+                return True
+        return False
 
     # Group ALL hlines into colinear bands (sorted by y, glued by y_tolerance).
     sorted_hl = sorted(hlines, key=lambda h: h.y)
@@ -346,10 +396,20 @@ def _filter_page_separator_hlines(
         band_y = band[0].y
         in_margin = (band_y <= header_y_max) or (band_y >= footer_y_min)
 
-        # Criterion 1: wide rule in margin zone
-        is_separator = in_margin
+        # Criterion 1: wide rule in margin zone — but ONLY when no text
+        # line baseline sits just above the band.  Genuine underlines
+        # on the last body-text line of a page will fall inside the
+        # bottom margin zone but always have their text directly
+        # above; we must preserve them.
+        is_separator = False
+        if in_margin and not _text_baseline_just_above(band_y, x_min, x_max):
+            is_separator = True
 
         # Criterion 2: multi-segment decorative rule (anywhere on page)
+        # — applied without text-above check because CT footer rules
+        # are deliberately drawn within underline tolerance of the
+        # last body line; the multi-segment colinear shape is what
+        # distinguishes them from real underlines.
         if not is_separator and len(band) >= min_segments:
             sum_widths = sum(h.x1 - h.x0 for h in band)
             if sum_widths / span >= coverage_ratio:
