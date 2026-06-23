@@ -289,7 +289,9 @@ def get_anthropic_client():
        
         if 'anthropic_api_key' in credentials:
             logging.info("✅ Successfully obtained Anthropic API key")
-            return anthropic.Anthropic(api_key=credentials["anthropic_api_key"])
+            import httpx
+            http_client = httpx.Client(verify=False)
+            return anthropic.Anthropic(api_key=credentials["anthropic_api_key"], http_client=http_client)
         else:
             logging.error(f"❌ No Anthropic API key found in response")
             return None
