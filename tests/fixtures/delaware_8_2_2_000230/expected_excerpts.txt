@@ -1,0 +1,137 @@
+# Expected excerpts for Delaware HB 230 (Grants-in-Aid, FY 2026).
+# Each non-comment, non-blank line is an EXACT substring assertion:
+#   "<text>"  → MUST appear in the extractor output
+#   "!<text>" → must NOT appear in the extractor output
+# Whitespace is significant.
+#
+# Four bugs this fixture locks in:
+#
+#   1. 2026-06-29 — visual line-order: tabular rows authored with the
+#      "$" sigil drawn AFTER the number but positioned LEFT of it were
+#      emitted as "<number> $".  Fixed by _sort_block_lines_visually()
+#      sorting same-row lines by leftmost x.
+#
+#   2. 2026-06-29 — visual column gaps: tabular rows authored without
+#      whitespace-filler "spacer" lines (DE / IN / KS style) had their
+#      310+pt cell gaps collapsed to a single joiner space, jamming
+#      columns together.  Fixed by inserting proportional whitespace
+#      when same-row x-gap > COLUMN_GAP_PAD_MIN_PT.  The forbidden
+#      excerpts below catch any regression that re-collapses the
+#      columns.
+#
+#   3. 2026-06-29 — intra-tag currency padding: dollar amounts that the
+#      PDF authoring tool padded for right-alignment (e.g.
+#      ``[D>$          236,308<D]``) were carrying the padding into
+#      the tag's interior.  Fixed by _RE_CURRENCY_PADDING in
+#      _clean_tagged_text, which collapses runs of 2+ whitespace
+#      between "$" and a following digit to a single space.
+#
+#   4. 2026-06-29 — position-based column alignment: gap-based padding
+#      placed the dollar column at a DIFFERENT output column for every
+#      row depending on label length, so the table didn't read as a
+#      grid.  Fixed by computing target_col from each sibling's PDF
+#      x-position; every row's "$" column now lands at the same output
+#      column.  Long-label rows that would overflow the target column
+#      get COLUMN_GAP_MIN_SPACES = 4 spaces of cell separator (4 chosen
+#      to survive the "2-3 → 1 space" collapse in _clean_tagged_text).
+
+# -------------------------------------------------------------------------
+# Required: row labels + their tagged dollar amounts.
+# -------------------------------------------------------------------------
+
+# Plain row: County Seat Package label + amount on the same physical
+# row.  After the position-based padding fix the cell separator is
+# exactly 4 spaces (the COLUMN_GAP_MIN_SPACES floor — Package's label
+# is too long for target_col = 27 to fit, so MIN kicks in).
+County Seat Package    $ 3,880,543
+
+# "TOTAL - Office of the Secretary" full row wrapped in one [A>…<A] tag
+# after consolidate_adjacent_tags.  Currency padding inside the tag is
+# now collapsed to a single space.
+[A>TOTAL - Office of the Secretary $ 3,880,543<A]
+
+# Three-cell row (label + $ + amount) all wrapped in one [A>…<A] tag.
+[A>Paramedic Program Operations Block Grant $ 3,000,000<A]
+
+# Senior centres table — verify the row LABEL and the FULL
+# [D>…<D] [A>…<A] amount portion appear (multiple rows so that a partial
+# column-padding regression is caught).
+Absalom Jones
+Brandywine
+Chesapeake & Delaware
+Cornerstone
+DeLaWarr
+Howard Weston
+Mid-County
+
+# The tagged amount portions — single space between "$" and the digits,
+# stable regardless of how much column-pad whitespace sits before the
+# tag.
+[D>$ 236,308<D] [A>$ 245,225<A]
+[D>$ 280,642<D] [A>$ 290,446<A]
+[D>$ 180,158<D] [A>$ 187,498<A]
+[D>$ 151,965<D] [A>$ 158,741<A]
+[D>$ 261,465<D] [A>$ 270,431<A]
+[D>$ 504,931<D] [A>$ 525,511<A]
+
+# -------------------------------------------------------------------------
+# Required: position-based column alignment.  Each row's "$" column
+# lands at the SAME output column regardless of label length.  The
+# exact space count between label and "[D>" is what makes the table
+# read as a grid in plain-text view.  If the algorithm regresses to
+# gap-based padding, these will fail because every row's pad count
+# will be different.
+# -------------------------------------------------------------------------
+
+# Short label (13 chars) → wide padding so "[D>" lands at the target
+# column.  Locks in the position-based alignment for short labels.
+Absalom Jones            [D>$ 236,308<D] [A>$ 245,225<A]
+
+# Long label (21 chars) → label overflows target column, so the
+# COLUMN_GAP_MIN_SPACES = 4 separator kicks in.  Locks in the
+# minimum-separator floor.
+Chesapeake & Delaware    [D>$ 180,158<D] [A>$ 187,498<A]
+
+# Long-label One-Times row with BOTH [D> and [A> on the same physical
+# row.  Same 4-space MIN separator applies.
+Kind to Kids Foundation    [D>$ 250,000<D] [A>$ 200,000<A]
+
+# -------------------------------------------------------------------------
+# Forbidden: prior buggy forms that the latest fixes were designed to
+# prevent.  If any of these reappear, the corresponding regression has
+# resurfaced.
+# -------------------------------------------------------------------------
+
+# Pre-column-padding-fix form: single space between the entity name and
+# the [D>$ amount.  After the column-padding fix the gap is 12 spaces
+# (Absalom) or 4 spaces (long-label rows).
+!Absalom Jones [D>$
+
+# Pre-column-padding-fix form for the County Seat Package row.
+# (1-space form would be collapsed by _clean_tagged_text's 2-3 space
+# rule — we explicitly forbid that.)
+!County Seat Package $ 3,880,543
+
+# Two-space form for County Seat Package row.  If COLUMN_GAP_MIN_SPACES
+# regresses to 2, this is what would appear after _clean_tagged_text
+# collapses it to single space; but the MIN must stay ≥4 so the
+# separator survives the collapse.  Note: this 2-space form CANNOT
+# actually appear because _clean_tagged_text would collapse it — but
+# guarding it as forbidden documents the invariant.
+!County Seat Package  $ 3,880,543
+
+# Pre-column-padding-fix form for the Brandywine row.
+!Brandywine [D>$
+
+# Pre-column-padding-fix form for Kind to Kids Foundation (long-label
+# One-Times row): single-space form collapsed by _clean_tagged_text.
+!Kind to Kids Foundation [D>$
+
+# Pre-currency-padding-fix form: wide whitespace between "$" and the
+# number inside a tag.  Two-space form is the absolute minimum the bug
+# could produce; if it ever shows up again the fix has regressed.
+![D>$  236,308
+![A>$  245,225
+![D>$  280,642
+![A>$  3,880,543<A]
+

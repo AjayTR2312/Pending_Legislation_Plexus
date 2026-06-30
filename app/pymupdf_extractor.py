@@ -81,6 +81,31 @@ PAGE_SEPARATOR_Y_TOL_PT     = 1.5    # max y-delta for segments treated as colin
 PAGE_SEPARATOR_MIN_SEGMENTS = 3      # min segments in band to qualify as decorative rule
 PAGE_SEPARATOR_COVERAGE     = 0.95   # min sum-of-widths / span (i.e. gaps must be tiny)
 
+# --- Arkansas-specific leader-line filter ----------------------------------
+# Arkansas appropriation/fiscal bills (e.g. JAR104 — SB 8 of the 2026 Fiscal
+# Session) draw horizontal "leader" lines as typographic decoration: a thin
+# rule sits at the baseline of a tabular row and runs from one column across
+# whitespace to another (think TOC dot-leaders, but as a continuous line).
+# These rules incidentally overlap a few characters at one end (e.g. the "2"
+# in the "Maximum No. of Employees" column of the ADMINISTRATIVE SPECIALIST
+# salary row) and get misread by :func:`_classify_char_decoration` as
+# legitimate underlines, producing false ``[A>2<A]`` tags.
+#
+# A genuine legislative underline always has text directly above ≥ half of
+# the line's horizontal extent — the line was *drawn under* that text.
+# Leader lines have text covering < half of their extent because most of
+# the line sits in the whitespace gap between columns.  In the JAR104
+# survey the two populations were perfectly separable: real underlines
+# 69–100% coverage, leaders 0–35% coverage.  The 50% threshold leaves a
+# 34-point margin on each side.
+#
+# This filter is intentionally AR-only.  Other states (DE, CT, CA, …) draw
+# underlines that hug the text width, so the discriminator isn't needed
+# and isn't applied.  See the call sites for the state-code guard.
+AR_LEADER_LINE_COVERAGE_MAX  = 0.50  # drop lines with < this fraction of text coverage
+AR_LEADER_LINE_BASELINE_TOL  = 4.0   # chars within this pt above the line count as "on baseline"
+AR_LEADER_LINE_MIN_WIDTH_PT  = 10.0  # ignore very short lines (genuine 1-char underlines)
+
 # --- Geometric paragraph-break detection (within a single text block) ------
 # PyMuPDF often groups every line on a page into a single block, destroying
 # paragraph boundaries.  We recover them by looking at the left-x of each
@@ -96,6 +121,48 @@ LINE_NUMBER_MAX_WIDTH_PT = 50.0  # narrow lines (e.g. "line 12") that aren't tex
 # share the same y-coordinate.  We treat consecutive lines whose y-mids
 # differ by ≤ SAME_ROW_Y_TOL points as a single physical row.
 SAME_ROW_Y_TOL_PT        = 2.0   # max y-mid delta for same-physical-row
+
+# --- Visual column-gap padding (same physical row, big x-gap) --------------
+# When the visual x-gap between two same-row sibling lines is large enough
+# that it is clearly a TABLE COLUMN gap (not a normal word break), we pad
+# so column structure survives extraction.
+#
+# Background.  Many tabular bills are authored in two distinct styles:
+#
+#   * AR-style ("self-padded"): the PDF authoring tool draws several
+#     whitespace-only "spacer" lines between cells.  Each spacer's content
+#     (`' '` ≈ 1 char) plus the default 1-char joiner produces ~2 chars of
+#     padding per ~30pt gap, giving an effective ~15 pt/padding-char that
+#     reads as a columnar layout in the raw extraction.
+#
+#   * DE-style ("sparse"): the PDF authoring tool emits only the cell
+#     contents — no spacer lines at all.  A 310pt visual gap between
+#     ``"Absalom Jones"`` and the dollar column collapses to a single
+#     joiner space, jamming the columns together and making the row look
+#     like prose to downstream LLM cleaning.
+#
+# Padding strategy: POSITION-BASED.  When the gap exceeds the threshold we
+# compute the *target output column* from the next sibling's PDF x-position
+# (``target_col = round(line_x0 / POINTS_PER_PADDING_SPACE)``) and emit
+# exactly enough spaces to land there.  This makes every row in a tabular
+# block put its data cells at the *same* output column regardless of how
+# wide the row's label happens to be — e.g. "Absalom Jones" (13 chars) and
+# "Chesapeake & Delaware" (21 chars) both anchor the dollar column at
+# column 28, so the table reads as a true grid in plain-text view.
+#
+# Gap-based fallback never engages below the threshold, so AR-style bills
+# (where same-row gaps are ~30pt) keep the 1-space joiner and remain
+# byte-identical to pre-padding output.  The pt-per-char ratio of 16 is
+# empirical: it puts a typical 8.5×11" page (~510pt wide content area)
+# inside a ~32-column output, which matches the natural density of AR's
+# self-padded rows so AR and DE layouts read at the same visual scale.
+COLUMN_GAP_PAD_MIN_PT    = 60.0  # below this, keep current 1-space joiner
+POINTS_PER_PADDING_SPACE = 16.0  # pt per output column (defines target_col)
+COLUMN_GAP_MAX_SPACES    = 80    # safety cap on padding insertion
+COLUMN_GAP_MIN_SPACES    = 4     # minimum cell separator even when target
+                                 # column is already passed (long label row).
+                                 # MUST be ≥ 4 so it survives the "2-3 spaces
+                                 # → 1 space" collapse in _clean_tagged_text.
 
 # --- Superscript footnote-reference detection ----------------------------
 # Legislative bills (especially CT OFA Fiscal Notes) place footnote markers
@@ -240,6 +307,16 @@ def _detect_table_zones(page: fitz.Page) -> List[Tuple[float, float, float, floa
     because they are exactly the kind of decoration the downstream
     filters are trying to *preserve*, not suppress.
 
+    Stroked horizontal lines that look like UNDERLINES (sitting within
+    ``UNDERLINE_TOLERANCE_PT`` below a text baseline and substantially
+    overlapping that text's x-range) are also excluded from evidence —
+    they are decoration, not structure.  This matters for Delaware-style
+    bills whose underlines are emitted as stroked ``"l"`` items rather
+    than the more common filled ``"re"`` rectangles; without this guard
+    a single long underlined paragraph fools ``find_tables()`` into
+    treating the surrounding text as tabular and suppresses ALL
+    underline tagging in that region (the page-7 SB295 bug, 2026-06-29).
+
     Returns an empty list if no tables are detected, no detected zones
     pass validation, or the API is unavailable.
     """
@@ -251,6 +328,43 @@ def _detect_table_zones(page: fitz.Page) -> List[Tuple[float, float, float, floa
 
     if not raw_zones:
         return []
+
+    # Collect text-line bboxes once so we can identify stroked hlines
+    # that are actually underlines (and therefore must NOT count as
+    # table-structure evidence).
+    try:
+        text_dict = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)
+        text_line_bboxes: List[Tuple[float, float, float, float]] = []
+        for blk in text_dict.get("blocks", []):
+            if blk.get("type") != 0:
+                continue
+            for ln in blk.get("lines", []):
+                bb = ln.get("bbox")
+                if bb:
+                    text_line_bboxes.append(tuple(bb))
+    except Exception:
+        text_line_bboxes = []
+
+    def _looks_like_underline(y: float, x0: float, x1: float) -> bool:
+        """True if this stroked horizontal line sits under a text line and
+        substantially overlaps it horizontally — i.e. it's a hand-drawn
+        underline, not a table border.
+        """
+        line_width = x1 - x0
+        if line_width <= 0:
+            return False
+        for tx0, ty0, tx1, ty1 in text_line_bboxes:
+            # Underline sits below baseline → y is within tolerance of
+            # the text bbox bottom (a small slack above the bottom is
+            # allowed because the underline can be drawn at the
+            # baseline rather than below the descender).
+            if not (ty1 - 1.0 <= y <= ty1 + UNDERLINE_TOLERANCE_PT):
+                continue
+            # Horizontal overlap must cover most of the stroked line.
+            overlap = _horizontal_overlap(x0, x1, tx0, tx1)
+            if overlap / line_width >= 0.80:
+                return True
+        return False
 
     # Collect stroked-line evidence from drawings.  We look at the raw
     # path items rather than the post-processed hlines because we need
@@ -280,6 +394,10 @@ def _detect_table_zones(page: fitz.Page) -> List[Tuple[float, float, float, floa
                 y = (p1.y + p2.y) / 2
                 x0 = min(p1.x, p2.x)
                 x1 = max(p1.x, p2.x)
+                # Skip stroked horizontals that look like text underlines —
+                # they're decoration, not structural borders.
+                if _looks_like_underline(y, x0, x1):
+                    continue
                 stroked_hlines.append((y, x0, x1))
             elif dx <= HORIZONTAL_SLOPE_TOL and dy > 2:
                 x = (p1.x + p2.x) / 2
@@ -565,6 +683,162 @@ def _filter_page_separator_hlines(
     return kept
 
 
+# ---------------------------------------------------------------------------
+# Arkansas-only: leader / decorative-rule filter
+# ---------------------------------------------------------------------------
+# NOTE: invoked **only for Arkansas bills**.  The call sites
+# (`_extract_page_tagged_text`, `_extract_page_spans`,
+# `extract_pdf_json_report`) are gated by `state_code == "AR"` so other
+# states' extraction behaviour is unchanged.
+
+def _filter_ar_leader_lines(
+    hlines: List[HLine],
+    page: fitz.Page,
+    *,
+    coverage_max: float = AR_LEADER_LINE_COVERAGE_MAX,
+    baseline_tol: float = AR_LEADER_LINE_BASELINE_TOL,
+    min_width_pt: float = AR_LEADER_LINE_MIN_WIDTH_PT,
+) -> List[HLine]:
+    """Remove Arkansas-style typographic leader/decorative rules.
+
+    AR appropriation/fiscal bills (JAR104, etc.) draw thin horizontal
+    rules that sit at the baseline of a row but extend across whitespace
+    between columns — TOC-style leaders, page-wide ruled lines under
+    table headers, dollar-column rules, and similar decoration.  These
+    rules incidentally overlap a handful of characters at one end
+    (e.g. the "2" in the *Maximum No. of Employees* column of the
+    ``(16) ADMINISTRATIVE SPECIALIST`` salary row) and are misread by
+    :func:`_classify_char_decoration` as underlines, producing false
+    ``[A>2<A]`` tags on isolated digits/whitespace.
+
+    A genuine legislative underline or strikethrough always has text
+    directly along ≥ ``coverage_max`` of the line's horizontal extent —
+    the line was drawn *under* that text (underline) or *through* it
+    (strikethrough).  A leader/decorative rule has text covering
+    ≤ ``coverage_max`` of its extent (most of it sits in whitespace
+    between columns).  Empirically on JAR104, real decoration lines
+    covered 69–100 % of the line while leaders covered 0–35 %; the
+    default 50 % threshold leaves a 34-point margin on each side.
+
+    Coverage criterion (covers BOTH underline and strikethrough
+    geometries — important so we don't accidentally strip
+    strikethrough rules on stricken years like ``[D>2025<D]``):
+
+      A character is treated as "text-bearing" for this hline when
+      either holds:
+        (a) the hline y falls anywhere within the character's vertical
+            bounding box ``[cy_top, cy_bottom]`` — this captures
+            strikethroughs that sit at the character's midline; OR
+        (b) the hline y is within ``baseline_tol`` points BELOW the
+            baseline (``cy_bottom``) — this captures underlines.
+
+    A line is **dropped** when:
+      1. Its width is ≥ ``min_width_pt`` (very short lines under a
+         single character are skipped to avoid removing real 1-char
+         underlines), **and**
+      2. The union of text-bearing characters' x-ranges, clipped to
+         the hline's x-range, covers strictly less than
+         ``coverage_max`` of the line's horizontal extent.
+
+    Lines without any nearby text (e.g. floating decorative borders)
+    have 0 % coverage and are also dropped — that is harmless because
+    those lines can't be misclassified as underlines anyway (the
+    classifier requires nearby text), so removing them is a no-op for
+    correctness and reduces work downstream.
+
+    This filter is intentionally AR-only.  Other states (DE, CT, CA, …)
+    draw underlines that hug the text width and do not exhibit leader
+    rules in tabular layouts, so the heuristic isn't needed and isn't
+    applied.
+    """
+    if not hlines:
+        return hlines
+
+    # Collect non-space character bboxes from rawdict.  We need char-level
+    # precision (not line-level) because a tabular row may have widely
+    # spaced cells — a line-bbox would falsely span the entire row width.
+    try:
+        raw = page.get_text("rawdict", flags=fitz.TEXT_PRESERVE_WHITESPACE)
+    except Exception:
+        return hlines
+
+    # (cx0, cx1, cy_top, cy_bottom) — we need the FULL vertical extent
+    # (not just the baseline) so strikethrough lines that sit at the
+    # character's midline qualify as "text-bearing".  Pre-2026-06-29
+    # this stored only cy_bottom and the baseline-only check caused
+    # strikethroughs on stricken years (e.g. ``[D>2025<D]``) to be
+    # incorrectly dropped as leader lines.
+    char_records: List[Tuple[float, float, float, float]] = []
+    for blk in raw.get("blocks", []):
+        if blk.get("type") != 0:
+            continue
+        for ln in blk.get("lines", []):
+            for sp in ln.get("spans", []):
+                for ch in sp.get("chars", []):
+                    bb = ch.get("bbox")
+                    c  = ch.get("c", "")
+                    if bb and c and not c.isspace():
+                        char_records.append((bb[0], bb[2], bb[1], bb[3]))
+
+    # If we have no character data at all (e.g. an image-only page), every
+    # hline would have 0 % coverage.  Leave hlines untouched in that case
+    # so we don't strip decoration the classifier wouldn't have used either.
+    if not char_records:
+        return hlines
+
+    drop_ids: set = set()
+    for hl in hlines:
+        hl_width = hl.x1 - hl.x0
+        if hl_width < min_width_pt:
+            continue  # too short — keep (could be a real 1-char underline)
+
+        # Clip every "text-bearing" char's x-range to the hline's x-range
+        # then merge the overlapping intervals to compute the union
+        # coverage in points.  "Text-bearing" means the hline y sits
+        # either within the character's vertical bbox (strikethrough
+        # case) OR within ``baseline_tol`` pt below its baseline
+        # (underline case).  Both bands together cover every decoration
+        # geometry we care about; lines further below the text are
+        # decorative leaders.
+        clipped: List[Tuple[float, float]] = []
+        for cx0, cx1, cy_top, cy_bot in char_records:
+            in_bbox      = (cy_top - 1.0) <= hl.y <= (cy_bot + 0.5)
+            below_baseline = cy_bot < hl.y <= (cy_bot + baseline_tol)
+            if not (in_bbox or below_baseline):
+                continue
+            lo = max(cx0, hl.x0)
+            hi = min(cx1, hl.x1)
+            if hi > lo:
+                clipped.append((lo, hi))
+        if not clipped:
+            # No text on this line's baseline at all → harmless to drop.
+            drop_ids.add(id(hl))
+            continue
+        clipped.sort()
+        union_pts = 0.0
+        cur_lo, cur_hi = clipped[0]
+        for lo, hi in clipped[1:]:
+            if lo <= cur_hi:
+                cur_hi = max(cur_hi, hi)
+            else:
+                union_pts += cur_hi - cur_lo
+                cur_lo, cur_hi = lo, hi
+        union_pts += cur_hi - cur_lo
+
+        if union_pts / hl_width < coverage_max:
+            drop_ids.add(id(hl))
+
+    if not drop_ids:
+        return hlines
+
+    kept = [hl for hl in hlines if id(hl) not in drop_ids]
+    logger.debug(
+        "AR leader-line filter dropped %d hlines (kept %d) on page",
+        len(hlines) - len(kept), len(kept),
+    )
+    return kept
+
+
 def _extract_annot_rects(page: fitz.Page) -> Tuple[List[fitz.Rect], List[fitz.Rect]]:
     """Return (underline_rects, strikeout_rects) from PDF annotations."""
     ul_rects: List[fitz.Rect] = []
@@ -776,6 +1050,100 @@ def _classify_char_decoration(
 
 
 # ---------------------------------------------------------------------------
+# Line-order helpers
+# ---------------------------------------------------------------------------
+
+def _sort_block_lines_visually(
+    lines: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Reorder a block's text "lines" so spans on the same physical row
+    appear in left-to-right visual order.
+
+    PyMuPDF returns text fragments in PDF *drawing* order rather than
+    visual reading order.  When a tabular row was authored with the
+    number drawn first and a "$" sigil drawn afterwards but positioned
+    to the LEFT of the number (a common pattern in PDFs generated from
+    accounting templates — e.g. Delaware Grants-in-Aid bills), the raw
+    line order is:
+
+        Line N:   "3,880,543"   x0 = 528.9
+        Line N+1: "$"           x0 = 506.0   ← visually LEFT of number
+
+    Without reordering, the extractor renders that row as
+    ``"3,880,543 $"``, scrambling the currency notation.  This helper
+    groups consecutive lines whose y-midpoints fall within
+    ``SAME_ROW_Y_TOL_PT`` of each other and sorts each group by the
+    line's leftmost x-coordinate so the same row renders as
+    ``"$ 3,880,543"``.
+
+    Lines on different physical rows keep their original relative order,
+    preserving PyMuPDF's top-to-bottom flow and any multi-column layout
+    decisions baked into the block structure.
+    """
+    if len(lines) <= 1:
+        return list(lines)
+
+    result: List[Dict[str, Any]] = []
+    pending: List[Tuple[float, int, Dict[str, Any]]] = []  # (x0, idx, line)
+    group_y: Optional[float] = None
+
+    def _flush() -> None:
+        if not pending:
+            return
+        # Sort the same-physical-row group by leftmost x-coordinate.
+        # The original index is a tie-breaker so identical x0 values
+        # preserve PyMuPDF's drawing order (stable sort).
+        pending.sort(key=lambda t: (t[0], t[1]))
+        result.extend(p[2] for p in pending)
+        pending.clear()
+
+    for idx, ln in enumerate(lines):
+        bbox = ln.get("bbox", (0.0, 0.0, 0.0, 0.0))
+        y_mid = (bbox[1] + bbox[3]) / 2
+        x0 = bbox[0]
+        if group_y is None or abs(y_mid - group_y) <= SAME_ROW_Y_TOL_PT:
+            pending.append((x0, idx, ln))
+            if group_y is None:
+                group_y = y_mid
+        else:
+            _flush()
+            pending.append((x0, idx, ln))
+            group_y = y_mid
+
+    _flush()
+    return result
+
+
+def _count_chars_since_last_newline(output_pieces: List[str]) -> int:
+    """
+    Count how many characters have been emitted on the current physical
+    output row since the most recent ``'\\n'`` in *output_pieces*.
+
+    Used by ``_extract_page_tagged_text`` to compute *position-based*
+    column padding: when we are about to emit a same-row sibling line at
+    PDF x-position ``X``, we want it to land at output column
+    ``round(X / POINTS_PER_PADDING_SPACE)``.  To pad exactly that many
+    spaces we need to know how many characters are already on the row.
+
+    The walk is O(pieces-since-last-newline) and runs at most once per
+    same-row sibling join (which itself is rare \u2014 only triggered when
+    the visual x-gap exceeds COLUMN_GAP_PAD_MIN_PT), so the cost is
+    negligible compared to the rest of the extraction pipeline.
+    """
+    total = 0
+    for piece in reversed(output_pieces):
+        nl_idx = piece.rfind("\n")
+        if nl_idx != -1:
+            # Everything after this newline counts towards the current row.
+            total += len(piece) - nl_idx - 1
+            return total
+        total += len(piece)
+    # No newline found in any prior piece \u2014 every char counts.
+    return total
+
+
+# ---------------------------------------------------------------------------
 # Page-level extraction  (character-level precision)
 # ---------------------------------------------------------------------------
 
@@ -820,6 +1188,17 @@ def _extract_page_tagged_text(
     # Other states don't exhibit this pattern, so the filter is skipped.
     if state_code and state_code.upper() == "CT":
         hlines = _filter_page_separator_hlines(hlines, page)
+
+    # -- 1d. AR-only: filter typographic leader / decorative rules --
+    # AR appropriation bills draw thin rules running across whitespace
+    # between columns (TOC-style leaders + dollar-column underrules).
+    # These incidentally clip a few characters at one end and get
+    # misread as underlines, producing false [A>2<A] tags on isolated
+    # digits.  Real legislative underlines hug the text width;
+    # leaders extend mostly through whitespace.  See
+    # _filter_ar_leader_lines for the geometric discriminator.
+    if state_code and state_code.upper() == "AR":
+        hlines = _filter_ar_leader_lines(hlines, page)
 
     # -- 2. Get text with per-character positions --
     # Try rawdict first for char-level precision; fall back to dict if
@@ -875,7 +1254,11 @@ def _extract_page_tagged_text(
         # baseline from the lines that LOOK like wrapped continuations:
         # full-width (so they are real text, not narrow line-number
         # markers) and not a California margin marker.
-        block_lines = block.get("lines", [])
+        # NOTE: sort lines into visual reading order FIRST so that tabular
+        # rows authored as "<number> then <$>" (with the $ positioned to
+        # the LEFT of the number) emit as "$ <number>" rather than
+        # "<number> $".  See _sort_block_lines_visually() for details.
+        block_lines = _sort_block_lines_visually(block.get("lines", []))
         candidate_xs: List[float] = []
         for _ln in block_lines:
             _lbb = _ln.get("bbox", (0, 0, 0, 0))
@@ -906,9 +1289,11 @@ def _extract_page_tagged_text(
 
         first_line_in_block = True
         prev_line_y_mid: Optional[float] = None
+        prev_line_x1:    Optional[float] = None
         for line in block_lines:
             lbbox_full = line.get("bbox", (0, 0, 0, 0))
             line_x0 = lbbox_full[0]
+            line_x1 = lbbox_full[2]
             line_width = lbbox_full[2] - lbbox_full[0]
             line_y_mid = (lbbox_full[1] + lbbox_full[3]) / 2
 
@@ -946,14 +1331,42 @@ def _extract_page_tagged_text(
                 )
 
                 if same_physical_row:
-                    # Close tags + emit a single space.  The downstream
+                    # Close tags + emit a joiner.  The downstream
                     # `consolidate_adjacent_tags` (Phase 1a) will merge
                     # the resulting "<T] [T>" pair into one tag span.
                     if in_add:
                         output.append(ADD_CLOSE); in_add = False
                     if in_del:
                         output.append(DEL_CLOSE); in_del = False
-                    output.append(" ")
+                    # Position-based column padding.  When the visual
+                    # x-gap exceeds COLUMN_GAP_PAD_MIN_PT this is a
+                    # tabular column gap (e.g. DE Grants-in-Aid: 310pt
+                    # between "Absalom Jones" and the dollar column).
+                    # We compute the TARGET output column from the
+                    # next sibling's PDF x-position and pad so it lands
+                    # there — giving every row in the table the same
+                    # column for its data cells, regardless of label
+                    # width.  Smaller gaps keep the single-space joiner
+                    # so AR / CT / CA tabular bills (whose authoring
+                    # tool already drew spacer lines) remain
+                    # byte-identical.
+                    gap_pt = (
+                        line_x0 - prev_line_x1
+                        if prev_line_x1 is not None else 0.0
+                    )
+                    if gap_pt > COLUMN_GAP_PAD_MIN_PT:
+                        target_col = int(round(
+                            line_x0 / POINTS_PER_PADDING_SPACE
+                        ))
+                        current_col = _count_chars_since_last_newline(output)
+                        pad_n = target_col - current_col
+                        pad_n = max(
+                            COLUMN_GAP_MIN_SPACES,
+                            min(pad_n, COLUMN_GAP_MAX_SPACES),
+                        )
+                        output.append(" " * pad_n)
+                    else:
+                        output.append(" ")
                 else:
                     # Decide separator BEFORE emitting this line.
                     # A first-line-indented line starts a NEW paragraph
@@ -972,6 +1385,7 @@ def _extract_page_tagged_text(
                     output.append("\n\n" if is_para_start else "\n")
             first_line_in_block = False
             prev_line_y_mid = line_y_mid
+            prev_line_x1    = line_x1
 
             # --- Skip ALL decoration tagging for lines inside a table zone ---
             # Table cell borders are often short horizontal lines that slip
@@ -1171,6 +1585,10 @@ def _extract_page_spans(page: fitz.Page, state_code: Optional[str] = None) -> Li
     if state_code and state_code.upper() == "CT":
         hlines = _filter_page_separator_hlines(hlines, page)
 
+    # AR-only: filter typographic leader / decorative rules
+    if state_code and state_code.upper() == "AR":
+        hlines = _filter_ar_leader_lines(hlines, page)
+
     text_dict = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)
     spans: List[TextSpan] = []
     block_idx = 0
@@ -1178,7 +1596,12 @@ def _extract_page_spans(page: fitz.Page, state_code: Optional[str] = None) -> Li
     for block in text_dict.get("blocks", []):
         if block.get("type") != 0:
             continue
-        for line_idx, line in enumerate(block.get("lines", [])):
+        # Mirror the visual-order sort applied in _extract_page_tagged_text
+        # so summary spans (used for diagnostics + Acrobat overlay) match the
+        # left-to-right reading order of the emitted text.
+        for line_idx, line in enumerate(
+            _sort_block_lines_visually(block.get("lines", []))
+        ):
             for sp in line.get("spans", []):
                 txt = sp.get("text", "")
                 if not txt:
@@ -1261,6 +1684,26 @@ _RE_LINE_NUMBER_BETWEEN_TAGS = re.compile(
     r"(<[AD]\])[ \t]*line[ \t]+\d+[ \t]*", re.MULTILINE
 )
 
+# Currency right-alignment padding: a "$" followed by 2+ whitespace
+# characters before a digit.  PDF authoring tools draw "$" and the
+# number as separate text runs and pad the gap so the column right-
+# aligns; once the row is re-flowed into a single text stream, that
+# padding becomes meaningless noise inside tagged amounts like
+# ``[D>$          236,308<D]``.  This regex normalises any such run
+# to a single space ("$ 236,308").
+#
+# Safe by construction:
+#   * "$NNN"        — no whitespace, no match
+#   * "$ NNN"       — single space, no match (requires 2+ to fire)
+#   * "$  NNN"      — 2+ spaces, collapsed to "$ NNN"
+#   * "$ - 5,000"   — char after spaces is "-", no match
+#   * "money$ tree" — char after spaces is "t", no match
+#
+# Only sequences of regular space + tab are eaten; newlines are
+# excluded so a "$" at end-of-line stays separated from the digit
+# on the next line.
+_RE_CURRENCY_PADDING = re.compile(r"(\$)[ \t]{2,}(\d)")
+
 
 def _clean_tagged_text(text: str, strip_line_numbers: bool = False) -> str:
     """Remove empty tags, merge adjacent same-type tags, tidy whitespace."""
@@ -1281,6 +1724,11 @@ def _clean_tagged_text(text: str, strip_line_numbers: bool = False) -> str:
         text = _RE_LINE_NUMBER.sub("", text)
     # Remove logo/letterhead text that may have slipped through
     text = _RE_LOGO_TEXT.sub("", text)
+    # Collapse right-alignment padding inside currency: "$<2+ spaces>NNN"
+    # → "$ NNN".  Runs at this point (BEFORE the generic 2-3 space
+    # collapse below) so it also catches "$<4+ spaces>NNN" which the
+    # general collapse intentionally preserves for column layout.
+    text = _RE_CURRENCY_PADDING.sub(r"\1 \2", text)
     # Normalize small runs of multiple spaces (2-3) to single space
     # but preserve larger gaps (4+) which are intentional layout formatting
     text = re.sub(r"(?<=\S) {2,3}(?=\S)", " ", text)
@@ -3138,6 +3586,35 @@ def clean_extracted_text(
     # Store the diff report for the caller to retrieve and save
     clean_extracted_text._last_diff_report = diff_report
 
+    # ── Passive watchdog: scan the final cleaned text for known
+    #    extraction anti-patterns (trailing "$", split numbers, empty
+    #    tags, etc.).  Read-only — never mutates `cleaned`.  Results are
+    #    attached to the function for the UI to retrieve and logged as
+    #    structured warnings so CloudWatch / metric filters can alarm on
+    #    sustained regressions.  See extraction_validator.py for the
+    #    catalogue of patterns and the rationale for each.
+    try:
+        from extraction_validator import validate_extraction, log_anomalies
+        _pdf_basename = (
+            Path(pdf_path).name if pdf_path else None
+        )
+        anomalies = validate_extraction(
+            cleaned,
+            state_code=state_code,
+            pdf_basename=_pdf_basename,
+        )
+        clean_extracted_text._last_anomalies = anomalies
+        if anomalies:
+            log_anomalies(anomalies, log=logger)
+            logger.warning(
+                "🚨 %d extraction anomalies detected (state=%s, pdf=%s)",
+                len(anomalies), state_code or "?", _pdf_basename or "?",
+            )
+    except Exception as _vexc:
+        # The validator must never break extraction.  Log and continue.
+        logger.debug("extraction_validator failed: %s", _vexc, exc_info=True)
+        clean_extracted_text._last_anomalies = []
+
     return cleaned
 
 
@@ -3889,6 +4366,10 @@ def extract_pdf_json_report(
         if state_code and state_code.upper() == "CT":
             hlines = _filter_page_separator_hlines(hlines, page)
 
+        # --- AR-only: filter typographic leader / decorative rules ---
+        if state_code and state_code.upper() == "AR":
+            hlines = _filter_ar_leader_lines(hlines, page)
+
         # --- text with per-character positions (rawdict → dict fallback) ---
         text_dict = page.get_text("rawdict", flags=fitz.TEXT_PRESERVE_WHITESPACE)
         total_chars = sum(
@@ -3907,7 +4388,11 @@ def extract_pdf_json_report(
         for block in text_dict.get("blocks", []):
             if block.get("type") != 0:
                 continue
-            for tl in block.get("lines", []):
+            # Mirror the visual-order sort applied in _extract_page_tagged_text
+            # so the JSON report's formatted_spans + context strings match the
+            # left-to-right reading order (e.g. "$ 3,880,543" not
+            # "3,880,543 $" for currency cells in tabular rows).
+            for tl in _sort_block_lines_visually(block.get("lines", [])):
                 lbbox = tl.get("bbox", (0, 0, 0, 0))
                 y_mid = (lbbox[1] + lbbox[3]) / 2
                 spans = tl.get("spans", [])

@@ -1,0 +1,14 @@
+# Development-only Python dependencies.
+#
+# Install in your venv with:
+#     pip install -r requirements-dev.txt
+#
+# These are NOT shipped into the production Docker image — see
+# Dockerfile for the runtime-only requirements.txt install.
+
+# Test framework
+pytest>=8.0.0
+
+# (Optional) coverage reports when you want them.
+# Uncomment to enable: `pytest --cov=app --cov-report=term-missing`
+# pytest-cov>=5.0.0

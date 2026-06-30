@@ -98,7 +98,7 @@
       "add_markup": {
         "underline": false,
         "bold": true,
-        "italic": true,
+        "italic": false,
         "italic_section_only": "PRINTING CODE",
         "all_caps": false,
         "brackets": false,
