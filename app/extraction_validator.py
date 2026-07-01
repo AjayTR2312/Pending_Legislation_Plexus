@@ -254,6 +254,55 @@ _ANTI_PATTERNS: List[_AntiPattern] = [
         ),
         pattern=re.compile(r"^\s*<[AD]\]", re.MULTILINE),
     ),
+
+    # ── 9. DIVISION header missing blank-line separator ──────────────
+    # "DIVISION X\nSUBTITLE" with no blank line between them means the
+    # deterministic fix in `deterministic_cleanup` (Fix 9) missed a case.
+    _AntiPattern(
+        kind="division_missing_blank_line",
+        severity="warning",
+        description=(
+            "DIVISION header immediately followed by subtitle with no "
+            "blank line separator. Fix 9 in deterministic_cleanup should "
+            "have inserted one."
+        ),
+        pattern=re.compile(
+            r"^DIVISION\s+[IVXLCDM]+\n(?!\n)[A-Z][A-Z]",
+            re.MULTILINE,
+        ),
+    ),
+
+    # ── 10. Duplicate paragraph run (chunk merge failure) ────────────
+    # Two identical paragraphs (50+ chars) appearing back-to-back signals
+    # the chunk stitcher failed to deduplicate overlap.  We detect a
+    # repeated sentence-length substring separated by 0-2 blank lines.
+    _AntiPattern(
+        kind="duplicate_paragraph_run",
+        severity="error",
+        description=(
+            "A paragraph of 50+ characters appears duplicated back-to-back. "
+            "Indicates a chunk-merge overlap deduplication failure in "
+            "_stitch_two_chunks()."
+        ),
+        pattern=re.compile(
+            r"(\n[^\n]{50,})\s*\n{1,3}\1",
+        ),
+    ),
+
+    # ── 11. Signature line merged with Approved date ─────────────────
+    # "Approved ___, YYYY ______" on same line means Fix 10 missed it.
+    _AntiPattern(
+        kind="signature_line_merged",
+        severity="info",
+        description=(
+            "Governor signature line merged on same line as 'Approved' date. "
+            "Fix 10 in deterministic_cleanup should have split them."
+        ),
+        pattern=re.compile(
+            r"^Approved\s+_{3,},\s*\d{4}[^\S\n]+_{10,}\s*$",
+            re.MULTILINE,
+        ),
+    ),
 ]
 
 

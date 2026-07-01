@@ -1848,7 +1848,7 @@ def _restructure_ct_header(text: str) -> str:
 _RE_CT_COMPACT_DESIGNATOR = re.compile(
     r"^\s*(?:\[A>)?\s*"
     r"(?:s[SH]B|[SH]\.?B\.?)\s*\d+"
-    r"\s*/\s*File\s+No\.\s*\d+"
+    r"\s*(?:/\s*)?File\s+No\.\s*\d+"
     r"\s*(?:<A\])?\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
@@ -1867,6 +1867,424 @@ def _strip_ct_compact_designator(text: str) -> str:
         new_text = re.sub(r"\n{3,}", "\n\n", new_text)
         logger.debug("Stripped CT compact bill designator lines")
     return new_text
+
+
+# ---------------------------------------------------------------------------
+# CT false-underline heading removal (bill analysis section headings)
+# ---------------------------------------------------------------------------
+# In the bill analysis / fiscal note section at the end of CT bills,
+# section headings (e.g. "VICTIM NOTIFICATION", "COMMITTEE ACTION") are
+# printed with a decorative underline.  The underline detector picks
+# these up as [A>...<A] tags, but they are NOT legislative additions.
+#
+# Detection: standalone line containing ONLY [A>TEXT IN ALL CAPS<A].
+_RE_CT_FALSE_HEADING_TAG = re.compile(
+    r"^\[A>([A-Z][A-Z ]{2,})<A\]$",
+    re.MULTILINE,
+)
+
+
+def _strip_ct_false_underline_headings(text: str) -> str:
+    """Remove false ``[A>…<A]`` tags from CT bill analysis section headings.
+
+    These are all-caps headings (e.g. "VICTIM NOTIFICATION",
+    "COMMITTEE ACTION") with decorative underlines that the detector
+    misidentifies as legislative additions.  They appear on standalone
+    lines in the bill analysis section at the end of the document.
+
+    Only strips tags when the ENTIRE line content is uppercase/spaces
+    (3+ chars) to avoid false-positive removal of legitimate short
+    additions.
+    """
+    new_text = _RE_CT_FALSE_HEADING_TAG.sub(r"\1", text)
+    if new_text != text:
+        logger.debug("Stripped false [A>] tags from CT all-caps headings")
+    return new_text
+
+
+# ---------------------------------------------------------------------------
+# Mid-word page-break false-underline fix
+# ---------------------------------------------------------------------------
+# When a word spans a page break and the underline is detected only on the
+# continuation page, the PyMuPDF extractor emits e.g. ``e[A>stimated`` or
+# ``a[A>ny injuries``.  This is a false tag: the underline on the next page
+# is just the continuation of the same formatting that was on the previous
+# page (or a decorative line near the footer).
+#
+# Pattern: lowercase_letter + [A> + lowercase_continuation (same word)
+# Fix: strip the [A> opener and the matching <A] closer so the word is whole.
+_RE_MIDWORD_PAGE_BREAK_TAG = re.compile(
+    r"([a-z])"           # Group 1: letter before the tag (end of prev page)
+    r"\[A>"
+    r"([a-z]+)"          # Group 2: lowercase continuation (same word)
+)
+
+
+def _fix_midword_page_break_tags(text: str) -> str:
+    """Fix false ``[A>`` tags that start mid-word due to page breaks.
+
+    When a word straddles a page boundary and the underline is only
+    detected on the continuation page, the extractor emits patterns like
+    ``e[A>stimated annual fringe benefits cost...<A]`` where the tag starts
+    inside a word.
+
+    Detection: a lowercase letter immediately before ``[A>`` followed by
+    a lowercase continuation (no space) — this is ALWAYS a mid-word split
+    because legitimate tags after a lowercase letter always have punctuation
+    or space before the tag content (e.g. ``54-91c[A>, as amended...``).
+
+    Fix: for each mid-word hit, find the matching ``<A]`` closer and strip
+    both tag markers, making the word whole again.
+    """
+    # Find all mid-word tag starts
+    result = text
+    offset = 0
+    matches = list(_RE_MIDWORD_PAGE_BREAK_TAG.finditer(text))
+    if not matches:
+        return text
+
+    fix_count = 0
+    for m in matches:
+        # Verify this isn't inside a table cell or legitimate tag
+        # by checking the tag content doesn't start with a comma/space
+        # (already guaranteed by regex: group 2 is [a-z]+)
+        # Find the matching <A] closer
+        tag_start = m.start() + 1  # position of '[' in [A>
+        # Search for <A] after the tag opener
+        close_pos = result.find('<A]', tag_start + offset + 3)
+        if close_pos < 0:
+            continue
+
+        # Check: the content between opener and closer shouldn't contain
+        # another [A> or [D> (would mean nested/different tag)
+        content_between = result[tag_start + offset + 3:close_pos + offset]
+        if '[A>' in content_between or '[D>' in content_between:
+            continue
+
+        fix_count += 1
+
+    # Apply all fixes at once using a simpler approach:
+    # Replace each "letter[A>...content...<A]" with "letter + content"
+    if fix_count == 0:
+        return text
+
+    def _replace_midword(m_inner):
+        # m_inner matches the full pattern from the letter through to content
+        # But we only have the opener here; we need to find/strip the closer
+        return m_inner.group(1) + m_inner.group(2)
+
+    # Two-pass: first replace the openers, then clean up orphaned <A] closers.
+    # Actually, let's do it properly with a single scan.
+    parts = []
+    last_end = 0
+    fixed = 0
+    for m in _RE_MIDWORD_PAGE_BREAK_TAG.finditer(text):
+        # Position of [A> in the original text
+        open_pos = m.start() + 1  # the '[' of [A>
+        # Find the matching <A] after this opener
+        close_pos = text.find('<A]', open_pos + 3)
+        if close_pos < 0:
+            continue
+        # Check no nested tags between
+        segment = text[open_pos + 3:close_pos]
+        if '[A>' in segment or '[D>' in segment:
+            continue
+
+        # Build replacement: letter + tag_content (without markers)
+        parts.append(text[last_end:m.start()])
+        tag_content = text[open_pos + 3:close_pos]
+        parts.append(m.group(1) + tag_content)  # letter + rest of word + content
+        last_end = close_pos + 3  # skip past <A]
+        fixed += 1
+
+    if fixed == 0:
+        return text
+
+    parts.append(text[last_end:])
+    logger.debug(f"Fixed {fixed} mid-word page-break false [A>] tag(s)")
+    return ''.join(parts)
+
+
+# ---------------------------------------------------------------------------
+# CT raw footer-line tag stripping (PRE-LLM)
+# ---------------------------------------------------------------------------
+# In CT bill PDFs, a horizontal rule separates page content from the footer.
+# PyMuPDF sometimes interprets this rule as an underline on the last content
+# line before the page break, causing the ENTIRE line to be wrapped in
+# [A>…<A] tags — even though the text is not actually underlined.
+#
+# This must be fixed BEFORE the LLM sees the text, because:
+#   1. The false full-line tag confuses the LLM about what is truly added text
+#   2. The LLM cannot distinguish footer-line artifacts from legitimate tags
+#   3. After LLM processing, page markers are removed so we lose the signal
+#
+# Detection (all must be true):
+#   1. The line is the last numbered content line before ``--- Page N ---``
+#   2. ``[A>…<A]`` wraps the entire line content (starts at beginning or mid-word)
+#   3. There is a trailing space before ``<A]`` — the signature of the footer
+#      line extending to the full page margin width
+#
+# Fix: strip the [A> opener and ` <A]` closer, preserving the text content.
+
+_RE_CT_RAW_FOOTER_TAG_LINE = re.compile(
+    r'^(\d+\s+)(\w*)\[A>(.+?) <A\]\s*$'
+)
+_RE_CT_PAGE_MARKER = re.compile(r'^---\s*Page\s+\d+\s*---$')
+
+
+def _strip_ct_raw_footer_line_tags(text: str) -> str:
+    """Strip false ``[A>…<A]`` tags caused by footer separator lines in raw CT text.
+
+    In CT bill PDFs, the footer separator line (horizontal rule) is detected
+    by PyMuPDF as an underline on the last content line before the page break.
+    This causes the entire last line to be falsely wrapped in ``[A>...<A]`` tags.
+
+    The signature of these false tags is:
+      1. Last numbered content line before ``--- Page N ---``
+      2. ``[A>...<A]`` wraps the entire line content (or starts mid-word)
+      3. A trailing space before ``<A]`` (footer line extends to margin width)
+
+    This function operates on the RAW text BEFORE LLM processing, preventing
+    the LLM from being confused by incorrect markup.
+    """
+    lines = text.split('\n')
+    fixed = 0
+
+    for i, line in enumerate(lines):
+        if not _RE_CT_PAGE_MARKER.match(line.strip()):
+            continue
+        # Found a page marker — walk backwards to find last numbered line
+        for j in range(i - 1, max(-1, i - 6), -1):
+            m = _RE_CT_RAW_FOOTER_TAG_LINE.match(lines[j])
+            if m:
+                # Found a false footer-line tag — strip it
+                line_num_part = m.group(1)   # e.g. "78 "
+                pre_chars = m.group(2)       # e.g. "" or "p" (mid-word)
+                content = m.group(3)         # tagged text (without trailing space)
+                lines[j] = f"{line_num_part}{pre_chars}{content}"
+                fixed += 1
+                break
+            # If we hit a non-empty line that's not a match, stop searching
+            if lines[j].strip():
+                break
+
+    if fixed:
+        logger.debug(
+            f"Stripped {fixed} false raw footer-line tag(s) (pre-LLM)"
+        )
+        return '\n'.join(lines)
+    return text
+
+
+# ---------------------------------------------------------------------------
+# CT false footer-line underline removal
+# ---------------------------------------------------------------------------
+# The horizontal rule separating page content from the footer (e.g. the line
+# above "sHB5564 / File No. 633    8") is sometimes detected as an underline
+# on the last text line before the footer.  After the LLM merges paragraphs
+# across page breaks, this produces a false ``[A>…<A]`` tag that covers only
+# the portion of text that was on the previous page — the sentence continues
+# UNTAGGED after the closing ``<A]``.
+#
+# Detection (all must be true):
+#   1. ``[A>…<A]`` starts at a paragraph boundary (after ``\n\n`` or SOF)
+#   2. Content is 40+ chars (not a short insertion)
+#   3. ``<A]`` is immediately followed by SPACE + lowercase letter (sentence
+#      continues untagged)
+#   4. BOTH the previous and next paragraphs contain NO ``[A>`` tags — i.e.
+#      the tagged paragraph is isolated (surrounded by plain/existing text).
+#      Legitimate additions always appear in blocks where adjacent paragraphs
+#      also contain tags.
+#
+# Fix: strip the ``[A>`` opener and ``<A]`` closer, preserving the text.
+_RE_FALSE_FOOTER_UNDERLINE = re.compile(
+    r"(?:(?<=\n\n)|(?<=\A))\[A>([^\n]{40,}?)<A\](?= [a-z])"
+)
+
+
+def _strip_false_footer_line_underline(text: str) -> str:
+    """Strip false ``[A>…<A]`` tags caused by footer separator lines.
+
+    The footer's horizontal rule is detected as an underline on the last
+    content line before the page break.  After the LLM joins paragraphs
+    across pages, the result is a tag that ends mid-sentence with the
+    sentence continuing untagged.
+
+    Only strips when the tagged paragraph is SURROUNDED by untagged
+    paragraphs (no ``[A>`` in prev/next) — legitimate additions always
+    appear in blocks where adjacent paragraphs also contain tags.
+
+    Two passes:
+      Pass 1 — Original regex: ``[A>…<A] lowercase`` (sentence continues
+               on the same line, no page break between).
+      Pass 2 — Paragraph-level: paragraph ends with ``<A]`` AND contains
+               a single ``[A>…<A]`` tag of 30+ chars AND both real
+               neighbouring content paragraphs (skipping page markers /
+               headers) are untagged.  This catches tags before page
+               breaks where ``--- Page N ---`` separates tag from the
+               sentence continuation.
+    """
+    _RE_PAGE_MARKER = re.compile(
+        r'^---\s*Page\s+\d+\s*---$|'            # --- Page N ---
+        r'^s[SH]B\d+\s*/?\s*File\s+No\.\s*\d+', # sSB294 / File No. 615  10
+        re.IGNORECASE,
+    )
+
+    def _is_noise_para(p: str) -> bool:
+        """True for empty/whitespace-only or page-marker paragraphs."""
+        stripped = p.strip()
+        if not stripped:
+            return True
+        if _RE_PAGE_MARKER.match(stripped):
+            return True
+        return False
+
+    paras = text.split('\n\n')
+    if len(paras) <= 2:
+        return text
+
+    # Build para index for fast lookup
+    para_offsets: list[int] = []
+    offset = 0
+    for p in paras:
+        para_offsets.append(offset)
+        offset += len(p) + 2  # +2 for \n\n
+
+    fixed = 0
+
+    # --- Pass 1: regex-based (tag followed immediately by space+lowercase) ---
+    for m in _RE_FALSE_FOOTER_UNDERLINE.finditer(text):
+        pos = m.start()
+        # Determine which paragraph this is in
+        para_idx = 0
+        for i, off in enumerate(para_offsets):
+            if off > pos:
+                break
+            para_idx = i
+
+        # Check surrounding paragraphs for tags
+        prev_has_tag = '[A>' in paras[para_idx - 1] if para_idx > 0 else True
+        next_idx = para_idx + 1
+        next_has_tag = '[A>' in paras[next_idx] if next_idx < len(paras) else True
+
+        if not prev_has_tag and not next_has_tag:
+            # This is an isolated tagged paragraph surrounded by plain text
+            # → false footer-line underline. Strip the tag markers.
+            tagged_content = m.group(1)
+            paras[para_idx] = paras[para_idx].replace(
+                f'[A>{tagged_content}<A]', tagged_content, 1
+            )
+            fixed += 1
+
+    # --- Pass 2: paragraph-level (tag ends at paragraph boundary, page break follows) ---
+    # Regex: matches a paragraph that is a SINGLE [A>...<A] tag.
+    # The content group explicitly excludes <A] to prevent non-greedy
+    # backtracking from matching across multiple tag segments.
+    _RE_SINGLE_TAG_PARA = re.compile(
+        r'^(\d+\s+)?\[A>((?:(?!<A\]).){30,})<A\]\s*$'
+    )
+    for idx, para in enumerate(paras):
+        if '[A>' not in para:
+            continue
+        # Skip paragraphs with multiple [A>...<A] segments — these are
+        # legitimate multi-segment additions, not footer-line artifacts
+        if para.count('[A>') > 1:
+            continue
+        m2 = _RE_SINGLE_TAG_PARA.match(para)
+        if not m2:
+            continue
+        # Already fixed in pass 1?
+        if '[A>' not in paras[idx]:
+            continue
+        # Find real previous content paragraph (skip noise)
+        prev_real_idx = idx - 1
+        while prev_real_idx >= 0 and _is_noise_para(paras[prev_real_idx]):
+            prev_real_idx -= 1
+        # Find real next content paragraph (skip noise)
+        next_real_idx = idx + 1
+        while next_real_idx < len(paras) and _is_noise_para(paras[next_real_idx]):
+            next_real_idx += 1
+
+        prev_has_tag = '[A>' in paras[prev_real_idx] if prev_real_idx >= 0 else True
+        next_has_tag = (
+            '[A>' in paras[next_real_idx] if next_real_idx < len(paras) else True
+        )
+
+        if not prev_has_tag and not next_has_tag:
+            tagged_content = m2.group(2)
+            # Safety check: if tagged content ends with sentence-ending
+            # punctuation, it's likely a complete clause (legitimate
+            # addition), not a mid-sentence fragment from a page break.
+            content_stripped = tagged_content.rstrip()
+            if content_stripped and content_stripped[-1] in '.;:!?)':
+                continue
+            prefix = m2.group(1) or ''
+            paras[idx] = f'{prefix}{tagged_content}'
+            fixed += 1
+
+    if fixed:
+        logger.debug(
+            f"Stripped {fixed} false footer-line underline tag(s)"
+        )
+        return '\n\n'.join(paras)
+    return text
+
+
+# ---------------------------------------------------------------------------
+# CT analysis/fiscal-note section tag stripping
+# ---------------------------------------------------------------------------
+# CT bills end with explanatory sections (Statement of Legislative
+# Commissioners, OFA Fiscal Note, OLR Bill Analysis, COMMITTEE ACTION)
+# that are NOT legislation.  These sections never have underline/strike
+# markup, yet page-break footer-line detection can produce false [A>…<A]
+# tags there.  Stripping ALL tags from these sections is safe.
+#
+# Additionally, CT bills end with an "effective date" table:
+#   "This act shall take effect as follows and shall amend the following
+#    sections:"
+# In Substitute Bills the entire table is underlined (formatting artifact),
+# producing false [A>…<A] tags.  This table is administrative metadata, not
+# legislative text, so tags are always false.
+_CT_ANALYSIS_SECTION_MARKERS = (
+    "This act shall take effect as follows",
+    "Statement of Legislative Commissioners",
+    "OFA Fiscal Note",
+    "OLR Bill Analysis",
+)
+
+
+def _strip_ct_analysis_section_tags(text: str) -> str:
+    """Remove all ``[A>…<A]`` and ``[D>…<D]`` tags from CT analysis sections.
+
+    CT bills end with explanatory sections (fiscal note, bill analysis,
+    committee action) that never have legislative markup.  Any tags in
+    these sections are artifacts of page-break underline detection.
+    """
+    # Find the earliest analysis-section marker
+    earliest_pos = -1
+    for marker in _CT_ANALYSIS_SECTION_MARKERS:
+        pos = text.find(marker)
+        if pos >= 0 and (earliest_pos < 0 or pos < earliest_pos):
+            earliest_pos = pos
+
+    if earliest_pos < 0:
+        return text  # No analysis section found
+
+    # Split text at the marker boundary
+    legislation = text[:earliest_pos]
+    analysis = text[earliest_pos:]
+
+    # Strip all tags from the analysis section
+    cleaned_analysis = re.sub(r'\[A>(.*?)<A\]', r'\1', analysis)
+    cleaned_analysis = re.sub(r'\[D>(.*?)<D\]', r'\1', cleaned_analysis)
+
+    if cleaned_analysis != analysis:
+        tag_count = analysis.count('[A>') + analysis.count('[D>')
+        logger.debug(
+            f"Stripped {tag_count} tag(s) from CT analysis/fiscal section"
+        )
+        return legislation + cleaned_analysis
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -3840,6 +4258,106 @@ def merge_split_tags(text: str) -> str:
             r'\[' + tag_type + r'>' + _no_sub
         )
         text = re.sub(cross_line, ' ', text)
+    return text
+
+
+def merge_cross_page_break_tags(text: str) -> str:
+    """Merge adjacent same-type tags split across a page break.
+
+    Background
+    ----------
+    The standard :func:`merge_split_tags` only merges across a SINGLE
+    newline gap (``[ \\t]*\\n[ \\t]{0,15}``) because a double newline
+    (``\\n\\n``) almost always marks a real paragraph boundary that must
+    be preserved.
+
+    But when a paragraph wraps across a **page break**, the PyMuPDF text
+    extraction and the LLM cleaning step often emit the two halves as
+    SEPARATE tags separated by a paragraph break::
+
+        [D>(2) When passing a senior center ... A local<D]
+
+        [D>authority may erect a sign ... shall apply.<D]
+
+    Both halves should logically be ONE tag because the strikethrough /
+    underline in the source PDF is continuous across the page break.
+
+    This function detects and merges such pairs using three guards that
+    together make false-positive merging effectively impossible:
+
+    1. **First tag must NOT end with a sentence/clause terminator**
+       (``.``, ``!``, ``?``, ``:``, ``;``).  A paragraph that ended
+       with a terminator is genuinely complete; the next tag is a NEW
+       paragraph.
+    2. **Second tag must START with a lowercase ASCII letter**
+       (``[a-z]``).  In legal text new paragraphs almost always start
+       with a capital (``The court shall…``), a digit (``1. As used…``),
+       a parenthesised label (``(a) The board…``), or a section header
+       (``SECTION 1.``).  Starting with a lowercase letter is a strong
+       continuation signal — the only realistic case is a word that was
+       wrapped from the previous page.
+    3. **Second tag must NOT start with a subsection marker** (``(a)``,
+       ``(1)``, ``a.``, ``1.``, …).  Belt-and-braces guard layered on
+       top of #2 in case a subsection ever started with a lowercase
+       letter.
+
+    Only tags of the same type are considered (``[A>…<A]`` with another
+    ``[A>…<A]``, or ``[D>…<D]`` with another ``[D>…<D]``).  The merge is
+    iterative — three consecutive paragraphs that all wrap across page
+    breaks are merged into one in successive passes.
+    """
+    tag_pat = re.compile(r'\[([AD])>(.*?)<\1\]', re.DOTALL)
+    # Subsection-marker regexes (second tag must not start with any of these)
+    _re_paren_label = re.compile(r'^\([A-Za-z0-9]{1,4}\)\s')
+    _re_letter_dot = re.compile(r'^[a-z]\.\d*\.?\s')
+    _re_digit_dot  = re.compile(r'^\d+\.\s')
+
+    changed = True
+    safety_iters = 0
+    while changed and safety_iters < 50:
+        changed = False
+        safety_iters += 1
+        tags = list(tag_pat.finditer(text))
+        for i in range(len(tags) - 1):
+            t1 = tags[i]
+            t2 = tags[i + 1]
+            # Same tag type?
+            if t1.group(1) != t2.group(1):
+                continue
+            # Gap between the two tags must be a paragraph break
+            # (2+ newlines, only whitespace otherwise).
+            between = text[t1.end():t2.start()]
+            if not re.fullmatch(r'[ \t]*\n[ \t]*\n[ \t\n]*', between):
+                continue
+            first_text  = t1.group(2)
+            second_text = t2.group(2)
+            # Guard 1: first tag must NOT end with sentence/clause terminator
+            first_rstrip = first_text.rstrip()
+            if not first_rstrip:
+                continue
+            if first_rstrip[-1] in ".!?:;":
+                continue
+            # Guard 2: second tag must START with lowercase ASCII letter
+            second_lstrip = second_text.lstrip()
+            if not second_lstrip:
+                continue
+            if not (second_lstrip[0].isascii()
+                    and second_lstrip[0].islower()):
+                continue
+            # Guard 3: second tag must NOT start with a subsection marker
+            if _re_paren_label.match(second_lstrip):
+                continue
+            if _re_letter_dot.match(second_lstrip):
+                continue
+            if _re_digit_dot.match(second_lstrip):
+                continue
+            # All guards passed — merge the two tags into one.
+            merged_inner = first_rstrip + ' ' + second_lstrip
+            tag_letter = t1.group(1)
+            replacement = f'[{tag_letter}>{merged_inner}<{tag_letter}]'
+            text = text[:t1.start()] + replacement + text[t2.end():]
+            changed = True
+            break  # positions have shifted; restart the scan
     return text
 
 

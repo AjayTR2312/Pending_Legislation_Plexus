@@ -76,6 +76,9 @@ try:
         consolidate_adjacent_tags, _load_state_clean_prompt,
         _tag_brackets, _generate_clean_diff_report,
         _strip_ct_header_tags, _strip_ct_compact_designator,
+        _strip_ct_false_underline_headings, _fix_midword_page_break_tags,
+        _strip_false_footer_line_underline, _strip_ct_analysis_section_tags,
+        _strip_ct_raw_footer_line_tags,
         _strip_false_subsection_d_tags, _restructure_ct_header,
         _strip_in_artifacts, _strip_in_header_tags,
         _strip_ks_header_tags,
@@ -1351,6 +1354,14 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
             f.write(raw_text)
         logging.info(f"   💾 Raw PyMuPDF saved to: {raw_path}")
 
+        # CT-specific raw text pre-processing (before LLM)
+        # NOTE: _strip_ct_raw_footer_line_tags disabled — analysis showed ALL
+        # cases it stripped were legitimate underlined text (preceding lines
+        # have [A>] tags or tag starts mid-word).  Footer-line false positives
+        # are handled post-LLM by _strip_false_footer_line_underline instead.
+        # if state_code and state_code.upper() == "CT":
+        #     raw_text = _strip_ct_raw_footer_line_tags(raw_text)
+
         # ── Step 2: Split into chunks ────────────────────────────────
         chunks = _split_text_into_chunks(raw_text, max_chars=40000, overlap_chars=2000)
         total_chunks = len(chunks)
@@ -1443,6 +1454,14 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
             logging.info(f"   ✅ Chunk {i}: {len(chunk):,} → {len(cleaned):,} chars")
 
         # ── Step 4: Merge cleaned chunks ─────────────────────────────
+        # Pre-normalise tag formatting in each chunk so overlap detection
+        # sees identical strings for the same content.  Without this,
+        # one chunk may have line-level tags ([A>word<A] [A>word<A]) while
+        # another has merged sentence-level tags ([A>word word<A]), causing
+        # all stitch strategies to fail and duplicate text to appear.
+        for ci in range(len(cleaned_chunks)):
+            cleaned_chunks[ci] = merge_split_tags(cleaned_chunks[ci])
+
         if len(cleaned_chunks) == 1:
             merged = cleaned_chunks[0]
         else:
@@ -1495,6 +1514,10 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         if state_code and state_code.upper() == "CT":
             merged = _strip_ct_header_tags(merged)
             merged = _strip_ct_compact_designator(merged)
+            merged = _strip_ct_false_underline_headings(merged)
+            merged = _fix_midword_page_break_tags(merged)
+            merged = _strip_false_footer_line_underline(merged)
+            merged = _strip_ct_analysis_section_tags(merged)
             merged = _strip_false_subsection_d_tags(merged)
             merged = _restructure_ct_header(merged)
 
@@ -1519,6 +1542,7 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         # Fix: rewrite mirrored closers to canonical form so depth
         # tracking stays balanced.  Must run BEFORE remove_nested_tags.
         merged = _fix_malformed_close_tags(merged)
+        merged = _merge_page_break_paragraph_splits(merged)
 
         merged = consolidate_adjacent_tags(merged)
         merged = remove_nested_tags(merged)
@@ -1559,6 +1583,86 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
     except Exception as e:
         logging.error(f"❌ Hybrid conversion failed: {e}", exc_info=True)
         return None
+
+
+def _merge_page_break_paragraph_splits(text):
+    """Merge paragraphs that were split mid-sentence at a PDF page break.
+
+    The chunk-level LLM sometimes fails to rejoin paragraphs that cross a
+    page boundary in the raw PyMuPDF extraction.  The symptom is two
+    consecutive paragraphs whose boundary sits inside a single ``[A>…<A]``
+    (or ``[D>…<D]``) block — the first paragraph ends with a closing tag
+    and the next paragraph opens with the same tag type, continuing the
+    same sentence.
+
+    **Detection** (all three must be true):
+
+    1. Paragraph *A* ends with ``<A]`` (or ``<D]``).
+    2. Paragraph *B* starts with ``[A>`` (or ``[D>``, same tag type).
+    3. The first non-whitespace character after the opening tag in *B*
+       is a **lowercase** letter — i.e. it is a mid-sentence continuation,
+       not a new sentence (``Sec. …``) or subsection marker (``(b) …``).
+
+    An extra guard prevents merging when the tagged text in *A* already
+    ends with sentence-terminal punctuation (``. ! ?``).
+
+    **Fix:** strip the closing tag from *A* and the opening tag from *B*
+    and join with a single space, turning two paragraphs into one with a
+    single continuous tag.
+
+    Runs **before** ``consolidate_adjacent_tags`` / ``merge_split_tags``
+    so the structural tag passes see the corrected paragraph topology.
+    """
+    paras = text.split('\n\n')
+    if len(paras) <= 1:
+        return text
+
+    merged_paras: list[str] = []
+    i = 0
+    merge_count = 0
+    while i < len(paras):
+        curr = paras[i]
+        # Try to merge with one or more subsequent paragraphs whose
+        # tag was split at a page break.
+        while i + 1 < len(paras):
+            nxt = paras[i + 1]
+            curr_s = curr.rstrip()
+            nxt_s = nxt.lstrip()
+
+            did_merge = False
+            for tag in ('A', 'D'):
+                close_tag = f'<{tag}]'
+                open_tag = f'[{tag}>'
+                if curr_s.endswith(close_tag) and nxt_s.startswith(open_tag):
+                    # Guard 1 – continuation must start with a lowercase
+                    # letter (not a new sentence or subsection marker).
+                    inner = nxt_s[len(open_tag):].lstrip()
+                    if not inner or not inner[0].islower():
+                        continue
+                    # Guard 2 – the tagged text in A must not already end
+                    # with sentence-terminal punctuation.
+                    text_before = curr_s[:-len(close_tag)].rstrip()
+                    if text_before and text_before[-1] in '.!?':
+                        continue
+                    # All guards passed — merge the two paragraphs.
+                    curr = text_before + ' ' + nxt_s[len(open_tag):]
+                    i += 1
+                    merge_count += 1
+                    did_merge = True
+                    break  # restart inner while to check next para
+
+            if not did_merge:
+                break
+
+        merged_paras.append(curr)
+        i += 1
+
+    if merge_count:
+        logging.info(
+            f"   🔗 Merged {merge_count} page-break paragraph split(s)"
+        )
+
+    return '\n\n'.join(merged_paras)
 
 
 def _merge_cleaned_chunks(chunks):
@@ -1727,6 +1831,67 @@ def _stitch_two_chunks(merged, next_chunk, *, chunk_index, window=4000):
                 f"({best_overlap} normalised chars, {raw_cut} raw chars)"
             )
             return merged + next_chunk[raw_cut:]
+
+    # ── Strategy 2b: tail-probe overlap ─────────────────────────────────
+    # When the LLM starts the head mid-sentence (e.g. "n section 10-264s,
+    # shall not charge tuition…"), Strategies 1-2 fail because (1) no
+    # shared section anchor exists between the tail and head windows and
+    # (2) the boundary characters don't align for an exact suffix-prefix
+    # match.
+    #
+    # Fix: take a normalised probe from the END of *merged* and search
+    # for it inside the beginning of *next_chunk*.  If the probe is
+    # found, everything in next_chunk before the probe's end is overlap
+    # that should be skipped.  merged is kept in full (it has the
+    # complete start of the overlapping paragraph) and next_chunk
+    # continues from where merged left off.
+    _PROBE_LEN = 200          # normalised chars — long enough to avoid false hits
+    _PROBE_MIN = 80           # minimum viable probe length
+    tail_for_probe = merged[-3000:]
+    tail_probe_norm = ' '.join(tail_for_probe.split())
+    actual_probe_len = min(_PROBE_LEN, len(tail_probe_norm))
+    if actual_probe_len >= _PROBE_MIN:
+        probe = tail_probe_norm[-actual_probe_len:]
+        head_for_probe = next_chunk[:6000]
+        head_probe_norm = ' '.join(head_for_probe.split())
+        probe_hit = head_probe_norm.find(probe)
+        if probe_hit >= 0:
+            # Overlap confirmed.  Cut next_chunk just after the matched
+            # probe so the duplicated text is skipped.
+            cut_norm = probe_hit + actual_probe_len
+            # Map normalised position → raw position in next_chunk.
+            normed_2b = 0
+            in_ws_2b = False
+            raw_cut_2b = 0
+            for j, ch in enumerate(head_for_probe):
+                if ch.isspace():
+                    if not in_ws_2b:
+                        normed_2b += 1
+                        in_ws_2b = True
+                else:
+                    normed_2b += 1
+                    in_ws_2b = False
+                if normed_2b >= cut_norm:
+                    raw_cut_2b = j + 1
+                    break
+            if raw_cut_2b > 0:
+                candidate = merged.rstrip() + next_chunk[raw_cut_2b:]
+                # Sanity: stitched result should not be shorter than the
+                # longer input (overlap dedup shortens by at most a few K).
+                min_expected = max(len(merged), len(next_chunk))
+                if len(candidate) >= min_expected:
+                    logging.info(
+                        f"   🔗 Chunk {chunk_index}: tail-probe overlap "
+                        f"({actual_probe_len} probe chars matched at norm "
+                        f"offset {probe_hit}, raw cut at {raw_cut_2b})"
+                    )
+                    return candidate
+                else:
+                    logging.warning(
+                        f"   ⚠️  Chunk {chunk_index}: tail-probe cut would "
+                        f"shrink result to {len(candidate):,} "
+                        f"(below {min_expected:,}). Skipping to Strategy 3."
+                    )
 
     # ── Strategy 3: normalised line match ───────────────────────────────
     # IMPORTANT: use ``tail_window`` / ``head_window`` (the full ``window``-
@@ -2272,6 +2437,38 @@ def deterministic_cleanup(text, state_config=None):
             logging.info(f"   • {msg}")
     else:
         logging.info("✅ Deterministic cleanup: no fixes needed")
+
+    # ── Fix 9: Ensure blank line between DIVISION headers and subtitles ──
+    # The LLM often collapses "DIVISION X\nSUBTITLE" onto adjacent lines
+    # without the expected blank separator.  Insert one when the line
+    # immediately after a DIVISION header is an ALL-CAPS subtitle (not a
+    # "Sec." / "Section" line).
+    _div_hdr_re = re.compile(
+        r'^(DIVISION\s+[IVXLCDM]+(?:\s*[-\u2014\u2013]+\s*\S.*)?)$\n'  # DIVISION line
+        r'(?!\n)'                                                        # NOT already followed by blank
+        r'([A-Z][A-Z \u2014\u2013\'&/.,;:\-\(\)]+\S)$',                # ALL-CAPS subtitle (incl. apostrophe, &, /)
+        re.MULTILINE,
+    )
+    div_fixed = _div_hdr_re.sub(r'\1\n\n\2', text)
+    if div_fixed != text:
+        n_div = len(_div_hdr_re.findall(text))
+        fix_log.append(f"Inserted blank line after {n_div} DIVISION header(s)")
+        text = div_fixed
+
+    # ── Fix 10: Normalize enrolled-bill signature block ──────────────
+    # PyMuPDF merges the "Approved ___, YYYY" date and the Governor's
+    # signature line onto one text line because they share the same
+    # vertical position in the PDF.  Split them so the signature line
+    # sits above the Governor's name (matching the visual layout and
+    # the format of other signature blocks in the document).
+    _sig_block_re = re.compile(
+        r'^(Approved\s+_{3,},\s*\d{4})\s+(_{10,})$',
+        re.MULTILINE,
+    )
+    sig_fixed = _sig_block_re.sub(r'\1\n\n\2', text)
+    if sig_fixed != text:
+        fix_log.append("Split Governor signature line from Approved date line")
+        text = sig_fixed
 
     # ── Final: Fix cross-type overlaps, remove nested tags, merge mid-sentence splits, then split at subsection boundaries ──
     text = fix_overlapping_cross_tags(text)

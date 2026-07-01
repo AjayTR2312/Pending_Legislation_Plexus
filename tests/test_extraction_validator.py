@@ -49,6 +49,17 @@ from extraction_validator import (
         # Orphan tag opener / closer on a line by itself.
         ("orphan_tag_opener", "previous line text\n[A>\nnext line text"),
         ("orphan_tag_closer", "previous line text\n<A]\nnext line text"),
+
+        # DIVISION header missing blank-line separator.
+        ("division_missing_blank_line", "DIVISION V\nIOWA PUBLIC EMPLOYEES RETIREMENT SYSTEM"),
+
+        # Duplicate paragraph run (chunk merge failure).
+        ("duplicate_paragraph_run",
+         "\nThe authority shall allocate ten million dollars for purposes of this paragraph and the board shall determine amounts.\n\n"
+         "\nThe authority shall allocate ten million dollars for purposes of this paragraph and the board shall determine amounts.\n"),
+
+        # Signature line merged with Approved date.
+        ("signature_line_merged", "Approved _______________, 2026 ______________________________"),
     ],
 )
 def test_validator_catches_known_antipattern(kind: str, text: str) -> None:
@@ -82,6 +93,12 @@ _CLEAN_SAMPLES = [
 
     # Section header on its own line — but with the number on the same line.
     "Sec. 123. The following shall apply",
+
+    # DIVISION with proper blank line (should NOT trigger).
+    "DIVISION V\n\nIOWA PUBLIC EMPLOYEES RETIREMENT SYSTEM",
+
+    # Signature already on separate lines (should NOT trigger).
+    "Approved _______________, 2026\n\n______________________________",
 
     # Legitimate hyphenated compound across a wrap is rare here, but
     # the dehyphenation pattern requires lowercase-on-the-right with
