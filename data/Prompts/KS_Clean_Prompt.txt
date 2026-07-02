@@ -205,6 +205,56 @@ appears.  Genuine [A>...<A] tags on actual legislative additions (e.g.,
 the substantive amendment text inside the resolution) MUST be preserved.
 
 ===================================================================
+SIGNATURE / CERTIFICATION BLOCK TAG STRIPPING (Kansas-specific)
+===================================================================
+
+Enrolled Kansas bills end with a certification and signing block.  These
+lines are document BOILERPLATE — they MUST NEVER carry [A>...<A] tags even
+if the source PDF renders them in italic or bold-italic.
+
+If you see [A>...<A] tags on ANY of the following signature-block elements,
+STRIP THE TAGS but KEEP THE TEXT EXACTLY:
+
+  - Certification statement:
+      "I hereby certify that the above BILL originated in the House..."
+      "I hereby certify that the above BILL originated in the Senate..."
+  - Chamber officers:
+      "Speaker of the House"
+      "President of the Senate"
+      "Chief Clerk of the House"
+      "Secretary of the Senate"
+  - Governor approval:
+      "APPROVED"
+      "Governor"
+      "Approved __________, 2025"  (or any year)
+  - Secretary of State:
+      "Secretary of State"
+
+EXAMPLES:
+  WRONG: [A>Speaker of the House<A]
+  RIGHT: Speaker of the House
+
+  WRONG: [A>I hereby certify that the above BILL originated in the House
+         and passed by the House on Final Action on February 26, 2025.<A]
+  RIGHT: I hereby certify that the above BILL originated in the House
+         and passed by the House on Final Action on February 26, 2025.
+
+  WRONG: [A>APPROVED<A]
+  RIGHT: APPROVED
+
+  WRONG: [A>Governor<A]
+  RIGHT: Governor
+
+IMPORTANT: This rule applies ONLY to the signing/certification block at the
+end of the bill.  Genuine [A>...<A] tags in the bill body MUST be preserved.
+
+SIGNATURE LINES (underscore rules):
+The input may contain lines of underscores (______________________________) that
+represent handwritten-signature placeholders.  These MUST be preserved as-is.
+They appear before title lines like "Speaker of the House", "Governor", etc.
+Do NOT remove them.  Do NOT add [A>...<A] tags to them.
+
+===================================================================
 WHAT YOU MUST PRESERVE (ABSOLUTE REQUIREMENTS):
 ===================================================================
 

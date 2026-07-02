@@ -159,10 +159,13 @@ SAME_ROW_Y_TOL_PT        = 2.0   # max y-mid delta for same-physical-row
 COLUMN_GAP_PAD_MIN_PT    = 60.0  # below this, keep current 1-space joiner
 POINTS_PER_PADDING_SPACE = 16.0  # pt per output column (defines target_col)
 COLUMN_GAP_MAX_SPACES    = 80    # safety cap on padding insertion
-COLUMN_GAP_MIN_SPACES    = 4     # minimum cell separator even when target
+COLUMN_GAP_MIN_SPACES    = 6     # minimum cell separator even when target
                                  # column is already passed (long label row).
                                  # MUST be ≥ 4 so it survives the "2-3 spaces
                                  # → 1 space" collapse in _clean_tagged_text.
+                                 # Raised from 4 → 6 to give wider visual
+                                 # gap for long organisation names in
+                                 # DE-style appropriation tables.
 
 # --- Superscript footnote-reference detection ----------------------------
 # Legislative bills (especially CT OFA Fiscal Notes) place footnote markers
@@ -1144,6 +1147,111 @@ def _count_chars_since_last_newline(output_pieces: List[str]) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Cross-block line merging
+# ---------------------------------------------------------------------------
+# Some PDFs (notably DE Grants-in-Aid bills) split a single tabular page
+# into multiple text blocks: Block 0 has line numbers and dollar amounts,
+# Block 1 has the organisation names at the same y-coordinates.  When the
+# blocks are processed sequentially, the org names appear after the dollar
+# amounts \u2014 destroying the tabular layout.
+#
+# ``_merge_overlapping_blocks`` detects pairs of text blocks whose
+# y-ranges overlap and folds the smaller block's lines into the larger one,
+# interleaved by y-coordinate.  The existing same-row detector
+# (``SAME_ROW_Y_TOL_PT``) and column-gap padding then correctly place the
+# org name next to its dollar amount on the same output line.
+
+def _merge_overlapping_blocks(text_dict: dict) -> dict:
+    """Merge text blocks that share overlapping y-ranges.
+
+    For each pair of text blocks whose vertical extents overlap, the
+    smaller block's lines are inserted into the larger block's line
+    list at the correct y-sorted position, and the smaller block is
+    removed.  Non-text blocks (images) are left untouched.
+
+    Returns the (possibly mutated) *text_dict*.
+    """
+    blocks = text_dict.get("blocks", [])
+    if len(blocks) < 2:
+        return text_dict
+
+    # Collect text-block indices with their y-ranges
+    text_blocks: list[tuple[int, float, float, int]] = []
+    # (index_in_blocks, y_min, y_max, line_count)
+    for i, blk in enumerate(blocks):
+        if blk.get("type") != 0:
+            continue
+        lines = blk.get("lines", [])
+        if not lines:
+            continue
+        bb = blk.get("bbox", (0, 0, 0, 0))
+        text_blocks.append((i, bb[1], bb[3], len(lines)))
+
+    if len(text_blocks) < 2:
+        return text_dict
+
+    # Sort by line count descending \u2014 we merge smaller blocks INTO larger
+    text_blocks.sort(key=lambda t: -t[3])
+
+    merged_indices: set[int] = set()
+
+    for idx_a in range(len(text_blocks)):
+        i_a, ya_min, ya_max, cnt_a = text_blocks[idx_a]
+        if i_a in merged_indices:
+            continue
+        for idx_b in range(idx_a + 1, len(text_blocks)):
+            i_b, yb_min, yb_max, cnt_b = text_blocks[idx_b]
+            if i_b in merged_indices:
+                continue
+            # Check y-range overlap
+            overlap = min(ya_max, yb_max) - max(ya_min, yb_min)
+            if overlap <= 0:
+                continue
+            # The blocks overlap.  Merge B's lines into A.
+            host_lines = blocks[i_a].get("lines", [])
+            guest_lines = blocks[i_b].get("lines", [])
+
+            # Interleave by y-midpoint
+            combined = []
+            for ln in host_lines:
+                lb = ln.get("bbox", (0, 0, 0, 0))
+                combined.append((lb[1], lb[0], ln))
+            for ln in guest_lines:
+                lb = ln.get("bbox", (0, 0, 0, 0))
+                combined.append((lb[1], lb[0], ln))
+            # Sort by y first, then x for same-row
+            combined.sort(key=lambda t: (t[0], t[1]))
+            blocks[i_a]["lines"] = [c[2] for c in combined]
+
+            # Update the host bbox to encompass both blocks
+            bb_a = list(blocks[i_a].get("bbox", (0, 0, 0, 0)))
+            bb_b = blocks[i_b].get("bbox", (0, 0, 0, 0))
+            bb_a[0] = min(bb_a[0], bb_b[0])
+            bb_a[1] = min(bb_a[1], bb_b[1])
+            bb_a[2] = max(bb_a[2], bb_b[2])
+            bb_a[3] = max(bb_a[3], bb_b[3])
+            blocks[i_a]["bbox"] = tuple(bb_a)
+
+            # Update ya_max for further overlap checks
+            ya_max = bb_a[3]
+
+            merged_indices.add(i_b)
+            logger.debug(
+                "Merged block %d (%d lines) into block %d (%d lines) \u2014 "
+                "y-overlap %.1fpt",
+                i_b, cnt_b, i_a, cnt_a, overlap,
+            )
+
+    # Remove merged (absorbed) blocks
+    if merged_indices:
+        text_dict["blocks"] = [
+            blk for i, blk in enumerate(blocks) if i not in merged_indices
+        ]
+
+    return text_dict
+
+
+# ---------------------------------------------------------------------------
 # Page-level extraction  (character-level precision)
 # ---------------------------------------------------------------------------
 
@@ -1214,6 +1322,21 @@ def _extract_page_tagged_text(
     if total_chars == 0:
         logger.debug("rawdict returned 0 chars — falling back to dict mode")
         text_dict = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)
+
+    # -- 2b. Merge overlapping blocks --
+    # Some PDFs (notably DE Grants-in-Aid bills) split tabular rows
+    # across multiple text blocks: one block has line numbers and dollar
+    # amounts, another has organization names.  Both share the same
+    # y-coordinates but sit in different blocks.  Processing blocks
+    # sequentially would emit the org names AFTER the amounts, losing
+    # the tabular association.
+    #
+    # Fix: find pairs of text blocks whose y-ranges overlap and merge
+    # the smaller block's lines into the larger block, interleaved by
+    # y-coordinate.  This lets the existing same-row detection
+    # (SAME_ROW_Y_TOL_PT) and column-gap padding correctly place the
+    # org names next to their amounts.
+    text_dict = _merge_overlapping_blocks(text_dict)
 
     output: List[str] = []
     in_add = False
@@ -2761,6 +2884,78 @@ def _strip_ks_resolving_clause_tags(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Kansas (KS) signature / certification block tag stripping
+# ---------------------------------------------------------------------------
+# Enrolled Kansas bills end with a certification and signing block that is
+# document boilerplate — it MUST NEVER carry [A>…<A] tags even when the
+# source PDF renders the text in italic or bold-italic.
+#
+# Typical lines:
+#   "I hereby certify that the above BILL originated in the House..."
+#   "Speaker of the House"
+#   "President of the Senate"
+#   "Chief Clerk of the House"
+#   "Secretary of the Senate"
+#   "APPROVED"
+#   "Governor"
+#   "Secretary of State"
+#
+# Strategy: only operate on the **tail** of the document (last ~25 lines)
+# to avoid touching genuine legislative body text.  Within that tail,
+# strip [A>…<A] tags from lines matching known signature-block patterns.
+
+_KS_SIGNATURE_PATTERNS = re.compile(
+    r"^\[A>"
+    r"("
+    # Certification statement
+    r"I\s+hereby\s+certify\s+that\s+the\s+above\b.*"
+    r"|"
+    # Chamber officers
+    r"Speaker\s+of\s+the\s+House"
+    r"|President\s+of\s+the\s+Senate"
+    r"|Chief\s+Clerk\s+of\s+the\s+House"
+    r"|Secretary\s+of\s+the\s+Senate"
+    r"|Secretary\s+of\s+State"
+    r"|"
+    # Governor approval
+    r"APPROVED"
+    r"|Governor"
+    r"|Approved\s+[_,\s\d]+"
+    r")"
+    r"\.?\s*<A\]$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _strip_ks_signature_block_tags(text: str) -> str:
+    """Remove ``[A>…<A]`` tags from the KS certification / signing block.
+
+    Enrolled Kansas bills end with a certification / signing block at the
+    bottom.  The source PDF often renders these lines in italic, causing
+    the formatting detector to wrap them with ``[A>…<A]`` tags.  These
+    are document boilerplate, not added legislative language.
+
+    This function scans **only the last ~25 lines** to avoid accidentally
+    stripping genuine body tags that happen to mention "Governor" or
+    similar words inside legislative text.
+    """
+    lines = text.split("\n")
+    tail_start = max(0, len(lines) - 25)
+    changed = False
+
+    for i in range(tail_start, len(lines)):
+        new_line = _KS_SIGNATURE_PATTERNS.sub(r"\1", lines[i])
+        if new_line != lines[i]:
+            lines[i] = new_line
+            changed = True
+
+    if changed:
+        logger.debug("Stripped [A>…<A] tags from KS signature/certification block")
+        return "\n".join(lines)
+    return text
+
+
+# ---------------------------------------------------------------------------
 # Indiana (IN) deterministic post-processing
 # ---------------------------------------------------------------------------
 
@@ -2861,6 +3056,121 @@ def _strip_in_artifacts(text: str) -> str:
         logger.debug("Stripped IN artifacts (footer/barcode/year/decorative lines)")
 
     return new_text
+
+
+# ---------------------------------------------------------------------------
+# _split_in_midline_items  (IN-specific)
+# ---------------------------------------------------------------------------
+
+# Regex: "; and (N)" or "; or (N)" mid-line where (N) is a list item marker.
+# The semicolon + conjunction is a very strong signal that (N) is a new
+# list item, not a subsection reference.  Safe for aggressive splitting.
+_RE_IN_MIDLINE_ITEM = re.compile(
+    r'(;\s*(?:and|or))\s+'
+    r'(\([a-zA-Z0-9]{1,3}\))'
+)
+
+
+def _split_in_midline_items(text: str) -> str:
+    """Split numbered/lettered items that got merged mid-line in IN text.
+
+    The LLM sometimes merges items like::
+
+        (1) passes the exam; and (2) meets requirements
+
+    into a single line.  This function detects ``; and (N)`` or
+    ``; or (N)`` patterns and inserts a newline before ``(N)`` so each
+    item starts on its own line.  The subsequent
+    ``_ensure_in_item_spacing`` pass then adds the blank line.
+
+    Scoped to IN only by callers.
+    """
+    result = _RE_IN_MIDLINE_ITEM.sub(r'\1\n\2', text)
+    if result != text:
+        logger.debug("Split mid-line items at '; and/or (N)' boundaries in IN text")
+    return result
+
+
+# Regex: line that starts with a numbered/lettered item marker.
+# Covers plain text and tagged versions:
+#   (a), (b), (1), (2), (A), (B), (i), (ii), etc.
+#   [A>(a), [D>(1), [A>(A), etc.
+_RE_IN_ITEM_START = re.compile(
+    r'^\s*(?:\[[AD]>)?\s*'
+    r'\('
+    r'(?:[a-z]|[A-Z]|\d{1,3}|[ivxlIVXL]+)'
+    r'\)'
+)
+
+
+def _ensure_in_item_spacing(text: str) -> str:
+    """Ensure blank lines before numbered/lettered items in IN output.
+
+    The IN prompt instructs the LLM to add blank lines between items
+    like ``(a)``, ``(b)``, ``(1)``, ``(2)`` etc., but the LLM doesn't
+    always comply — especially for existing (untagged) text in
+    amended sections.
+
+    This deterministic pass inserts a blank line before any line that
+    starts with an item marker when the preceding line is non-blank.
+
+    Scoped to IN only by callers.
+    """
+    lines = text.split('\n')
+    if len(lines) < 2:
+        return text
+
+    new_lines: list[str] = [lines[0]]
+    changed = False
+
+    for i in range(1, len(lines)):
+        curr = lines[i]
+        prev = lines[i - 1]
+
+        # If current line starts with an item marker and previous
+        # line is not blank → insert a blank line before.
+        if (curr.strip()
+                and prev.strip()
+                and _RE_IN_ITEM_START.match(curr)):
+            new_lines.append('')
+            changed = True
+
+        new_lines.append(curr)
+
+    if changed:
+        logger.debug("Inserted blank lines before IN item markers")
+        return '\n'.join(new_lines)
+    return text
+
+
+def _strip_in_leading_indent(text: str) -> str:
+    """Strip leading whitespace from IN output lines that carry tags or sub-items.
+
+    The LLM sometimes preserves the PDF's visual indentation, producing
+    lines like::
+
+        (4) [A>in a county:<A]
+                 [A>(A) without a consolidated city,<A] two (2) judges ...
+
+    All IN output should start at the left margin::
+
+        (4) [A>in a county:<A]
+        [A>(A) without a consolidated city,<A] two (2) judges ...
+
+    This function strips leading spaces/tabs from every non-blank line.
+    Blank lines (paragraph separators) are left untouched.
+    """
+    lines = text.split('\n')
+    changed = False
+    for i, line in enumerate(lines):
+        stripped = line.lstrip()
+        if stripped and stripped != line:
+            lines[i] = stripped
+            changed = True
+    if changed:
+        logger.debug("Stripped leading indentation from IN output lines")
+        return '\n'.join(lines)
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -3300,6 +3610,135 @@ def _tag_brackets(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# KS signature-line injection — recover vector-drawn horizontal rules
+# ---------------------------------------------------------------------------
+# Enrolled Kansas bills have a certification / signing block at the end
+# with handwritten-signature placeholders drawn as horizontal vector lines.
+# PyMuPDF's text extraction skips these because they are path objects, not
+# text.  This function detects them and inserts underscore text at the
+# correct vertical position among the text lines.
+
+def _inject_ks_signature_lines(page: fitz.Page, page_text: str) -> str:
+    """Inject ``______________________________`` for vector-drawn signature lines.
+
+    Only operates on KS pages whose text contains signature-block markers
+    (e.g. "Speaker of the House", "Governor", "APPROVED").  This avoids
+    touching ordinary legislative pages.
+
+    Handles two types of signature lines:
+
+    **Type 1 — Standalone lines** (not near any text):
+        Horizontal rules that sit between text lines, used as handwritten-
+        signature placeholders.  Injected as a separate underscore line
+        BEFORE the text line immediately below.
+
+    **Type 2 — Fill-in lines** (same Y as text, but extending to the right):
+        Lines like "Conference Committee Report________" or "APPROVED ____".
+        The drawing starts where the text content ends and extends further
+        right.  Detected by checking that the drawing's x0 is ≥ 30pt to
+        the right of the text's x0 (real underlines span the full text
+        width, so their x0 ≈ text x0).  Underscores are APPENDED to the
+        text line.
+    """
+    # Quick bail: only fire when the page has signature-block text
+    _SIG_MARKERS = re.compile(
+        r"Speaker of the House|President of the Senate|"
+        r"Chief Clerk|Secretary of the Senate|Secretary of State|"
+        r"\bAPPROVED\b|\bGovernor\b",
+        re.IGNORECASE,
+    )
+    if not _SIG_MARKERS.search(page_text):
+        return page_text
+
+    # 1. Get horizontal line drawings
+    hlines = _extract_hlines_from_drawings(page)
+    sig_lines = [h for h in hlines if (h.x1 - h.x0) >= 80]
+    if not sig_lines:
+        return page_text
+
+    # 2. Get text-line data: bottom_y, x0, text
+    text_dict = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)
+    text_entries: list[tuple[float, float, str]] = []  # (bottom_y, x0, text)
+    for blk in text_dict.get("blocks", []):
+        if blk.get("type") != 0:
+            continue
+        for ln in blk.get("lines", []):
+            bb = ln.get("bbox")
+            if not bb:
+                continue
+            txt = ""
+            for sp in ln.get("spans", []):
+                txt += sp.get("text", "")
+            txt = txt.strip()
+            if txt:
+                text_entries.append((bb[3], bb[0], txt))
+    text_entries.sort(key=lambda t: t[0])
+
+    # 3. Classify each line as standalone, fill-in, or true underline
+    UNDERLINE_TOL = 6.0
+    FILL_IN_GAP = 30.0  # if line x0 is ≥ 30pt right of text x0 → fill-in
+    UNDERSCORE = "______________________________"
+
+    # Build a unified list of actions sorted by Y-position
+    # Each action: (y, type, target_text)
+    #   type="insert" → insert underscore line BEFORE target_text
+    #   type="append" → append underscores TO target_text
+    actions: list[tuple[float, str, str]] = []
+
+    for h in sig_lines:
+        # Find the nearest text line by y
+        near_entry = None
+        for ey, ex0, etxt in text_entries:
+            if abs(h.y - ey) < UNDERLINE_TOL:
+                near_entry = (ey, ex0, etxt)
+                break
+
+        if near_entry is None:
+            # Standalone signature line → insert before next text
+            for ey, _, etxt in text_entries:
+                if ey > h.y + 3:
+                    actions.append((h.y, "insert", etxt))
+                    break
+        else:
+            _, text_x0, text_content = near_entry
+            if h.x0 >= text_x0 + FILL_IN_GAP:
+                # Fill-in line → append to the text
+                actions.append((h.y, "append", text_content))
+            # else: true underline → skip
+
+    if not actions:
+        return page_text
+
+    # Sort actions by Y so we process them top-to-bottom
+    actions.sort(key=lambda a: a[0])
+
+    # 4. Walk through page_text and apply actions in order
+    lines = page_text.split('\n')
+    new_lines: list[str] = []
+    action_idx = 0
+    count = 0
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped and action_idx < len(actions):
+            _, atype, atarget = actions[action_idx]
+            # Check if this line matches the current action's target
+            if atarget[:25] in stripped or stripped[:25] in atarget:
+                if atype == "insert":
+                    new_lines.append(UNDERSCORE)
+                elif atype == "append":
+                    line = line.rstrip() + UNDERSCORE
+                action_idx += 1
+                count += 1
+
+        new_lines.append(line)
+
+    if count:
+        logger.debug("Injected %d signature/fill-in lines on KS page", count)
+    return '\n'.join(new_lines)
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -3377,6 +3816,12 @@ def extract_pdf_with_pymupdf(
         # NOTE: _tag_brackets() is NOT called here.  It runs AFTER the
         # LLM clean step (in clean_extracted_text) so the LLM never sees
         # confusing nested [D>[…]<D] structures.
+
+        # KS-only: inject underscore text for vector-drawn signature lines
+        # on pages that contain the certification/signing block.
+        if state_code and state_code.upper() == "KS":
+            clean = _inject_ks_signature_lines(page, clean)
+
         results.append(clean)
 
     doc.close()
@@ -3951,6 +4396,12 @@ def clean_extracted_text(
         # them in italic / bold-italic.  Operates on the full text since
         # "Be it further resolved" can appear anywhere in a resolution.
         cleaned = _strip_ks_resolving_clause_tags(cleaned)
+        # Strip false [A>…<A] tags from the certification / signing block
+        # at the end of enrolled KS bills ("Speaker of the House",
+        # "President of the Senate", "APPROVED", "Governor", etc.).
+        # These are document boilerplate and must never be tagged.
+        # Only scans the last ~25 lines to avoid touching body text.
+        cleaned = _strip_ks_signature_block_tags(cleaned)
 
     # ── consolidate, clean, and split tagged blocks ───────────────────
     cleaned = consolidate_adjacent_tags(cleaned)
@@ -3961,6 +4412,15 @@ def clean_extracted_text(
     # that the LLM tends to collapse onto a single line.  See the docstring
     # of `split_renumber_paragraph_breaks` for the detection rules.
     cleaned = split_renumber_paragraph_breaks(cleaned)
+    # ── IN-specific: split tagged lines where a short numbered item
+    #    (e.g. "(2) interview each member.") got welded to the
+    #    following paragraph by the LLM.  Scoped to IN only because
+    #    other states format numbered sub-items differently (e.g. CA
+    #    keeps them as standalone header lines).  See the docstring of
+    #    `split_numbered_item_paragraph_welds` for the detection rules.
+    if state_code and state_code.upper() == "IN":
+        cleaned = _split_in_merged_table_rows(cleaned)
+        cleaned = split_numbered_item_paragraph_welds(cleaned)
     # ── KS-specific: re-join LLM-inserted paragraph breaks between a
     #    "K.S.A. <num> is hereby amended to read as follows:" intro and
     #    the statute body that immediately follows.  The PDF/raw PyMuPDF
@@ -4000,6 +4460,25 @@ def clean_extracted_text(
     #    citation / inline-numeric guards that prevent false splits.
     if state_code and state_code.upper() == "AR":
         cleaned = _split_ar_welded_paragraphs(cleaned)
+
+    # ── IN-specific: split mid-line item merges like "; and (2)"
+    #    so that each item starts on its own line.
+    if state_code and state_code.upper() == "IN":
+        cleaned = _split_in_midline_items(cleaned)
+
+    # ── IN-specific: ensure blank lines between (a)/(1) items.
+    #    Must run BEFORE _strip_in_leading_indent so that indentation
+    #    is still available for pattern matching (not critical here,
+    #    but keeps ordering logical).
+    if state_code and state_code.upper() == "IN":
+        cleaned = _ensure_in_item_spacing(cleaned)
+
+    # ── IN-specific: strip PDF indentation as the VERY LAST step.
+    #    Must run AFTER all merge/split/rejoin steps because those can
+    #    re-introduce leading whitespace.  Every IN output line should
+    #    start at the left margin — no leading spaces or tabs.
+    if state_code and state_code.upper() == "IN":
+        cleaned = _strip_in_leading_indent(cleaned)
 
     # Store the diff report for the caller to retrieve and save
     clean_extracted_text._last_diff_report = diff_report
@@ -4589,11 +5068,242 @@ def split_renumber_paragraph_breaks(text: str) -> str:
         if _inline_prefix_re.search(preceding):
             return m.group(0)
 
+        # If the preceding paragraph text ends with a word character
+        # (letter/digit — not sentence-terminal punctuation like . : ; ! ?)
+        # the renumber is mid-sentence, e.g.:
+        #   "...the institution has[D>(1)<D] [A>(A)<A] obtained authorization"
+        #   "...Pell Grant program, and [D>(2)<D] [A>(B)<A] obtained approvals"
+        # In these cases the (old)→(new) markers are inline edits within
+        # a running sentence, NOT paragraph-level subsection renumbers.
+        # Splitting them with \n\n would break the grammatical flow.
+        stripped_pre = preceding.rstrip()
+        if stripped_pre and not re.search(r'[.;:!?]\s*$', stripped_pre):
+            return m.group(0)
+
         # Otherwise it's a standalone block renumber that the LLM merged →
         # restore the paragraph break.
         return f"{m.group(1)}\n\n{m.group(2)} "
 
     return pattern.sub(_maybe_split, text)
+
+
+# ---------------------------------------------------------------------------
+# _split_in_merged_table_rows  (IN-specific deterministic safety net)
+# ---------------------------------------------------------------------------
+
+# Regex: a dollar amount followed by 2+ spaces before the next row text.
+_RE_TABLE_ROW_BOUNDARY = re.compile(
+    r'(\$\d[\d,]*)\s{2,}(?=[A-Z])'
+)
+
+
+def _split_in_merged_table_rows(text: str) -> str:
+    """Split table rows the LLM collapsed and give each cell its own tag.
+
+    Indiana pension/benefit tables have rows like::
+
+        [A>At least 5 years, but less than 10 years<A]          [A>$150<A]
+        [A>At least 10 years, but less than 20 years<A]          [A>$275<A]
+
+    The LLM sometimes (a) merges all rows into one paragraph inside a
+    single tag, and/or (b) keeps each row in one tag instead of giving
+    the description and dollar amount separate tags.
+
+    This function fixes both:
+
+    1. Tags with 3+ dollar amounts → re-split into separate rows.
+    2. ``[A>description   $150<A]`` → ``[A>description<A]  [A>$150<A]``.
+
+    Scoped to IN only by callers.
+    """
+    lines = text.split('\n')
+    changed = False
+    new_lines: list[str] = []
+
+    for line in lines:
+        stripped = line.strip()
+
+        # Detect single-tag lines: [A>content<A] or [D>content<D]
+        tag_info = None
+        for t in ('A', 'D'):
+            opener = f'[{t}>'
+            closer = f'<{t}]'
+            if (stripped.startswith(opener) and stripped.endswith(closer)
+                    and stripped.count(opener) == 1
+                    and stripped.count(closer) == 1):
+                tag_info = (t, stripped[len(opener):-len(closer)])
+                break
+
+        if tag_info is None:
+            new_lines.append(line)
+            continue
+
+        tag, content = tag_info
+        dollar_count = len(re.findall(r'\$\d[\d,]*', content))
+
+        if dollar_count >= 3:
+            # Merged table: split into rows, cell-tag each
+            parts = re.split(r'(\$\d[\d,]*)\s{2,}(?=[A-Z])', content)
+            rows: list[tuple[str, str | None]] = []
+            i = 0
+            while i < len(parts) - 1:
+                desc = parts[i].rstrip()
+                amount = parts[i + 1]
+                rows.append((desc, amount))
+                i += 2
+            # Trailing segment (last row whose $amount had nothing after)
+            if i < len(parts):
+                last = parts[i].strip()
+                m = re.search(r'^(.*?)\s{3,}(\$\d[\d,.]*)$', last)
+                if m:
+                    rows.append((m.group(1).rstrip(), m.group(2)))
+                elif last:
+                    rows.append((last, None))
+
+            row_lines = []
+            for desc, amount in rows:
+                if amount:
+                    row_lines.append(
+                        f'[{tag}>{desc}<{tag}]          [{tag}>{amount}<{tag}]')
+                else:
+                    row_lines.append(f'[{tag}>{desc}<{tag}]')
+            new_lines.append('\n'.join(row_lines))
+            changed = True
+
+        elif dollar_count == 1:
+            # Single row: split desc from $amount if multi-space gap
+            m = re.search(r'^(.*?)\s{3,}(\$\d[\d,.]*)$', content)
+            if m:
+                desc = m.group(1).rstrip()
+                amount = m.group(2)
+                new_lines.append(
+                    f'[{tag}>{desc}<{tag}]          [{tag}>{amount}<{tag}]')
+                changed = True
+            else:
+                new_lines.append(line)
+
+        else:
+            new_lines.append(line)
+
+    if changed:
+        logger.debug("Split merged table rows / cell tags in IN text")
+        return '\n'.join(new_lines)
+    return text
+
+
+# ---------------------------------------------------------------------------
+# split_numbered_item_paragraph_welds
+# ---------------------------------------------------------------------------
+
+def split_numbered_item_paragraph_welds(text: str) -> str:
+    """Split tagged lines where a numbered item got welded to the next paragraph.
+
+    The LLM sometimes merges a short numbered-item clause with the
+    substantive paragraph that follows it into a **single** ``[A>…<A]``
+    (or ``[D>…<D]``) tag::
+
+        [A>(2) interview each new executive committee member. The chair
+        of the judicial selection committee shall consider the feedback
+        of incumbent executive committee members …<A]
+
+    Or with a semicolon boundary (common in legal lists)::
+
+        [A>(2) nonresidential onsite sewage systems (as defined in
+        IC 16-19-3.5-3.5); since 2023 shall continue to allow …<A]
+
+        [A>(C) specific location; of a grease trap or grease
+        interceptor if a regulated entity has the properly sized …<A]
+
+    The correct output keeps them as separate tagged paragraphs.
+
+    **Detection criteria** (ALL must hold):
+
+    1. The tagged content starts with a parenthesised marker —
+       ``(1)``, ``(a)``, ``(iv)``, ``(B)`` — identifying it as a
+       numbered or lettered item.
+    2. A clause-ending punctuation mark appears inside the content:
+       - **Period** followed by spaces + capitalised word ``[A-Z][a-z]``
+         (guards against citation periods like ``IC 35-43-5-3.8``).
+       - **Semicolon** followed by spaces + any letter ``[a-zA-Z]``
+         (semicolons don't appear in citation numbers, so lowercase
+         continuation is safe to match — e.g. ``; since``, ``; of``).
+    3. The text *before* the split (the numbered item) is short
+       (≤ 120 characters).
+    4. The text *after* the split (the following paragraph) is long
+       (≥ 100 characters).
+    5. The total tagged content exceeds 200 characters — so trivially
+       short multi-sentence items are never touched.
+
+    These guards prevent false splits on:
+
+    * Multi-sentence numbered items where the second sentence is still
+      part of the same item (total length < 200, or item part > 120).
+    * Citation periods like ``IC 35-43-5-3.8`` — the character after
+      the dot is a digit, not ``[A-Z][a-z]``.
+    * Semicolons between list sub-items like ``; (1)`` or ``; and`` —
+      the ``(`` is not a letter, and ``and`` is typically short enough
+      that the length guards prevent a split.
+    * Inline numeric parentheticals like ``one (1) member`` — no
+      period or semicolon precedes the paren.
+
+    The function is idempotent: once a tag is split, neither fragment
+    matches the combined criteria, so re-running is a no-op.
+    """
+    # Split-point patterns:
+    #   1. Period + capital letter (sentence boundary):  ". The", ". A"
+    #   2. Semicolon + any letter (clause boundary):     "; since", "; of", "; A"
+    # Both use lookahead so sp.start() lands on the . or ;
+    _SPLIT_POINT = re.compile(
+        r'\.\s+(?=[A-Z][a-z])'    # period → require capital letter start
+        r'|'
+        r';\s+(?=[a-zA-Z])'       # semicolon → any letter is OK
+    )
+
+    lines = text.split('\n')
+    new_lines: list[str] = []
+
+    for line in lines:
+        # Quick check: must start with a tag opener + parenthesised marker
+        m_tag = re.match(r'^\[([AD])>\(([a-zA-Z0-9]{1,4})\)\s+', line)
+        if not m_tag or len(line) < 200:
+            new_lines.append(line)
+            continue
+
+        tag_type = m_tag.group(1)          # 'A' or 'D'
+        tag_open = f'[{tag_type}>'
+        tag_close = f'<{tag_type}]'
+
+        # Find the LAST occurrence of the close tag — allows trailing
+        # punctuation like <A]". in committee-report quoted text.
+        close_idx = line.rfind(tag_close)
+        if close_idx < 0:
+            new_lines.append(line)
+            continue
+
+        trailing = line[close_idx + len(tag_close):]   # e.g. '".', '"', ''
+        content = line[len(tag_open):close_idx]
+
+        # Walk candidate split points (first match wins)
+        split_done = False
+        for sp in _SPLIT_POINT.finditer(content):
+            item_part = content[: sp.start() + 1]    # up to and including the . or ;
+            para_part = content[sp.start() + 1 :].lstrip()  # skip whitespace
+
+            if len(item_part) <= 120 and len(para_part) >= 100:
+                new_lines.append(f"{tag_open}{item_part}{tag_close}")
+                new_lines.append("")                  # blank-line separator
+                new_lines.append(f"{tag_open}{para_part}{tag_close}{trailing}")
+                split_done = True
+                logger.debug(
+                    "Split numbered-item (%s) weld: item=%d chars, para=%d chars",
+                    m_tag.group(2), len(item_part), len(para_part),
+                )
+                break
+
+        if not split_done:
+            new_lines.append(line)
+
+    return '\n'.join(new_lines)
 
 
 def rejoin_amendment_intro_breaks(text: str) -> str:
@@ -4772,6 +5482,88 @@ def rejoin_inline_renumber_list_breaks(text: str) -> str:
         r'(?=[ \t]+\S)',                      # lookahead: inline whitespace + content
     )
     return pattern.sub(r'\1 \2', text)
+
+
+# ---------------------------------------------------------------------------
+# Split merged grant / appropriation tag rows
+# ---------------------------------------------------------------------------
+_RE_DOLLAR_AMT_SPLIT = re.compile(r'\$\s*[\d,]+(?:\.\d{2})?')
+
+
+def _split_merged_grant_tag_rows(text: str) -> str:
+    """Split ``[D>…<D]`` / ``[A>…<A]`` tags that contain multiple line items.
+
+    Problem
+    -------
+    When the LLM cleans a tabular appropriations bill (e.g. DE Grants-in-
+    Aid), it sometimes merges **consecutive same-tag rows** into a single
+    tag span::
+
+        [D>Adult Basic Education $ 40,000 Child Care (95-01-06) $ 750,000<D]
+
+    The raw extraction had them on separate lines with separate tags, but
+    the LLM treated consecutive deletions/additions as one paragraph.
+
+    Fix
+    ---
+    Detect tags whose content contains **two or more** ``$ amount``
+    patterns.  At each non-final ``$ amount``, if the next non-whitespace
+    character is an uppercase letter or ``(`` (the start of a new entity
+    name or account code), place a split there and give each piece its
+    own tag on its own line::
+
+        [D>Adult Basic Education $ 40,000<D]
+        [D>Child Care (95-01-06) $ 750,000<D]
+
+    Safety
+    ------
+    - Only engages when 2 + ``$ amount`` patterns exist inside one tag.
+    - Only splits when the text after a ``$ amount`` starts with an
+      uppercase letter or ``(`` — never in mid-sentence lowercase
+      continuations like ``$ 500 per year``.
+    - Legislative prose tags (CT, CA, KS, IN …) almost never contain
+      two ``$ amount`` tokens, so this is effectively self-scoping to
+      tabular appropriation bills.
+    """
+
+    _TAG_RE = re.compile(r'\[([AD])>(.*?)<\1\]')
+
+    def _split_tag(m: re.Match) -> str:
+        tag_type = m.group(1)   # 'A' or 'D'
+        content  = m.group(2)
+
+        amounts = list(_RE_DOLLAR_AMT_SPLIT.finditer(content))
+        if len(amounts) < 2:
+            return m.group(0)           # nothing to split
+
+        pieces: list[str] = []
+        last_cut = 0
+
+        for i in range(len(amounts) - 1):
+            after = amounts[i].end()
+            tail  = content[after:]
+            stripped = tail.lstrip()
+            if not stripped:
+                continue
+            ws   = len(tail) - len(stripped)
+            cut  = after + ws           # first non-WS char position
+
+            # Split only when the next text starts a new entity
+            if stripped[0].isupper() or stripped[0] == '(':
+                pieces.append(content[last_cut:cut].rstrip())
+                last_cut = cut
+
+        # Remainder after the last split
+        remainder = content[last_cut:].strip()
+        if remainder:
+            pieces.append(remainder)
+
+        if len(pieces) < 2:
+            return m.group(0)
+
+        return '\n'.join(f'[{tag_type}>{p}<{tag_type}]' for p in pieces)
+
+    return _TAG_RE.sub(_split_tag, text)
 
 
 def extract_pdf_summary(pdf_path: str | Path) -> dict:

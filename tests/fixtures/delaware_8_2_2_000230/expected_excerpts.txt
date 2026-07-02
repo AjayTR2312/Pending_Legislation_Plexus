@@ -32,8 +32,9 @@
 #      grid.  Fixed by computing target_col from each sibling's PDF
 #      x-position; every row's "$" column now lands at the same output
 #      column.  Long-label rows that would overflow the target column
-#      get COLUMN_GAP_MIN_SPACES = 4 spaces of cell separator (4 chosen
-#      to survive the "2-3 → 1 space" collapse in _clean_tagged_text).
+#      get COLUMN_GAP_MIN_SPACES = 6 spaces of cell separator (raised
+#      from 4 → 6 for wider visual gap on long org names in DE tables;
+#      ≥ 4 survives the "2-3 → 1 space" collapse in _clean_tagged_text).
 
 # -------------------------------------------------------------------------
 # Required: row labels + their tagged dollar amounts.
@@ -41,9 +42,9 @@
 
 # Plain row: County Seat Package label + amount on the same physical
 # row.  After the position-based padding fix the cell separator is
-# exactly 4 spaces (the COLUMN_GAP_MIN_SPACES floor — Package's label
+# exactly 6 spaces (the COLUMN_GAP_MIN_SPACES floor — Package's label
 # is too long for target_col = 27 to fit, so MIN kicks in).
-County Seat Package    $ 3,880,543
+County Seat Package      $ 3,880,543
 
 # "TOTAL - Office of the Secretary" full row wrapped in one [A>…<A] tag
 # after consolidate_adjacent_tags.  Currency padding inside the tag is
@@ -88,13 +89,13 @@ Mid-County
 Absalom Jones            [D>$ 236,308<D] [A>$ 245,225<A]
 
 # Long label (21 chars) → label overflows target column, so the
-# COLUMN_GAP_MIN_SPACES = 4 separator kicks in.  Locks in the
+# COLUMN_GAP_MIN_SPACES = 6 separator kicks in.  Locks in the
 # minimum-separator floor.
-Chesapeake & Delaware    [D>$ 180,158<D] [A>$ 187,498<A]
+Chesapeake & Delaware      [D>$ 180,158<D] [A>$ 187,498<A]
 
 # Long-label One-Times row with BOTH [D> and [A> on the same physical
-# row.  Same 4-space MIN separator applies.
-Kind to Kids Foundation    [D>$ 250,000<D] [A>$ 200,000<A]
+# row.  Same 6-space MIN separator applies.
+Kind to Kids Foundation      [D>$ 250,000<D] [A>$ 200,000<A]
 
 # -------------------------------------------------------------------------
 # Forbidden: prior buggy forms that the latest fixes were designed to
@@ -114,7 +115,7 @@ Kind to Kids Foundation    [D>$ 250,000<D] [A>$ 200,000<A]
 
 # Two-space form for County Seat Package row.  If COLUMN_GAP_MIN_SPACES
 # regresses to 2, this is what would appear after _clean_tagged_text
-# collapses it to single space; but the MIN must stay ≥4 so the
+# collapses it to single space; but the MIN must stay ≥6 so the
 # separator survives the collapse.  Note: this 2-space form CANNOT
 # actually appear because _clean_tagged_text would collapse it — but
 # guarding it as forbidden documents the invariant.

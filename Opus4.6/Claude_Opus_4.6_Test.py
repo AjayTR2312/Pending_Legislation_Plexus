@@ -80,11 +80,16 @@ try:
         _strip_false_footer_line_underline, _strip_ct_analysis_section_tags,
         _strip_ct_raw_footer_line_tags,
         _strip_false_subsection_d_tags, _restructure_ct_header,
-        _strip_in_artifacts, _strip_in_header_tags,
-        _strip_ks_header_tags,
+        _strip_in_artifacts, _strip_in_header_tags, _strip_in_leading_indent,
+        _split_in_merged_table_rows, _ensure_in_item_spacing,
+        _split_in_midline_items,
+        _strip_ks_header_tags, _strip_ks_signature_block_tags,
+        _inject_ks_signature_lines,
         remove_nested_tags, merge_split_tags, split_tagged_subsections,
-        split_renumber_paragraph_breaks, rejoin_amendment_intro_breaks,
+        split_renumber_paragraph_breaks, split_numbered_item_paragraph_welds,
+        rejoin_amendment_intro_breaks,
         rejoin_inline_renumber_list_breaks,
+        _split_merged_grant_tag_rows,
     )
     _HAS_PYMUPDF = True
 except ImportError:
@@ -1526,9 +1531,22 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
             merged = _strip_in_header_tags(merged)
             merged = _strip_in_artifacts(merged)
 
-        # KS-specific: strip false header tags
+        # KS-specific: strip false header tags + signature block tags
         if state_code and state_code.upper() == "KS":
             merged = _strip_ks_header_tags(merged)
+            merged = _strip_ks_signature_block_tags(merged)
+            # Re-inject signature/fill-in underscore lines from PDF
+            # vector drawings.  The extraction step already injected
+            # them, but the LLM cleaning strips them.  Re-open the
+            # PDF and scan the last page for drawing-based lines.
+            try:
+                import fitz as _fitz
+                _doc = _fitz.open(pdf_path)
+                _last = _doc[-1]
+                merged = _inject_ks_signature_lines(_last, merged)
+                _doc.close()
+            except Exception as _sig_err:
+                logging.warning("KS signature line re-injection failed: %s", _sig_err)
 
         # ── Normalise malformed close-tags BEFORE structural passes ──────
         # The chunk-level LLM occasionally emits `<A>` or `<D>` (mirrored
@@ -1552,6 +1570,22 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         # [D>SEC. N.<D] [A>SEC. M.<A] / [D>2182.<D] [A>2183.<A] pairs that
         # the chunk-level LLM clean tends to collapse onto a single line.
         merged = split_renumber_paragraph_breaks(merged)
+        # Split [D>…<D] / [A>…<A] tags that the LLM merged across
+        # consecutive table rows.  In appropriation / grants bills
+        # (DE, AR, …) each grant line is its own row with its own
+        # "$ amount"; the LLM sometimes fuses N consecutive same-tag
+        # rows into one long tag.  This deterministic pass detects
+        # tags with 2+ "$ amount" patterns and re-splits them onto
+        # separate lines.  Safe for non-tabular states because prose
+        # tags almost never contain two dollar amounts.
+        merged = _split_merged_grant_tag_rows(merged)
+        # IN-specific: split tagged lines where a short numbered item
+        # (e.g. "(2) interview each member.") got welded to the
+        # following paragraph by the LLM.  Scoped to IN only so other
+        # states are never affected.
+        if state_code and state_code.upper() == "IN":
+            merged = _split_in_merged_table_rows(merged)
+            merged = split_numbered_item_paragraph_welds(merged)
         # KS-specific: re-join LLM-inserted false paragraph breaks between
         # a "K.S.A. <num> ... amended to read as follows:" intro and the
         # statute body that follows.  Scoped to KS only (mirrors the
@@ -1570,6 +1604,21 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         # line).
         if state_code and state_code.upper() in {"IA", "DE", "IN"}:
             merged = rejoin_inline_renumber_list_breaks(merged)
+
+        # IN-specific: split mid-line item merges like "; and (2)".
+        if state_code and state_code.upper() == "IN":
+            merged = _split_in_midline_items(merged)
+
+        # IN-specific: ensure blank lines between (a)/(1) items.
+        if state_code and state_code.upper() == "IN":
+            merged = _ensure_in_item_spacing(merged)
+
+        # IN-specific: strip leading indentation as the VERY LAST step.
+        # Must run AFTER all merge/split/rejoin steps because those can
+        # re-introduce leading whitespace.  Every IN output line should
+        # start at the left margin.
+        if state_code and state_code.upper() == "IN":
+            merged = _strip_in_leading_indent(merged)
 
         total_time = time.time() - start_time
         minutes = int(total_time // 60)
@@ -2470,6 +2519,17 @@ def deterministic_cleanup(text, state_config=None):
         fix_log.append("Split Governor signature line from Approved date line")
         text = sig_fixed
 
+    # ── Fix 11: CA vote fraction — ² outside [D> tag ────────────────
+    # PyMuPDF renders the "⅔" fraction as separate Unicode chars
+    # (² = U+00B2, ⁄ = U+2044, 3) and splits them across a tag
+    # boundary: "²[D>⁄3<D]".  Move the superscript digit inside the
+    # delete tag so the full fraction is tagged correctly: "[D>²⁄3<D]".
+    _frac_re = re.compile(r'([²³⁴⁵⁶⁷⁸⁹])\s*\[D>(⁄\d+)')
+    frac_fixed = _frac_re.sub(r'[D>\1\2', text)
+    if frac_fixed != text:
+        fix_log.append("Moved superscript digit inside [D> tag for vote fraction")
+        text = frac_fixed
+
     # ── Final: Fix cross-type overlaps, remove nested tags, merge mid-sentence splits, then split at subsection boundaries ──
     text = fix_overlapping_cross_tags(text)
     text = remove_nested_tags(text)
@@ -2633,6 +2693,14 @@ def post_process_output(text, state_config):
 
     # Regex fragment that matches any [A>, <A], [D>, or <D] tag (with optional surrounding whitespace)
     TAG_RE = r'(?:\[A>|<A\]|\[D>|<D\])'
+    # Opening-only / closing-only fragments — the leading match should only
+    # consume *opening* tags (the clause "starts" inside a tagged span)
+    # and the trailing match should only consume *closing* tags (the clause
+    # "ends" the span).  Previously both used TAG_RE which matches ALL
+    # four tokens; this caused the trailing `(?:\s*TAG_RE)*` to greedily
+    # eat the NEXT paragraph's `[A>` opener, orphaning its `<A]` closer.
+    TAG_OPEN  = r'(?:\[A>|\[D>)'
+    TAG_CLOSE = r'(?:<A\]|<D\])'
 
     for clause in no_tag_clauses:
         # Build a regex that matches the clause text even if it has [A>/<A]/[D>/<D] tags
@@ -2641,8 +2709,8 @@ def post_process_output(text, state_config):
         escaped = re.escape(clause)
         # Allow any combination of add/delete tags (with optional whitespace) between words
         pattern = escaped.replace(r'\ ', rf'\s*(?:{TAG_RE}\s*)*')
-        # Also allow tags at the very start and end of the clause
-        full_pattern = rf'(?:{TAG_RE}\s*)*' + pattern + rf'(?:\s*{TAG_RE})*'
+        # Leading: only opening tags; trailing: only closing tags.
+        full_pattern = rf'(?:{TAG_OPEN}\s*)*' + pattern + rf'(?:\s*{TAG_CLOSE})*'
 
         def strip_tags(match):
             """Remove all [A>, <A], [D>, <D] tags from the matched text."""

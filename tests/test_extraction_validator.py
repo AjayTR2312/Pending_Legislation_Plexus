@@ -8,6 +8,8 @@ that is known-clean.  Cheap, fast, and deterministic.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from extraction_validator import (
@@ -173,3 +175,289 @@ def test_validator_assigns_page_numbers_when_markers_present() -> None:
     bad = [a for a in anomalies if a.kind == "trailing_dollar"]
     assert len(bad) == 1
     assert bad[0].page_number == 2
+
+
+# ── Anti-pattern 12: orphan closer mid-line ──────────────────────────
+
+
+def test_orphan_closer_midline_detected() -> None:
+    """A line with <A] but no [A> on the same line should be flagged."""
+    text = "SECTION 1. (a) The Legislature finds and declares all of the following:<A]\n"
+    anomalies = validate_extraction(text)
+    assert any(a.kind == "orphan_closer_midline" for a in anomalies)
+
+
+def test_orphan_closer_midline_clean() -> None:
+    """A properly tagged line should NOT trigger orphan_closer_midline."""
+    text = "[A>SECTION 1. (a) The Legislature finds and declares all of the following:<A]\n"
+    anomalies = validate_extraction(text)
+    assert not any(a.kind == "orphan_closer_midline" for a in anomalies)
+
+
+# ── Anti-pattern 13: vote fraction split ─────────────────────────────
+
+
+def test_vote_fraction_split_detected() -> None:
+    """²[D>⁄3<D] should trigger vote_fraction_split."""
+    text = "Vote: ²[D>⁄3<D][A>majority<A]. Appropriation: no.\n"
+    anomalies = validate_extraction(text)
+    assert any(a.kind == "vote_fraction_split" for a in anomalies)
+
+
+def test_vote_fraction_split_clean() -> None:
+    """[D>²⁄3<D] (fixed) should NOT trigger vote_fraction_split."""
+    text = "Vote: [D>²⁄3<D][A>majority<A]. Appropriation: no.\n"
+    anomalies = validate_extraction(text)
+    assert not any(a.kind == "vote_fraction_split" for a in anomalies)
+
+
+# ── split_numbered_item_paragraph_welds ──────────────────────────────
+
+from app.pymupdf_extractor import split_numbered_item_paragraph_welds
+from app.pymupdf_extractor import _split_in_merged_table_rows
+from app.pymupdf_extractor import _ensure_in_item_spacing
+from app.pymupdf_extractor import _split_in_midline_items
+
+
+def test_split_numbered_item_weld_basic() -> None:
+    """A short (N) item welded to a long paragraph should be split."""
+    welded = (
+        "[A>(2) interview each new executive committee member. "
+        "The chair of the judicial selection committee shall consider the "
+        "feedback of incumbent executive committee members and superior "
+        "court judges in an executive session and shall select one (1) "
+        "member of the executive committee as the chief judge.<A]"
+    )
+    result = split_numbered_item_paragraph_welds(welded)
+    lines = [l for l in result.split('\n') if l.strip()]
+    assert len(lines) == 2, f"Expected 2 non-blank lines, got {len(lines)}"
+    assert lines[0] == "[A>(2) interview each new executive committee member.<A]"
+    assert lines[1].startswith("[A>The chair of the judicial")
+    assert lines[1].endswith("<A]")
+
+
+def test_split_numbered_item_weld_no_false_positive_short() -> None:
+    """A short multi-sentence item (total <200 chars) must NOT be split."""
+    short = "[A>(1) The court shall hold a hearing. The hearing must be within thirty days.<A]"
+    result = split_numbered_item_paragraph_welds(short)
+    assert result == short, "Short item should not be split"
+
+
+def test_split_numbered_item_weld_no_false_positive_citation() -> None:
+    """Periods inside citations (IC 35-43-5-3.8) must NOT cause a split."""
+    citation = (
+        "[A>(3) as described in IC 35-43-5-3.8 the defendant shall be "
+        "subject to the penalties outlined in this chapter and any "
+        "subsequent amendments that may apply to the original "
+        "conviction as determined by the sentencing court.<A]"
+    )
+    result = split_numbered_item_paragraph_welds(citation)
+    # After "3.8" comes a space then lowercase "the" → [A-Z][a-z] won't match digit.
+    # Total length is also under 200 or item part > 120 for any candidate split.
+    assert result == citation, "Citation period should not cause a split"
+
+
+def test_split_numbered_item_weld_idempotent() -> None:
+    """Already-split text must not be changed."""
+    already_split = (
+        "[A>(2) interview each new executive committee member.<A]\n"
+        "\n"
+        "[A>The chair of the judicial selection committee shall consider "
+        "the feedback of incumbent executive committee members and "
+        "superior court judges in session.<A]"
+    )
+    result = split_numbered_item_paragraph_welds(already_split)
+    assert result == already_split, "Already-split text should be unchanged"
+
+
+def test_split_numbered_item_weld_semicolon_lowercase() -> None:
+    """Semicolon + lowercase continuation should trigger a split."""
+    welded = (
+        "[A>(2) nonresidential onsite sewage systems (as defined in "
+        "IC 16-19-3.5-3.5); since 2023 shall continue to allow for the "
+        "disposal of septage picked up from within the unit or a neighboring "
+        "unit at a wastewater treatment facility within the unit.<A]"
+    )
+    result = split_numbered_item_paragraph_welds(welded)
+    lines = [l for l in result.split('\n') if l.strip()]
+    assert len(lines) == 2, f"Expected 2 non-blank lines, got {len(lines)}"
+    assert lines[0].endswith("3.5-3.5);<A]")
+    assert lines[1].startswith("[A>since 2023")
+
+
+def test_split_numbered_item_weld_semicolon_lettered() -> None:
+    """Lettered item (C) + semicolon + lowercase continuation should split."""
+    welded = (
+        "[A>(C) specific location; of a grease trap or grease interceptor "
+        "if a regulated entity has the properly sized and maintained grease "
+        "control equipment that prevents FOG discharges exceeding the "
+        "allowable concentration.<A]"
+    )
+    result = split_numbered_item_paragraph_welds(welded)
+    lines = [l for l in result.split('\n') if l.strip()]
+    assert len(lines) == 2, f"Expected 2 non-blank lines, got {len(lines)}"
+    assert lines[0] == "[A>(C) specific location;<A]"
+    assert lines[1].startswith("[A>of a grease trap")
+
+
+def test_split_numbered_item_weld_trailing_punctuation() -> None:
+    """Lines with trailing punctuation after <A] (committee report quotes) should still split."""
+    welded = (
+        '[A>(6) Mandate insurance coverage for treatment under this chapter. '
+        'Sec. 9. A practitioner, eligible facility (as defined in '
+        'IC 16-42-26.5-1), research institution, or other person '
+        'participating in providing treatment that complies with the '
+        'requirements of this chapter is immune from criminal or '
+        'civil liability.<A]".'
+    )
+    result = split_numbered_item_paragraph_welds(welded)
+    lines = [l for l in result.split('\n') if l.strip()]
+    assert len(lines) == 2, f"Expected 2 non-blank lines, got {len(lines)}: {lines}"
+    assert lines[0] == "[A>(6) Mandate insurance coverage for treatment under this chapter.<A]"
+    # Trailing ". should stay on the second line
+    assert lines[1].startswith("[A>Sec. 9.")
+    assert lines[1].endswith('<A]".')
+
+
+# ---------------------------------------------------------------------------
+# Tests for _split_in_merged_table_rows
+# ---------------------------------------------------------------------------
+
+def test_split_merged_table_rows_basic() -> None:
+    """Lines with 3+ dollar amounts should be split into rows with cell-level tags."""
+    merged = (
+        "[A>If a Member's Creditable Service Is:          The Amount Is: "
+        "At least 5 years, but less than 10 years          $150  "
+        "At least 10 years, but less than 20 years          $275  "
+        "At least 20 years, but less than 30 years          $375  "
+        "At least 30 years          $450<A]"
+    )
+    result = _split_in_merged_table_rows(merged)
+    lines = [l for l in result.split('\n') if l.strip()]
+    assert len(lines) >= 4, f"Expected at least 4 lines, got {len(lines)}: {lines}"
+    # Each row with a dollar amount should have it in its own [A>$NNN<A] tag
+    for line in lines:
+        dollars = re.findall(r'\$\d[\d,]*', line)
+        if dollars:
+            assert len(dollars) == 1, f"Expected 1 dollar amount per row, got {dollars} in: {line}"
+            assert f'[A>{dollars[0]}<A]' in line, (
+                f"Dollar amount should be in its own tag: {line}")
+
+
+def test_split_merged_table_rows_single_row() -> None:
+    """A single table row with description + $amount should split into cell tags."""
+    row = "[A>At least 5 years, but less than 10 years          $150<A]"
+    result = _split_in_merged_table_rows(row)
+    assert "[A>At least 5 years, but less than 10 years<A]" in result
+    assert "[A>$150<A]" in result
+    assert result.count("[A>") == 2
+
+
+def test_split_merged_table_rows_no_false_positive() -> None:
+    """Prose with dollar amounts (no multi-space gap or no tags) should not be split."""
+    normal = "appropriates $5,000,000 for Health Care and $3,000,000 for Education."
+    result = _split_in_merged_table_rows(normal)
+    assert result == normal
+    # Tagged prose with dollar amount mid-sentence should not be split
+    tagged = "[A>appropriates $5,000,000 for Health Care<A]"
+    result2 = _split_in_merged_table_rows(tagged)
+    assert result2 == tagged
+
+
+# ---------------------------------------------------------------------------
+# Tests for _ensure_in_item_spacing
+# ---------------------------------------------------------------------------
+
+def test_ensure_in_item_spacing_inserts_blank_lines() -> None:
+    """Missing blank lines between lettered/numbered items should be added."""
+    text = (
+        "(a) First subsection content.\n"
+        "(b) Second subsection content.\n"
+        "(c) Third subsection content."
+    )
+    result = _ensure_in_item_spacing(text)
+    lines = result.split('\n')
+    # Should have blank lines: (a), blank, (b), blank, (c) = 5 lines
+    assert len(lines) == 5, f"Expected 5 lines, got {len(lines)}: {lines}"
+    assert lines[0].startswith("(a)")
+    assert lines[1] == ""
+    assert lines[2].startswith("(b)")
+    assert lines[3] == ""
+    assert lines[4].startswith("(c)")
+
+
+def test_ensure_in_item_spacing_numbered() -> None:
+    """Numbered items (1), (2) should also get blank lines."""
+    text = (
+        "commits a Level 2 felony if:\n"
+        "(1) the amount is at least 10 grams;\n"
+        "(2) delivered to a person under 18;\n"
+        "(3) within 1,000 feet of school."
+    )
+    result = _ensure_in_item_spacing(text)
+    lines = result.split('\n')
+    # Should have: colon line, blank, (1), blank, (2), blank, (3) = 7
+    assert len(lines) == 7, f"Expected 7 lines, got {len(lines)}: {lines}"
+
+
+def test_ensure_in_item_spacing_tagged() -> None:
+    """Tagged items like [A>(a) should also get blank lines."""
+    text = (
+        "[A>(a) First item.<A]\n"
+        "[A>(b) Second item.<A]"
+    )
+    result = _ensure_in_item_spacing(text)
+    lines = result.split('\n')
+    assert len(lines) == 3
+    assert lines[1] == ""
+
+
+def test_ensure_in_item_spacing_already_spaced() -> None:
+    """Items that already have blank lines should not get doubles."""
+    text = (
+        "(a) First subsection.\n"
+        "\n"
+        "(b) Second subsection."
+    )
+    result = _ensure_in_item_spacing(text)
+    assert result == text  # No change — already spaced
+
+
+# ---------------------------------------------------------------------------
+# Tests for _split_in_midline_items
+# ---------------------------------------------------------------------------
+
+def test_split_midline_items_and() -> None:
+    """'; and (2)' mid-line should split onto a new line."""
+    text = (
+        "[D>(1) successfully passes the examination provided in "
+        "section 12 of this chapter; and (2)<D] meets the requirements "
+        "of section 8 of this chapter."
+    )
+    result = _split_in_midline_items(text)
+    lines = result.split('\n')
+    assert len(lines) == 2, f"Expected 2 lines, got {len(lines)}: {lines}"
+    assert lines[0].endswith("; and")
+    assert lines[1].startswith("(2)")
+
+
+def test_split_midline_items_or() -> None:
+    """'; or (b)' mid-line should split onto a new line."""
+    text = "fails to comply with subsection (a); or (b) makes a false statement."
+    result = _split_in_midline_items(text)
+    lines = result.split('\n')
+    assert len(lines) == 2
+    assert lines[0].endswith("; or")
+    assert lines[1].startswith("(b)")
+
+
+def test_split_midline_items_no_false_positive() -> None:
+    """Inline references without '; and/or' should not be split."""
+    # subsection reference mid-sentence
+    text = "under subsection (b) of this chapter and section (c) applies."
+    result = _split_in_midline_items(text)
+    assert result == text  # No change
+    # IC reference
+    text2 = "IC 5-10.2-3-7.5 or IC 5-10.4-4-10 to pay"
+    result2 = _split_in_midline_items(text2)
+    assert result2 == text2  # No change

@@ -35,9 +35,23 @@ PROTECTED_CLAUSES: dict[str, list[str]] = {
     ],
     "CA": [
         "The people of the State of California do enact as follows:",
-        "Resolved by the Senate of the State of California, the Assembly thereof concurring,",
+        # Individual "Resolved" variants are no longer needed here —
+        # prefix-based matching in PROTECTED_CLAUSE_PREFIXES handles
+        # ALL resolving-clause forms automatically.
         "Resolved,",
-        "Resolved by the Assembly of the State of California, the Senate thereof concurring,",
+    ],
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
+#  Prefix-based protection — any tagged span whose stripped content starts
+#  with one of these prefixes has its tags removed, regardless of what
+#  follows the prefix.  This avoids having to enumerate every resolving-
+#  clause variant (e.g. "jointly,", "the Assembly thereof concurring,").
+# ──────────────────────────────────────────────────────────────────────────────
+PROTECTED_CLAUSE_PREFIXES: dict[str, list[str]] = {
+    "CA": [
+        "Resolved by the Senate",
+        "Resolved by the Assembly",
     ],
 }
 
@@ -98,7 +112,8 @@ def strip_protected_tags(text: str, state_code: str | None) -> str:
         return text
 
     clauses = PROTECTED_CLAUSES.get(state_code.upper(), [])
-    if not clauses:
+    prefixes = PROTECTED_CLAUSE_PREFIXES.get(state_code.upper(), [])
+    if not clauses and not prefixes:
         return text
 
     for clause in clauses:
@@ -141,5 +156,18 @@ def strip_protected_tags(text: str, state_code: str | None) -> str:
             return cleaned
 
         text = pattern.sub(_strip_tags, text)
+
+    # ── Prefix-based stripping ───────────────────────────────────────
+    # For each prefix, find tagged spans [A>…<A] or [D>…<D] whose inner
+    # text (after stripping any nested tags) starts with the prefix.
+    # Strip the outer tags so the resolving clause appears untagged.
+    for prefix in prefixes:
+        escaped = re.escape(prefix)
+        for tag in ('A', 'D'):
+            _prefix_pat = re.compile(
+                r'\[' + tag + r'>(' + escaped + r'.*?)<' + tag + r'\]',
+                re.IGNORECASE,
+            )
+            text = _prefix_pat.sub(r'\1', text)
 
     return text

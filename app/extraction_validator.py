@@ -303,6 +303,41 @@ _ANTI_PATTERNS: List[_AntiPattern] = [
             re.MULTILINE,
         ),
     ),
+    # ── 12. Orphaned closer mid-line (no opener on same line) ─────────
+    # A closing tag <A] or <D] appearing on a line that has NO opener.
+    # Different from pattern 8 which only looks at start-of-line orphans.
+    # This catches "SECTION 1. (a) ... following:<A]" where the opener
+    # was accidentally consumed by a prior cleanup step.
+    _AntiPattern(
+        kind="orphan_closer_midline",
+        severity="warning",
+        description=(
+            "A line has a closing tag (<A] or <D]) but no matching "
+            "opener ([A> or [D>) on the same line. Indicates a tag "
+            "was split across lines or consumed by protected-clause stripping."
+        ),
+        pattern=re.compile(
+            r"^(?:(?!\[[AD]>).)*<[AD]\]",
+            re.MULTILINE,
+        ),
+    ),
+
+    # ── 13. Vote fraction split across tag boundary ──────────────────
+    # PyMuPDF splits Unicode fraction chars (²⁄₃) with the superscript
+    # digit outside the [D> tag: "²[D>⁄3".  Fix 11 in
+    # deterministic_cleanup should catch it.
+    _AntiPattern(
+        kind="vote_fraction_split",
+        severity="warning",
+        description=(
+            "A Unicode superscript digit (² etc.) appears immediately "
+            "before a [D> tag containing a fraction slash. The fraction "
+            "should be fully inside the tag."
+        ),
+        pattern=re.compile(
+            r"[²³⁴⁵⁶⁷⁸⁹]\s*\[D>⁄",
+        ),
+    ),
 ]
 
 
