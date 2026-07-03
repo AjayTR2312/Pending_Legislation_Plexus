@@ -344,6 +344,26 @@ def test_split_merged_table_rows_basic() -> None:
                 f"Dollar amount should be in its own tag: {line}")
 
 
+def test_split_merged_table_rows_single_space() -> None:
+    """LLM-normalised single-space gaps should also be split when 3+ amounts."""
+    merged = (
+        "[A>If a Member's Creditable Service Is: The Amount Is: "
+        "At least 5 years, but less than 10 years $150 "
+        "At least 10 years, but less than 20 years $275 "
+        "At least 20 years, but less than 30 years $375 "
+        "At least 30 years $450<A]"
+    )
+    result = _split_in_merged_table_rows(merged)
+    lines = [l for l in result.split('\n') if l.strip()]
+    assert len(lines) >= 4, f"Expected at least 4 lines, got {len(lines)}: {lines}"
+    for line in lines:
+        dollars = re.findall(r'\$\d[\d,]*', line)
+        if dollars:
+            assert len(dollars) == 1, f"Expected 1 dollar amount per row, got {dollars} in: {line}"
+            assert f'[A>{dollars[0]}<A]' in line, (
+                f"Dollar amount should be in its own tag: {line}")
+
+
 def test_split_merged_table_rows_single_row() -> None:
     """A single table row with description + $amount should split into cell tags."""
     row = "[A>At least 5 years, but less than 10 years          $150<A]"
@@ -428,27 +448,43 @@ def test_ensure_in_item_spacing_already_spaced() -> None:
 # ---------------------------------------------------------------------------
 
 def test_split_midline_items_and() -> None:
-    """'; and (2)' mid-line should split onto a new line."""
+    """'; and (2)' inside a [D> tag should split with proper tag boundaries."""
     text = (
         "[D>(1) successfully passes the examination provided in "
         "section 12 of this chapter; and (2)<D] meets the requirements "
         "of section 8 of this chapter."
     )
     result = _split_in_midline_items(text)
-    lines = result.split('\n')
-    assert len(lines) == 2, f"Expected 2 lines, got {len(lines)}: {lines}"
-    assert lines[0].endswith("; and")
-    assert lines[1].startswith("(2)")
+    lines = [l for l in result.split('\n') if l.strip()]
+    assert len(lines) == 2, f"Expected 2 non-blank lines, got {len(lines)}: {lines}"
+    # First line: tag closed after "; and"
+    assert lines[0].endswith("; and<D]"), f"Expected tag close after '; and': {lines[0]}"
+    # Second line: tag re-opened before "(2)"
+    assert lines[1].startswith("[D>(2)<D]"), f"Expected tag re-open before (2): {lines[1]}"
 
 
 def test_split_midline_items_or() -> None:
-    """'; or (b)' mid-line should split onto a new line."""
+    """'; or (b)' mid-line without tags should split with just newline."""
     text = "fails to comply with subsection (a); or (b) makes a false statement."
     result = _split_in_midline_items(text)
-    lines = result.split('\n')
+    lines = [l for l in result.split('\n') if l.strip()]
     assert len(lines) == 2
     assert lines[0].endswith("; or")
     assert lines[1].startswith("(b)")
+
+
+def test_split_midline_items_tagged_add() -> None:
+    """'; and (2)' inside an [A> tag should also split correctly."""
+    text = (
+        "[A>(1) first requirement; and (2) second requirement; and "
+        "(3) third requirement.<A]"
+    )
+    result = _split_in_midline_items(text)
+    lines = [l for l in result.split('\n') if l.strip()]
+    assert len(lines) == 3, f"Expected 3 non-blank lines, got {len(lines)}: {lines}"
+    assert lines[0].endswith("; and<A]")
+    assert lines[1].startswith("[A>(2)")
+    assert lines[2].startswith("[A>(3)")
 
 
 def test_split_midline_items_no_false_positive() -> None:

@@ -3076,16 +3076,50 @@ def _split_in_midline_items(text: str) -> str:
 
     The LLM sometimes merges items like::
 
-        (1) passes the exam; and (2) meets requirements
+        [D>(1) passes the exam; and (2)<D] meets requirements
 
-    into a single line.  This function detects ``; and (N)`` or
-    ``; or (N)`` patterns and inserts a newline before ``(N)`` so each
-    item starts on its own line.  The subsequent
-    ``_ensure_in_item_spacing`` pass then adds the blank line.
+    into a single tagged line.  This function detects ``; and (N)`` or
+    ``; or (N)`` patterns and splits them onto separate lines **with
+    correct tag boundaries**::
+
+        [D>(1) passes the exam; and<D]
+
+        [D>(2)<D] meets requirements
+
+    Tag-aware: if the split point falls inside a ``[A>…<A]`` or
+    ``[D>…<D]`` tag, the tag is closed before the newline and re-opened
+    after it.
 
     Scoped to IN only by callers.
     """
-    result = _RE_IN_MIDLINE_ITEM.sub(r'\1\n\2', text)
+    def _tag_aware_replace(m: re.Match) -> str:
+        full = m.group(0)
+        conjunction = m.group(1)   # "; and" or "; or"
+        marker = m.group(2)        # "(2)"
+
+        # Find what position this match is at in the original text
+        pos = m.start()
+
+        # Look backwards for an unclosed [A> or [D> tag
+        text_before = text[:pos + len(conjunction)]
+        open_tag = None
+        for t in ('A', 'D'):
+            opener = f'[{t}>'
+            closer = f'<{t}]'
+            last_open = text_before.rfind(opener)
+            last_close = text_before.rfind(closer)
+            if last_open > last_close:
+                open_tag = t
+                break
+
+        if open_tag:
+            # Split point is inside a tag — close before, re-open after
+            return f'{conjunction}<{open_tag}]\n\n[{open_tag}>{marker}'
+        else:
+            # Not inside a tag — just insert newline
+            return f'{conjunction}\n{marker}'
+
+    result = _RE_IN_MIDLINE_ITEM.sub(_tag_aware_replace, text)
     if result != text:
         logger.debug("Split mid-line items at '; and/or (N)' boundaries in IN text")
     return result
@@ -5091,9 +5125,15 @@ def split_renumber_paragraph_breaks(text: str) -> str:
 # _split_in_merged_table_rows  (IN-specific deterministic safety net)
 # ---------------------------------------------------------------------------
 
-# Regex: a dollar amount followed by 2+ spaces before the next row text.
-_RE_TABLE_ROW_BOUNDARY = re.compile(
+# Regex: a dollar amount followed by spaces before the next row text.
+# Multi-space variant (preserved from PDF).
+_RE_TABLE_ROW_BOUNDARY_MULTI = re.compile(
     r'(\$\d[\d,]*)\s{2,}(?=[A-Z])'
+)
+# Single-space variant — only safe when the line has 3+ dollar amounts
+# (strong signal it's a merged table, not prose).
+_RE_TABLE_ROW_BOUNDARY_SINGLE = re.compile(
+    r'(\$\d[\d,]*)\s+(?=[A-Z])'
 )
 
 
@@ -5112,7 +5152,9 @@ def _split_in_merged_table_rows(text: str) -> str:
     This function fixes both:
 
     1. Tags with 3+ dollar amounts → re-split into separate rows.
-    2. ``[A>description   $150<A]`` → ``[A>description<A]  [A>$150<A]``.
+       Works with both multi-space AND single-space gaps (the LLM
+       often normalises whitespace to single spaces).
+    2. ``[A>description   $150<A]`` → ``[A>description<A>  [A>$150<A]``.
 
     Scoped to IN only by callers.
     """
@@ -5142,8 +5184,13 @@ def _split_in_merged_table_rows(text: str) -> str:
         dollar_count = len(re.findall(r'\$\d[\d,]*', content))
 
         if dollar_count >= 3:
-            # Merged table: split into rows, cell-tag each
-            parts = re.split(r'(\$\d[\d,]*)\s{2,}(?=[A-Z])', content)
+            # Merged table: split into rows, cell-tag each.
+            # Try multi-space first; fall back to single-space.
+            parts = re.split(_RE_TABLE_ROW_BOUNDARY_MULTI.pattern, content)
+            if len(parts) < 3:
+                # Multi-space didn't split — LLM normalised to single spaces
+                parts = re.split(_RE_TABLE_ROW_BOUNDARY_SINGLE.pattern, content)
+
             rows: list[tuple[str, str | None]] = []
             i = 0
             while i < len(parts) - 1:
@@ -5154,7 +5201,10 @@ def _split_in_merged_table_rows(text: str) -> str:
             # Trailing segment (last row whose $amount had nothing after)
             if i < len(parts):
                 last = parts[i].strip()
-                m = re.search(r'^(.*?)\s{3,}(\$\d[\d,.]*)$', last)
+                m = re.search(r'^(.*?)\s{2,}(\$\d[\d,.]*)$', last)
+                if not m:
+                    # Try single-space for the last cell too
+                    m = re.search(r'^(.*?)\s+(\$\d[\d,.]*)$', last)
                 if m:
                     rows.append((m.group(1).rstrip(), m.group(2)))
                 elif last:

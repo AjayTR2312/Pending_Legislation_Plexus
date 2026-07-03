@@ -31,11 +31,24 @@ class SessionManager:
             os.makedirs(base_sessions_dir, exist_ok=True)
             logging.info(f"✓ Session directory created/verified: {base_sessions_dir}")
             
-            # Test write permissions immediately
-            test_file = os.path.join(base_sessions_dir, ".write_test")
+            # Test write permissions immediately.
+            # Use a unique name to avoid OneDrive / antivirus lock
+            # collisions, and retry the delete in case the sync agent
+            # briefly holds the file open (WinError 32).
+            test_file = os.path.join(base_sessions_dir,
+                                     f".write_test_{os.getpid()}")
             with open(test_file, 'w') as f:
                 f.write("test")
-            os.remove(test_file)
+            for _attempt in range(5):
+                try:
+                    os.remove(test_file)
+                    break
+                except PermissionError:
+                    time.sleep(0.2)
+            else:
+                # Could not delete — not fatal, just warn
+                logging.warning(f"Could not remove write-test file "
+                                f"{test_file} (OneDrive lock?)")
             logging.info(f"✓ Write test successful in {base_sessions_dir}")
             
         except Exception as e:
