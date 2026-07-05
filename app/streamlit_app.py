@@ -2054,7 +2054,7 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
         add_log(f"✅ Visual conversion complete: {len(converted_text)} characters")
 
         # ── Step 4b: Deterministic cleanup of common Claude inconsistencies ─────
-        converted_text = opus.deterministic_cleanup(converted_text, state_config=state_config)
+        converted_text = opus.deterministic_cleanup(converted_text, state_config=state_config, state_code=detected_state)
         add_log("🔧 Deterministic cleanup complete (markdown→tags, malformed tags, etc.)")
 
         # ── Step 4c: Post-process — strip tags from protected clauses ────────────
@@ -3071,7 +3071,7 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
         add_log(f"✅ Hybrid conversion complete: {len(converted_text):,} characters")
 
         # Apply deterministic cleanup (same as visual mode)
-        converted_text = opus.deterministic_cleanup(converted_text, state_config=state_config)
+        converted_text = opus.deterministic_cleanup(converted_text, state_config=state_config, state_code=detected_state)
         add_log("🔧 Deterministic cleanup applied")
 
         # Strip protected clauses
@@ -4245,7 +4245,8 @@ def show_simple_ui():
 
                     # Scanned PDF gate
                     if detect_pdf_type is not None:
-                        pdf_analysis = detect_pdf_type(temp_path)
+                        with st.spinner(f"🔍 Analyzing **{uf.name}** — detecting document type..."):
+                            pdf_analysis = detect_pdf_type(temp_path)
                         if pdf_analysis and pdf_analysis['type'] == 'scanned':
                             logging.info(f"Skipped scanned PDF: {uf.name}")
                             try:
@@ -4346,43 +4347,74 @@ def show_simple_ui():
                     # Upload file using session manager
                     session_mgr = st.session_state.session_manager
 
-                    with st.spinner(f"Uploading {uploaded_file.name}..."):
+                    _scanned_detected = False
+                    temp_path = None
+                    with st.status(f"📄 Processing **{uploaded_file.name}**...", expanded=True) as _upload_status:
+                        st.write("📤 Uploading file...")
                         temp_path = session_mgr.upload_file(
                             st.session_state.session_id,
                             uploaded_file,
                             "AUTO"
                         )
 
-                    if temp_path:
-                        # ── Scanned PDF gate ──────────────────────────────────
-                        if detect_pdf_type is not None:
-                            with st.spinner("🔍 Analyzing PDF type (scanned vs digital)..."):
+                        if temp_path:
+                            # ── Scanned PDF gate ──────────────────────────────────
+                            if detect_pdf_type is not None:
+                                st.write("🔍 Analyzing PDF — detecting document type...")
                                 pdf_analysis = detect_pdf_type(temp_path)
-                            if pdf_analysis and pdf_analysis['type'] == 'scanned':
-                                st.info(
-                                    f"🛠️ **Scanned PDF Support — Coming Soon**\n\n"
-                                    f"The uploaded file **{uploaded_file.name}** appears to be a "
-                                    f"**scanned (image-based) PDF**.\n\n"
-                                    f"Support for scanned PDFs (with OCR) is currently under "
-                                    f"development and will be available in a future release. "
-                                    f"For now, please upload a **digital (text-based) PDF** to "
-                                    f"continue."
-                                )
-                                try:
-                                    os.remove(temp_path)
-                                except Exception:
-                                    pass
-                                st.session_state.temp_pdf_path = None
-                                st.session_state.last_uploaded_file_id = None
-                                st.stop()
-                        # ──────────────────────────────────────────────────────
+                                if pdf_analysis:
+                                    _pg = pdf_analysis.get('total_pages', '?')
+                                    _tp = pdf_analysis.get('type', 'unknown')
+                                    _tp_label = ('Digital (text-based)' if _tp == 'digital'
+                                                 else 'Hybrid (text + images)' if _tp == 'hybrid'
+                                                 else _tp.capitalize())
+                                    st.write(f"📊 **{_pg} pages** detected — Type: **{_tp_label}**")
+                                if pdf_analysis and pdf_analysis['type'] == 'scanned':
+                                    _upload_status.update(
+                                        label=f"⚠️ {uploaded_file.name} — Scanned PDF detected",
+                                        state="error", expanded=True)
+                                    _scanned_detected = True
+                                else:
+                                    _upload_status.update(
+                                        label=f"✅ {uploaded_file.name} — Ready to process",
+                                        state="complete", expanded=False)
+                            else:
+                                _upload_status.update(
+                                    label=f"✅ {uploaded_file.name} — Uploaded",
+                                    state="complete", expanded=False)
+                            # ──────────────────────────────────────────────────────
+                        else:
+                            _upload_status.update(
+                                label=f"❌ {uploaded_file.name} — Upload failed",
+                                state="error")
+                            st.error("❌ Failed to upload file - check logs for details")
+
+                    # Show scanned-PDF message outside the status container
+                    # so it remains clearly visible.
+                    if _scanned_detected:
+                        st.info(
+                            f"🛠️ **Scanned PDF Support — Coming Soon**\n\n"
+                            f"The uploaded file **{uploaded_file.name}** appears to be a "
+                            f"**scanned (image-based) PDF**.\n\n"
+                            f"Support for scanned PDFs (with OCR) is currently under "
+                            f"development and will be available in a future release. "
+                            f"For now, please upload a **digital (text-based) PDF** to "
+                            f"continue."
+                        )
+                        try:
+                            os.remove(temp_path)
+                        except Exception:
+                            pass
+                        st.session_state.temp_pdf_path = None
+                        st.session_state.last_uploaded_file_id = None
+                        st.stop()
+
+                    if temp_path:
                         st.session_state.temp_pdf_path = temp_path
                         st.session_state.last_uploaded_file_id = current_file_id
                         # No success banner — the slim processing pill
                         # (or the file-ready pill once processing finishes)
                         # makes the upload status implicit.
-                    else:
-                        st.error("❌ Failed to upload file - check logs for details")
                 except Exception as e:
                     st.error(f"❌ **File Upload Failed**")
                     st.error(f"Error: {str(e)}")
@@ -4777,13 +4809,12 @@ def show_results_section():
                     _clean_text = _txt_data.decode('utf-8', errors='replace') if isinstance(_txt_data, bytes) else _txt_data
                 _clean_lines = _clean_text.splitlines()
 
-                with st.spinner("Rendering PDF pages & mapping words…"):
-                    _images = compare_render_pdf_pages(_pdf_bytes)
+                with st.spinner("Extracting words & mapping…"):
                     _words = compare_extract_word_bboxes(_pdf_bytes)
                     _word_map = compare_build_word_level_map(_clean_lines, _words)
 
                 _viewer_html = compare_build_viewer_html(
-                    _images, _clean_lines, _word_map,
+                    _pdf_bytes, _clean_lines, _word_map,
                     filename=Path(_txt_path).name,
                 )
                 # ── Iframe height strategy ─────────────────────────
@@ -5275,7 +5306,7 @@ class BatchWorker:
 
         # Step 4b: Deterministic cleanup + Strip protected clauses
         try:
-            converted_text = opus.deterministic_cleanup(converted_text, state_config=state_config)
+            converted_text = opus.deterministic_cleanup(converted_text, state_config=state_config, state_code=detected_state)
             add_log("🔧 Deterministic cleanup complete (markdown→tags, malformed tags, etc.)")
         except Exception:
             pass

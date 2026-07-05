@@ -100,12 +100,39 @@ def _strip_tags(t: str) -> str:
 def build_word_level_map(
     clean_lines: List[str], word_infos: List[dict]
 ) -> Dict[str, dict]:
-    """Returns dict keyed by 'lineIdx_wordIdx' -> {page, x0, y0, x1, y1}."""
+    """Returns dict keyed by 'lineIdx_wordIdx' -> {page, x0, y0, x1, y1}.
+
+    Uses a two-phase search strategy so that reordered text files
+    (e.g. hybrid extraction that moves headers / boilerplate) still
+    get mapped correctly:
+
+      Phase 1 – Bidirectional local search around the cursor (fast).
+      Phase 2 – Global fallback using an inverted index when local
+                search fails (handles arbitrary reordering).
+    """
     pdf_words = [(re.sub(r"[^\w]", "", w["text"].lower()), w) for w in word_infos]
     pdf_texts = [pw[0] for pw in pdf_words]
 
+    # Inverted index: normalised word → list of positions in pdf_texts
+    word_index: Dict[str, List[int]] = {}
+    for i, t in enumerate(pdf_texts):
+        if t:
+            word_index.setdefault(t, []).append(i)
+
     mapping = {}
     cursor = 0
+
+    def _score_at(start: int, toks: list) -> int:
+        """Count how many *toks* match sequentially from *start*."""
+        n, pi = 0, start
+        for tok in toks:
+            span = min(10, len(pdf_texts) - pi)
+            for off in range(span):
+                if pdf_texts[pi + off] == tok:
+                    n += 1
+                    pi = pi + off + 1
+                    break
+        return n
 
     for li, raw in enumerate(clean_lines):
         stripped = _strip_tags(raw).strip()
@@ -118,20 +145,41 @@ def build_word_level_map(
             continue
 
         best_pos, best_n = -1, 0
-        for start in range(cursor, min(cursor + 2000, len(pdf_texts))):
-            n, pi = 0, start
-            for tok in tokens:
-                for off in range(min(8, len(pdf_texts) - pi)):
-                    if pi + off < len(pdf_texts) and pdf_texts[pi + off] == tok:
-                        n += 1
-                        pi = pi + off + 1
-                        break
+        threshold_good = max(1, int(len(tokens) * 0.7))
+        threshold_min  = max(1, int(len(tokens) * 0.3))
+
+        # Phase 1 – bidirectional local search around cursor
+        local_lo = max(0, cursor - 500)
+        local_hi = min(cursor + 2000, len(pdf_texts))
+        for start in range(local_lo, local_hi):
+            n = _score_at(start, tokens)
             if n > best_n:
                 best_n, best_pos = n, start
-            if best_n >= len(tokens) * 0.7:
+            if best_n >= threshold_good:
                 break
 
-        if best_pos >= 0 and best_n >= max(1, len(tokens) * 0.3):
+        # Phase 2 – global fallback via inverted index
+        if best_n < threshold_min:
+            # Pick the rarest token as anchor so we check fewer candidates
+            best_anchor, min_freq = None, float('inf')
+            for t in tokens:
+                freq = len(word_index.get(t, []))
+                if 0 < freq < min_freq:
+                    min_freq = freq
+                    best_anchor = t
+            if best_anchor:
+                cands = sorted(word_index[best_anchor],
+                               key=lambda p: abs(p - cursor))
+                for start in cands[:80]:
+                    if local_lo <= start < local_hi:
+                        continue            # already scored in phase 1
+                    n = _score_at(start, tokens)
+                    if n > best_n:
+                        best_n, best_pos = n, start
+                    if best_n >= threshold_good:
+                        break
+
+        if best_pos >= 0 and best_n >= threshold_min:
             orig_words = raw.split(' ')
             vis_idx = 0
             pi = best_pos
@@ -141,8 +189,8 @@ def build_word_level_map(
                 if not norm_w:
                     continue
                 if vis_idx < len(tokens):
-                    for off in range(min(8, len(pdf_texts) - pi)):
-                        if pi + off < len(pdf_texts) and pdf_texts[pi + off] == norm_w:
+                    for off in range(min(10, len(pdf_texts) - pi)):
+                        if pdf_texts[pi + off] == norm_w:
                             pw = pdf_words[pi + off][1]
                             mapping["{}_{}".format(li, ow_idx)] = {
                                 "page": pw["page"],
@@ -152,7 +200,7 @@ def build_word_level_map(
                             pi = pi + off + 1
                             break
                     vis_idx += 1
-            cursor = pi  # advance past matched PDF words
+            cursor = pi  # advance — allows jumps for reordered text
 
     return mapping
 
@@ -223,7 +271,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,san
              page-ctr grows past the panel and panel's overflow:auto
              provides a horizontal scrollbar.                          */
           margin-left:auto;margin-right:auto}
-.page-ctr img{width:100%;display:block}
+.page-ctr canvas{width:100%;display:block}
 .page-lbl{text-align:center;font-size:10px;color:var(--text2);padding:4px 0;
            background:var(--surface);border-bottom:1px solid var(--border)}
 
@@ -236,6 +284,21 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,san
 
 .cz{position:absolute;cursor:pointer;z-index:4;border:1px solid transparent;transition:all .12s}
 .cz:hover{border-color:rgba(9,105,218,.3);background:rgba(9,105,218,.06)}
+
+/* PDF.js native text layer */
+.pdf-text-layer{
+  position:absolute;left:0;right:0;
+  z-index:6;overflow:hidden;
+  user-select:text;-webkit-user-select:text;
+  transform-origin:0 0;
+  line-height:1;
+}
+.pdf-text-layer span,.pdf-text-layer br{
+  color:transparent;position:absolute;white-space:pre;cursor:text;
+  transform-origin:0% 0%;
+}
+.pdf-text-layer span::selection{background:rgba(9,105,218,.35)}
+.pdf-text-layer span::-moz-selection{background:rgba(9,105,218,.35)}
 
 .text-wrap{padding:0;min-height:calc(100dvh - 90px);background:var(--bg)}
 .tl{
@@ -340,6 +403,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,san
 ::-webkit-scrollbar-thumb{background:#c1c8ce;border-radius:4px}
 ::-webkit-scrollbar-thumb:hover{background:#9ca3ab}
 </style>
+<script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
 </head>
 <body>
 
@@ -387,21 +451,77 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,san
 </div>
 
 <script>
-var pageImages=[__IMGS_JS__];
 var wordMap=__WORDMAP_JS__;
-var S=__SCALE__;
+var S=1; // will be set after PDF.js renders
 var originalLines=__LINES_JS__;
 var changeLines=__CHANGELINES_JS__;
 var diffsCount=0;
+var _pageCount=__PAGE_COUNT__;
 
-// Build PDF pages
+// Build PDF pages — containers first (sync), then render with PDF.js (async)
 var wrap=document.getElementById('pdfWrap'),containers=[];
-pageImages.forEach(function(b64,idx){
-  var c=document.createElement('div');c.className='page-ctr';c.id='pg_'+idx;
-  var l=document.createElement('div');l.className='page-lbl';l.textContent='Page '+(idx+1);
-  var i=document.createElement('img');i.src='data:image/png;base64,'+b64;i.id='img_'+idx;
-  c.appendChild(l);c.appendChild(i);wrap.appendChild(c);containers.push(c);
-});
+for(var _pi=0;_pi<_pageCount;_pi++){
+  var c=document.createElement('div');c.className='page-ctr';c.id='pg_'+_pi;
+  var l=document.createElement('div');l.className='page-lbl';l.textContent='Page '+(_pi+1);
+  var cv=document.createElement('canvas');cv.id='cv_'+_pi;cv.style.width='100%';cv.style.display='block';
+  var tld=document.createElement('div');tld.className='pdf-text-layer';tld.id='tl_'+_pi;
+  c.appendChild(l);c.appendChild(cv);c.appendChild(tld);
+  wrap.appendChild(c);containers.push(c);
+}
+
+// PDF.js async rendering
+var _pdfB64='__PDF_B64__';
+pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+var _renderScale=Math.max(2,window.devicePixelRatio||2);
+S=_renderScale;
+
+(function renderPdfPages(){
+  var raw=atob(_pdfB64);
+  var arr=new Uint8Array(raw.length);
+  for(var i=0;i<raw.length;i++)arr[i]=raw.charCodeAt(i);
+  pdfjsLib.getDocument({data:arr}).promise.then(function(pdfDoc){
+    var promises=[];
+    for(var p=0;p<pdfDoc.numPages;p++){
+      (function(idx){
+        promises.push(pdfDoc.getPage(idx+1).then(function(page){
+          var vp=page.getViewport({scale:_renderScale});
+          var cv=document.getElementById('cv_'+idx);
+          cv.width=vp.width;cv.height=vp.height;
+          return page.render({canvasContext:cv.getContext('2d'),viewport:vp}).promise.then(function(){
+            return page.getTextContent();
+          }).then(function(tc){
+            var tld=document.getElementById('tl_'+idx);
+            tld.style.width=vp.width+'px';tld.style.height=vp.height+'px';
+            tld.style.top=cv.offsetTop+'px';
+            // Scale text layer to match displayed canvas size
+            var scaleFactor=cv.clientWidth/vp.width;
+            tld.style.transform='scale('+scaleFactor+')';
+            pdfjsLib.renderTextLayer({textContent:tc,container:tld,viewport:vp,enhanceTextSelection:true});
+          });
+        }));
+      })(p);
+    }
+    Promise.all(promises).then(function(){
+      // All pages rendered — build overlays
+      syncTextLayers();
+      rebuildPdfOverlays();
+    });
+  }).catch(function(err){
+    document.getElementById('statBar').textContent='\u26a0\ufe0f PDF render failed: '+err.message;
+    document.getElementById('statBar').style.color='#cf222e';
+  });
+})();
+
+// Sync text layer scale+position to match canvas display size
+function syncTextLayers(){
+  containers.forEach(function(ctr,idx){
+    var cv=ctr.querySelector('canvas');if(!cv)return;
+    var tld=ctr.querySelector('.pdf-text-layer');if(!tld)return;
+    tld.style.top=cv.offsetTop+'px';
+    var scaleFactor=cv.clientWidth/cv.width;
+    tld.style.transform='scale('+scaleFactor+')';
+  });
+}
 
 // Recompute and mark changed lines
 function refreshChangeMeta(){
@@ -419,6 +539,22 @@ function refreshChangeMeta(){
 }
 refreshChangeMeta();
 
+// Safe scroll — only scrolls the given panel, not the parent iframe or sibling panels.
+// scrollIntoView() scrolls ALL scrollable ancestors which causes the PDF panel to
+// jump when we intend to scroll only the text panel (and vice-versa).
+function scrollElIntoPanel(el, panel, block){
+  if(!el||!panel) return;
+  var elRect=el.getBoundingClientRect();
+  var panelRect=panel.getBoundingClientRect();
+  var offset;
+  if(block==='start'){
+    offset=elRect.top - panelRect.top + panel.scrollTop;
+  } else { // 'center'
+    offset=elRect.top - panelRect.top + panel.scrollTop - (panel.clientHeight/2) + (el.clientHeight/2);
+  }
+  panel.scrollTo({top:Math.max(0,offset),behavior:'smooth'});
+}
+
 // Diff navigation
 var currentDiffIdx=-1;
 function navDiff(dir){
@@ -432,7 +568,7 @@ function navDiff(dir){
   var tl=document.querySelector('.tl[data-li="'+li+'"]');
   if(tl){
     tl.classList.add('active');
-    tl.scrollIntoView({behavior:'smooth',block:'center'});
+    scrollElIntoPanel(tl, document.getElementById('textPanel'), 'center');
     // Also highlight on PDF
     tl.querySelectorAll('.tw').forEach(function(t){
       t.classList.add('sel');
@@ -445,7 +581,7 @@ function navDiff(dir){
 }
 
 // Page nav
-var totalPages=pageImages.length;
+var totalPages=_pageCount;
 document.getElementById('pageLbl').textContent='1 / '+totalPages;
 var pdfPanel=document.getElementById('pdfPanel');
 pdfPanel.addEventListener('scroll',function(){
@@ -457,32 +593,25 @@ pdfPanel.addEventListener('scroll',function(){
 function navPage(dir){
   var cur=parseInt(document.getElementById('pageLbl').textContent.split('/')[0].trim())-1;
   var next=Math.max(0,Math.min(totalPages-1,cur+dir));
-  containers[next].scrollIntoView({behavior:'smooth',block:'start'});
+  scrollElIntoPanel(containers[next], document.getElementById('pdfPanel'), 'start');
 }
 
 // Zoom
 var zoomLevel=0; // 0=fit, else percentage steps
 var zoomSteps=[50,75,100,125,150,200];
 function zoomPdf(dir){
-  var imgs=document.querySelectorAll('.page-ctr img');
-  var containers=document.querySelectorAll('.page-ctr');
+  var cvs=document.querySelectorAll('.page-ctr canvas');
+  var allCtrs=document.querySelectorAll('.page-ctr');
   var panel=document.getElementById('pdfPanel');
-  // The "Fit" baseline is the panel's inner width (minus the 10px
-  // .pdf-wrap padding on each side).  Zooming N% means the page-ctr
-  // becomes (panelInnerWidth * N/100) pixels wide.  Using PIXEL widths
-  // on .page-ctr (instead of % on .img) lets the panel grow horizontally
-  // beyond its own width, which engages overflow:auto's horizontal
-  // scrollbar so the user can scroll right to see the clipped edge.
   var panelInner = panel ? Math.max(100, panel.clientWidth - 20) : 800;
 
   if(dir===0){
-    // FIT — clear pixel widths, image fills page-ctr at 100% of panel
     zoomLevel=0;
-    containers.forEach(function(c){
+    allCtrs.forEach(function(c){
       c.style.width='';
       c.style.maxWidth='100%';
     });
-    imgs.forEach(function(img){img.style.width='100%';});
+    cvs.forEach(function(cv){cv.style.width='100%';});
     document.getElementById('zoomLbl').textContent='Fit';
   } else {
     if(zoomLevel===0)zoomLevel=100;
@@ -491,14 +620,14 @@ function zoomPdf(dir){
     idx=Math.max(0,Math.min(zoomSteps.length-1,idx+dir));
     zoomLevel=zoomSteps[idx];
     var targetPx = Math.round(panelInner * zoomLevel / 100);
-    containers.forEach(function(c){
+    allCtrs.forEach(function(c){
       c.style.width = targetPx + 'px';
       c.style.maxWidth = 'none';
     });
-    imgs.forEach(function(img){img.style.width='100%';});
+    cvs.forEach(function(cv){cv.style.width='100%';});
     document.getElementById('zoomLbl').textContent=zoomLevel+'%';
   }
-  setTimeout(function(){clearHL();buildZones();},200);
+  setTimeout(function(){clearHL();syncTextLayers();rebuildPdfOverlays();},200);
 }
 
 // Focus on changes
@@ -551,30 +680,47 @@ function toggleCollapse(on){
 var lg={};
 Object.keys(wordMap).forEach(function(k){var li=k.split('_')[0];if(!lg[li])lg[li]=[];lg[li].push(wordMap[k]);});
 
+// Show mapping diagnostic in stat bar
+(function(){
+  var totalTw=document.querySelectorAll('.tw').length;
+  var mappedKeys=Object.keys(wordMap).length;
+  var mappedLines=Object.keys(lg).length;
+  if(totalTw>0 && mappedKeys===0){
+    document.getElementById('statBar').textContent='⚠️ No word mappings — PDF↔Text linking unavailable';
+    document.getElementById('statBar').style.color='#cf222e';
+  } else if(mappedKeys>0){
+    document.getElementById('statBar').textContent=
+        'PDF → Line '+mappedLines+' lines, '+mappedKeys+' words mapped';
+  }
+})();
+
 function buildZones(){
   document.querySelectorAll('.cz').forEach(function(z){z.remove();});
   Object.keys(lg).forEach(function(li){
-    var ws=lg[li],pg=ws[0].page,ctr=containers[pg],img=ctr.querySelector('img');
-    if(!img||!img.naturalWidth)return;
-    var ds=img.clientWidth/img.naturalWidth;
+    var ws=lg[li],pg=ws[0].page,ctr=containers[pg],cv=ctr.querySelector('canvas');
+    if(!cv||!cv.width)return;
+    var ds=cv.clientWidth/cv.width;
     var x0=1e9,y0=1e9,x1=0,y1=0;
     ws.forEach(function(w){if(w.x0<x0)x0=w.x0;if(w.y0<y0)y0=w.y0;if(w.x1>x1)x1=w.x1;if(w.y1>y1)y1=w.y1;});
     var z=document.createElement('div');z.className='cz';
-    z.style.left=(x0*S*ds)+'px';z.style.top=(y0*S*ds+img.offsetTop)+'px';
+    z.style.left=(x0*S*ds)+'px';z.style.top=(y0*S*ds+cv.offsetTop)+'px';
     z.style.width=((x1-x0)*S*ds)+'px';z.style.height=((y1-y0)*S*ds)+'px';
     z.onclick=function(){clickPdfLine(parseInt(li));};
     ctr.appendChild(z);
   });
 }
-var fi=document.querySelector('.page-ctr img');
-if(fi){if(fi.complete)setTimeout(buildZones,100);else fi.onload=function(){setTimeout(buildZones,100);};}
-window.addEventListener('resize',function(){clearHL();buildZones();});
+function rebuildPdfOverlays(){
+  buildZones();
+}
+// PDF.js renders text layers once; on resize we just re-sync transforms
+window.addEventListener('resize',function(){clearHL();syncTextLayers();rebuildPdfOverlays();});
 
 // Highlights
 var hlEls=[];
 function clearHL(){
   document.querySelectorAll('.tw.sel').forEach(function(e){e.classList.remove('sel');});
   document.querySelectorAll('.tl.active').forEach(function(e){e.classList.remove('active');});
+  // (PDF.js text layer selection is native — no custom psel class needed)
   hlEls.forEach(function(e){e.remove();});hlEls=[];
 }
 function hlWord(wd,lineKey){
@@ -600,25 +746,123 @@ function flushHL(){
   // Draw merged rects
   Object.keys(groups).forEach(function(gk){
     var r=groups[gk];
-    var ctr=containers[r.page],img=ctr.querySelector('img');if(!img)return;
-    var ds=img.clientWidth/img.naturalWidth;
+    var ctr=containers[r.page],cv=ctr.querySelector('canvas');if(!cv)return;
+    var ds=cv.clientWidth/cv.width;
     var el=document.createElement('div');el.className='hl-overlay';
-    el.style.left=(r.x0*S*ds)+'px';el.style.top=(r.y0*S*ds+img.offsetTop)+'px';
+    el.style.left=(r.x0*S*ds)+'px';el.style.top=(r.y0*S*ds+cv.offsetTop)+'px';
     el.style.width=((r.x1-r.x0)*S*ds)+'px';el.style.height=((r.y1-r.y0)*S*ds)+'px';
     ctr.appendChild(el);hlEls.push(el);
   });
   hlQueue=[];
 }
 function scrollPdf(wd){
-  var ctr=containers[wd.page],img=ctr.querySelector('img');if(!img)return;
-  var ds=img.clientWidth/img.naturalWidth;
-  document.getElementById('pdfPanel').scrollTo({top:ctr.offsetTop+wd.y0*S*ds-120,behavior:'smooth'});
+  var ctr=containers[wd.page],cv=ctr.querySelector('canvas');if(!cv)return;
+  var ds=cv.clientWidth/cv.width;
+  var targetY=ctr.offsetTop+wd.y0*S*ds+cv.offsetTop;
+  var pdfPanel=document.getElementById('pdfPanel');
+  // Centre the target in the panel viewport
+  pdfPanel.scrollTo({top:Math.max(0,targetY - pdfPanel.clientHeight/3),behavior:'smooth'});
 }
 
 // Clear highlights when clicking empty area
 document.getElementById('pdfPanel').addEventListener('mousedown',function(e){
-  if(!e.target.closest('.cz'))clearHL();
+  if(!e.target.closest('.cz') && !e.target.closest('.pdf-text-layer'))clearHL();
 });
+
+// ── PDF text-layer selection → bidirectional highlight ──────────────
+// PDF.js native text layer provides real text selection.  On mouseup we
+// match the selected text back to our wordMap for bidirectional linking.
+document.getElementById('pdfPanel').addEventListener('mouseup',function(e){
+  if(!e.target.closest('.pdf-text-layer'))return;
+  setTimeout(function(){
+    var sel=window.getSelection();
+    if(!sel||!sel.rangeCount)return;
+    clearHL();
+    if(sel.isCollapsed){
+      // Single click — find the closest wordMap entry by position
+      var sp=e.target.closest('.pdf-text-layer span');
+      if(sp){
+        var pgIdx=_findPageOfTextLayerSpan(sp);
+        var bestLi=_findClosestLine(sp,pgIdx);
+        if(bestLi>=0) clickPdfLine(bestLi);
+      }
+      return;
+    }
+    // Range selection — find PDF.js text spans that intersect
+    var range=sel.getRangeAt(0);
+    var allSp=document.querySelectorAll('.pdf-text-layer span');
+    var lineSet={},n=0,firstWd=null;
+    allSp.forEach(function(sp){
+      if(!range.intersectsNode(sp))return;
+      var pgIdx=_findPageOfTextLayerSpan(sp);
+      var bestLi=_findClosestLine(sp,pgIdx);
+      if(bestLi>=0){
+        lineSet[bestLi]=true;
+        // Highlight matching words on PDF overlay
+        var keys=Object.keys(wordMap);
+        for(var ki=0;ki<keys.length;ki++){
+          var k=keys[ki];
+          if(parseInt(k.split('_')[0])===bestLi){
+            var wd=wordMap[k];
+            if(wd.page===pgIdx){hlWord(wd,''+bestLi);n++;if(!firstWd)firstWd=wd;}
+          }
+        }
+      }
+    });
+    flushHL();
+    // Highlight corresponding text lines
+    var lineKeys=Object.keys(lineSet);
+    lineKeys.forEach(function(li){
+      var tl=document.querySelector('.tl[data-li="'+li+'"]');
+      if(tl){
+        tl.classList.add('active');
+        tl.querySelectorAll('.tw').forEach(function(tw){tw.classList.add('sel');});
+      }
+    });
+    if(lineKeys.length>0){
+      var firstLi=Math.min.apply(null,lineKeys.map(Number));
+      var firstTl=document.querySelector('.tl[data-li="'+firstLi+'"]');
+      if(firstTl)scrollElIntoPanel(firstTl,document.getElementById('textPanel'),'center');
+      document.getElementById('statBar').textContent=
+        'PDF selection \u2192 '+lineKeys.length+' line(s)  (Ctrl+C to copy)';
+    }
+  },10);
+});
+
+// Helper: find which page index a text-layer span belongs to
+function _findPageOfTextLayerSpan(sp){
+  var layer=sp.closest('.pdf-text-layer');
+  if(!layer)return 0;
+  var ctr=layer.closest('.page-ctr');
+  for(var i=0;i<containers.length;i++){if(containers[i]===ctr)return i;}
+  return 0;
+}
+
+// Helper: given a PDF.js text span and page, find the closest text line via
+// the wordMap by comparing the span's vertical position to mapped word y-coords
+function _findClosestLine(sp,pgIdx){
+  // Get span's position relative to the page in PDF point coordinates
+  var ctr=containers[pgIdx];if(!ctr)return -1;
+  var cv=ctr.querySelector('canvas');if(!cv||!cv.width)return -1;
+  var ds=cv.clientWidth/cv.width;
+  var spRect=sp.getBoundingClientRect();
+  var ctrRect=cv.getBoundingClientRect();
+  // Convert display pixels back to PDF points
+  var pdfY=((spRect.top-ctrRect.top)/ds)/S;
+  var pdfX=((spRect.left-ctrRect.left)/ds)/S;
+  // Search wordMap for closest match on this page
+  var bestLi=-1,bestDist=1e9;
+  var keys=Object.keys(lg);
+  for(var i=0;i<keys.length;i++){
+    var li=keys[i],ws=lg[li];
+    if(ws[0].page!==pgIdx)continue;
+    for(var j=0;j<ws.length;j++){
+      var dy=Math.abs(ws[j].y0-pdfY);
+      if(dy<bestDist){bestDist=dy;bestLi=parseInt(li);}
+    }
+  }
+  return bestDist<30?bestLi:-1;
+}
 
 // Native text selection → PDF highlight
 document.getElementById('textWrap').addEventListener('mouseup',function(){
@@ -657,7 +901,7 @@ function highlightFromSelection(){
 function clickPdfLine(li){
   clearHL();
   var tl=document.querySelector('.tl[data-li="'+li+'"]');
-  if(tl){tl.classList.add('active');tl.scrollIntoView({behavior:'smooth',block:'center'});
+  if(tl){tl.classList.add('active');scrollElIntoPanel(tl, document.getElementById('textPanel'), 'center');
     tl.querySelectorAll('.tw').forEach(function(t){
       t.classList.add('sel');var k=t.dataset.li+'_'+t.dataset.wi,wd=wordMap[k];if(wd)hlWord(wd,t.dataset.li);
     });
@@ -673,6 +917,35 @@ function scheduleAutoApply(){
   document.getElementById('statBar').textContent='Editing…';
   autoApplyTimer=setTimeout(function(){applyInlineEdits();},700);
 }
+
+// ── Undo / Redo history ─────────────────────────────────────────────
+// The browser's native Ctrl+Z doesn't work because applyInlineEdits()
+// rebuilds the DOM (innerHTML) on every edit, destroying the undo stack.
+// We maintain our own snapshot history of originalLines.
+var undoStack=[];   // past states (newest last)
+var redoStack=[];   // future states after undo
+var MAX_UNDO=100;
+function _linesSnapshot(){ return originalLines.map(function(l){return l;}); }
+function pushUndo(){
+  undoStack.push(_linesSnapshot());
+  if(undoStack.length>MAX_UNDO) undoStack.shift();
+  redoStack=[];  // new edit clears redo
+}
+function doUndo(){
+  if(!undoStack.length){document.getElementById('statBar').textContent='Nothing to undo';return;}
+  redoStack.push(_linesSnapshot());
+  originalLines=undoStack.pop();
+  rebuildEditor(true);
+  document.getElementById('statBar').textContent='↩ Undo ('+undoStack.length+' left)';
+}
+function doRedo(){
+  if(!redoStack.length){document.getElementById('statBar').textContent='Nothing to redo';return;}
+  undoStack.push(_linesSnapshot());
+  originalLines=redoStack.pop();
+  rebuildEditor(true);
+  document.getElementById('statBar').textContent='↪ Redo ('+redoStack.length+' left)';
+}
+
 function enableInlineEditing(){
   var tw=document.getElementById('textWrap');
   tw.classList.add('editing');
@@ -704,6 +977,14 @@ function enableInlineEditing(){
   // line-based data model.
   if(!tw._keyBound){
     tw.addEventListener('keydown',function(e){
+      // Undo — Ctrl+Z
+      if((e.ctrlKey||e.metaKey) && !e.shiftKey && e.key==='z'){
+        e.preventDefault(); doUndo(); return;
+      }
+      // Redo — Ctrl+Y or Ctrl+Shift+Z
+      if((e.ctrlKey||e.metaKey) && (e.key==='y' || (e.shiftKey && e.key==='Z') || (e.shiftKey && e.key==='z'))){
+        e.preventDefault(); doRedo(); return;
+      }
       // Enter — split line at caret
       if(e.key==='Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey){
         e.preventDefault();
@@ -734,6 +1015,29 @@ function enableInlineEditing(){
     });
     tw._keyBound=true;
   }
+  // ── Paste interception ────────────────────────────────────────────
+  // Insert pasted content as PLAIN TEXT only (strip HTML / rich
+  // formatting) so it doesn't inject stray DOM nodes into our
+  // line-based structure.  Triggers auto-apply so edits are saved.
+  if(!tw._pasteBound){
+    tw.addEventListener('paste',function(e){
+      e.preventDefault();
+      var text=(e.clipboardData||window.clipboardData).getData('text/plain');
+      if(!text)return;
+      // Insert at caret position
+      var sel=window.getSelection();
+      if(!sel||!sel.rangeCount)return;
+      var range=sel.getRangeAt(0);
+      range.deleteContents();
+      range.insertNode(document.createTextNode(text));
+      // Move caret to end of inserted text
+      range.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(range);
+      scheduleAutoApply();
+    });
+    tw._pasteBound=true;
+  }
   // ── Selection-change tracking for active line highlight ───────────
   // With parent contentEditable the per-line `focusin` doesn't fire on
   // every caret move, so we listen to selectionchange globally and
@@ -754,7 +1058,28 @@ function enableInlineEditing(){
   }
 }
 function applyInlineEdits(){
+  pushUndo();
   var tw=document.getElementById('textWrap');
+
+  // ── Save cursor position before rebuild ──────────────────────────
+  var savedLi=-1, savedOff=0;
+  var sel=window.getSelection();
+  if(sel && sel.rangeCount && sel.isCollapsed){
+    var range=sel.getRangeAt(0);
+    var lc=range.startContainer;
+    while(lc && !(lc.classList && lc.classList.contains('lc'))) lc=lc.parentNode;
+    if(lc){
+      var tl=lc.closest('.tl');
+      if(tl){
+        savedLi=parseInt(tl.dataset.li);
+        savedOff=getTextOffset(lc, range.startContainer, range.startOffset);
+      }
+    }
+  }
+
+  var panel=document.getElementById('textPanel');
+  var scrollTop=panel?panel.scrollTop:0;
+
   var lines=[];
   tw.querySelectorAll('.tl').forEach(function(tl){
     var lc=tl.querySelector('.lc');
@@ -766,6 +1091,21 @@ function applyInlineEdits(){
   enableInlineEditing();
   if(document.getElementById('focusCb').checked)toggleFocus(true);
   if(document.getElementById('collapseCb').checked)toggleCollapse(true);
+
+  // ── Restore cursor position after rebuild ────────────────────────
+  if(panel)panel.scrollTop=scrollTop;
+  if(savedLi>=0 && savedLi<originalLines.length){
+    var restoredTl=document.querySelector('.tl[data-li="'+savedLi+'"]');
+    if(restoredTl){
+      setActiveLine(restoredTl);
+      var restoredLc=restoredTl.querySelector('.lc');
+      if(restoredLc){
+        restoredLc.focus({preventScroll:true});
+        placeCursorAtOffset(restoredLc, Math.min(savedOff, (restoredLc.textContent||'').length));
+      }
+    }
+  }
+
   document.getElementById('statBar').textContent='✅ Auto-updated';
 }
 enableInlineEditing();
@@ -1580,15 +1920,49 @@ function mergeWithPrevious(){
 }
 
 // ── Rebuild editor after split/merge ────────────────────────
-function rebuildEditor(){
+function rebuildEditor(skipUndo, restoreLi, restoreOff){
+  if(!skipUndo) pushUndo();
   var tw=document.getElementById('textWrap');
   var panel=document.getElementById('textPanel');
   var scrollTop=panel?panel.scrollTop:0;
+
+  // ── Save cursor if caller didn't specify a restore point ────────
+  var savedLi=restoreLi, savedOff=restoreOff;
+  if(savedLi===undefined || savedLi===null || savedLi<0){
+    savedLi=-1; savedOff=0;
+    var sel=window.getSelection();
+    if(sel && sel.rangeCount && sel.isCollapsed){
+      var range=sel.getRangeAt(0);
+      var lc=range.startContainer;
+      while(lc && !(lc.classList && lc.classList.contains('lc'))) lc=lc.parentNode;
+      if(lc){
+        var tl=lc.closest('.tl');
+        if(tl){
+          savedLi=parseInt(tl.dataset.li);
+          savedOff=getTextOffset(lc, range.startContainer, range.startOffset);
+        }
+      }
+    }
+  }
+
   tw.innerHTML=renderLinesWithTags(originalLines);
   refreshChangeMeta();enableInlineEditing();buildTagIndices();
   if(document.getElementById('focusCb').checked)toggleFocus(true);
   if(document.getElementById('collapseCb').checked)toggleCollapse(true);
   if(panel)panel.scrollTop=scrollTop;
+
+  // ── Restore cursor ─────────────────────────────────────────────
+  if(savedLi>=0 && savedLi<originalLines.length){
+    var restoredTl=document.querySelector('.tl[data-li="'+savedLi+'"]');
+    if(restoredTl){
+      setActiveLine(restoredTl);
+      var restoredLc=restoredTl.querySelector('.lc');
+      if(restoredLc){
+        restoredLc.focus({preventScroll:true});
+        placeCursorAtOffset(restoredLc, Math.min(savedOff>=0?savedOff:0, (restoredLc.textContent||'').length));
+      }
+    }
+  }
 }
 
 // ── Enhanced keyboard: Enter=tag-aware split, Backspace@0=simple merge ──
@@ -1786,13 +2160,31 @@ def _split_at_tags(word: str) -> list:
 
 
 def build_viewer_html(
-    pdf_images_b64: List[str],
+    pdf_bytes_or_images,
     clean_lines: List[str],
     word_map: Dict[str, dict],
     dpi: int = PDF_RENDER_DPI,
     filename: str = "edited_clean.txt",
+    pdf_bytes: bytes = None,
 ) -> str:
     scale = dpi / 72.0
+
+    # Support both old (list of base64 images) and new (raw pdf_bytes) API
+    if pdf_bytes is None:
+        if isinstance(pdf_bytes_or_images, bytes):
+            pdf_bytes = pdf_bytes_or_images
+        else:
+            # Legacy: caller passed list of images — we need pdf_bytes for PDF.js
+            # This shouldn't happen with updated call sites but just in case,
+            # fall back gracefully (caller must update).
+            raise ValueError("build_viewer_html now requires pdf_bytes (raw PDF bytes)")
+    
+    # Compute page count from PDF
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    page_count = len(doc)
+    doc.close()
+    
+    pdf_b64 = base64.b64encode(pdf_bytes).decode()
 
     text_lines_html = []
     in_add = False
@@ -1864,7 +2256,6 @@ def build_viewer_html(
         )
 
     text_block = "\n".join(text_lines_html)
-    imgs_js = ",".join('"' + b + '"' for b in pdf_images_b64)
     wordmap_js = json.dumps(word_map)
     lines_js = json.dumps(clean_lines)
 
@@ -1877,10 +2268,10 @@ def build_viewer_html(
 
     return (_TEMPLATE
             .replace("__TEXT_BLOCK__", text_block)
-            .replace("__IMGS_JS__", imgs_js)
+            .replace("__PDF_B64__", pdf_b64)
+            .replace("__PAGE_COUNT__", str(page_count))
             .replace("__WORDMAP_JS__", wordmap_js)
             .replace("__LINES_JS__", lines_js)
-            .replace("__SCALE__", str(scale))
             .replace("__FILENAME__", filename)
             .replace("__CHANGELINES_JS__", json.dumps(change_lines)))
 
@@ -1951,8 +2342,7 @@ def main():
     clean_text = txt_file.read().decode("utf-8", errors="replace")
     clean_lines = clean_text.splitlines()
 
-    with st.spinner("Rendering pages & mapping words…"):
-        images = render_pdf_pages(pdf_bytes)
+    with st.spinner("Extracting words & mapping…"):
         words = extract_word_bboxes(pdf_bytes)
 
     # --- Edit mode via session state ---
@@ -1968,7 +2358,7 @@ def main():
     with st.spinner("Mapping words…"):
         word_map = build_word_level_map(display_lines, words)
 
-    html = build_viewer_html(images, display_lines, word_map, filename=txt_file.name)
+    html = build_viewer_html(pdf_bytes, display_lines, word_map, filename=txt_file.name)
     st.components.v1.html(html, height=920, scrolling=False)
 
 

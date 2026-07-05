@@ -90,6 +90,8 @@ try:
         rejoin_amendment_intro_breaks,
         rejoin_inline_renumber_list_breaks,
         _split_merged_grant_tag_rows,
+        _split_tabular_tag_at_dollar,
+        _split_tabular_header_from_data,
     )
     _HAS_PYMUPDF = True
 except ImportError:
@@ -1346,7 +1348,7 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         active = [k.replace("mark_", "") for k, v in flags.items() if v and k.startswith("mark_")]
         logging.info(f"   Detecting formats: {', '.join(active) if active else 'none'}")
 
-        raw_text = extract_pdf_with_pymupdf(pdf_path, join_pages=True, **flags)
+        raw_text = extract_pdf_with_pymupdf(pdf_path, join_pages=True, state_code=state_code, **flags)
         if not raw_text or len(raw_text.strip()) < 50:
             logging.error("❌ PyMuPDF extraction returned empty/minimal text")
             return None
@@ -1580,6 +1582,11 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         # separate lines.  Safe for non-tabular states because prose
         # tags almost never contain two dollar amounts.
         merged = _split_merged_grant_tag_rows(merged)
+        # DE/IN-specific: split tags that span description + dollar amount
+        # columns, and header:data merged tags.
+        if state_code and state_code.upper() in ("DE", "IN"):
+            merged = _split_tabular_header_from_data(merged)
+            merged = _split_tabular_tag_at_dollar(merged)
         # IN-specific: split tagged lines where a short numbered item
         # (e.g. "(2) interview each member.") got welded to the
         # following paragraph by the LLM.  Scoped to IN only so other
@@ -1620,6 +1627,12 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         # start at the left margin.
         if state_code and state_code.upper() == "IN":
             merged = _strip_in_leading_indent(merged)
+
+        # Universal: ensure multi-line ALL-CAPS headings have paragraph
+        # breaks between them.  The LLM sometimes emits consecutive
+        # heading lines (e.g. "ECONOMIC DEVELOPMENT PROGRAMS\n
+        # CONFORMING CHANGES") with only \n instead of \n\n.
+        merged = _split_consecutive_caps_heading_lines(merged)
 
         total_time = time.time() - start_time
         minutes = int(total_time // 60)
@@ -1823,6 +1836,53 @@ def _split_tagged_subsections_safe(text):
     text = re.sub(r'(\[A>)(.*?)(<A\])', _split_block, text, flags=re.DOTALL)
     text = re.sub(r'(\[D>)(.*?)(<D\])', _split_block, text, flags=re.DOTALL)
     return text
+
+
+def _split_consecutive_caps_heading_lines(text):
+    """Insert paragraph breaks between consecutive ALL-CAPS heading lines.
+
+    The LLM sometimes emits multi-line headings (e.g. a division title
+    followed by a subtitle) with only ``\\n`` between them instead of
+    ``\\n\\n``.  Example::
+
+        ECONOMIC DEVELOPMENT PROGRAMS —— TAX CREDIT LIMITS
+        CONFORMING CHANGES
+
+    This function detects consecutive non-blank lines that are both
+    ALL-CAPS (letters only, after stripping tags) and inserts a blank
+    line between them so they render as separate paragraphs.
+
+    Safe for all states — only touches lines that are entirely uppercase
+    with at least 4 letter characters (avoids matching short tokens).
+    """
+    _TAG_RE = re.compile(r'\[([AD])>|<([AD])\]')
+    lines = text.split('\n')
+    result = []
+    i = 0
+    fix_count = 0
+    while i < len(lines):
+        result.append(lines[i])
+        if i + 1 < len(lines):
+            a = lines[i].rstrip()
+            b = lines[i + 1].rstrip()
+            if a and b:
+                a_clean = _TAG_RE.sub('', a).strip()
+                b_clean = _TAG_RE.sub('', b).strip()
+                a_letters = re.sub(r'[^a-zA-Z]', '', a_clean)
+                b_letters = re.sub(r'[^a-zA-Z]', '', b_clean)
+                if (a_letters and b_letters
+                        and len(a_letters) >= 4 and len(b_letters) >= 4
+                        and a_letters == a_letters.upper()
+                        and b_letters == b_letters.upper()):
+                    result.append('')  # insert blank line
+                    fix_count += 1
+        i += 1
+    if fix_count:
+        logging.info(
+            f"   📐 Inserted {fix_count} paragraph break(s) between "
+            f"consecutive ALL-CAPS heading lines"
+        )
+    return '\n'.join(result)
 
 
 def _merge_page_break_paragraph_splits(text):
@@ -2642,7 +2702,7 @@ def restore_special_symbols(claude_text, pymupdf_text):
     return claude_text
 
 
-def deterministic_cleanup(text, state_config=None):
+def deterministic_cleanup(text, state_config=None, state_code=None):
     """
     Apply deterministic fixes for common Claude output inconsistencies.
     These are formatting errors that Claude makes intermittently regardless
@@ -2794,16 +2854,20 @@ def deterministic_cleanup(text, state_config=None):
 
     # ── Fix 7: Merge adjacent same-type tags ──────────────────────
     # [A>text1<A] [A>text2<A] → [A>text1 text2<A]  (if only spaces/tabs between, NOT newlines)
-    # Using [^\S\n]* instead of \s* to avoid merging tags across lines,
-    # which would incorrectly merge separate underlined spans separated by
-    # plain-text content like subsection labels.
-    merge_a = len(re.findall(r'<A\][^\S\n]*\[A>', text))
-    merge_d = len(re.findall(r'<D\][^\S\n]*\[D>', text))
+    # Using [^\S\n]{0,5} instead of [^\S\n]* to avoid merging tags
+    # that are separated by ≥ 6 horizontal spaces.  A gap of 6+ spaces
+    # signals a tabular column boundary (COLUMN_GAP_MIN_SPACES = 6 in
+    # pymupdf_extractor), and merging those tags destroys the multi-
+    # column layout of DE Grants-in-Aid and IN pension tables.  The
+    # {0,5} threshold mirrors ``consolidate_adjacent_tags`` Phase 1a
+    # which also uses ``[ \t]{1,5}``.
+    merge_a = len(re.findall(r'<A\][^\S\n]{0,5}\[A>', text))
+    merge_d = len(re.findall(r'<D\][^\S\n]{0,5}\[D>', text))
     if merge_a > 0:
-        text = re.sub(r'<A\][^\S\n]*\[A>', ' ', text)
+        text = re.sub(r'<A\][^\S\n]{0,5}\[A>', ' ', text)
         fix_log.append(f"Merged {merge_a} adjacent [A>...<A] tag pairs")
     if merge_d > 0:
-        text = re.sub(r'<D\][^\S\n]*\[D>', ' ', text)
+        text = re.sub(r'<D\][^\S\n]{0,5}\[D>', ' ', text)
         fix_log.append(f"Merged {merge_d} adjacent [D>...<D] tag pairs")
 
     # ── Fix 8: Fix orphaned/mismatched tags ───────────────────────
@@ -2899,6 +2963,19 @@ def deterministic_cleanup(text, state_config=None):
     text = remove_nested_tags(text)
     text = merge_split_tags(text)
     text = split_tagged_subsections(text)
+
+    # ── Absolute last step: split tabular tags at column boundaries ──
+    # DE-specific: re-split multi-row merged tags, then split single
+    # Label $ Amount tags into separate per-cell tags.
+    # _split_merged_grant_tag_rows must run AFTER merge_split_tags
+    # (which re-merges tags across lines) so the split survives.
+    # _split_tabular_tag_at_dollar then handles remaining single-dollar
+    # "Label $ Amount" tags (e.g. [A>TOTAL - Secretary $ 3,880,543<A]).
+    # Scoped to DE + IN so prose tags in other states are never split.
+    if _HAS_PYMUPDF and state_code and state_code.upper() in ("DE", "IN"):
+        text = _split_merged_grant_tag_rows(text)
+        text = _split_tabular_header_from_data(text)
+        text = _split_tabular_tag_at_dollar(text)
 
     return text
 
@@ -3274,7 +3351,7 @@ def main():
 
     # Post-process: deterministic cleanup of common Claude inconsistencies
     print(f"🔧 Running deterministic cleanup...")
-    converted_text = deterministic_cleanup(converted_text, state_config=state_config)
+    converted_text = deterministic_cleanup(converted_text, state_config=state_config, state_code=state_code)
 
     # Post-process: strip tags from protected clauses (state-specific cleanup)
     if state_config:
@@ -3317,7 +3394,7 @@ def main():
 
             # --- JSON report ---
             print("🔄 Generating PyMuPDF JSON report...")
-            report = extract_pdf_json_report(pdf_path, **flags)
+            report = extract_pdf_json_report(pdf_path, state_code=state_code, **flags)
             pymupdf_json_path = output_path.replace(".txt", "_pymupdf_report.json")
             import json as json_mod2
             with open(pymupdf_json_path, "w", encoding="utf-8") as f:
@@ -3340,6 +3417,7 @@ def main():
             pymupdf_text = extract_pdf_with_pymupdf(
                 pdf_path,
                 join_pages=True,
+                state_code=state_code,
                 **flags,
             )
             pymupdf_txt_path = output_path.replace(".txt", "_pymupdf.txt")

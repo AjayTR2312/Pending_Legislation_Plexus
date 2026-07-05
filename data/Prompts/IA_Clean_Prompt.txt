@@ -71,4 +71,21 @@ EXAMPLES OF WHAT TO DO:
 - WRONG: Removing "[A>...<A]" or "[D>...<D]" markers
 - RIGHT: Preserve all addition and deletion markers exactly as written
 
+TAG MERGING RULE - NEVER DROP TAGGED CONTENT:
+When the input has per-line [D>...<D] or [A>...<A] tags that span multiple lines,
+you MUST merge them into paragraph-level tags. However, you must NEVER drop
+any tagged content during this merge. Every [D>...<D] block in the input must
+have its text content preserved in the output. If two consecutive items have
+different numbering (e.g. item 6 and item 7), they are SEPARATE items — do NOT
+combine them into one even if the new text reads as a continuation.
+Example of WRONG merging:
+  Input:  [D>6.<D] [A>d.<A] [D>A table of<D] [A>An<A] organization[D>.<D]
+          [D>7. A personnel system description, including identification<D]
+          [A>chart that includes the name<A] ...
+  WRONG:  [D>6.<D] [A>d.<A] [D>A table of<D] [A>An<A] organization[D>.<D] [A>chart that includes the name<A] ...
+          (item 7 deletion dropped!)
+  RIGHT:  [D>6.<D] [A>d.<A] [D>A table of<D] [A>An<A] organization[D>.<D]
+          [D>7. A personnel system description, including identification<D]
+          [A>chart that includes the name<A] ...
+
 CRITICAL: Do not add any conversational text, explanations, or comments. Return ONLY the clean legislative text with proper flowing paragraphs. DO NOT drop, remove, or "fix" any words - they are intentional legislative markup. Preserve all symbols, citations, and legal references exactly as they appear.

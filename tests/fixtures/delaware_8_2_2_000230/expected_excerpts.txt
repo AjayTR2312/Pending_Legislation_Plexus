@@ -46,13 +46,14 @@
 # is too long for target_col = 27 to fit, so MIN kicks in).
 County Seat Package      $ 3,880,543
 
-# "TOTAL - Office of the Secretary" full row wrapped in one [A>…<A] tag
-# after consolidate_adjacent_tags.  Currency padding inside the tag is
-# now collapsed to a single space.
-[A>TOTAL - Office of the Secretary $ 3,880,543<A]
+# "TOTAL - Office of the Secretary" full row — the text label and
+# dollar amount are now in separate [A>...<A] tags because the
+# column-gap split is preserved (6+ spaces prevent merging).
+[A>TOTAL - Office of the Secretary<A]
 
-# Three-cell row (label + $ + amount) all wrapped in one [A>…<A] tag.
-[A>Paramedic Program Operations Block Grant $ 3,000,000<A]
+# Three-cell row (label + amount) — label and dollar amount are in
+# separate [A>...<A] tags split at the column boundary.
+[A>Paramedic Program Operations Block Grant<A]
 
 # Senior centres table — verify the row LABEL and the FULL
 # [D>…<D] [A>…<A] amount portion appear (multiple rows so that a partial

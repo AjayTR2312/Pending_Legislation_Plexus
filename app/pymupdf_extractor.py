@@ -81,6 +81,27 @@ PAGE_SEPARATOR_Y_TOL_PT     = 1.5    # max y-delta for segments treated as colin
 PAGE_SEPARATOR_MIN_SEGMENTS = 3      # min segments in band to qualify as decorative rule
 PAGE_SEPARATOR_COVERAGE     = 0.95   # min sum-of-widths / span (i.e. gaps must be tiny)
 
+# --- CT stroke-width-based footer/header separator removal ----------------
+# CT bill PDFs draw footer separator rules (above the bill-ID / page-number
+# footer) and header separator rules (below the header block on pages 2+)
+# with a stroke width of ~1.44 pt, whereas genuine legislative underlines
+# use ~0.72 pt (exactly 2× thinner).  Surveyed across 16 CT PDFs (650+
+# horizontal lines):
+#
+#   Footer separators:  stroke = 1.440 pt   (180 / 186 footer-zone lines)
+#   Header separators:  stroke = 1.464 pt   ( 88 /  90 header-zone lines)
+#   Genuine underlines: stroke = 0.720 pt   (all body lines + 6 footer-zone)
+#   Title decorative:   stroke = 0.480 pt   (page-1 title block only)
+#
+# A threshold of 1.0 pt gives a 0.28 pt safety margin on each side.
+# This pre-filter runs BEFORE any other hline processing so downstream
+# code never sees footer/header separator drawings at all — eliminating
+# both false [A>…<A] tags on the last body line AND the problem where
+# genuine underlines near the footer were incorrectly suppressed by the
+# old text-above heuristic in _filter_page_separator_hlines.
+CT_FOOTER_SEPARATOR_MIN_STROKE_PT = 1.0   # lines with stroke ≥ this in margin zone → separator
+CT_FOOTER_SEPARATOR_ZONE_PT       = 100.0 # top/bottom margin zone (pt)
+
 # --- Arkansas-specific leader-line filter ----------------------------------
 # Arkansas appropriation/fiscal bills (e.g. JAR104 — SB 8 of the 2026 Fiscal
 # Session) draw horizontal "leader" lines as typographic decoration: a thin
@@ -196,6 +217,18 @@ DEL_OPEN, DEL_CLOSE = "[D>", "<D]"
 # Used to skip these narrow lines entirely during paragraph-break detection
 # so they don't pollute the continuation-x baseline calculation.
 _RE_CA_LINE_MARKER = re.compile(r"^\s*line\s+\d+\s*$", re.IGNORECASE)
+
+# Bare margin line-number marker — many states (IN, IA, …) number every
+# line of the bill body with a bare 1–3 digit number ("1", "37", "42")
+# placed in a narrow column at the left margin.  These sit at the SAME
+# y-coordinate as the adjacent body-text line, so PyMuPDF treats them as
+# same-physical-row siblings.  Without filtering they prevent the
+# paragraph-indent detector from firing: the line-number's x0 (~114 pt)
+# anchors ``prev_line_y_mid``, and the body line at x0=180 pt that
+# follows on the same row gets a space-joiner instead of a paragraph
+# break.  Skipping bare line-number lines (just like "line N" markers)
+# restores correct paragraph detection.
+_RE_BARE_LINE_NUMBER = re.compile(r"^\s*\d{1,3}\s*$")
 
 # Small-caps font detection: fonts that render lowercase as visual capitals
 # e.g. MinionPC (Petite Caps), *-SC (Small Caps)
@@ -665,10 +698,22 @@ def _filter_page_separator_hlines(
         # are deliberately drawn within underline tolerance of the
         # last body line; the multi-segment colinear shape is what
         # distinguishes them from real underlines.
+        #
+        # HOWEVER: skip thick bands (stroke ≥ 1.0pt) because these are
+        # footer/header separator lines already handled by the stroke-
+        # based filter (_strip_ct_footer_separator_hlines).  If that
+        # filter preserved them (because body text sits above), we
+        # must NOT remove them here.  Thin multi-segment bands (e.g.
+        # title-block decorative rules at stroke=0.48pt) are still
+        # caught by this criterion.
         if not is_separator and len(band) >= min_segments:
-            sum_widths = sum(h.x1 - h.x0 for h in band)
-            if sum_widths / span >= coverage_ratio:
-                is_separator = True
+            # Check if ALL segments in the band are thick (stroke >= 1.0)
+            # — if so, they were already evaluated by the stroke filter
+            band_is_thick = all(h.width >= CT_FOOTER_SEPARATOR_MIN_STROKE_PT for h in band)
+            if not band_is_thick:
+                sum_widths = sum(h.x1 - h.x0 for h in band)
+                if sum_widths / span >= coverage_ratio:
+                    is_separator = True
 
         if is_separator:
             for h in band:
@@ -684,6 +729,87 @@ def _filter_page_separator_hlines(
             len(hlines) - len(kept), len(kept),
         )
     return kept
+
+
+def _strip_ct_footer_separator_hlines(
+    hlines: List[HLine],
+    page: fitz.Page,
+    *,
+    min_stroke: float = CT_FOOTER_SEPARATOR_MIN_STROKE_PT,
+    zone_pt: float = CT_FOOTER_SEPARATOR_ZONE_PT,
+) -> List[HLine]:
+    """Remove CT footer/header separator lines based on stroke width.
+
+    CT legislative PDFs draw thick horizontal rules (~1.44 pt stroke)
+    at the top and bottom of each page as visual separators between
+    the body text and the header/footer blocks.  Genuine underlines
+    use ~0.72 pt stroke — exactly half the thickness.
+
+    This function **unconditionally** removes thick horizontal lines
+    (stroke ≥ *min_stroke*) that fall inside the margin zone (top or
+    bottom *zone_pt* of the page).
+
+    Why unconditional?  Geometric analysis across 16 CT PDFs (650+
+    horizontal lines) shows that the CT footer separator (stroke
+    ~1.44 pt) is NEVER a genuine underline — it is purely a
+    decorative rule.  When body text on the last line of a page IS
+    genuinely underlined, the PDF always draws a SEPARATE thin
+    underline rect (stroke ~0.72 pt) underneath that text.  The thick
+    footer separator sits further below, within the margin zone, and
+    merely *happens* to fall within ``UNDERLINE_TOLERANCE_PT`` of the
+    last text baseline.
+
+    Diagnostic evidence (sSB294 pp. 1/3/5):
+      • Page 1 line 12 "State in the office…": NO genuine 0.72 pt
+        underline exists — the ONLY line beneath it is the footer
+        separator at 1.44 pt.  The text is NOT underlined.
+      • Genuinely underlined text on the same pages (lines 9–11)
+        each has its own 0.72 pt underline rect that is unaffected
+        by this removal.
+
+    By stripping these thick lines unconditionally, downstream
+    ``_classify_char_decoration`` never sees them, so no false
+    ``[A>…<A]`` tags are produced on the last body line of each page.
+
+    Returns a new list with separator lines removed.
+    """
+    if not hlines:
+        return hlines
+
+    page_height = page.rect.height
+    if page_height <= 0:
+        return hlines
+
+    footer_y_min = page_height - zone_pt
+    header_y_max = zone_pt
+
+    kept: List[HLine] = []
+    dropped = 0
+    for hl in hlines:
+        in_header = hl.y <= header_y_max
+        in_footer = hl.y >= footer_y_min
+        in_margin = in_header or in_footer
+        if in_margin and hl.width >= min_stroke:
+            # Thick line in margin zone → footer/header separator.
+            # ALWAYS remove — genuine underlines use ~0.72 pt stroke
+            # and are drawn as separate rects that remain in the list.
+            dropped += 1
+            logger.debug(
+                "Stripped CT footer/header separator: y=%.1f "
+                "x=[%.1f,%.1f] stroke=%.3f zone=%s",
+                hl.y, hl.x0, hl.x1, hl.width,
+                "header" if in_header else "footer",
+            )
+        else:
+            kept.append(hl)
+
+    if dropped:
+        logger.info(
+            "CT footer/header separator filter: removed %d — %d hlines remain",
+            dropped, len(kept),
+        )
+    return kept
+
 
 
 # ---------------------------------------------------------------------------
@@ -1284,16 +1410,22 @@ def _extract_page_tagged_text(
 
     hlines = _extract_hlines_from_drawings(page)
 
-    # -- 1b. Filter out table-border lines to avoid false underline tags --
+    # -- 1b. CT-only: PRE-STRIP footer/header separator rules by stroke width.
+    # This runs FIRST — before table-border filtering and everything else —
+    # so downstream code never sees the thick separator drawings at all.
+    # CT footer separators use ~1.44 pt stroke vs 0.72 pt for underlines.
+    if state_code and state_code.upper() == "CT":
+        hlines = _strip_ct_footer_separator_hlines(hlines, page)
+
+    # -- 1c. Filter out table-border lines to avoid false underline tags --
     table_zones = _detect_table_zones(page)
     if table_zones:
         hlines = _filter_table_border_hlines(hlines, table_zones)
 
-    # -- 1c. CT-only: filter page header/footer separator rules --
-    # CT bills draw a long rule above the page footer that sits within
-    # underline tolerance of the last body line and gets misread as an
-    # underline on the final word of the page (e.g. "o[A>fficers.<A]").
-    # Other states don't exhibit this pattern, so the filter is skipped.
+    # -- 1d. CT-only: legacy multi-segment / text-above separator filter.
+    # Most CT separators are already removed by the stroke-width filter
+    # above; this catches any remaining edge cases (e.g. title-block
+    # decorative rules with normal stroke width but multi-segment shape).
     if state_code and state_code.upper() == "CT":
         hlines = _filter_page_separator_hlines(hlines, page)
 
@@ -1437,7 +1569,10 @@ def _extract_page_tagged_text(
                 else:
                     line_raw_text += _sp.get("text", "")
             if (line_width < LINE_NUMBER_MAX_WIDTH_PT
-                    and _RE_CA_LINE_MARKER.match(line_raw_text)):
+                    and (_RE_CA_LINE_MARKER.match(line_raw_text)
+                         or (_RE_BARE_LINE_NUMBER.match(line_raw_text)
+                             and continuation_x is not None
+                             and line_x0 < continuation_x))):
                 continue
 
             if not first_line_in_block:
@@ -1699,12 +1834,16 @@ def _extract_page_spans(page: fitz.Page, state_code: Optional[str] = None) -> Li
 
     hlines = _extract_hlines_from_drawings(page)
 
+    # CT-only: PRE-STRIP footer/header separator rules by stroke width
+    if state_code and state_code.upper() == "CT":
+        hlines = _strip_ct_footer_separator_hlines(hlines, page)
+
     # Filter out table-border lines
     table_zones = _detect_table_zones(page)
     if table_zones:
         hlines = _filter_table_border_hlines(hlines, table_zones)
 
-    # CT-only: filter page header/footer separator rules
+    # CT-only: legacy multi-segment separator filter (catches edge cases)
     if state_code and state_code.upper() == "CT":
         hlines = _filter_page_separator_hlines(hlines, page)
 
@@ -1782,7 +1921,7 @@ _RE_EMPTY_DEL = re.compile(r"\[D>\s*<D\]")
 _RE_MERGE_ADD = re.compile(
     r"<A\]"
     r"(?:"
-    r"[ \t]+\[A>"                                       # inline (same row)
+    r"[ \t]{1,5}\[A>"                                      # inline (same row, ≤5 spaces)
     r"|"
     r"[ \t]*\n[ \t]*\[A>(?!\([A-Za-z0-9]{1,6}\))"        # cross-line, NOT list marker
     r")"
@@ -1790,7 +1929,7 @@ _RE_MERGE_ADD = re.compile(
 _RE_MERGE_DEL = re.compile(
     r"<D\]"
     r"(?:"
-    r"[ \t]+\[D>"
+    r"[ \t]{1,5}\[D>"                                      # inline (same row, ≤5 spaces)
     r"|"
     r"[ \t]*\n[ \t]*\[D>(?!\([A-Za-z0-9]{1,6}\))"
     r")"
@@ -2983,24 +3122,41 @@ _RE_IN_HEADER_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
+# IN sponsor/author line — appears on page 1 between the "Effective:" line
+# and the "January X, 2026, read first time…" history block.  Decorative
+# horizontal rules above and below the author name cause false [A>…<A]
+# tagging.  The pattern matches a line whose ENTIRE content is a single
+# [A>…<A] tag containing only name-like characters (letters, commas,
+# spaces, periods, hyphens — no digits, no parentheses, no IC references).
+# Guard: content must be 3–80 chars and start with an uppercase letter.
+_RE_IN_SPONSOR_TAG = re.compile(
+    r"^\[A>([A-Z][A-Za-z \t,.\-']{2,79})<A\]$"
+)
+
 
 def _strip_in_header_tags(text: str) -> str:
     """Remove false ``[A>…<A]`` tags from IN bill header lines.
 
     Indiana PDFs have decorative lines near the page-1 header that the
     underline detector picks up as underlines.  This strips those tags
-    from header-pattern lines (bill title, date, digest) while leaving
-    genuine legislative tags untouched.
+    from header-pattern lines (bill title, date, digest, sponsor names)
+    while leaving genuine legislative tags untouched.
 
-    Only operates on the first ~15 lines (the header area).
+    Only operates on the first ~20 lines (the header area).
     """
     lines = text.split("\n")
-    header_end = min(15, len(lines))
+    header_end = min(20, len(lines))
     changed = False
     for i in range(header_end):
         new_line = _RE_IN_HEADER_PATTERNS.sub(r"\1", lines[i])
         if new_line != lines[i]:
             lines[i] = new_line
+            changed = True
+            continue
+        # Sponsor/author line: entire line is [A>Names<A]
+        m = _RE_IN_SPONSOR_TAG.match(lines[i].strip())
+        if m:
+            lines[i] = m.group(1)
             changed = True
     if changed:
         logger.debug("Stripped false [A> tags from IN header lines")
@@ -3091,7 +3247,18 @@ def _split_in_midline_items(text: str) -> str:
     after it.
 
     Scoped to IN only by callers.
+
+    Safety: inline enumerations in prose (e.g. Synopsis text like
+    ``(1) teachers; (2) police; and (3) firefighters``) are detected
+    by looking for an earlier ``; (N)`` pattern on the same line — the
+    semicolon before a parenthesised marker is the hallmark of an inline
+    list.  If found, the ``; and (N)`` is part of a flowing sentence and
+    must NOT be split.  Standalone ``(N)`` references (like
+    ``subsection (b)``) are ignored because they lack the leading ``;``.
     """
+    # Detects inline list markers: "; (N)" where N is a number/letter
+    _RE_EARLIER_SEMICOLON_ITEM = re.compile(r';\s+\([a-zA-Z0-9]{1,3}\)')
+
     def _tag_aware_replace(m: re.Match) -> str:
         full = m.group(0)
         conjunction = m.group(1)   # "; and" or "; or"
@@ -3099,6 +3266,16 @@ def _split_in_midline_items(text: str) -> str:
 
         # Find what position this match is at in the original text
         pos = m.start()
+
+        # --- Inline-enumeration guard ---
+        # If the same line already contains an earlier "; (N)" pattern,
+        # this is an inline enumeration ("(1)...; (2)...; and (3)...")
+        # and must NOT be split.  The semicolon prefix distinguishes
+        # inline list items from references like "subsection (b)".
+        line_start = text.rfind('\n', 0, pos)
+        line_before = text[line_start + 1 : pos]
+        if _RE_EARLIER_SEMICOLON_ITEM.search(line_before):
+            return full   # leave the inline enumeration intact
 
         # Look backwards for an unclosed [A> or [D> tag
         text_before = text[:pos + len(conjunction)]
@@ -3951,6 +4128,12 @@ ABSOLUTE PRESERVATION RULES  (never violate)
      ➜  This applies to ALL pages, not just page 1.
 🛡️  PRESERVE section / subsection numbering ("Section 1.", "(a)", "(2)", …).
 🛡️  When in doubt whether something is content or artefact → **KEEP IT**.
+🛡️  **TAG MERGING — NEVER DROP CONTENT**: When merging per-line tags into
+     paragraph-level tags, you must preserve ALL tagged content.  Every
+     `[D>…<D]` block in the input must appear in the output.  If two
+     consecutively numbered items (e.g. item 6 and item 7) have separate
+     tags, they are SEPARATE items — do NOT combine them into one, even
+     if the new text reads as a continuation of the previous item.
 
 ══════════════════════════════════════════════════════════════
 OUTPUT FORMAT
@@ -4609,10 +4792,10 @@ def consolidate_adjacent_tags(text: str) -> str:
     # ── Phase 1a: same-line merging — merge unless Sec./SECTION ───────
     # Parenthesized refs like (5) on the same line are inline, not
     # subsection markers, so they should still merge.
-    _adj_a_inline = _re.compile(r'<A\][ \t]+\[A>' + _NO_MERGE_INLINE)
+    _adj_a_inline = _re.compile(r'<A\][ \t]{1,5}\[A>' + _NO_MERGE_INLINE)
     while _adj_a_inline.search(text):
         text = _adj_a_inline.sub(' ', text)
-    _adj_d_inline = _re.compile(r'<D\][ \t]+\[D>' + _NO_MERGE_INLINE)
+    _adj_d_inline = _re.compile(r'<D\][ \t]{1,5}\[D>' + _NO_MERGE_INLINE)
     while _adj_d_inline.search(text):
         text = _adj_d_inline.sub(' ', text)
 
@@ -5556,8 +5739,8 @@ def _split_merged_grant_tag_rows(text: str) -> str:
 
     Fix
     ---
-    Detect tags whose content contains **two or more** ``$ amount``
-    patterns.  At each non-final ``$ amount``, if the next non-whitespace
+    Detect tags whose content contains **one or more** ``$ amount``
+    patterns.  At each ``$ amount``, if the next non-whitespace
     character is an uppercase letter or ``(`` (the start of a new entity
     name or account code), place a split there and give each piece its
     own tag on its own line::
@@ -5565,15 +5748,21 @@ def _split_merged_grant_tag_rows(text: str) -> str:
         [D>Adult Basic Education $ 40,000<D]
         [D>Child Care (95-01-06) $ 750,000<D]
 
+    Also handles dollar-at-start tags (IN pension tables)::
+
+        [A>$150 At least 10 years, but less than 20 years<A]
+        → [A>$150<A]
+          [A>At least 10 years, but less than 20 years<A]
+
     Safety
     ------
-    - Only engages when 2 + ``$ amount`` patterns exist inside one tag.
     - Only splits when the text after a ``$ amount`` starts with an
       uppercase letter or ``(`` — never in mid-sentence lowercase
       continuations like ``$ 500 per year``.
-    - Legislative prose tags (CT, CA, KS, IN …) almost never contain
-      two ``$ amount`` tokens, so this is effectively self-scoping to
-      tabular appropriation bills.
+    - Pure dollar tags (``[A>$450<A]``) have no text after the
+      amount, so the loop skips them.
+    - Legislative prose tags almost never START with a dollar amount
+      followed by a new entity name.
     """
 
     _TAG_RE = re.compile(r'\[([AD])>(.*?)<\1\]')
@@ -5583,13 +5772,13 @@ def _split_merged_grant_tag_rows(text: str) -> str:
         content  = m.group(2)
 
         amounts = list(_RE_DOLLAR_AMT_SPLIT.finditer(content))
-        if len(amounts) < 2:
-            return m.group(0)           # nothing to split
+        if len(amounts) < 1:
+            return m.group(0)           # no dollar amounts at all
 
         pieces: list[str] = []
         last_cut = 0
 
-        for i in range(len(amounts) - 1):
+        for i in range(len(amounts)):
             after = amounts[i].end()
             tail  = content[after:]
             stripped = tail.lstrip()
@@ -5614,6 +5803,159 @@ def _split_merged_grant_tag_rows(text: str) -> str:
         return '\n'.join(f'[{tag_type}>{p}<{tag_type}]' for p in pieces)
 
     return _TAG_RE.sub(_split_tag, text)
+
+
+# ---------------------------------------------------------------------------
+# Split tabular tags at column boundaries (description + dollar amount)
+# ---------------------------------------------------------------------------
+# Regex: text label (letters/spaces/punctuation) followed by a dollar amount
+# at the END of the tag content.  The text label must be ≥ 4 characters
+# (avoids splitting tags that are purely dollar amounts like "$ 3,880,543").
+_RE_TABULAR_LABEL_THEN_DOLLAR = re.compile(
+    r'^([A-Za-z][\w\s,.\-:;\u2013\u2014\'&/()\[\]]{3,}?)'  # text label (≥4 chars, non-greedy; includes : and ;)
+    r'\s+'                                                   # whitespace gap
+    r'(\$\s*[\d,]+(?:\.\d{2})?)\s*$'                        # trailing dollar amount
+)
+
+# Target output column where dollar amounts should start in split tabular
+# tags.  Chosen so the longest typical DE description (~85 chars with tags)
+# still gets a visible gap, while shorter labels get generous padding that
+# makes the column alignment obvious.
+TABULAR_AMOUNT_TARGET_COL = 90
+
+# Prose-safety guard for _split_tabular_tag_at_dollar.  If the LAST word
+# of the label text (before the dollar amount) is a common function word
+# / verb / preposition, the tag is almost certainly narrative prose
+# ("a penalty not to exceed $5,000") rather than a tabular cell
+# ("At least 30 years $375").  Prevents false-positive splits on IN
+# statutory text while still working for DE appropriation table labels
+# (which always end with nouns like "Secretary", "Education", "Package").
+_PROSE_BEFORE_DOLLAR = frozenset({
+    'exceed', 'exceeding', 'of', 'pay', 'pays', 'paying', 'paid',
+    'is', 'was', 'were', 'be', 'been', 'being',
+    'than', 'to', 'at', 'for', 'from', 'not', 'over', 'under',
+    'about', 'approximately', 'totaling', 'costing', 'worth',
+})
+
+
+def _split_tabular_tag_at_dollar(text: str) -> str:
+    """Split ``[A>…<A]`` / ``[D>…<D]`` tags that span a description + dollar amount.
+
+    Problem
+    -------
+    When an entire table row is underlined / struck through, PyMuPDF wraps
+    the *full row* in a single tag::
+
+        [A>TOTAL - Office of the Secretary $ 3,880,543<A]
+
+    The text label (column 1–2) and the dollar amount (column 3) are
+    conceptually in different table columns and should have separate tags::
+
+        [A>TOTAL - Office of the Secretary<A]                                [A>$ 3,880,543<A]
+
+    Alignment
+    ---------
+    The dollar-amount tag is placed at ``TABULAR_AMOUNT_TARGET_COL`` (90)
+    from the start of the line, with a minimum gap of
+    ``COLUMN_GAP_MIN_SPACES`` (6).  This ensures:
+
+    - Short labels get generous padding so the column is obvious.
+    - Long labels still get at least 6 spaces of separation.
+    - Dollar amounts roughly align across rows.
+
+    Safety
+    ------
+    - Only matches when the tag ends with a dollar amount preceded by
+      a text label — never splits "$ 3,000 per year" (no leading label).
+    - Tags that are purely dollar amounts ("$ 3,880,543") are untouched.
+    - The gap is always ≥ ``COLUMN_GAP_MIN_SPACES`` (6) so the downstream
+      merge passes (which respect the 6-space boundary) will NOT
+      re-merge them.
+    """
+    _TAG_RE = re.compile(r'\[([AD])>(.*?)<\1\]', re.DOTALL)
+
+    def _split(m: re.Match) -> str:
+        tag_type = m.group(1)
+        content  = m.group(2).strip()
+
+        match = _RE_TABULAR_LABEL_THEN_DOLLAR.match(content)
+        if not match:
+            return m.group(0)
+
+        label  = match.group(1).rstrip()
+        amount = match.group(2)
+
+        # Prose safety: if the label ends with a function word (verb,
+        # preposition, article), the tag is likely narrative prose
+        # ("not to exceed $5,000") rather than a table cell.  Skip.
+        last_word = label.rsplit(None, 1)[-1].lower() if label else ''
+        if last_word in _PROSE_BEFORE_DOLLAR:
+            return m.group(0)
+
+        label_tag  = f'[{tag_type}>{label}<{tag_type}]'
+        amount_tag = f'[{tag_type}>{amount}<{tag_type}]'
+
+        # Pad to target column, with a minimum gap
+        gap_size = max(
+            COLUMN_GAP_MIN_SPACES,
+            TABULAR_AMOUNT_TARGET_COL - len(label_tag),
+        )
+        return f'{label_tag}{" " * gap_size}{amount_tag}'
+
+    return _TAG_RE.sub(_split, text)
+
+
+# ---------------------------------------------------------------------------
+# Split tabular header-colon-data tags (e.g. IN pension table headers)
+# ---------------------------------------------------------------------------
+# Matches a tag where a short header (≤30 chars) ending with ':' has been
+# merged with data row text (≥8 chars, starts uppercase).  Only triggers
+# when followed on the SAME LINE by a same-type dollar-amount tag (via
+# lookahead) — prevents false positives on prose tags like
+# [A>Citations Affected: IC 5-10; noncode.<A].
+_RE_HEADER_COLON_BEFORE_DOLLAR = re.compile(
+    r'\[([AD])>'
+    r'([^<]{3,30}?)'
+    r'\s*:\s+'
+    r'([A-Z][^<]{8,}?)\s*'
+    r'<\1\]'
+    r'(?=\s{2,}\[\1>\$)'   # lookahead: same-type dollar tag with 2+ space gap
+)
+
+
+def _split_tabular_header_from_data(text: str) -> str:
+    """Split ``[T>Header: Data Row Text<T]`` tags when followed by a dollar tag.
+
+    Problem
+    -------
+    In IN pension tables, the column header ending with ``:`` gets merged
+    with the first data row's text::
+
+        [A>The Amount Is: At least 5 years, but less than 10 years<A]  [A>$150<A]
+
+    Fix
+    ---
+    Split at the colon boundary::
+
+        [A>The Amount Is:<A]
+        [A>At least 5 years, but less than 10 years<A]  [A>$150<A]
+
+    Safety
+    ------
+    - Only splits when the SAME LINE has a same-type dollar-amount tag
+      after the colon tag (lookahead).  Prose tags like
+      ``[A>Effective: July 1, 2026<A]`` are NOT followed by dollar tags,
+      so the lookahead fails and they stay unchanged.
+    - Header text is limited to ≤ 30 chars to avoid matching long prose.
+    - Data text must start with uppercase and be ≥ 8 chars.
+    """
+    def _split(m: re.Match) -> str:
+        tag = m.group(1)     # 'A' or 'D'
+        header = m.group(2).rstrip()
+        data = m.group(3).rstrip()
+        return f'[{tag}>{header}:<{tag}]\n[{tag}>{data}<{tag}]'
+
+    return _RE_HEADER_COLON_BEFORE_DOLLAR.sub(_split, text)
 
 
 def extract_pdf_summary(pdf_path: str | Path) -> dict:
@@ -5717,12 +6059,16 @@ def extract_pdf_json_report(
             ul_rects, so_rects = [], []
         hlines = _extract_hlines_from_drawings(page)
 
+        # --- CT-only: PRE-STRIP footer/header separator rules by stroke width ---
+        if state_code and state_code.upper() == "CT":
+            hlines = _strip_ct_footer_separator_hlines(hlines, page)
+
         # --- filter out table-border lines ---
         table_zones = _detect_table_zones(page)
         if table_zones:
             hlines = _filter_table_border_hlines(hlines, table_zones)
 
-        # --- CT-only: filter out page header/footer separator rules ---
+        # --- CT-only: legacy multi-segment separator filter (edge cases) ---
         if state_code and state_code.upper() == "CT":
             hlines = _filter_page_separator_hlines(hlines, page)
 
