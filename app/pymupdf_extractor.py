@@ -1422,8 +1422,18 @@ def _extract_page_tagged_text(
         hlines = _strip_ct_footer_separator_hlines(hlines, page)
 
     # -- 1c. Filter out table-border lines to avoid false underline tags --
+    # EXCEPTION: DE and IN bills use tabular layouts where the dollar-
+    # column band is misidentified as a "table" by find_tables().  The
+    # border filter then strips legitimate underline hlines that happen
+    # to sit near a zone edge (the "DE HB 230 page-15/17" bug).  Skip
+    # the border filter for these states — their underlines are genuine
+    # decorations, not table borders.
+    _skip_table_filter = (
+        state_code is not None
+        and state_code.upper() in ("DE", "IN")
+    )
     table_zones = _detect_table_zones(page)
-    if table_zones:
+    if table_zones and not _skip_table_filter:
         hlines = _filter_table_border_hlines(hlines, table_zones)
 
     # -- 1d. CT-only: legacy multi-segment / text-above separator filter.
@@ -1663,8 +1673,13 @@ def _extract_page_tagged_text(
             # Table cell borders are often short horizontal lines that slip
             # past the width-based hline filter but still trigger false
             # underline detection.  Suppress tagging entirely for table text.
+            #
+            # EXCEPTION: DE and IN — see ``_skip_table_filter`` above.
+            # The same false-positive table zones that caused border-
+            # filter removal also trigger blanket tagging suppression.
+            # Both guards are disabled together for these states.
             line_in_table = False
-            if table_zones:
+            if table_zones and not _skip_table_filter:
                 lbbox = line.get("bbox", (0, 0, 0, 0))
                 for zx0, zy0, zx1, zy1 in table_zones:
                     if (lbbox[1] >= zy0 - 2 and lbbox[3] <= zy1 + 2 and
