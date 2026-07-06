@@ -1570,7 +1570,7 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         # Fix: rewrite mirrored closers to canonical form so depth
         # tracking stays balanced.  Must run BEFORE remove_nested_tags.
         merged = _fix_malformed_close_tags(merged)
-        merged = _merge_page_break_paragraph_splits(merged)
+        merged = _merge_page_break_paragraph_splits(merged, state_code=state_code)
 
         merged = consolidate_adjacent_tags(merged)
         merged = remove_nested_tags(merged)
@@ -1893,16 +1893,33 @@ def _split_consecutive_caps_heading_lines(text):
     return '\n'.join(result)
 
 
-def _merge_page_break_paragraph_splits(text):
+def _merge_page_break_paragraph_splits(text, state_code=None):
     """Merge paragraphs that were split mid-sentence at a PDF page break.
 
     The chunk-level LLM sometimes fails to rejoin paragraphs that cross a
     page boundary in the raw PyMuPDF extraction.  Three patterns are
     detected and repaired:
 
-    **Pattern 1 — both tags present** (original):
-      A ends ``<TAG]``, B starts ``[TAG>`` (same type), and the first
-      word after the opening tag in B is lowercase.
+    **Pattern 1 — both tags present**:
+      A ends ``<TAG]``, B starts ``[TAG>`` (same type).
+
+      *Default (all states)*: merges only when B starts with a lowercase
+      letter and A does not end with terminal punctuation — the original
+      conservative behaviour.
+
+      *FL-specific enhancement* (``state_code="FL"``):
+
+      * **1a — mid-sentence**: A does *not* end with terminal punctuation
+        (``. ! ? : ;``) or a section-header delimiter (em/en dash).
+        Merge regardless of B's case (uppercase continuations like
+        ``…Technology<A]  [A>AI Risk Management…`` are common in FL).
+
+      * **1b — same-subsection sentence boundary**: A ends with terminal
+        punctuation *and* A's tag-stripped content is ≥ 40 chars (not a
+        section heading) *and* B does not start with a subsection/section
+        marker.  Handles the case where the LLM left per-line tags
+        unmerged and consecutive sentences within the same subsection got
+        separate tags (``…violations.<A]  [A>The department may…``).
 
     **Pattern 2 — missing re-open tag** (new):
       A ends ``<TAG]`` but B does *not* start with any tag.  The LLM
@@ -1917,8 +1934,26 @@ def _merge_page_break_paragraph_splits(text):
     Runs **before** ``consolidate_adjacent_tags`` / ``merge_split_tags``
     so the structural tag passes see the corrected paragraph topology.
     """
+    _is_fl = state_code and state_code.upper() == "FL"
+
     _BARE_SUBSEC = re.compile(r'^[a-z]\.\s')
     _TAG_STRIP   = re.compile(r'\[([AD])>|<([AD])\]')
+    # Subsection / section markers that signal a NEW paragraph —
+    # never merge across these (same for ALL states including FL).
+    # The FL-specific logic is in Pattern 1 below (line ~1988):
+    # it allows merging across uppercase starts and sentence
+    # boundaries, but ONLY when B doesn't start with any of these
+    # markers.
+    _SUBSEC_OR_SECTION = re.compile(
+        r'^\(\d+\)'            # (1)
+        r'|\([a-zA-Z]{1,4}\)'  # (a), (A), (iv)
+        r'|\d+\.\s'            # 1.
+        r'|[a-z]\.\s'          # a.
+        r'|Sec\.\s'            # Sec.
+        r'|SECTION\s'          # SECTION
+        r'|\d{2,}\.\d'         # 501.9986 (statute numbers)
+        r'|"'                  # "Definition..." start
+    )
 
     paras = text.split('\n\n')
     if len(paras) <= 1:
@@ -1944,17 +1979,49 @@ def _merge_page_break_paragraph_splits(text):
                 # --- Pattern 1: A ends <TAG], B starts [TAG> (same) ---
                 if curr_s.endswith(close_tag) and nxt_s.startswith(open_tag):
                     inner = nxt_s[len(open_tag):].lstrip()
-                    if not inner or not inner[0].islower():
-                        continue
                     text_before = curr_s[:-len(close_tag)].rstrip()
-                    if text_before and text_before[-1] in '.!?':
+                    if not inner or not text_before:
                         continue
-                    # Merge: strip close from A, strip open from B
-                    curr = text_before + ' ' + nxt_s[len(open_tag):]
-                    i += 1
-                    merge_count += 1
-                    did_merge = True
-                    break
+                    # Guard: subsection / section marker → new paragraph
+                    if _SUBSEC_OR_SECTION.match(inner):
+                        continue
+                    # Guard: section-header delimiter (em/en dash)
+                    if text_before[-1] in '\u2014\u2013':
+                        continue
+                    has_terminal = text_before[-1] in '.!?:;'
+                    if _is_fl:
+                        # ── FL-specific enhanced merging ──────────────
+                        if not has_terminal:
+                            # 1a — mid-sentence: no terminal punct →
+                            # always merge regardless of B's case
+                            curr = text_before + ' ' + nxt_s[len(open_tag):]
+                            i += 1
+                            merge_count += 1
+                            did_merge = True
+                            break
+                        # 1b — sentence boundary within same subsection:
+                        # terminal punct present, merge if the prior
+                        # content is substantial (≥ 40 chars)
+                        if len(_TAG_STRIP.sub('', text_before).strip()) >= 40:
+                            curr = text_before + ' ' + nxt_s[len(open_tag):]
+                            i += 1
+                            merge_count += 1
+                            did_merge = True
+                            break
+                        continue
+                    else:
+                        # ── Default (all other states) ────────────────
+                        # Original conservative logic: merge only when
+                        # B starts lowercase and A has no terminal punct
+                        if not inner[0].islower():
+                            continue
+                        if has_terminal:
+                            continue
+                        curr = text_before + ' ' + nxt_s[len(open_tag):]
+                        i += 1
+                        merge_count += 1
+                        did_merge = True
+                        break
 
                 # --- Pattern 2: A ends <TAG], B has NO open tag ---
                 # LLM closed the tag at page break but forgot to reopen.
