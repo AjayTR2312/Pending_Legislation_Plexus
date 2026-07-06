@@ -137,7 +137,7 @@ RULE 5 - CHECK EVERY WORD: Examine each word individually for formatting. Do not
  
 RULE 6 - SUBSECTION LABELS INDEPENDENT: Labels like (a), (b), and (c) may have different formatting than the text that follows them. Check each label separately.
  
-RULE 7 - PRESERVE EXACT VISUAL SEQUENCE: Output every word in the exact left-to-right, top-to-bottom order it appears on the page. Never move, regroup, or reorder words to make the markup look cleaner. If a plain text word appears between a deletion and an addition on the page, keep it between them in the output. Tag each word at the position it occupies visually.
+RULE 7 - PRESERVE EXACT VISUAL SEQUENCE — NO SEMANTIC PAIRING: Output every word in the exact left-to-right, top-to-bottom order it appears on the page. Never move, regroup, or reorder words to make the markup look cleaner. If a plain text word appears between a deletion and an addition on the page, keep it between them in the output. Tag each word at the position it occupies visually. CRITICAL: Do NOT rearrange words to pair each deletion with its semantic replacement. If two deleted words appear consecutively in the PDF followed by two added words, output them in that exact order — deletions first, then additions. Example: If the PDF visually shows (in reading order) "~~old-word1~~ ~~old-word2~~ NEW-WORD1 NEW-WORD2", the CORRECT output is [D>old-word1<D] [D>old-word2<D] [A>NEW-WORD1<A] [A>NEW-WORD2<A]. The WRONG output is [D>old-word1<D] [A>NEW-WORD1<A] [D>old-word2<D] [A>NEW-WORD2<A] — this reorders words by pairing each deletion with its replacement, which violates reading order.
  
 RULE 8 - ADJACENT TAGS IN DOCUMENT ORDER: When two differently-formatted spans appear next to each other, tag each one separately in the exact order they appear in the document. Never absorb a character into an adjacent tag of a different type. Each character belongs to exactly one tag based solely on its own visual formatting.
  
@@ -261,6 +261,7 @@ For EACH formatting span:
 ❌ Converting ALL CAPS to lowercase
 ❌ Splitting continuous formatting into separate tags per line
 ❌ Using markdown: **bold** or *italic* (FORBIDDEN)
+❌ Reordering words to pair each deletion with its semantic replacement — keep the EXACT visual reading order from the PDF
  
 BEGIN CONVERSION NOW.
 ```

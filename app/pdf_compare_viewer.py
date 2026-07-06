@@ -287,11 +287,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,san
 
 /* PDF.js native text layer */
 .pdf-text-layer{
-  position:absolute;left:0;right:0;
-  z-index:6;overflow:hidden;
+  position:absolute;left:0;
+  z-index:6;
+  overflow:hidden;
   user-select:text;-webkit-user-select:text;
   transform-origin:0 0;
   line-height:1;
+  /* Clip content to this element's border-box even when transformed */
+  contain:paint;
 }
 .pdf-text-layer span,.pdf-text-layer br{
   color:transparent;position:absolute;white-space:pre;cursor:text;
@@ -493,10 +496,10 @@ S=_renderScale;
             var tld=document.getElementById('tl_'+idx);
             tld.style.width=vp.width+'px';tld.style.height=vp.height+'px';
             tld.style.top=cv.offsetTop+'px';
-            // Scale text layer to match displayed canvas size
+            // Scale text layer from PDF-point size down to displayed canvas size
             var scaleFactor=cv.clientWidth/vp.width;
             tld.style.transform='scale('+scaleFactor+')';
-            pdfjsLib.renderTextLayer({textContent:tc,container:tld,viewport:vp,enhanceTextSelection:true});
+            pdfjsLib.renderTextLayer({textContent:tc,container:tld,viewport:vp});
           });
         }));
       })(p);
@@ -518,6 +521,11 @@ function syncTextLayers(){
     var cv=ctr.querySelector('canvas');if(!cv)return;
     var tld=ctr.querySelector('.pdf-text-layer');if(!tld)return;
     tld.style.top=cv.offsetTop+'px';
+    // Set the text layer to the canvas's RENDERED pixel dimensions,
+    // then scale it down to the DISPLAYED size.  This keeps overflow:hidden
+    // clipping accurate and prevents bleed across page boundaries.
+    tld.style.width=cv.width+'px';
+    tld.style.height=cv.height+'px';
     var scaleFactor=cv.clientWidth/cv.width;
     tld.style.transform='scale('+scaleFactor+')';
   });

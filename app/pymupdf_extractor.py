@@ -177,7 +177,11 @@ SAME_ROW_Y_TOL_PT        = 2.0   # max y-mid delta for same-physical-row
 # empirical: it puts a typical 8.5×11" page (~510pt wide content area)
 # inside a ~32-column output, which matches the natural density of AR's
 # self-padded rows so AR and DE layouts read at the same visual scale.
-COLUMN_GAP_PAD_MIN_PT    = 60.0  # below this, keep current 1-space joiner
+#
+# Lowered from 60 → 35 to catch IN-style borderless tables where the
+# gap between description and dollar-amount columns is 39–50 pt.  AR
+# self-padded bills (~30 pt per-spacer gap) stay below the threshold.
+COLUMN_GAP_PAD_MIN_PT    = 35.0  # below this, keep current 1-space joiner
 POINTS_PER_PADDING_SPACE = 16.0  # pt per output column (defines target_col)
 COLUMN_GAP_MAX_SPACES    = 80    # safety cap on padding insertion
 COLUMN_GAP_MIN_SPACES    = 6     # minimum cell separator even when target
@@ -1545,6 +1549,7 @@ def _extract_page_tagged_text(
         first_line_in_block = True
         prev_line_y_mid: Optional[float] = None
         prev_line_x1:    Optional[float] = None
+        prev_row_had_column_gap = False  # tabular-row tracker
         for line in block_lines:
             lbbox_full = line.get("bbox", (0, 0, 0, 0))
             line_x0 = lbbox_full[0]
@@ -1623,6 +1628,7 @@ def _extract_page_tagged_text(
                             min(pad_n, COLUMN_GAP_MAX_SPACES),
                         )
                         output.append(" " * pad_n)
+                        prev_row_had_column_gap = True  # mark as tabular row
                     else:
                         output.append(" ")
                 else:
@@ -1634,6 +1640,14 @@ def _extract_page_tagged_text(
                         para_indent_threshold is not None
                         and line_x0 >= para_indent_threshold
                     )
+                    # Force paragraph break after tabular rows so the
+                    # tag merger (_RE_MERGE_ADD cross-line pattern)
+                    # does NOT collapse consecutive table rows into a
+                    # single run-on tag.  The merger respects \n\n as
+                    # a paragraph boundary and won't merge across it.
+                    if prev_row_had_column_gap:
+                        is_para_start = True
+                        prev_row_had_column_gap = False
                     # Close tags before the break — they will be reopened
                     # if the decoration continues on the next line.
                     if in_add:
@@ -4635,6 +4649,11 @@ def clean_extracted_text(
     #    other states format numbered sub-items differently (e.g. CA
     #    keeps them as standalone header lines).  See the docstring of
     #    `split_numbered_item_paragraph_welds` for the detection rules.
+    # ── DE/IN-specific: split tags that span description + dollar amount
+    #    columns, and header:data merged tags (same as Hybrid pipeline).
+    if state_code and state_code.upper() in ("DE", "IN"):
+        cleaned = _split_tabular_header_from_data(cleaned)
+        cleaned = _split_tabular_tag_at_dollar(cleaned)
     if state_code and state_code.upper() == "IN":
         cleaned = _split_in_merged_table_rows(cleaned)
         cleaned = split_numbered_item_paragraph_welds(cleaned)
@@ -5320,6 +5339,103 @@ _RE_TABLE_ROW_BOUNDARY_SINGLE = re.compile(
 )
 
 
+def _fix_leaked_dollar_tags(line: str) -> str:
+    """Re-split a multi-tag line where dollar amounts leaked across tags.
+
+    Input pattern (tags split at wrong boundary)::
+
+        [A>header<A]   [A>The Amount Is: At least 5 years...<A]   [A>$150 At least 10...<A]   [A>$275 ...<A]   [A>$450<A]
+
+    Output (each row on its own line, each cell in its own tag)::
+
+        [A>header<A]          [A>The Amount Is:<A]
+        [A>At least 5 years, but less than 10 years<A]          [A>$150<A]
+        [A>At least 10 years, but less than 20 years<A>          [A>$275<A]
+        ...
+
+    Works by extracting all tag-interior strings, reassembling the
+    description/amount pairs, and re-emitting as properly formatted
+    table rows.
+    """
+    # Extract all tagged segments: list of (tag_type, content)
+    segments = re.findall(r'\[([AD])>([^<]*)<[AD]\]', line)
+    if not segments:
+        return line
+
+    tag_type = segments[0][0]  # use the tag type from the first segment
+
+    # Flatten all content into a single stream, preserving order
+    all_content: list[str] = []
+    for _tag, content in segments:
+        all_content.append(content.strip())
+
+    # Join all content, then split on dollar-amount boundaries.
+    # The dollar amount always starts a new "cell" (right column).
+    # Text after the dollar amount on the same piece starts a new "row"
+    # (left column of the next row).
+    joined = ' '.join(all_content)
+
+    # Split into: [header_text, $amt1, row2_text, $amt2, row3_text, ...]
+    # Pattern: split on ($NNN) keeping the separator
+    parts = re.split(r'(\$\d[\d,.]*)', joined)
+    # parts = [header_or_desc, '$150', ' desc2 ', '$275', ' desc3 ', ...]
+
+    if len(parts) < 3:
+        return line  # no dollar splits → bail
+
+    # Build rows: pair each description with the NEXT dollar amount.
+    # The first element is the header(s) / first description.
+    rows: list[tuple[str, str | None]] = []
+    # First part may be "header_col1 The Amount Is: desc1" — we need
+    # to split the header row from the first data row.
+    first_part = parts[0].strip()
+
+    # Process in pairs: (desc_text, $amount)
+    i = 0
+    pending_desc = first_part
+    while i < len(parts):
+        if i == 0:
+            pending_desc = parts[0].strip()
+            i += 1
+            continue
+        # parts[i] should be a dollar amount, parts[i+1] (if exists)
+        # is the next description
+        dollar = parts[i].strip()
+        next_desc = parts[i + 1].strip() if i + 1 < len(parts) else ''
+        rows.append((pending_desc, dollar))
+        pending_desc = next_desc
+        i += 2
+
+    # If there's trailing text without a dollar amount
+    if pending_desc:
+        rows.append((pending_desc, None))
+
+    # Now check for multi-part headers. The first row's "description"
+    # might contain the column headers merged together.
+    # E.g. "If a Member's Creditable Service Is: The Amount Is:"
+    # We need to keep the first row intact if it looks like a header.
+
+    # Emit rows as properly formatted lines.
+    # CRITICAL: join with \n\n (paragraph break) so that a subsequent
+    # ``consolidate_adjacent_tags`` call (which merges ``<A]\n[A>`` but
+    # respects ``<A]\n\n[A>`` as a paragraph boundary) does NOT re-merge
+    # the split table rows back into a single run-on line.
+    result_lines: list[str] = []
+    for desc, amount in rows:
+        if not desc and not amount:
+            continue
+        if amount:
+            result_lines.append(
+                f'[{tag_type}>{desc}<{tag_type}]          [{tag_type}>{amount}<{tag_type}]'
+            )
+        elif desc:
+            result_lines.append(f'[{tag_type}>{desc}<{tag_type}]')
+
+    if result_lines:
+        return '\n\n'.join(result_lines)
+    return line
+
+
 def _split_in_merged_table_rows(text: str) -> str:
     """Split table rows the LLM collapsed and give each cell its own tag.
 
@@ -5330,14 +5446,19 @@ def _split_in_merged_table_rows(text: str) -> str:
 
     The LLM sometimes (a) merges all rows into one paragraph inside a
     single tag, and/or (b) keeps each row in one tag instead of giving
-    the description and dollar amount separate tags.
+    the description and dollar amount separate tags, and/or (c) splits
+    tags at the wrong boundaries so dollar amounts leak across tags::
 
-    This function fixes both:
+        [A>header<A]  [A>$150 At least 10 years...<A]  [A>$275 ...<A]
+
+    This function fixes all three:
 
     1. Tags with 3+ dollar amounts → re-split into separate rows.
        Works with both multi-space AND single-space gaps (the LLM
        often normalises whitespace to single spaces).
     2. ``[A>description   $150<A]`` → ``[A>description<A>  [A>$150<A]``.
+    3. Multi-tag lines where dollar amounts leaked across tag
+       boundaries → re-split into proper rows.
 
     Scoped to IN only by callers.
     """
@@ -5347,6 +5468,27 @@ def _split_in_merged_table_rows(text: str) -> str:
 
     for line in lines:
         stripped = line.strip()
+
+        # ── Case 3: multi-tag line with dollar leakage ──────────────
+        # Pattern: [A>header<A]   [A>$150 desc2<A]   [A>$275 desc3<A]  [A>$450<A]
+        # The LLM split tags at the wrong place so each tag STARTS with
+        # a $ amount that belongs to the PREVIOUS row.  Detect by
+        # counting tags and checking if any tag interior starts with $.
+        tag_count_a = stripped.count('[A>') + stripped.count('[D>')
+        if tag_count_a >= 3:
+            # Count dollar amounts across ALL tags on this line
+            all_dollars = re.findall(r'\$\d[\d,]*', stripped)
+            # Check for the leaked-dollar pattern: a tag whose content
+            # starts with "$NNN followed by text" (i.e. "$150 At least")
+            leaked = re.findall(
+                r'\[[AD]>(\$\d[\d,]*)\s+([A-Z][^<]*)<[AD]\]', stripped
+            )
+            if len(all_dollars) >= 3 and leaked:
+                result = _fix_leaked_dollar_tags(stripped)
+                if result != stripped:
+                    new_lines.append(result)
+                    changed = True
+                    continue
 
         # Detect single-tag lines: [A>content<A] or [D>content<D]
         tag_info = None
@@ -5400,7 +5542,9 @@ def _split_in_merged_table_rows(text: str) -> str:
                         f'[{tag}>{desc}<{tag}]          [{tag}>{amount}<{tag}]')
                 else:
                     row_lines.append(f'[{tag}>{desc}<{tag}]')
-            new_lines.append('\n'.join(row_lines))
+            # Join with \n\n (paragraph break) so a subsequent
+            # consolidate_adjacent_tags call cannot re-merge the rows.
+            new_lines.append('\n\n'.join(row_lines))
             changed = True
 
         elif dollar_count == 1:
@@ -5953,7 +6097,11 @@ def _split_tabular_header_from_data(text: str) -> str:
         tag = m.group(1)     # 'A' or 'D'
         header = m.group(2).rstrip()
         data = m.group(3).rstrip()
-        return f'[{tag}>{header}:<{tag}]\n[{tag}>{data}<{tag}]'
+        # Use \n\n (paragraph break) so the downstream
+        # consolidate_adjacent_tags / merge_split_tags calls in
+        # streamlit_app.py cannot re-merge header and data.  Those
+        # functions only merge across a single \n, never \n\n.
+        return f'[{tag}>{header}:<{tag}]\n\n[{tag}>{data}<{tag}]'
 
     return _RE_HEADER_COLON_BEFORE_DOLLAR.sub(_split, text)
 
