@@ -3262,6 +3262,19 @@ def deterministic_cleanup(text, state_config=None, state_code=None):
             r'|^(?:\([a-zA-Z0-9.]+\)){2,}[;,.:]*$'   # compound: (1)(a)(I), (1)(a)(I);
         )
 
+        def _is_alphanumeric_ref(w: str) -> bool:
+            """True if word is an alphanumeric reference, not real text.
+
+            Catches statutory section numbers (2000d, 1232g), mixed
+            references ((a.1), 4th), or any token that contains at
+            least one digit and at most 3 lowercase letters.  Real
+            words like 'Investigation', 'and', 'procedures' have many
+            more lowercase letters and no digits, so they stay 'L'.
+            """
+            lower_count = sum(1 for c in w if c.islower())
+            has_digit = any(c.isdigit() for c in w)
+            return has_digit and lower_count <= 3
+
         # Roman numeral pattern for false-positive detection.
         # Bare Roman numerals like "VI" in "Title VI" are section/title
         # references, NOT ALL-CAPS new-text headings.
@@ -3289,8 +3302,8 @@ def deterministic_cleanup(text, state_config=None, state_code=None):
             #   'N' = neutral  (no letters, or subsection label)
             classes = []
             for w in words:
-                if _subsec_label_re.match(w):
-                    classes.append('N')  # subsection label → neutral
+                if _subsec_label_re.match(w) or _is_alphanumeric_ref(w):
+                    classes.append('N')  # subsection / alphanumeric ref → neutral
                 elif _word_is_caps(w):
                     classes.append('C')
                 elif _word_is_neutral(w):
@@ -3298,8 +3311,15 @@ def deterministic_cleanup(text, state_config=None, state_code=None):
                 else:
                     classes.append('L')
 
-            # If no CAPS words at all → strip entire tag
+            # If no CAPS words at all:
             if 'C' not in classes:
+                # ALL neutral (subsection labels, numbers, refs) — keep
+                # the tag.  merge_split_tags runs later and will merge
+                # it into the adjacent CAPS tag on the same line.
+                # e.g. [A>(4)<A] [A>(c)<A] [A>ON JULY 1,...<A] → merged
+                if 'L' not in classes:
+                    return m.group(0)      # keep tag
+                # Has real lowercase words → strip entire tag
                 return content
 
             # If no lowercase words at all → keep entire tag
