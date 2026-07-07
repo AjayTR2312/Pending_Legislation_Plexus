@@ -19,8 +19,8 @@ SFTP_PORT = 22
 SFTP_USER = "mag2ftp"
 REMOTE_DIR = "/apps/Codes/MP2/LandingStrips/LCPR/ftp/keyed"
 
-# Local directory containing files to upload
-LOCAL_DIR = os.environ.get("UPLOAD_SOURCE_DIR", "/home/m6119788/Pending_Legislation/pending_outputs")
+# Local directory — sessions are stored under tmp/pending_processing/
+LOCAL_DIR = os.environ.get("UPLOAD_SOURCE_DIR", "/home/m6119788/Pending_Legislation/tmp/pending_processing")
 
 
 def connect_sftp(username: str, password: str) -> tuple[paramiko.Transport, paramiko.SFTPClient]:
@@ -44,7 +44,11 @@ def ensure_remote_dir(sftp: paramiko.SFTPClient, remote_dir: str):
 
 
 def upload_files(sftp: paramiko.SFTPClient, local_dir: str, remote_dir: str, extensions: tuple = (".txt",)):
-    """Upload files from local_dir to remote_dir."""
+    """Upload output files from session folders to remote_dir.
+
+    Scans local_dir recursively for files in output/ subdirectories
+    (e.g. pending_processing/{date}/{session}/output/*.txt).
+    """
     ensure_remote_dir(sftp, remote_dir)
 
     local_path = Path(local_dir)
@@ -52,13 +56,18 @@ def upload_files(sftp: paramiko.SFTPClient, local_dir: str, remote_dir: str, ext
         print(f"[ERROR] Local directory not found: {local_dir}")
         return
 
-    files = [f for f in local_path.iterdir() if f.is_file() and f.suffix.lower() in extensions]
+    # Collect output files from session folders
+    files = []
+    for ext in extensions:
+        files.extend(local_path.glob(f"**/output/*{ext}"))
+    # Deduplicate and sort
+    files = sorted(set(files))
 
     if not files:
-        print(f"[INFO] No matching files found in {local_dir}")
+        print(f"[INFO] No matching output files found under {local_dir}")
         return
 
-    print(f"[INFO] Found {len(files)} file(s) to upload")
+    print(f"[INFO] Found {len(files)} output file(s) to upload")
 
     uploaded = 0
     failed = 0

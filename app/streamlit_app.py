@@ -10,8 +10,9 @@ import logging
 import threading
 import copy
 
-# Add the current directory to the Python path
+# Add the current directory and the project root to the Python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import our processing functions
 try:
@@ -87,26 +88,23 @@ try:
         extract_word_bboxes as compare_extract_word_bboxes,
         build_word_level_map as compare_build_word_level_map,
         build_viewer_html as compare_build_viewer_html,
+        compute_diff_map as compare_compute_diff_map,
     )
 except ImportError:
     compare_render_pdf_pages = compare_extract_word_bboxes = None
     compare_build_word_level_map = compare_build_viewer_html = None
+    compare_compute_diff_map = None
     logging.warning("⚠️ pdf_compare_viewer module not found — PDF↔Text compare viewer disabled")
 
 # ── SFTP Submit to Keyed helper ────────────────────────────────────────────
 def _submit_to_keyed_sftp(file_path: str, edited_text: str = None):
-    """Save edited text back to the source folder, copy to pending_outputs/, and upload via SFTP.
-    
-    If edited_text is provided, the file is updated in-place (in the dated folder)
-    before staging and uploading.
+    """Upload file to SFTP /ftp/keyed directly from its session folder.
+
+    If edited_text is provided, the file is updated in-place before uploading.
     """
     from dotenv import load_dotenv as _ld
     _ld()
     import paramiko
-
-    _project_root = Path(__file__).resolve().parent.parent
-    _outputs_dir = _project_root / "pending_outputs"
-    _outputs_dir.mkdir(parents=True, exist_ok=True)
 
     src = Path(file_path)
 
@@ -116,11 +114,7 @@ def _submit_to_keyed_sftp(file_path: str, edited_text: str = None):
             f.write(edited_text)
         logging.info(f"[HITL] Updated {src.name} with validated edits")
 
-    # Stage file to pending_outputs/
-    dest = _outputs_dir / src.name
-    shutil.copy2(src, dest)
-
-    # SFTP upload
+    # SFTP upload directly from source
     _host = "10.17.38.130"
     _port = 22
     _user = "mag2ftp"
@@ -134,8 +128,12 @@ def _submit_to_keyed_sftp(file_path: str, edited_text: str = None):
     transport.connect(username=_user, password=_password)
     sftp = paramiko.SFTPClient.from_transport(transport)
     try:
-        sftp.put(str(dest), f"{_remote_dir}/{src.name}")
+        sftp.put(str(src), f"{_remote_dir}/{src.name}")
         logging.info(f"[SFTP] Uploaded {src.name} to {_remote_dir}")
+
+        # Write upload log via session manager
+        session_mgr = st.session_state.get('session_manager') or get_session_manager()
+        session_mgr.write_upload_log(f"UPLOADED {src.name} → {_remote_dir}/{src.name}")
     finally:
         sftp.close()
         transport.close()
@@ -2750,10 +2748,10 @@ def show_simple_ui():
         # No file uploader shown — results take full space
         uploaded_files = []
     else:
-        # Radio toggle between Upload and Pipeline Sessions
+        # Radio toggle between Upload, Downloads, and Pipeline Sessions
         _input_mode = st.radio(
             "Input source",
-            ["📁 Upload PDF Files", "📂 Pipeline Sessions"],
+            ["📁 Upload PDF Files", "📥 Downloaded Files", "📂 Pipeline Sessions"],
             horizontal=True,
             key="input_mode_radio",
             label_visibility="collapsed",
@@ -2771,33 +2769,125 @@ def show_simple_ui():
                 key=_uploader_key,
                 help="Upload one or more PDF files (max 15 pages each)"
             )
+        elif _input_mode == "📥 Downloaded Files":
+            # ── Process files from pending_downloads/ ─────────────────────
+            st.header("📥 Downloaded Files")
+            uploaded_files = []
+            _downloads_dir = Path(__file__).resolve().parent.parent / "tmp" / "pending_downloads"
+            _downloads_dir.mkdir(parents=True, exist_ok=True)
+            st.caption(f"📂 `{_downloads_dir}`")
+
+            # Check SFTP button
+            if st.button("🔄 Check SFTP for New Files", use_container_width=True, key="dl_check_sftp_btn"):
+                import sys as _sys
+                _proj_root = Path(__file__).resolve().parent.parent
+                if str(_proj_root) not in _sys.path:
+                    _sys.path.insert(0, str(_proj_root))
+                from pipeline_runner import download_new_files
+                with st.spinner("Connecting to SFTP..."):
+                    _new_files = download_new_files()
+                if _new_files:
+                    st.success(f"📥 Downloaded {len(_new_files)} new file(s) from SFTP")
+                    st.rerun()
+                else:
+                    st.info("No new files on SFTP server")
+
+            # List available ZIPs
+            _zip_files = sorted(_downloads_dir.glob("*.zip"), key=lambda x: x.stat().st_mtime, reverse=True)
+            if _zip_files:
+                _zip_labels = [f"{z.name}  ({z.stat().st_size // 1024} KB)" for z in _zip_files]
+                _selected_zips = st.multiselect(
+                    "Select ZIP file(s) to process",
+                    range(len(_zip_files)),
+                    format_func=lambda i: _zip_labels[i],
+                    key="dl_zip_select",
+                )
+
+                if _selected_zips:
+                    st.caption(f"Selected {len(_selected_zips)} ZIP(s) for conversion")
+                    if st.button("⚙️ Extract & Convert", type="primary", use_container_width=True, key="dl_convert_btn"):
+                        import sys as _sys
+                        import shutil as _shutil2
+                        _proj_root = Path(__file__).resolve().parent.parent
+                        if str(_proj_root) not in _sys.path:
+                            _sys.path.insert(0, str(_proj_root))
+                        from pipeline_runner import extract_zips, convert_pdf, get_today_folder
+
+                        _chosen_zips = [_zip_files[i] for i in _selected_zips]
+                        with st.spinner(f"Extracting {len(_chosen_zips)} ZIP(s)..."):
+                            _extracted = extract_zips(_chosen_zips)
+
+                        if _extracted:
+                            _progress = st.progress(0, text="Converting...")
+                            _total = len(_extracted)
+                            _success = 0
+                            _converted_paths = []
+                            for _idx, _item in enumerate(_extracted):
+                                _progress.progress((_idx + 1) / _total, text=f"Converting {_idx + 1}/{_total}: {Path(_item['pdf_path']).name}")
+                                _out_dir = Path(_item['date_folder']) / _item['session_id'] / 'output'
+                                _result = convert_pdf(_item['pdf_path'], _item['state'], _out_dir)
+                                if _result:
+                                    _success += 1
+                                    _converted_paths.append(_result)
+                            _progress.progress(1.0, text="Uploading...")
+
+                            # Upload to SFTP /ftp/keyed
+                            _upload_ok = 0
+                            _upload_log_entries = []
+                            try:
+                                from ftp_upload import connect_sftp as _up_connect, SFTP_USER as _up_user, REMOTE_DIR as _up_remote
+                                _ftp_pw = os.environ.get("FTP_PASSWORD", "")
+                                if _ftp_pw and _converted_paths:
+                                    _transport, _sftp = _up_connect(_up_user, _ftp_pw)
+                                    try:
+                                        for _cp in _converted_paths:
+                                            _sftp.put(_cp, f"{_up_remote}/{Path(_cp).name}")
+                                            _upload_ok += 1
+                                            _upload_log_entries.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] UPLOADED {Path(_cp).name} → {_up_remote}/{Path(_cp).name}")
+                                            logging.info(f"[SFTP] Uploaded {Path(_cp).name} to {_up_remote}")
+                                    finally:
+                                        _sftp.close()
+                                        _transport.close()
+                            except Exception as _ue:
+                                st.warning(f"⚠️ SFTP upload error: {_ue}")
+                                _upload_log_entries.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ERROR: {_ue}")
+
+                            # Write upload log via session manager
+                            if _upload_log_entries:
+                                _sm = st.session_state.get('session_manager') or get_session_manager()
+                                for _entry in _upload_log_entries:
+                                    _sm.write_upload_log(_entry)
+
+                            _progress.empty()
+                            st.markdown(
+                                f'<div style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:10px; '
+                                f'padding:12px 20px; display:flex; align-items:center; gap:12px; margin-bottom:8px; '
+                                f'box-shadow:0 1px 4px rgba(0,0,0,.04);">'
+                                f'<span style="font-size:1.2rem;">✅</span>'
+                                f'<span style="font-weight:600; color:#166534;">Done</span>'
+                                f'<span style="font-size:0.88rem; color:#1e293b;">{_success}/{_total} converted</span>'
+                                f'<span style="font-size:0.82rem; color:#475569;">| {_upload_ok} uploaded to /ftp/keyed</span>'
+                                f'<span style="margin-left:auto; color:#64748b; font-size:0.85rem;">→ tmp/pending_processing/{get_today_folder().name}/</span>'
+                                f'</div>',
+                                unsafe_allow_html=True,
+                            )
+                            st.rerun()
+                        else:
+                            st.warning("No new PDFs to extract (already processed)")
+            else:
+                st.info("No ZIP files in pending_downloads/. Click 'Check SFTP' to download.")
         else:
             # ── Pipeline Sessions (SFTP → Convert → Review) ───────────────
             st.header("📂 Pipeline Sessions")
             uploaded_files = []
-            _pipeline_dir = Path(__file__).resolve().parent.parent / "pending_processing"
-            if _pipeline_dir.exists():
-                _p_sessions = []
-                for _entry in sorted(_pipeline_dir.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
-                    if not _entry.is_dir() or _entry.name.startswith("."):
-                        continue
-                    if len(_entry.name) == 8 and _entry.name.isdigit():
-                        for _sub in sorted(_entry.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
-                            if _sub.is_dir():
-                                _p_sessions.append((_entry.name, _sub))
-                    else:
-                        _p_sessions.append(("", _entry))
 
-                if _p_sessions:
+            _pipeline_sm = st.session_state.get('session_manager') or get_session_manager()
+            _p_sessions = _pipeline_sm.list_persisted_sessions()
+            if _p_sessions:
                     _session_labels = []
-                    for _date_label, _ps in _p_sessions:
-                        _out_dir = _ps / "output"
-                        _in_dir = _ps / "input"
-                        _n_out = len(list(_out_dir.glob("*.txt"))) if _out_dir.exists() else 0
-                        _n_pdf = len(list(_in_dir.glob("*.pdf"))) if _in_dir.exists() else len(list(_ps.glob("*.pdf")))
-                        _state = _ps.name.split("_")[0]
-                        _prefix = f"[{_date_label}] " if _date_label else ""
-                        _label = f"{_prefix}{_state} | {_n_pdf} PDFs | {_n_out} converted"
+                    for _ps in _p_sessions:
+                        _prefix = f"[{_ps['date_label']}] " if _ps['date_label'] else ""
+                        _label = f"{_prefix}{_ps['state']} | {_ps['n_pdfs']} PDFs | {_ps['n_outputs']} converted"
                         _session_labels.append(_label)
 
                     _sel_idx = st.selectbox(
@@ -2806,11 +2896,12 @@ def show_simple_ui():
                         format_func=lambda i: _session_labels[i],
                         key="pipeline_session_select",
                     )
-                    _date_lbl, _selected_session = _p_sessions[_sel_idx]
+                    _selected_ps = _p_sessions[_sel_idx]
+                    _selected_session = _selected_ps['path']
                     _sel_output_dir = _selected_session / "output"
                     _sel_input_dir = _selected_session / "input"
 
-                    _converted_files = sorted(_sel_output_dir.glob("*.txt")) if _sel_output_dir.exists() else []
+                    _converted_files = _selected_ps['output_files']
                     if _converted_files:
                         st.caption(f"✅ {len(_converted_files)} file(s) ready for review")
                         _file_choice = st.selectbox(
@@ -2886,8 +2977,6 @@ def show_simple_ui():
                             st.caption(f"⏳ {len(_pdfs)} PDF(s) awaiting conversion")
                         else:
                             st.caption("Empty session")
-                else:
-                    st.info("No pipeline sessions yet")
             else:
                 st.info("No pipeline sessions yet")
 
@@ -3226,7 +3315,8 @@ def show_simple_ui():
                 # Partial results exist but worker stopped — show what we have
                 show_batch_results_section()
         else:
-            st.info("👆 Please upload one or more PDF files to begin processing")
+            if st.session_state.get('input_mode_radio') == "📁 Upload PDF Files":
+                st.info("👆 Please upload one or more PDF files to begin processing")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -3547,10 +3637,17 @@ def show_results_section():
                     _images = compare_render_pdf_pages(_pdf_bytes)
                     _words = compare_extract_word_bboxes(_pdf_bytes)
                     _word_map = compare_build_word_level_map(_clean_lines, _words)
+                    if compare_compute_diff_map:
+                        _dev_map, _miss_map, _n_pdf_missing = compare_compute_diff_map(_clean_lines, _words)
+                    else:
+                        _dev_map, _miss_map, _n_pdf_missing = {}, {}, 0
 
                 _viewer_html = compare_build_viewer_html(
                     _images, _clean_lines, _word_map,
                     filename=Path(_txt_path).name,
+                    dev_map=_dev_map,
+                    miss_map=_miss_map,
+                    n_pdf_missing=_n_pdf_missing,
                 )
                 st.components.v1.html(_viewer_html, height=920, scrolling=False)
             except Exception as _cmp_err:
@@ -5110,6 +5207,18 @@ def show_single_file_processing():
             except Exception as _read_err:
                 logging.warning(f"Could not cache output file bytes: {_read_err}")
                 st.session_state.processed_file_data = None
+
+            # ── Persist input + output via SessionManager ────────────
+            try:
+                _pdf_src = st.session_state.temp_pdf_path
+                _state_code = st.session_state.get('detected_state', 'UNK') or 'UNK'
+                _persist_sm = st.session_state.get('session_manager') or get_session_manager()
+                _pp_dir = _persist_sm.persist_session(_pdf_src, result, _state_code)
+                if _pp_dir:
+                    logging.info(f"[Pipeline] Persisted session: {_pp_dir}")
+            except Exception as _pp_err:
+                logging.warning(f"Could not persist session: {_pp_err}")
+
             success_msg = "🎉 Processing completed successfully!"
             if st.session_state.processing_time:
                 success_msg += f" ⏱️ Total time: {st.session_state.processing_time}"

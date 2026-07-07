@@ -45,10 +45,9 @@ load_dotenv()
 
 # ── Paths ──────────────────────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).resolve().parent
-DOWNLOADS_DIR = Path(os.environ.get("DOWNLOAD_DEST_DIR", PROJECT_ROOT / "pending_downloads"))
-PROCESSING_DIR = PROJECT_ROOT / "pending_processing"
-OUTPUTS_DIR = PROJECT_ROOT / "pending_outputs"
-PROCESSED_LOG = PROJECT_ROOT / "pending_processing" / ".processed_files.json"
+DOWNLOADS_DIR = Path(os.environ.get("DOWNLOAD_DEST_DIR", PROJECT_ROOT / "tmp" / "pending_downloads"))
+PROCESSING_DIR = PROJECT_ROOT / "tmp" / "pending_processing"
+PROCESSED_LOG = PROJECT_ROOT / "tmp" / "pending_processing" / ".processed_files.json"
 
 
 def get_today_folder() -> Path:
@@ -282,19 +281,9 @@ def convert_all(extracted_files: list[dict]) -> list[dict]:
 
 
 def submit_to_keyed(file_paths: list[str]) -> bool:
-    """Copy approved files to pending_outputs/ and upload via SFTP."""
+    """Upload approved files to SFTP /ftp/keyed directly from their session folders."""
     from ftp_upload import connect_sftp, SFTP_USER, REMOTE_DIR as UPLOAD_REMOTE_DIR
     import paramiko
-
-    OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
-
-    # Copy files to pending_outputs
-    for fp in file_paths:
-        src = Path(fp)
-        if src.exists():
-            dest = OUTPUTS_DIR / src.name
-            shutil.copy2(src, dest)
-            log.info(f"  Staged: {src.name} → pending_outputs/")
 
     # Upload via SFTP
     password = os.environ.get("FTP_PASSWORD")

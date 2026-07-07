@@ -20,7 +20,7 @@ SFTP_USER = "mag2ftp"
 REMOTE_DIR = "/apps/Codes/MP2/LandingStrips/LCPR/ftp/out"
 
 # Local directory to save downloaded files
-LOCAL_DIR = os.environ.get("DOWNLOAD_DEST_DIR", "/home/m6119788/Pending_Legislation/pending_downloads")
+LOCAL_DIR = os.environ.get("DOWNLOAD_DEST_DIR", "/home/m6119788/Pending_Legislation/tmp/pending_downloads")
 
 
 def connect_sftp(username: str, password: str) -> tuple[paramiko.Transport, paramiko.SFTPClient]:
