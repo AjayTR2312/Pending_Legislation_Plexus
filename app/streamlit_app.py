@@ -1478,7 +1478,7 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
         if status_placeholder:
             status_placeholder.info("💾 Saving output...")
 
-        output_filename = Path(pdf_path).stem + "_claude_opus.txt"
+        output_filename = Path(pdf_path).stem + ".txt"
         output_path = os.path.join(session_folders['output_folder'], output_filename)
         os.makedirs(session_folders['output_folder'], exist_ok=True)
 
@@ -1912,7 +1912,7 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
             _mark_flags["mark_brackets"] = add_cfg.get("brackets", False) or del_cfg.get("brackets", False)
 
         # Output paths
-        output_filename = Path(pdf_path).stem + "_claude_opus_pymupdf_clean.txt"
+        output_filename = Path(pdf_path).stem + ".txt"
         output_path = os.path.join(session_folders['output_folder'], output_filename)
         os.makedirs(session_folders['output_folder'], exist_ok=True)
 
@@ -2244,7 +2244,7 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
         if status_placeholder:
             status_placeholder.info("💾 Saving output...")
 
-        output_filename = Path(pdf_path).stem + "_hybrid.txt"
+        output_filename = Path(pdf_path).stem + ".txt"
         output_path = os.path.join(session_folders['output_folder'], output_filename)
         os.makedirs(session_folders['output_folder'], exist_ok=True)
 
@@ -2779,10 +2779,6 @@ def show_simple_ui():
 
             # Check SFTP button
             if st.button("🔄 Check SFTP for New Files", use_container_width=True, key="dl_check_sftp_btn"):
-                import sys as _sys
-                _proj_root = Path(__file__).resolve().parent.parent
-                if str(_proj_root) not in _sys.path:
-                    _sys.path.insert(0, str(_proj_root))
                 from pipeline_runner import download_new_files
                 with st.spinner("Connecting to SFTP..."):
                     _new_files = download_new_files()
@@ -2806,11 +2802,7 @@ def show_simple_ui():
                 if _selected_zips:
                     st.caption(f"Selected {len(_selected_zips)} ZIP(s) for conversion")
                     if st.button("⚙️ Extract & Convert", type="primary", use_container_width=True, key="dl_convert_btn"):
-                        import sys as _sys
                         import shutil as _shutil2
-                        _proj_root = Path(__file__).resolve().parent.parent
-                        if str(_proj_root) not in _sys.path:
-                            _sys.path.insert(0, str(_proj_root))
                         from pipeline_runner import extract_zips, convert_pdf, get_today_folder
 
                         _chosen_zips = [_zip_files[i] for i in _selected_zips]
@@ -4137,7 +4129,7 @@ class BatchWorker:
         add_log(f"🏁 PDF Conversion complete in {conversion_time_str}")
         add_log("💾 Saving converted output...")
 
-        output_filename = Path(pdf_path).stem + "_claude_opus.txt"
+        output_filename = Path(pdf_path).stem + ".txt"
         output_path = os.path.join(session_folders['output_folder'], output_filename)
         os.makedirs(session_folders['output_folder'], exist_ok=True)
         if not opus.save_text_file(converted_text, output_path):
