@@ -94,12 +94,10 @@ try:
         extract_word_bboxes as compare_extract_word_bboxes,
         build_word_level_map as compare_build_word_level_map,
         build_viewer_html as compare_build_viewer_html,
-        compute_diff_map as compare_compute_diff_map,
     )
 except ImportError:
     compare_render_pdf_pages = compare_extract_word_bboxes = None
     compare_build_word_level_map = compare_build_viewer_html = None
-    compare_compute_diff_map = None
     logging.warning("⚠️ pdf_compare_viewer module not found — PDF↔Text compare viewer disabled")
 
 # ── SFTP Submit to Keyed helper ────────────────────────────────────────────
@@ -5111,17 +5109,10 @@ def show_results_section():
                 with st.spinner("Extracting words & mapping…"):
                     _words = compare_extract_word_bboxes(_pdf_bytes)
                     _word_map = compare_build_word_level_map(_clean_lines, _words)
-                    if compare_compute_diff_map:
-                        _dev_map, _miss_map, _n_pdf_missing = compare_compute_diff_map(_clean_lines, _words)
-                    else:
-                        _dev_map, _miss_map, _n_pdf_missing = {}, {}, 0
 
                 _viewer_html = compare_build_viewer_html(
                     _pdf_bytes, _clean_lines, _word_map,
                     filename=Path(_txt_path).name,
-                    dev_map=_dev_map,
-                    miss_map=_miss_map,
-                    n_pdf_missing=_n_pdf_missing,
                 )
                 # ── Iframe height strategy ─────────────────────────
                 # The iframe is sized via THREE mechanisms in priority
@@ -5305,19 +5296,20 @@ def show_results_section():
 
             # ── 3. Metrics cards (only if we have counts) ───────────────────
             if _n_total is not None:
-                _card = (
-                    'display:flex; flex-direction:column; align-items:center; '
-                    'padding:14px 10px; border-radius:10px; flex:1; min-width:100px;'
-                )
-                st.markdown(f"""
+                try:
+                    _card = (
+                        'display:flex; flex-direction:column; align-items:center; '
+                        'padding:14px 10px; border-radius:10px; flex:1; min-width:100px;'
+                    )
+                    st.markdown(f"""
                 <div style="display:flex; gap:12px; flex-wrap:wrap; margin:0 0 16px;">
                     <div style="{_card} background:#f8fafc; border:1px solid #e2e8f0;">
                         <span style="font-size:1.6rem; font-weight:800; color:#0f172a;">{_n_total}</span>
                         <span style="font-size:0.78rem; color:#64748b; margin-top:2px;">Total Items</span>
                     </div>
                     """, unsafe_allow_html=True)
-            except Exception:
-                pass  # audit metrics are nice-to-have; don't break Summary tab
+                except Exception:
+                    pass  # audit metrics are nice-to-have; don't break Summary tab
 
         # ── Submit to Keyed (SFTP Upload) ─────────────────────────────────────
         st.markdown("---")
