@@ -1300,7 +1300,8 @@ def _count_chars_since_last_newline(output_pieces: List[str]) -> int:
 # (``SAME_ROW_Y_TOL_PT``) and column-gap padding then correctly place the
 # org name next to its dollar amount on the same output line.
 
-def _merge_overlapping_blocks(text_dict: dict) -> dict:
+def _merge_overlapping_blocks(text_dict: dict, state_code: Optional[str] = None,
+                               page_rotation: int = 0) -> dict:
     """Merge text blocks that share overlapping y-ranges.
 
     For each pair of text blocks whose vertical extents overlap, the
@@ -1308,8 +1309,22 @@ def _merge_overlapping_blocks(text_dict: dict) -> dict:
     list at the correct y-sorted position, and the smaller block is
     removed.  Non-text blocks (images) are left untouched.
 
+    For DC: skips merging entirely on rotated pages (rotation != 0)
+    because y-overlap on a rotated page means the blocks sit side-by-
+    side horizontally, not in the same row.  Also requires the overlap
+    to be at least 50 % of the smaller block on non-rotated pages.
+
     Returns the (possibly mutated) *text_dict*.
     """
+    # DC rotated pages: blocks at same y-range are separate visual
+    # sections (resume entries, bios) stacked by x-coordinate.
+    # Merging them interleaves lines and scrambles reading order.
+    if state_code and state_code.upper() == "DC" and page_rotation != 0:
+        logger.debug(
+            "DC rotated page (rotation=%d) — skipping block merge",
+            page_rotation,
+        )
+        return text_dict
     blocks = text_dict.get("blocks", [])
     if len(blocks) < 2:
         return text_dict
@@ -1346,6 +1361,26 @@ def _merge_overlapping_blocks(text_dict: dict) -> dict:
             overlap = min(ya_max, yb_max) - max(ya_min, yb_min)
             if overlap <= 0:
                 continue
+
+            # DC-only guard: only merge when the overlap is a significant
+            # fraction of the SMALLER block's height.  DC bio/resume
+            # pages have tall, multi-line blocks (employment sections)
+            # that overlap by just a few points at their boundary.
+            # Merging them interleaves lines and scrambles reading
+            # order.  Genuine tabular columns (the DE grants use-case)
+            # share nearly their full height so pass easily.
+            if state_code and state_code.upper() == "DC":
+                height_a = ya_max - ya_min
+                height_b = yb_max - yb_min
+                smaller_height = min(height_a, height_b)
+                if smaller_height > 0 and (overlap / smaller_height) < 0.5:
+                    logger.debug(
+                        "DC: skipped merge blocks %d & %d — overlap "
+                        "%.1fpt is only %.0f%% of smaller height %.1fpt",
+                        i_a, i_b, overlap,
+                        100 * overlap / smaller_height, smaller_height,
+                    )
+                    continue
             # The blocks overlap.  Merge B's lines into A.
             host_lines = blocks[i_a].get("lines", [])
             guest_lines = blocks[i_b].get("lines", [])
@@ -1540,17 +1575,27 @@ def _extract_page_tagged_text(
     # y-coordinate.  This lets the existing same-row detection
     # (SAME_ROW_Y_TOL_PT) and column-gap padding correctly place the
     # org names next to their amounts.
-    text_dict = _merge_overlapping_blocks(text_dict)
+    text_dict = _merge_overlapping_blocks(text_dict, state_code=state_code,
+                                           page_rotation=page.rotation)
 
-    # -- 2c. Sort blocks by y-coordinate for correct reading order --
+    # -- 2c. Sort blocks by coordinate for correct reading order --
     # PyMuPDF returns blocks in PDF *drawing* order, which may NOT
     # match visual top-to-bottom reading order.  Example: DC Council
     # letterhead blocks (author name / committee columns) are drawn
     # after the body-text blocks despite sitting near the page top.
     # Without this sort the author block ends up after the bullet-
     # point paragraphs instead of between the address and the title.
+    #
+    # Rotated pages: the visual top-to-bottom axis is the x-axis
+    # (descending for 270°, ascending for 90°).  Sort accordingly.
     _blks = text_dict.get("blocks", [])
-    _blks.sort(key=lambda b: b.get("bbox", (0, 0, 0, 0))[1])
+    if page.rotation in (90, 270):
+        # 270°: higher x = visually higher on page → sort descending
+        # 90°:  lower x  = visually higher on page → sort ascending
+        _blks.sort(key=lambda b: b.get("bbox", (0, 0, 0, 0))[0],
+                   reverse=(page.rotation == 270))
+    else:
+        _blks.sort(key=lambda b: b.get("bbox", (0, 0, 0, 0))[1])
     text_dict["blocks"] = _blks
 
     output: List[str] = []
