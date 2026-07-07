@@ -2763,8 +2763,9 @@ def build_viewer_html(
         if '[A>' in line or '[D>' in line or '<A]' in line or '<D]' in line:
             change_lines.append(li)
 
-    devmap_js = _json.dumps(dev_map or {})
-    missmap_js = _json.dumps(miss_map or {})
+    devmap_js = json.dumps({})
+    missmap_js = json.dumps({})
+    n_pdf_missing = 0
 
     return (_TEMPLATE
             .replace("__TEXT_BLOCK__", text_block)
@@ -2773,7 +2774,7 @@ def build_viewer_html(
             .replace("__WORDMAP_JS__", wordmap_js)
             .replace("__LINES_JS__", lines_js)
             .replace("__FILENAME__", filename)
-            .replace("__CHANGELINES_JS__", _json.dumps(change_lines))
+            .replace("__CHANGELINES_JS__", json.dumps(change_lines))
             .replace("__DEVMAP_JS__", devmap_js)
             .replace("__DEVMISSMAP_JS__", missmap_js)
             .replace("__N_PDF_MISSING__", str(n_pdf_missing)))
