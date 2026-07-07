@@ -1967,6 +1967,25 @@ def _extract_page_tagged_text(
                     "DC: recovered chairman line via OCR — %r", chairman_line
                 )
 
+        # Recover Mayor sign-off ("Muriel Bowser" / "Mayor") from the
+        # signature image below "Sincerely," on transmittal letters.
+        # Guard: only attempt if "Sincerely" is present but the name
+        # "Bowser" does NOT appear anywhere after it in the text.
+        low = result_text.lower()
+        sinc_idx = low.find("sincerely")
+        if sinc_idx >= 0:
+            after_sincerely = low[sinc_idx:]
+            if "bowser" not in after_sincerely:
+                signoff = _recover_dc_mayor_signoff_from_image(page)
+                if signoff:
+                    result_text = _splice_dc_mayor_signoff(
+                        result_text, signoff[0], signoff[1]
+                    )
+                    logger.debug(
+                        "DC: recovered Mayor sign-off via OCR — %r / %r",
+                        signoff[0], signoff[1],
+                    )
+
     return result_text
 
 
@@ -3085,6 +3104,113 @@ def _splice_dc_chairman_line(text: str, chairman_line: str) -> str:
     indent = m.group(1) or ""
     insert_at = m.start()
     return text[:insert_at] + f"{indent}{chairman_line} \n" + text[insert_at:]
+
+
+# ---------------------------------------------------------------------------
+# DC Mayor sign-off OCR recovery
+# ---------------------------------------------------------------------------
+# DC Mayor transmittal letters end with "Sincerely," followed by a raster
+# IMAGE block containing the Mayor's handwritten signature, printed name
+# ("Muriel Bowser"), and title ("Mayor").  PyMuPDF can only extract
+# "Sincerely," as native text; the printed name + title are baked into
+# the image and lost.  This recovery mirrors the chairman-signature
+# approach: OCR the image, fuzzy-match the Mayor's name/title, and
+# splice the canonical lines into the output.
+
+_RE_DC_SINCERELY = re.compile(
+    r"^[ \t]*Sincerely,?[ \t]*$",
+    re.MULTILINE | re.IGNORECASE,
+)
+
+
+def _recover_dc_mayor_signoff_from_image(
+    page: "fitz.Page",
+) -> Optional[Tuple[str, str]]:
+    """Recover the Mayor\'s sign-off from a raster image below ``Sincerely,``.
+
+    Returns a tuple ``(name, title)`` — e.g. ``("Muriel Bowser", "Mayor")``
+    — on success, or ``None`` if no qualifying layout / OCR match is found.
+    """
+    from difflib import SequenceMatcher
+
+    # 1. Find "Sincerely" anchor text on the page
+    sincerely_hits = page.search_for("Sincerely")
+    if not sincerely_hits:
+        return None
+    sincerely_y_bottom = max(r.y1 for r in sincerely_hits)
+
+    # 2. Find image blocks below "Sincerely," that could be a signature
+    raw = page.get_text("rawdict")
+    candidates: List[Tuple[float, float, float, float]] = []
+    for blk in raw.get("blocks", []):
+        if blk.get("type") != 1:              # 1 = image block
+            continue
+        bbox = tuple(blk.get("bbox", (0, 0, 0, 0)))
+        x0, y0, x1, y1 = bbox
+        width  = x1 - x0
+        height = y1 - y0
+        if width < 50 or height < 20:
+            continue
+        # Image must be below (or touching) "Sincerely," line
+        if y0 < sincerely_y_bottom - 5:       # allow 5pt above
+            continue
+        # Must be reasonably close (within 80pt)
+        if (y0 - sincerely_y_bottom) > 80:
+            continue
+        candidates.append(bbox)
+
+    if not candidates:
+        return None
+
+    # Largest candidate first
+    candidates.sort(
+        key=lambda b: (b[2] - b[0]) * (b[3] - b[1]),
+        reverse=True,
+    )
+    sig_bbox = candidates[0]
+
+    # 3. OCR the image
+    lines = _ocr_words_inside_bbox(page, sig_bbox, dpi=300)
+    if not lines:
+        return None
+
+    # 4. Fuzzy-match known patterns using SequenceMatcher
+    def _fuzzy(word: str, target: str, threshold: float = 0.55) -> bool:
+        return SequenceMatcher(
+            None, word.lower(), target.lower()
+        ).ratio() >= threshold
+
+    found_bowser = False
+    found_mayor  = False
+    for raw_line in lines:
+        words = raw_line.strip().split()
+        for w in words:
+            if _fuzzy(w, "Bowser") or _fuzzy(w, "Muriel"):
+                found_bowser = True
+            if _fuzzy(w, "Mayor"):
+                found_mayor = True
+
+    if found_bowser or found_mayor:
+        return ("Muriel Bowser", "Mayor")
+
+    return None
+
+
+def _splice_dc_mayor_signoff(text: str, name: str, title: str) -> str:
+    """Insert *name* and *title* after ``Sincerely,`` in *text*.
+
+    Returns *text* unchanged if no ``Sincerely,`` anchor is found or
+    if the name already appears after it.
+    """
+    m = _RE_DC_SINCERELY.search(text)
+    if not m:
+        return text
+    insert_at = m.end()
+    # Don't double-insert if already present
+    after_sincerely = text[insert_at:insert_at + 200].lower()
+    if name.lower() in after_sincerely:
+        return text
+    return text[:insert_at] + f"\n\n{name}\n{title}" + text[insert_at:]
 
 
 # ---------------------------------------------------------------------------
