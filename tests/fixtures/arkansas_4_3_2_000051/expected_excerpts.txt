@@ -1,0 +1,101 @@
+# ===========================================================================
+# Arkansas SB 8 (Act 154 of the 2026 Fiscal Session, JAR104)
+# Source bill id: 2026_2026_4_3_2_000051_0_8_1_20260501_0
+#
+# Bug: a thin horizontal "leader" rule on page 2 ran from the end of the
+# ``(16)     ADMINISTRATIVE SPECIALIST`` label across whitespace into the
+# Maximum-No.-of-Employees column.  The rule incidentally overlapped the
+# trailing "2" by ~6pt and was misclassified as an underline by
+# :func:`_classify_char_decoration`, producing the false
+# ``[A>2<A]`` tag the user reported in the screenshot.
+#
+# Fix: :func:`_filter_ar_leader_lines` (Arkansas-only) drops horizontal
+# rules whose horizontal extent is covered < 50 % by text on their
+# baseline.  In this bill, real legislative underlines covered 69-100 %
+# of the line's extent while leaders covered 0-35 %, so the 50 %
+# threshold cleanly separates them.
+#
+# This fixture locks the fix in TWO directions:
+#   1. The salary-row digit must remain plain text ("       2     ").
+#   2. Genuine legislative additions (SECTION 13 emergency clause,
+#      underlined dollar amounts, underlined year labels) must keep
+#      their [A>…<A] tags.
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Forbidden: tags that were emitted before the fix and must stay stripped.
+# ---------------------------------------------------------------------------
+
+# The headline bug: a bare "2" in the salary-table employee column.
+![A>2<A]
+
+# A bare "3" tagged on page 3 in the same column for another row.
+![A> 3<A]
+
+# A bare "0" tagged in another row's employee column.
+![A>            0<A]
+
+# Page-wide column-header leader rules — text "NO." / "Title" /
+# "Employees" / "2026-2027" were misread as one giant addition because
+# the underlying rule spans the whole page width but only touches the
+# four label strings.
+![A> NO.     Title                               Employees          2026-2027<A]
+![A> NO.                                                             2026-2027<A]
+
+# ---------------------------------------------------------------------------
+# Required: real legislative additions that MUST still be tagged.
+# ---------------------------------------------------------------------------
+
+# The ADMINISTRATIVE SPECIALIST salary row.  The "2" must be plain text,
+# but the rest of the row must extract verbatim.  Note the whitespace
+# layout is what the extractor emits; if the geometry changes this line
+# is the canary that catches it.
+(16)     ADMINISTRATIVE SPECIALIST       2     $48,575
+
+# Genuine underlined dollar amounts on page 3 / 4 / 5 (real underlines,
+# coverage 69-84 %) — must remain inside [A>…<A] tags.
+[A> $3,438,833<A]
+[A> $3,824,800<A]
+[A> $50,002,500<A]
+[A> $2,500,500<A]
+
+# Genuine underlined year labels on page 5 (coverage 99-100 %) — these
+# are short hlines that hug the year text; the filter must not strip them.
+[A>2026<A]
+[A>2027<A]
+
+# Genuine STRIKETHROUGH year labels on page 5 — these sit at the
+# characters' midline, NOT at the baseline.  Pre-2026-06-29 the AR
+# leader-line filter only checked baseline proximity, so it counted
+# 0% text coverage on strikethrough hlines and dropped them as if
+# they were leaders.  The resulting output showed plain "2025" /
+# "2026" instead of [D>2025<D] / [D>2026<D] inside the Section 9 / 10
+# date-range clauses.  Fix: _filter_ar_leader_lines now accepts a
+# character as "text-bearing" when the hline y falls anywhere within
+# the character's vertical bbox (strikethrough geometry) OR within
+# baseline_tol pt below the baseline (underline geometry).
+[D>2025<D]
+[D>2026<D]
+
+# The "through June 30" half of the date-range clause is rendered on
+# a single physical PDF line, so its full tagged form is a stable
+# substring.  Pin BOTH the strikethrough (`[D>2026<D]`) and the
+# adjacent underline (`[A>2027<A]`) so the strikethrough-detection
+# fix is verified end-to-end alongside the existing
+# underline-detection guarantee.
+through June 30, [D>2026<D] [A>2027<A].
+
+# The "from July 1" half is split across a physical line break in
+# the PDF (the strikethrough year falls on the next visible line
+# below "from July 1,"), but the adjacency of the strikethrough +
+# underline pair survives consolidation on the second occurrence
+# (Section 10).  This is the strongest single-line proof that BOTH
+# decorations were detected on the same row.
+[D>2025<D] [A>2026<A] through June 30, [D>2026<D] [A>2027<A].
+
+# Section 13 emergency clause — entirely underlined as a single
+# multi-line legislative addition (coverage 81-88 %).  We pin the
+# distinctive opening and the final clause as canaries; the filter
+# preserves both.
+[A>SECTION 13. EMERGENCY CLAUSE. It is found and determined by the<A]
+[A>and safety shall be in full force and effect from and after July 1, 2026.<A]

@@ -30,6 +30,48 @@ import sys
 import codecs
 import difflib
 
+# Optional import: text_accuracy_helpers lives in /app, so we add that to
+# sys.path when running as a standalone script (CLI mode).  If the import
+# fails we still work — just without the "allowed-removal" allowlist.
+try:
+    from text_accuracy_helpers import (  # type: ignore
+        classify_removed_text,
+        strip_trailing_line_numbers,
+        merge_wrapped_artifact_lines,
+        strip_table_row_markers,
+        normalise_ct_title_block,
+        strip_ca_inline_line_numbers,
+        strip_ca_page_headers,
+        merge_ca_caption_wrap,
+        strip_in_page_headers,
+    )
+except ImportError:  # pragma: no cover
+    _app_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "app")
+    if os.path.isdir(_app_dir) and _app_dir not in sys.path:
+        sys.path.insert(0, _app_dir)
+    try:
+        from text_accuracy_helpers import (  # type: ignore
+            classify_removed_text,
+            strip_trailing_line_numbers,
+            merge_wrapped_artifact_lines,
+            strip_table_row_markers,
+            normalise_ct_title_block,
+            strip_ca_inline_line_numbers,
+            strip_ca_page_headers,
+            merge_ca_caption_wrap,
+            strip_in_page_headers,
+        )
+    except ImportError:
+        classify_removed_text = None  # type: ignore
+        strip_trailing_line_numbers = None  # type: ignore
+        merge_wrapped_artifact_lines = None  # type: ignore
+        strip_table_row_markers = None  # type: ignore
+        normalise_ct_title_block = None  # type: ignore
+        strip_ca_inline_line_numbers = None  # type: ignore
+        strip_ca_page_headers = None  # type: ignore
+        merge_ca_caption_wrap = None  # type: ignore
+        strip_in_page_headers = None  # type: ignore
+
 # Fix encoding for Windows console/redirect
 if sys.platform == 'win32':
     try:
@@ -48,9 +90,43 @@ def strip_tags(text):
     return text
 
 
+# Unicode → ASCII punctuation map.  The LLM cleaning step routinely
+# normalises curly quotes, en/em dashes, ellipsis and non-breaking spaces
+# to their ASCII equivalents.  If we leave the raw PyMuPDF Unicode forms
+# in place during word comparison, every ``analyst’s`` vs ``analyst's``
+# pair shows up as a REPLACE diff even though the underlying word is
+# identical.  Normalising both sides before tokenisation eliminates that
+# whole class of false positives.
+_UNICODE_PUNCT_NORMALISATION = str.maketrans({
+    '\u2018': "'",    # ‘  left single quotation mark
+    '\u2019': "'",    # ’  right single quotation mark (curly apostrophe)
+    '\u201A': "'",    # ‚  single low-9 quotation mark
+    '\u201B': "'",    # ‛  single high-reversed-9 quotation mark
+    '\u201C': '"',    # “  left double quotation mark
+    '\u201D': '"',    # ”  right double quotation mark
+    '\u201E': '"',    # „  double low-9 quotation mark
+    '\u2013': '-',    # –  en-dash
+    '\u2014': '-',    # —  em-dash
+    '\u2212': '-',    # −  minus sign
+    '\u00A0': ' ',    #    non-breaking space
+    '\u2009': ' ',    #    thin space
+    '\u200A': ' ',    #    hair space
+    '\u202F': ' ',    #    narrow no-break space
+    '\u2026': '...',  # …  horizontal ellipsis
+})
+
+
+def normalise_unicode_punct(text):
+    """Map curly quotes / em-dash / ellipsis / NBSP to ASCII equivalents."""
+    if not text:
+        return text
+    return text.translate(_UNICODE_PUNCT_NORMALISATION)
+
+
 def extract_words(text):
     """Extract list of words from text after stripping tags and normalizing whitespace."""
     cleaned = strip_tags(text)
+    cleaned = normalise_unicode_punct(cleaned)
     normalized = re.sub(r'\s+', ' ', cleaned).strip()
     return normalized.split()
 
@@ -58,6 +134,7 @@ def extract_words(text):
 def get_clean_text(text):
     """Get tag-stripped, whitespace-normalized text."""
     cleaned = strip_tags(text)
+    cleaned = normalise_unicode_punct(cleaned)
     return re.sub(r'\s+', ' ', cleaned).strip()
 
 
@@ -282,7 +359,11 @@ def _merge_transposed_pairs(diffs: list[dict],
 # ─────────────────────────────────────────────────────────────────────
 # Programmatic API — returns structured dict
 # ─────────────────────────────────────────────────────────────────────
-def compare_texts(pymupdf_clean_text: str, converted_text: str) -> dict:
+def compare_texts(
+    pymupdf_clean_text: str,
+    converted_text: str,
+    state_code: str | None = None,
+) -> dict:
     """Compare two text strings and return a structured accuracy report.
 
     Parameters
@@ -291,23 +372,258 @@ def compare_texts(pymupdf_clean_text: str, converted_text: str) -> dict:
         Tag-stripped PyMuPDF clean text (ground truth).
     converted_text : str
         Claude Opus converted text (validation target).
+    state_code : str, optional
+        Two-letter state code.  When provided, any MISSING / EXTRA diff is
+        passed through ``classify_removed_text`` and — if it matches a known
+        artifact category (line numbers, headers, footers, page markers,
+        etc.) — is moved to the ``allowed_diffs`` bucket and counted as a
+        matching word rather than a real-content drop.  Eliminates false
+        positives caused by one side stripping an artifact the other kept.
 
     Returns
     -------
     dict with keys:
-        accuracy              – float, 0–100
+        accuracy              – float, 0–100  (excludes allowed removals)
+        raw_accuracy          – float, 0–100  (everything, no allowlist)
         pymupdf_word_count    – int
         converted_word_count  – int
-        matching_words        – int
+        matching_words        – int   (includes allowed-removal words)
         status                – "IDENTICAL" | "CONTENT_MATCH" | "DIFFERENT"
-        real_diffs            – list of diff dicts
+        real_diffs            – list of diff dicts (after allowlist filter)
+        allowed_diffs         – list of diff dicts (intentional cleanup)
         repositioned          – list of repositioned dicts
         real_diff_count       – int
+        allowed_diff_count    – int
         repositioned_count    – int
+        allowed_categories    – dict[str, int]   {"line_number": 12, ...}
     """
-    pymupdf_words = [w for w in extract_words(pymupdf_clean_text)
+    # ── Pre-pre-filter: strip right-aligned trailing line numbers ───────
+    # Some states (notably Connecticut) print line numbers in a right-margin
+    # column.  PyMuPDF extracts them as ordinary trailing words on every body
+    # line, where they:
+    #   • leak through the "whole-line-is-just-a-number" classifier (they
+    #     aren't on a line by themselves), and
+    #   • get glued onto adjacent words and headers, producing false REPLACE
+    #     and MISSING_IN_CONVERTED diffs ("Enfield- 8 Medium,",
+    #     "15 Raised Bill No. 6845").
+    # ``strip_trailing_line_numbers`` only fires when the trailing numbers
+    # form a near-monotonic sequence so legitimate trailing digits in body
+    # text (e.g. "rate of 5") are never touched.
+    if strip_trailing_line_numbers is not None:
+        try:
+            pymupdf_clean_text = strip_trailing_line_numbers(
+                pymupdf_clean_text, state_code=state_code
+            )
+            converted_text = strip_trailing_line_numbers(
+                converted_text, state_code=state_code
+            )
+        except Exception:  # pragma: no cover — defensive
+            pass
+
+    # ── Pre-pre-filter (1b): strip PyMuPDF ``T<n>`` table-row markers ─────
+    # When PyMuPDF extracts a tabular layout (e.g. tax-rate schedules in CT
+    # bills) it prefixes every cell line with a ``T1 ...``, ``T2 ...`` row
+    # marker.  The LLM correctly drops them, but the word-level diff then
+    # flags every ``T<n>`` as MISSING_IN_CONVERTED — a 28-row tax table
+    # generates 28 false positives.  ``strip_table_row_markers`` removes
+    # only the markers (keeping cell content intact) and only when the
+    # ``T<n>`` numbers form a near-monotonic sequence starting near 1.
+    if strip_table_row_markers is not None:
+        try:
+            pymupdf_clean_text = strip_table_row_markers(
+                pymupdf_clean_text, state_code=state_code
+            )
+            converted_text = strip_table_row_markers(
+                converted_text, state_code=state_code
+            )
+        except Exception:  # pragma: no cover — defensive
+            pass
+
+    # ── Pre-pre-filter (2): fuse wrapped header/footer lines ─────────────
+    # PyMuPDF often splits long headers across two text lines, e.g.
+    #     "Referred to Committee on EXECUTIVE AND LEGISLATIVE"
+    #     "NOMINATIONS"
+    # The first line classifies as HEADER (and is stripped) but the lonely
+    # "NOMINATIONS" continuation falls through to the body word stream and
+    # gets reported as a MISSING_IN_CONVERTED diff against the clean text
+    # (where the whole header sits on one line and IS fully stripped).
+    # ``merge_wrapped_artifact_lines`` joins those wrap pairs back together
+    # so the classifier sees the complete header as a single line.
+    if merge_wrapped_artifact_lines is not None and state_code:
+        try:
+            pymupdf_clean_text = merge_wrapped_artifact_lines(
+                pymupdf_clean_text, state_code=state_code
+            )
+            converted_text = merge_wrapped_artifact_lines(
+                converted_text, state_code=state_code
+            )
+        except Exception:  # pragma: no cover — defensive
+            pass
+
+    # ── Pre-pre-filter (3): normalise CT 2-column title-block artifact ───
+    # CT bills render the page-1 title block in two visual columns but
+    # PyMuPDF reads them in row-major order, producing a single jammed
+    # line like ``"General Assembly Proposed Bill No. 1200"`` or
+    # ``"General Assembly [A>File No. 629 <A]"`` (for post-committee
+    # substitute bills).  The LLM cleaning step correctly reorders these
+    # into the canonical CT title-block order (bill / file identifier
+    # first on its own line, then ``General Assembly`` on its own line),
+    # but the resulting positional mismatch costs ~3 pp of accuracy on
+    # every CT bill — caught as a ``repositioned`` block in the report.
+    # ``normalise_ct_title_block`` splits the artifact line into two
+    # canonical-order lines so the downstream diff sees identical word
+    # streams.  CT-only — the helper itself no-ops for other states.
+    if normalise_ct_title_block is not None and state_code == "CT":
+        try:
+            pymupdf_clean_text = normalise_ct_title_block(
+                pymupdf_clean_text, state_code=state_code
+            )
+            converted_text = normalise_ct_title_block(
+                converted_text, state_code=state_code
+            )
+        except Exception:  # pragma: no cover — defensive
+            pass
+
+    # ── Pre-pre-filter (4): strip California's inline ``line N`` wrap markers ──
+    # California's official LegInfo PDFs print body line numbers as the
+    # literal token ``line 2``, ``line 3``, ... at the start of every
+    # wrapped continuation line.  PyMuPDF extracts them verbatim; the
+    # LLM cleaning step correctly strips them.  Without this filter
+    # every ``line N`` token appears as a missing-words diff on the
+    # raw side, costing 10-15 pp of accuracy on every CA bill.  The
+    # helper is line-start anchored so it never touches legitimate
+    # sentence-internal uses like ``"after line 57"``.  CA-only — the
+    # helper itself no-ops for other states.
+    if strip_ca_inline_line_numbers is not None and state_code == "CA":
+        try:
+            pymupdf_clean_text = strip_ca_inline_line_numbers(
+                pymupdf_clean_text, state_code=state_code
+            )
+            converted_text = strip_ca_inline_line_numbers(
+                converted_text, state_code=state_code
+            )
+        except Exception:  # pragma: no cover — defensive
+            pass
+
+    # ── Pre-pre-filter (5): strip California's running page header/footer ──
+    # Every printed page of a CA bill has a running header in one of two
+    # alternating forms (em-dash U+2014):
+    #     — 2 — AB 45       (even pages)
+    #     AB 45 — 3 —       (odd pages)
+    # PyMuPDF extracts these verbatim; the LLM cleaning step correctly
+    # drops them.  Without this filter every such header appears as a
+    # false missing-words diff (typically 6-12 per CA bill).  The regex
+    # requires the CA bill identifier sandwiched by dashes around a page
+    # number AND the match must occupy the entire line — so body text
+    # can never present in this exact shape.  CA-only.
+    if strip_ca_page_headers is not None and state_code == "CA":
+        try:
+            pymupdf_clean_text = strip_ca_page_headers(
+                pymupdf_clean_text, state_code=state_code
+            )
+            converted_text = strip_ca_page_headers(
+                converted_text, state_code=state_code
+            )
+        except Exception:  # pragma: no cover — defensive
+            pass
+
+    # ── Pre-pre-filter (6): fuse wrapped CA Legislative Counsel's Digest captions ──
+    # Every CA bill's Legislative Counsel's Digest opens with a caption
+    # like ``AB 45, as amended, Bauer-Kahan. Privacy: health data:
+    # location and research.``  When the subject phrase is long enough
+    # PyMuPDF soft-wraps it onto a second physical line
+    # (``... location and \n research.``).  The line-level classifier
+    # strips the first line as a header but the orphaned ``research.``
+    # continuation falls through to the body word stream as a false
+    # ``MISSING_IN_CONVERTED`` diff — because the LLM correctly joined
+    # the wrap onto one line in the cleaned output and the whole caption
+    # is stripped as one unit there.  This helper joins the wrap pair
+    # back together so the classifier sees the same complete caption on
+    # both sides.  CA-only.
+    if merge_ca_caption_wrap is not None and state_code == "CA":
+        try:
+            pymupdf_clean_text = merge_ca_caption_wrap(
+                pymupdf_clean_text, state_code=state_code
+            )
+            converted_text = merge_ca_caption_wrap(
+                converted_text, state_code=state_code
+            )
+        except Exception:  # pragma: no cover — defensive
+            pass
+
+    # ── Pre-pre-filter (7): strip Indiana's running page footer ──────────
+    # Every printed page of an Indiana bill carries a single-line footer
+    # identifying the bill plus its Legislative Service (LS) and
+    # Drafter Identifier (DI) codes::
+    #     2025 IN 1701—LS 7775/DI 92          (with year prefix)
+    #     IN 1701—LS 7775/DI 92               (without year)
+    #     SB 85—LS 6422/DI 104                (Senate Bill variant)
+    # PyMuPDF extracts these verbatim on every page; the LLM cleaning
+    # step correctly drops them.  Without this filter every footer
+    # surfaces as a false MISSING_IN_CONVERTED diff in the accuracy
+    # comparison (typically 1 per page).  The regex requires the bill
+    # identifier + em-dash + ``LS \d+/DI \d+`` token sequence to occupy
+    # the entire line — false positives in legislative body text are
+    # effectively impossible.  IN-only.
+    if strip_in_page_headers is not None and state_code == "IN":
+        try:
+            pymupdf_clean_text = strip_in_page_headers(
+                pymupdf_clean_text, state_code=state_code
+            )
+            converted_text = strip_in_page_headers(
+                converted_text, state_code=state_code
+            )
+        except Exception:  # pragma: no cover — defensive
+            pass
+
+    # ── Pre-filter: strip artifact lines from BOTH sides when state_code is set
+    # SequenceMatcher tends to glue long runs of consecutive removed artifact
+    # lines into one giant MISSING_IN_CONVERTED block that no per-line pattern
+    # matches. By stripping artifact lines up front, the word-level diff sees
+    # only real content on both sides — far fewer false positives.
+    line_allowed_diffs: list[dict] = []
+    line_allowed_categories: dict[str, int] = {}
+    pymupdf_for_compare = pymupdf_clean_text
+    converted_for_compare = converted_text
+
+    if state_code and classify_removed_text is not None:
+        def _strip_artifact_lines(text: str) -> tuple[str, list[dict], dict[str, int]]:
+            kept_lines = []
+            stripped_records = []
+            cat_counts: dict[str, int] = {}
+            for ln in text.splitlines():
+                verdict = classify_removed_text(ln, state_code)
+                if verdict is None:
+                    kept_lines.append(ln)
+                else:
+                    cat = verdict["category"]
+                    cat_counts[cat] = cat_counts.get(cat, 0) + 1
+                    stripped_records.append({
+                        "type":             "MISSING_IN_CONVERTED",
+                        "missing_text":     ln.strip(),
+                        "sentence":         ln,
+                        "allowed_category": cat,
+                        "allowed_rule":     verdict["rule"],
+                    })
+            return "\n".join(kept_lines), stripped_records, cat_counts
+
+        pymupdf_for_compare, _p_stripped, _p_cats = _strip_artifact_lines(pymupdf_clean_text)
+        converted_for_compare, _c_stripped, _c_cats = _strip_artifact_lines(converted_text)
+
+        # Combine; tag converted-side strips as EXTRA_IN_CONVERTED for clarity
+        line_allowed_diffs.extend(_p_stripped)
+        for rec in _c_stripped:
+            rec["type"] = "EXTRA_IN_CONVERTED"
+            rec["extra_text"] = rec.pop("missing_text")
+            line_allowed_diffs.append(rec)
+        for cat, n in {**_p_cats, **_c_cats}.items():
+            line_allowed_categories[cat] = (
+                _p_cats.get(cat, 0) + _c_cats.get(cat, 0)
+            )
+
+    pymupdf_words = [w for w in extract_words(pymupdf_for_compare)
                       if not _is_underscore_fill([w])]
-    converted_words = [w for w in extract_words(converted_text)
+    converted_words = [w for w in extract_words(converted_for_compare)
                        if not _is_underscore_fill([w])]
 
     matcher = difflib.SequenceMatcher(None, pymupdf_words, converted_words)
@@ -327,8 +643,14 @@ def compare_texts(pymupdf_clean_text: str, converted_text: str) -> dict:
     }
 
     if pymupdf_words == converted_words:
-        base.update(status="IDENTICAL", real_diffs=[], repositioned=[],
-                    real_diff_count=0, repositioned_count=0)
+        base.update(
+            status="IDENTICAL",
+            real_diffs=[], repositioned=[], allowed_diffs=line_allowed_diffs,
+            real_diff_count=0, repositioned_count=0,
+            allowed_diff_count=len(line_allowed_diffs),
+            allowed_categories=dict(line_allowed_categories),
+            raw_accuracy=base["accuracy"],
+        )
         return base
 
     # Classify opcodes
@@ -424,17 +746,92 @@ def compare_texts(pymupdf_clean_text: str, converted_text: str) -> dict:
     if not real_diffs and status == "DIFFERENT":
         status = "CONTENT_MATCH"
 
+    # ── Allowlist filter: pull "intentional cleanup" diffs out ──────────
+    # If state_code is provided, classify every MISSING_IN_CONVERTED and
+    # EXTRA_IN_CONVERTED diff against the known artifact patterns (page
+    # markers, line numbers, headers, footers, decorative fill, …).  Any
+    # diff that matches a known pattern is moved into ``allowed_diffs``
+    # and its word count is added back into ``matching_words`` so it no
+    # longer reduces accuracy.  Real content drops stay in ``real_diffs``.
+    allowed_diffs: list[dict] = []
+    allowed_categories: dict[str, int] = {}
+    raw_accuracy = base["accuracy"]  # preserve pre-allowlist accuracy
+
+    if state_code and classify_removed_text is not None and real_diffs:
+        _kept: list[dict] = []
+        for d in real_diffs:
+            text = (
+                d.get("missing_text")
+                or d.get("extra_text")
+                or d.get("pymupdf_text")
+                or d.get("converted_text")
+                or ""
+            )
+            verdict = classify_removed_text(text, state_code) if text else None
+            if verdict:
+                d_copy = dict(d)
+                d_copy["allowed_category"] = verdict["category"]
+                d_copy["allowed_rule"]     = verdict["rule"]
+                allowed_diffs.append(d_copy)
+                cat = verdict["category"]
+                allowed_categories[cat] = allowed_categories.get(cat, 0) + 1
+            else:
+                _kept.append(d)
+        real_diffs = _kept
+
+        if allowed_diffs:
+            # Each allowed diff's words count back as matching (the larger
+            # side wins — mirrors the spacing-bonus rule above).
+            allowed_word_bonus = 0
+            for d in allowed_diffs:
+                if d.get("type") == "REPLACE":
+                    allowed_word_bonus += max(
+                        len((d.get("pymupdf_text") or "").split()),
+                        len((d.get("converted_text") or "").split()),
+                    )
+                elif d.get("type") == "MISSING_IN_CONVERTED":
+                    allowed_word_bonus += len((d.get("missing_text") or "").split())
+                elif d.get("type") == "EXTRA_IN_CONVERTED":
+                    allowed_word_bonus += len((d.get("extra_text") or "").split())
+            new_matching = base["matching_words"] + allowed_word_bonus
+            new_accuracy = (new_matching / max_words * 100) if max_words > 0 else 100.0
+            base["matching_words"] = new_matching
+            base["accuracy"] = round(new_accuracy, 2)
+
+            # Recount real-diff sub-types after allowlist filter
+            n_transposed  = sum(1 for d in real_diffs if d.get("sub_type") == "TRANSPOSED")
+            n_punctuation = sum(1 for d in real_diffs if d.get("sub_type") == "PUNCTUATION")
+            n_word_diffs  = len(real_diffs) - n_transposed - n_punctuation
+
+            # Re-evaluate status
+            if not real_diffs:
+                status = "CONTENT_MATCH"
+
+    # ── Merge in the line-level allowlist (pre-filtered above) ───────────
+    # These are full lines that were stripped before the word-level diff
+    # ran (page markers, headers, footers, etc.).  They don't reduce
+    # accuracy — they never reached the diff stage — but we surface them
+    # in ``allowed_diffs`` so the UI can show *all* intentional removals.
+    if line_allowed_diffs:
+        allowed_diffs = line_allowed_diffs + allowed_diffs
+        for cat, n in line_allowed_categories.items():
+            allowed_categories[cat] = allowed_categories.get(cat, 0) + n
+
     base.update(
         status=status,
         real_diffs=real_diffs,
         repositioned=repositioned,
+        allowed_diffs=allowed_diffs,
         real_diff_count=len(real_diffs),
         repositioned_count=len(repositioned),
+        allowed_diff_count=len(allowed_diffs),
+        allowed_categories=allowed_categories,
         transposed_count=n_transposed,
         punctuation_count=n_punctuation,
         spacing_count=n_spacing,
         spacing_diffs=spacing_diffs,
         word_diff_count=n_word_diffs,
+        raw_accuracy=raw_accuracy,
     )
     return base
 

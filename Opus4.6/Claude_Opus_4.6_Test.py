@@ -76,12 +76,24 @@ try:
         consolidate_adjacent_tags, _load_state_clean_prompt,
         _tag_brackets, _generate_clean_diff_report,
         _strip_ct_header_tags, _strip_ct_compact_designator,
+        _strip_ct_false_underline_headings, _fix_midword_page_break_tags,
+        _strip_false_footer_line_underline, _strip_ct_analysis_section_tags,
+        _strip_ct_raw_footer_line_tags,
         _strip_false_subsection_d_tags, _restructure_ct_header,
-        _strip_in_artifacts, _strip_in_header_tags,
-        _strip_ks_header_tags,
+        _strip_in_artifacts, _strip_in_header_tags, _strip_in_leading_indent,
+        _split_in_merged_table_rows, _ensure_in_item_spacing,
+        _split_in_midline_items, _split_in_section_heading_welds,
+        _strip_ks_header_tags, _strip_ks_signature_block_tags,
+        _inject_ks_signature_lines,
+        _strip_fl_repeated_headers,
+        pre_merge_paragraph_tags,
         remove_nested_tags, merge_split_tags, split_tagged_subsections,
-        split_renumber_paragraph_breaks, rejoin_amendment_intro_breaks,
+        split_renumber_paragraph_breaks, split_numbered_item_paragraph_welds,
+        rejoin_amendment_intro_breaks,
         rejoin_inline_renumber_list_breaks,
+        _split_merged_grant_tag_rows,
+        _split_tabular_tag_at_dollar,
+        _split_tabular_header_from_data,
     )
     _HAS_PYMUPDF = True
 except ImportError:
@@ -665,6 +677,14 @@ def get_conversion_prompt(state_config=None):
         f"{add_markup_instruction}"
         "Use regular quotes, not smart quotes. "
         f"{precision_guidance} "
+        "CRITICAL ANTI-PATTERN — NO SEMANTIC PAIRING: "
+        "When deleted words and added words appear next to each other, "
+        "output them in the EXACT visual reading order from the PDF page. "
+        "Do NOT rearrange words to pair each deletion with its semantic replacement. "
+        "WRONG: [D>old-adj<D] [A>NEW-ADJ<A] [D>old-noun<D] [A>NEW-NOUN<A] "
+        "(reorders to pair each deletion with its replacement). "
+        "CORRECT: [D>old-adj<D] [D>old-noun<D] [A>NEW-ADJ<A] [A>NEW-NOUN<A] "
+        "(preserves the visual left-to-right order from the page). "
         "Output only the converted text with markup tags, nothing else. "
         "Combine all pages into one continuous document."
     )
@@ -1338,7 +1358,7 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         active = [k.replace("mark_", "") for k, v in flags.items() if v and k.startswith("mark_")]
         logging.info(f"   Detecting formats: {', '.join(active) if active else 'none'}")
 
-        raw_text = extract_pdf_with_pymupdf(pdf_path, join_pages=True, **flags)
+        raw_text = extract_pdf_with_pymupdf(pdf_path, join_pages=True, state_code=state_code, **flags)
         if not raw_text or len(raw_text.strip()) < 50:
             logging.error("❌ PyMuPDF extraction returned empty/minimal text")
             return None
@@ -1350,6 +1370,25 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         with open(raw_path, "w", encoding="utf-8") as f:
             f.write(raw_text)
         logging.info(f"   💾 Raw PyMuPDF saved to: {raw_path}")
+
+        # CT-specific raw text pre-processing (before LLM)
+        # NOTE: _strip_ct_raw_footer_line_tags disabled — analysis showed ALL
+        # cases it stripped were legitimate underlined text (preceding lines
+        # have [A>] tags or tag starts mid-word).  Footer-line false positives
+        # are handled post-LLM by _strip_false_footer_line_underline instead.
+        # if state_code and state_code.upper() == "CT":
+        #     raw_text = _strip_ct_raw_footer_line_tags(raw_text)
+
+        # ── Pre-merge per-line tags into paragraph-level tags (FL only) ─
+        # Uses the PDF’s own \n vs \n\n signals as ground truth:
+        #   \n  = same paragraph (wrapped continuation) → merge tags
+        #   \n\n = paragraph boundary → keep separate
+        # This gives the LLM correct paragraph-level tags from the start,
+        # eliminating most post-LLM merge/split heuristics and their
+        # associated edge cases.  FL-only – other states work fine as-is.
+        if state_code and state_code.upper() == "FL":
+            raw_text = pre_merge_paragraph_tags(raw_text)
+            logging.info(f"   ✅ Pre-merged FL to paragraph-level tags: {len(raw_text):,} chars")
 
         # ── Step 2: Split into chunks ────────────────────────────────
         chunks = _split_text_into_chunks(raw_text, max_chars=40000, overlap_chars=2000)
@@ -1443,6 +1482,14 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
             logging.info(f"   ✅ Chunk {i}: {len(chunk):,} → {len(cleaned):,} chars")
 
         # ── Step 4: Merge cleaned chunks ─────────────────────────────
+        # Pre-normalise tag formatting in each chunk so overlap detection
+        # sees identical strings for the same content.  Without this,
+        # one chunk may have line-level tags ([A>word<A] [A>word<A]) while
+        # another has merged sentence-level tags ([A>word word<A]), causing
+        # all stitch strategies to fail and duplicate text to appear.
+        for ci in range(len(cleaned_chunks)):
+            cleaned_chunks[ci] = merge_split_tags(cleaned_chunks[ci])
+
         if len(cleaned_chunks) == 1:
             merged = cleaned_chunks[0]
         else:
@@ -1495,6 +1542,10 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         if state_code and state_code.upper() == "CT":
             merged = _strip_ct_header_tags(merged)
             merged = _strip_ct_compact_designator(merged)
+            merged = _strip_ct_false_underline_headings(merged)
+            merged = _fix_midword_page_break_tags(merged)
+            merged = _strip_false_footer_line_underline(merged)
+            merged = _strip_ct_analysis_section_tags(merged)
             merged = _strip_false_subsection_d_tags(merged)
             merged = _restructure_ct_header(merged)
 
@@ -1503,9 +1554,29 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
             merged = _strip_in_header_tags(merged)
             merged = _strip_in_artifacts(merged)
 
-        # KS-specific: strip false header tags
+        # KS-specific: strip false header tags + signature block tags
         if state_code and state_code.upper() == "KS":
             merged = _strip_ks_header_tags(merged)
+            merged = _strip_ks_signature_block_tags(merged)
+            # Re-inject signature/fill-in underscore lines from PDF
+            # vector drawings.  The extraction step already injected
+            # them, but the LLM cleaning strips them.  Re-open the
+            # PDF and scan the last page for drawing-based lines.
+            try:
+                import fitz as _fitz
+                _doc = _fitz.open(pdf_path)
+                _last = _doc[-1]
+                merged = _inject_ks_signature_lines(_last, merged)
+                _doc.close()
+            except Exception as _sig_err:
+                logging.warning("KS signature line re-injection failed: %s", _sig_err)
+
+        # FL-specific: deterministically strip repeated page headers/footers.
+        # Catches ALL bill-header variations (CS, CS for CS, engrossed,
+        # enrolled, doc-ref codes like 20261028er, etc.) via regex so
+        # the LLM prompt never needs to be updated for new header styles.
+        if state_code and state_code.upper() == "FL":
+            merged = _strip_fl_repeated_headers(merged)
 
         # ── Normalise malformed close-tags BEFORE structural passes ──────
         # The chunk-level LLM occasionally emits `<A>` or `<D>` (mirrored
@@ -1519,15 +1590,47 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         # Fix: rewrite mirrored closers to canonical form so depth
         # tracking stays balanced.  Must run BEFORE remove_nested_tags.
         merged = _fix_malformed_close_tags(merged)
+        merged = _merge_page_break_paragraph_splits(merged, state_code=state_code)
 
-        merged = consolidate_adjacent_tags(merged)
+        # ── Post-merge dedup ─────────────────────────────────────────────
+        # The earlier dedup (inside _merge_cleaned_chunks) runs on the
+        # raw per-line tagged text.  After _merge_page_break_paragraph_splits
+        # collapses those lines into full paragraphs, duplicate overlap
+        # content that was spread across many raw lines is now visible as
+        # adjacent duplicate paragraphs.  Run dedup again to catch them.
+        merged = _dedupe_consecutive_duplicate_blocks(merged)
+
+        merged = consolidate_adjacent_tags(merged, state_code=state_code)
         merged = remove_nested_tags(merged)
         merged = merge_split_tags(merged)
-        merged = split_tagged_subsections(merged)
+        if state_code and state_code.upper() == "IA":
+            merged = _split_tagged_subsections_safe(merged)
         # Restore paragraph breaks at renumber-only [D>(N)<D] [A>(M)<A] /
         # [D>SEC. N.<D] [A>SEC. M.<A] / [D>2182.<D] [A>2183.<A] pairs that
         # the chunk-level LLM clean tends to collapse onto a single line.
         merged = split_renumber_paragraph_breaks(merged)
+        # Split [D>…<D] / [A>…<A] tags that the LLM merged across
+        # consecutive table rows.  In appropriation / grants bills
+        # (DE, AR, …) each grant line is its own row with its own
+        # "$ amount"; the LLM sometimes fuses N consecutive same-tag
+        # rows into one long tag.  This deterministic pass detects
+        # tags with 2+ "$ amount" patterns and re-splits them onto
+        # separate lines.  Safe for non-tabular states because prose
+        # tags almost never contain two dollar amounts.
+        merged = _split_merged_grant_tag_rows(merged)
+        # DE/IN-specific: split tags that span description + dollar amount
+        # columns, and header:data merged tags.
+        if state_code and state_code.upper() in ("DE", "IN"):
+            merged = _split_tabular_header_from_data(merged)
+            merged = _split_tabular_tag_at_dollar(merged)
+        # IN-specific: split tagged lines where a short numbered item
+        # (e.g. "(2) interview each member.") got welded to the
+        # following paragraph by the LLM.  Scoped to IN only so other
+        # states are never affected.
+        if state_code and state_code.upper() == "IN":
+            merged = _split_in_merged_table_rows(merged)
+            merged = _split_in_section_heading_welds(merged)
+            merged = split_numbered_item_paragraph_welds(merged)
         # KS-specific: re-join LLM-inserted false paragraph breaks between
         # a "K.S.A. <num> ... amended to read as follows:" intro and the
         # statute body that follows.  Scoped to KS only (mirrors the
@@ -1547,6 +1650,27 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         if state_code and state_code.upper() in {"IA", "DE", "IN"}:
             merged = rejoin_inline_renumber_list_breaks(merged)
 
+        # IN-specific: split mid-line item merges like "; and (2)".
+        if state_code and state_code.upper() == "IN":
+            merged = _split_in_midline_items(merged)
+
+        # IN-specific: ensure blank lines between (a)/(1) items.
+        if state_code and state_code.upper() == "IN":
+            merged = _ensure_in_item_spacing(merged)
+
+        # IN-specific: strip leading indentation as the VERY LAST step.
+        # Must run AFTER all merge/split/rejoin steps because those can
+        # re-introduce leading whitespace.  Every IN output line should
+        # start at the left margin.
+        if state_code and state_code.upper() == "IN":
+            merged = _strip_in_leading_indent(merged)
+
+        # Universal: ensure multi-line ALL-CAPS headings have paragraph
+        # breaks between them.  The LLM sometimes emits consecutive
+        # heading lines (e.g. "ECONOMIC DEVELOPMENT PROGRAMS\n
+        # CONFORMING CHANGES") with only \n instead of \n\n.
+        merged = _split_consecutive_caps_heading_lines(merged)
+
         total_time = time.time() - start_time
         minutes = int(total_time // 60)
         seconds = int(total_time % 60)
@@ -1559,6 +1683,489 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
     except Exception as e:
         logging.error(f"❌ Hybrid conversion failed: {e}", exc_info=True)
         return None
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Safeguarded subsection splitter for the hybrid pipeline
+# ────────────────────────────────────────────────────────────────────────────
+# The original ``split_tagged_subsections`` (from pymupdf_extractor.py) was
+# disabled because it caused citation truncation (``K.S.A. 65-1501``,
+# ``IC 36-1-3-1.8``), section-header bleed (``Sec. 1.``), and edit
+# fragmentation.  This replacement adds explicit safeguards that prevent
+# those problems while still splitting at genuine paragraph-level markers
+# like ``a.``, ``b.``, ``(1)``, ``(a)`` that appear inside a single tag.
+#
+# Key safeguards:
+#   1. **Citation guard** — text before the marker is checked for citation
+#      prefixes (K.S.A., IC, U.S.C., §, section, subsection, chapter,
+#      paragraph).  If found, the marker is skipped.
+#   2. **Section-header guard** — markers that look like ``Sec. N.`` or
+#      ``Section N.`` are excluded.
+#   3. **Minimum content guard** — the piece AFTER the split must contain
+#      at least 50 characters of content (prevents tiny garbage fragments).
+#   4. **Inline-list guard** — if all markers are preceded by semicolons,
+#      the tag is treated as an inline list and not split.
+# ────────────────────────────────────────────────────────────────────────────
+_RE_SUBSEC_MARKER = re.compile(
+    r'(?:(?<=[.:;])|(?<=\band\b)|(?<=\bor\b))\s*'
+    r'('
+    r'\(\d+\)[a-z]\.\d*\.?'           # (1)a.
+    r'|\(\d+\)|\([A-Z]+\)|\([a-z]+\)' # (1), (A), (a)
+    r'|[a-z]\.\d*\.?'                  # a., b.
+    r'|\d+\.'                          # 1., 2.
+    r')(?:\s|$)',
+    re.IGNORECASE,
+)
+
+# Citation prefixes that precede a marker and indicate it's part of a
+# legal citation, NOT a subsection boundary.  E.g. "section 15.329",
+# "IC 36-1-3", "K.S.A. 65-1501(a)", "subsection 1, paragraph"
+_RE_CITATION_PREFIX = re.compile(
+    r'(?:section|subsection|paragraph|chapter|subchapter|part|division'
+    r'|IC|K\.S\.A\.|U\.S\.C\.|§|Sec\.|SEC\.|Section|SECTION'
+    r'|Article|ARTICLE|Art\.|ART\.)'
+    r'\s*[\d.,()\-a-zA-Z]*\s*$'
+    r'|'
+    # Also catch "42 U.S.C." / "29 U.S.C." etc. where a preceding number
+    # is part of the citation (e.g. "42 U.S.C. §1751–1785")
+    r'\d+\s+U\.S\.C\.\s*[\d§.,()\-a-zA-Z]*\s*$',
+    re.IGNORECASE,
+)
+
+
+def _split_tagged_subsections_safe(text):
+    """Split tagged blocks at subsection markers with citation-aware safeguards.
+
+    Unlike the original ``split_tagged_subsections`` (disabled as a no-op),
+    this version avoids false splits on legal citations, section headers,
+    and inline lists.  Only genuine paragraph-level markers trigger a split.
+    """
+
+    def _is_inline_list(content, markers):
+        """Return True if markers are separated by semicolons (inline list)."""
+        if not markers:
+            return False
+        list_sep_count = 0
+        period_count = 0
+        for m in markers:
+            preceding = content[:m.start()].rstrip()
+            if preceding.endswith(';'):
+                list_sep_count += 1
+            elif preceding.endswith(('.', ':')):
+                period_count += 1
+            else:
+                list_sep_count += 1
+        return list_sep_count > period_count
+
+    def _split_block(match):
+        tag_open = match.group(1)
+        content = match.group(2)
+        tag_close = match.group(3)
+
+        # Only split long-ish tags (short tags are unlikely to contain
+        # genuine multi-paragraph content).
+        if len(content) < 80:
+            return match.group(0)
+
+        markers = list(_RE_SUBSEC_MARKER.finditer(content))
+        if not markers:
+            return match.group(0)
+
+        # ── Filter out false-positive markers ──────────────────────────
+        safe_markers = []
+        for m in markers:
+            preceding = content[:m.start()].rstrip()
+            marker_text = m.group(1)
+
+            # Guard 1: Citation prefix — the text before the marker ends
+            # with a citation keyword or abbreviation.
+            if _RE_CITATION_PREFIX.search(preceding):
+                continue
+
+            # Guard 1b: Abbreviation component — the marker is a single
+            # letter + period (e.g. "C." from "U.S.C.") preceded by
+            # another single-letter abbreviation component (e.g. "S.").
+            # This catches dotted abbreviations like U.S.C., P.L., etc.
+            if (re.match(r'^[a-zA-Z]\.$', marker_text)
+                    and re.search(r'[A-Z]\.\s*$', preceding)):
+                continue
+
+            # Guard 1c: Statute number continuation — the marker is
+            # directly adjacent to a preceding dotted number with NO
+            # whitespace gap, e.g. "256F.5." where "5." is part of
+            # the statute number 256F.5, not a new subsection.
+            # Check the raw (un-rstripped) text: if the character
+            # immediately before the marker is a period (from a
+            # number/code like 256F.), it's a dotted continuation.
+            raw_before_marker = content[:m.start(1)]
+            if (raw_before_marker
+                    and raw_before_marker[-1] == '.'
+                    and len(raw_before_marker) >= 2
+                    and raw_before_marker[-2].isalnum()):
+                continue
+
+            # Guard 2: Section header — skip "Sec. N." / "SECTION N."
+            # patterns that are section headers, not subsection markers.
+            if re.match(r'(?:Sec|SEC|Section|SECTION|Art|ART|Article|ARTICLE)\.?$',
+                        marker_text, re.IGNORECASE):
+                continue
+
+            # Guard 3: The content AFTER this marker must be substantial
+            # (at least 50 chars) to avoid producing tiny garbage fragments.
+            remaining = content[m.start():].strip()
+            if len(remaining) < 50:
+                continue
+
+            safe_markers.append(m)
+
+        if not safe_markers:
+            return match.group(0)
+
+        # Guard 4: Inline list detection — if markers are separated by
+        # semicolons, this is an inline enumeration, not separate paragraphs.
+        if _is_inline_list(content, safe_markers):
+            return match.group(0)
+
+        # ── Split at safe marker positions ─────────────────────────────
+        pieces = []
+        prev_end = 0
+        for m in safe_markers:
+            split_at = m.start()
+            before = content[prev_end:split_at].rstrip()
+            if before:
+                pieces.append(before)
+            prev_end = split_at
+        last = content[prev_end:].strip()
+        if last:
+            pieces.append(last)
+
+        # ── Guard 5: Bare-marker orphan prevention ─────────────────────
+        # If a non-final piece is just a bare subsection marker (e.g.,
+        # "2.", "a.", "(1)"), merge it into the next piece to avoid
+        # creating a meaningless orphan tag like [D>2.<D].
+        _bare_marker_re = re.compile(
+            r'^\s*(?:\d+\.?|[a-z]\.?|\(\s*\d+\s*\)|\(\s*[a-z]+\s*\))\s*$',
+            re.IGNORECASE,
+        )
+        if len(pieces) > 1:
+            merged_pieces = []
+            i = 0
+            while i < len(pieces):
+                if (i < len(pieces) - 1
+                        and _bare_marker_re.match(pieces[i].strip())):
+                    # Merge bare marker with the next piece
+                    pieces[i + 1] = pieces[i].rstrip() + ' ' + pieces[i + 1].lstrip()
+                    i += 1
+                else:
+                    merged_pieces.append(pieces[i])
+                    i += 1
+            pieces = merged_pieces
+
+        tagged_pieces = [f"{tag_open}{p.strip()}{tag_close}" for p in pieces]
+        result = '\n\n'.join(tagged_pieces)
+        if result != match.group(0):
+            logging.info(
+                f"   ✂️  Split tagged block into {len(tagged_pieces)} pieces "
+                f"at markers: {[m.group(1) for m in safe_markers]}"
+            )
+        return result
+
+    text = re.sub(r'(\[A>)(.*?)(<A\])', _split_block, text, flags=re.DOTALL)
+    text = re.sub(r'(\[D>)(.*?)(<D\])', _split_block, text, flags=re.DOTALL)
+    return text
+
+
+def _split_consecutive_caps_heading_lines(text):
+    """Insert paragraph breaks between consecutive ALL-CAPS heading lines.
+
+    The LLM sometimes emits multi-line headings (e.g. a division title
+    followed by a subtitle) with only ``\\n`` between them instead of
+    ``\\n\\n``.  Example::
+
+        ECONOMIC DEVELOPMENT PROGRAMS —— TAX CREDIT LIMITS
+        CONFORMING CHANGES
+
+    This function detects consecutive non-blank lines that are both
+    ALL-CAPS (letters only, after stripping tags) and inserts a blank
+    line between them so they render as separate paragraphs.
+
+    Safe for all states — only touches lines that are entirely uppercase
+    with at least 4 letter characters (avoids matching short tokens).
+    """
+    _TAG_RE = re.compile(r'\[([AD])>|<([AD])\]')
+    lines = text.split('\n')
+    result = []
+    i = 0
+    fix_count = 0
+    while i < len(lines):
+        result.append(lines[i])
+        if i + 1 < len(lines):
+            a = lines[i].rstrip()
+            b = lines[i + 1].rstrip()
+            if a and b:
+                a_clean = _TAG_RE.sub('', a).strip()
+                b_clean = _TAG_RE.sub('', b).strip()
+                a_letters = re.sub(r'[^a-zA-Z]', '', a_clean)
+                b_letters = re.sub(r'[^a-zA-Z]', '', b_clean)
+                if (a_letters and b_letters
+                        and len(a_letters) >= 4 and len(b_letters) >= 4
+                        and a_letters == a_letters.upper()
+                        and b_letters == b_letters.upper()):
+                    result.append('')  # insert blank line
+                    fix_count += 1
+        i += 1
+    if fix_count:
+        logging.info(
+            f"   📐 Inserted {fix_count} paragraph break(s) between "
+            f"consecutive ALL-CAPS heading lines"
+        )
+    return '\n'.join(result)
+
+
+def _merge_page_break_paragraph_splits(text, state_code=None):
+    """Merge paragraphs that were split mid-sentence at a PDF page break.
+
+    The chunk-level LLM sometimes fails to rejoin paragraphs that cross a
+    page boundary in the raw PyMuPDF extraction.  Three patterns are
+    detected and repaired:
+
+    **Pattern 1 — both tags present**:
+      A ends ``<TAG]``, B starts ``[TAG>`` (same type).
+
+      *Default (all states)*: merges only when B starts with a lowercase
+      letter and A does not end with terminal punctuation — the original
+      conservative behaviour.
+
+      *FL-specific enhancement* (``state_code="FL"``):
+
+      * **1a — mid-sentence**: A does *not* end with terminal punctuation
+        (``. ! ? : ;``) or a section-header delimiter (em/en dash).
+        Merge regardless of B's case (uppercase continuations like
+        ``…Technology<A]  [A>AI Risk Management…`` are common in FL).
+        Sets the ``_p1a_active`` flag for the current paragraph.
+
+      * **1b — terminal punct, raw-format continuation**: A ends with
+        terminal punctuation BUT ``_p1a_active`` is True — meaning
+        Pattern 1a has been actively merging per-line tags from raw PDF
+        extraction into this paragraph.  Terminal punct at a per-line
+        boundary is just where the PDF line happened to end on a
+        sentence boundary, *not* a real paragraph break.  Only fires
+        when ``_p1a_active`` is True; when False the paragraph was
+        already a complete LLM-cleaned unit and the following tag is
+        genuinely separate (avoids SB 1028 / SB 1332 regressions).
+
+    **Pattern 2 — missing re-open tag** (new):
+      A ends ``<TAG]`` but B does *not* start with any tag.  The LLM
+      closed the tag at the page break but forgot to reopen.  Same
+      lowercase-start and no-terminal-punctuation guards apply, plus
+      B must not begin with a subsection marker (``a. ``) and A's
+      tag-stripped text must be ≥ 40 chars (avoids merging headings).
+
+    **Pattern 3 — no tags at boundary** (new):
+      Neither paragraph has a tag at the join.  Same guards as Pattern 2.
+
+    Runs **before** ``consolidate_adjacent_tags`` / ``merge_split_tags``
+    so the structural tag passes see the corrected paragraph topology.
+    """
+    _is_fl = state_code and state_code.upper() == "FL"
+    _is_ct = state_code and state_code.upper() == "CT"
+
+    _BARE_SUBSEC = re.compile(r'^[a-z]\.\s')
+    _TAG_STRIP   = re.compile(r'\[([AD])>|<([AD])\]')
+    # Subsection / section markers that signal a NEW paragraph —
+    # never merge across these (same for ALL states including FL).
+    # The FL-specific logic is in Pattern 1 below (line ~1988):
+    # it allows merging across uppercase starts and sentence
+    # boundaries, but ONLY when B doesn't start with any of these
+    # markers.
+    _SUBSEC_OR_SECTION = re.compile(
+        r'^\(\d+\)'            # (1)
+        r'|\([a-zA-Z]{1,4}\)'  # (a), (A), (iv)
+        r'|\d+\.[\s<]'         # 1.  (incl. standalone [D>1.<D] tags)
+        r'|[a-z]\.[\s<]'       # a.  (incl. standalone [A>a.<A] tags)
+        r'|Sec\.[\s<]'         # Sec. (incl. standalone tags)
+        r'|SECTION[\s<]'       # SECTION (incl. standalone tags)
+        r'|\d{2,}\.\d'         # 501.9986 (statute numbers)
+        r'|"'                  # "Definition..." start
+    )
+
+    paras = text.split('\n\n')
+    if len(paras) <= 1:
+        return text
+
+    merged_paras: list[str] = []
+    i = 0
+    merge_count = 0
+    while i < len(paras):
+        curr = paras[i]
+        _p1a_active = False   # True once Pattern 1a merges in this run
+        # Try to merge with one or more subsequent paragraphs whose
+        # tag was split at a page break.
+        while i + 1 < len(paras):
+            nxt = paras[i + 1]
+            curr_s = curr.rstrip()
+            nxt_s = nxt.lstrip()
+
+            did_merge = False
+            for tag in ('A', 'D'):
+                close_tag = f'<{tag}]'
+                open_tag = f'[{tag}>'
+
+                # --- Pattern 1: A ends <TAG], B starts [TAG> (same) ---
+                if curr_s.endswith(close_tag) and nxt_s.startswith(open_tag):
+                    inner = nxt_s[len(open_tag):].lstrip()
+                    text_before = curr_s[:-len(close_tag)].rstrip()
+                    if not inner or not text_before:
+                        continue
+                    # Guard: subsection / section marker → new paragraph.
+                    # FL-specific exceptions prevent false blocking:
+                    #
+                    # (a) Tag A ends with a section word/abbreviation
+                    #     ("Section", " s.", " S.", " sec.", " Sec.")
+                    #     and tag B starts with a statute number.  E.g.
+                    #     "established in s." → "627.351(6)(c)5.c.,…"
+                    #     "the corporation. Section" → "627.351(6)…"
+                    #
+                    # (b) Tag A ends with a preposition and tag B starts
+                    #     with "s. <digits>" (section reference split at
+                    #     the page break).  E.g.
+                    #     "punishable as provided in" → "s. 775.082,…"
+                    _skip_subsec_guard = False
+                    if _is_fl and _SUBSEC_OR_SECTION.match(inner):
+                        _skip_subsec_guard = bool(
+                            re.search(r'\b[sS]\.$|\b[sS]ec\.$|\bSection$', text_before)
+                        ) or bool(
+                            re.search(r'\b(?:in|under|of|per|to|see)\s*$', text_before, re.IGNORECASE)
+                            and re.match(r'[sS]\.\s+\d', inner)
+                        )
+                    if _SUBSEC_OR_SECTION.match(inner) and not _skip_subsec_guard:
+                        continue
+                    # Guard: section-header delimiter (em/en dash)
+                    if text_before[-1] in '\u2014\u2013':
+                        continue
+                    has_terminal = text_before[-1] in '.!?:;'
+                    if _is_fl:
+                        # ── FL-specific enhanced merging ──────────────
+                        if not has_terminal:
+                            # Guard: list-item conclusion pattern.
+                            # When the paragraph starts with a letter
+                            # subsection marker like (d), ends with a
+                            # comma, and _p1a_active is False (we are
+                            # NOT in per-line raw merge mode), the next
+                            # paragraph is typically a conclusion/
+                            # penalty clause that completes the sentence
+                            # started *before* the list — e.g.
+                            #   "Any person who …:  (a) …; (b) …;
+                            #    (c) …; or (d) …false information,
+                            #
+                            #    commits a felony …"
+                            # Do NOT merge.
+                            if (not _p1a_active
+                                    and text_before.rstrip()[-1:] == ','
+                                    and re.match(
+                                        r'\([a-z]\)\s',
+                                        _TAG_STRIP.sub('', curr).strip())):
+                                continue
+                            # 1a — mid-sentence: no terminal punct →
+                            # always merge regardless of B's case
+                            curr = text_before + ' ' + nxt_s[len(open_tag):]
+                            i += 1
+                            merge_count += 1
+                            did_merge = True
+                            _p1a_active = True
+                            break
+                        # 1b — terminal punct, raw-format continuation.
+                        # Only fires when Pattern 1a already merged
+                        # per-line tags into curr (_p1a_active=True),
+                        # meaning the text is raw PDF extraction where
+                        # terminal punct at a line break is NOT a real
+                        # paragraph boundary.  When _p1a_active is
+                        # False the paragraph came from the LLM as a
+                        # complete unit and the next tag is genuinely
+                        # separate (SB 1028 / SB 1332 regression guard).
+                        if _p1a_active:
+                            curr = text_before + ' ' + nxt_s[len(open_tag):]
+                            i += 1
+                            merge_count += 1
+                            did_merge = True
+                            break
+                        continue
+                    else:
+                        # ── Default (all other states) ────────────────
+                        # Original conservative logic: merge only when
+                        # B starts lowercase and A has no terminal punct
+                        if not inner[0].islower():
+                            continue
+                        if has_terminal:
+                            # CT-specific: semicolon + list continuation.
+                            # When A ends with ";" and B starts with a
+                            # conjunction + parenthesised marker like
+                            # "and (2)" or "or (B)", the semicolon is a
+                            # list-item separator, not a paragraph
+                            # boundary.  Allow the merge.
+                            if not (_is_ct
+                                    and text_before[-1] == ';'
+                                    and re.match(r'(?:and|or)\s+\(', inner)):
+                                continue
+                        curr = text_before + ' ' + nxt_s[len(open_tag):]
+                        i += 1
+                        merge_count += 1
+                        did_merge = True
+                        break
+
+                # --- Pattern 2: A ends <TAG], B has NO open tag ---
+                # LLM closed the tag at page break but forgot to reopen.
+                if (curr_s.endswith(close_tag)
+                        and not nxt_s.startswith('[A>')
+                        and not nxt_s.startswith('[D>')):
+                    inner = nxt_s.lstrip()
+                    if not inner or not inner[0].islower():
+                        continue
+                    if _BARE_SUBSEC.match(inner):
+                        continue
+                    text_before = curr_s[:-len(close_tag)].rstrip()
+                    if text_before and text_before[-1] in '.!?':
+                        continue
+                    # A's tag-stripped content must be substantial
+                    if len(_TAG_STRIP.sub('', text_before).strip()) < 40:
+                        continue
+                    # Merge: strip close tag from A, keep B as-is
+                    curr = text_before + ' ' + nxt_s
+                    i += 1
+                    merge_count += 1
+                    did_merge = True
+                    break
+
+            # --- Pattern 3: no tags at boundary (general mid-sentence) ---
+            if not did_merge:
+                if (not curr_s.endswith('<A]')
+                        and not curr_s.endswith('<D]')
+                        and not nxt_s.startswith('[A>')
+                        and not nxt_s.startswith('[D>')):
+                    inner = nxt_s.lstrip()
+                    if inner and inner[0].islower():
+                        a_clean = _TAG_STRIP.sub('', curr_s).rstrip()
+                        if (a_clean
+                                and a_clean[-1] not in '.!?:;'
+                                and not _BARE_SUBSEC.match(inner)
+                                and len(a_clean) >= 40):
+                            curr = curr_s + ' ' + nxt_s
+                            i += 1
+                            merge_count += 1
+                            did_merge = True
+
+            if not did_merge:
+                break
+
+        merged_paras.append(curr)
+        i += 1
+
+    if merge_count:
+        logging.info(
+            f"   🔗 Merged {merge_count} page-break paragraph split(s)"
+        )
+
+    return '\n\n'.join(merged_paras)
 
 
 def _merge_cleaned_chunks(chunks):
@@ -1728,6 +2335,197 @@ def _stitch_two_chunks(merged, next_chunk, *, chunk_index, window=4000):
             )
             return merged + next_chunk[raw_cut:]
 
+    # ── Strategy 2b: tail-probe overlap ─────────────────────────────────
+    # When the LLM starts the head mid-sentence (e.g. "n section 10-264s,
+    # shall not charge tuition…"), Strategies 1-2 fail because (1) no
+    # shared section anchor exists between the tail and head windows and
+    # (2) the boundary characters don't align for an exact suffix-prefix
+    # match.
+    #
+    # Fix: take a normalised probe from the END of *merged* and search
+    # for it inside the beginning of *next_chunk*.  If the probe is
+    # found, everything in next_chunk before the probe's end is overlap
+    # that should be skipped.  merged is kept in full (it has the
+    # complete start of the overlapping paragraph) and next_chunk
+    # continues from where merged left off.
+    _PROBE_LEN = 200          # normalised chars — long enough to avoid false hits
+    _PROBE_MIN = 80           # minimum viable probe length
+    tail_for_probe = merged[-3000:]
+    tail_probe_norm = ' '.join(tail_for_probe.split())
+    actual_probe_len = min(_PROBE_LEN, len(tail_probe_norm))
+    if actual_probe_len >= _PROBE_MIN:
+        probe = tail_probe_norm[-actual_probe_len:]
+        head_for_probe = next_chunk[:6000]
+        head_probe_norm = ' '.join(head_for_probe.split())
+        probe_hit = head_probe_norm.find(probe)
+        if probe_hit >= 0:
+            # Overlap confirmed.  Cut next_chunk just after the matched
+            # probe so the duplicated text is skipped.
+            cut_norm = probe_hit + actual_probe_len
+            # Map normalised position → raw position in next_chunk.
+            normed_2b = 0
+            in_ws_2b = False
+            raw_cut_2b = 0
+            for j, ch in enumerate(head_for_probe):
+                if ch.isspace():
+                    if not in_ws_2b:
+                        normed_2b += 1
+                        in_ws_2b = True
+                else:
+                    normed_2b += 1
+                    in_ws_2b = False
+                if normed_2b >= cut_norm:
+                    raw_cut_2b = j + 1
+                    break
+            if raw_cut_2b > 0:
+                candidate = merged.rstrip() + next_chunk[raw_cut_2b:]
+                # Sanity: stitched result should not be shorter than the
+                # longer input (overlap dedup shortens by at most a few K).
+                min_expected = max(len(merged), len(next_chunk))
+                if len(candidate) >= min_expected:
+                    logging.info(
+                        f"   🔗 Chunk {chunk_index}: tail-probe overlap "
+                        f"({actual_probe_len} probe chars matched at norm "
+                        f"offset {probe_hit}, raw cut at {raw_cut_2b})"
+                    )
+                    return candidate
+                else:
+                    logging.warning(
+                        f"   ⚠️  Chunk {chunk_index}: tail-probe cut would "
+                        f"shrink result to {len(candidate):,} "
+                        f"(below {min_expected:,}). Skipping to Strategy 3."
+                    )
+
+    # ── Strategy 2c: tag-stripped overlap detection ─────────────────────
+    # When the LLM tags the overlap region differently in each chunk
+    # (e.g. chunk 1 has per-line [D>…<D] tags while chunk 2 merges them
+    # into paragraph-level tags), all prior strategies fail because the
+    # tagged text doesn't match.  Fix: strip formatting tags from both
+    # overlap windows, do a probe match on the bare text, then map the
+    # match position back to the original tagged next_chunk.
+    _TAG_RE = re.compile(r'\[([AD])>|<([AD])\]')
+    def _strip_tags(s):
+        return _TAG_RE.sub('', s)
+
+    _PROBE_2C_LEN = 300       # longer probe for tag-stripped matching
+    _PROBE_2C_MIN = 100
+    tail_for_2c = merged[-4000:]
+    tail_stripped = _strip_tags(tail_for_2c)
+    tail_2c_norm = ' '.join(tail_stripped.split())
+    actual_2c_len = min(_PROBE_2C_LEN, len(tail_2c_norm))
+    if actual_2c_len >= _PROBE_2C_MIN:
+        probe_2c = tail_2c_norm[-actual_2c_len:]
+        head_for_2c = next_chunk[:8000]
+        head_stripped = _strip_tags(head_for_2c)
+        head_2c_norm = ' '.join(head_stripped.split())
+        probe_2c_hit = head_2c_norm.find(probe_2c)
+        if probe_2c_hit >= 0:
+            # Map normalised-stripped position → raw position in next_chunk.
+            # Walk the original (tagged) head text, stripping tags and
+            # collapsing whitespace, counting normalised-stripped chars
+            # until we reach the cut point.
+            cut_2c_norm = probe_2c_hit + actual_2c_len
+            normed_2c = 0
+            in_ws_2c = False
+            raw_cut_2c = 0
+            j_2c = 0
+            while j_2c < len(head_for_2c):
+                # Skip tag sequences in the raw text
+                tag_m = _TAG_RE.match(head_for_2c, j_2c)
+                if tag_m:
+                    j_2c = tag_m.end()
+                    continue
+                ch = head_for_2c[j_2c]
+                if ch.isspace():
+                    if not in_ws_2c:
+                        normed_2c += 1
+                        in_ws_2c = True
+                else:
+                    normed_2c += 1
+                    in_ws_2c = False
+                j_2c += 1
+                if normed_2c >= cut_2c_norm:
+                    raw_cut_2c = j_2c
+                    break
+            if raw_cut_2c > 0:
+                candidate_2c = merged.rstrip() + '\n\n' + next_chunk[raw_cut_2c:].lstrip('\n')
+                min_expected_2c = max(len(merged), len(next_chunk))
+                if len(candidate_2c) >= min_expected_2c:
+                    logging.info(
+                        f"   🔗 Chunk {chunk_index}: tag-stripped overlap "
+                        f"({actual_2c_len} probe chars matched at stripped "
+                        f"offset {probe_2c_hit}, raw cut at {raw_cut_2c})"
+                    )
+                    return candidate_2c
+                else:
+                    logging.warning(
+                        f"   ⚠️  Chunk {chunk_index}: tag-stripped cut "
+                        f"would shrink result to {len(candidate_2c):,} "
+                        f"(below {min_expected_2c:,}). Skipping."
+                    )
+
+    # ── Strategy 2d: paragraph-level tag-stripped overlap ───────────────
+    # When the LLM produces different subsection numbering or truncates
+    # content at the chunk boundary, the character-level probes in
+    # Strategies 2b/2c fail.  This strategy compares whole paragraphs
+    # (tag-stripped, normalised) from the head against those in the tail.
+    # The FIRST exact paragraph match establishes the overlap anchor:
+    #   • merged is kept up to (not including) the matching tail paragraph
+    #   • next_chunk is used from the matching head paragraph onwards
+    # This cleanly handles the HF 2754 case where subsections b. and c.
+    # appear identically in both chunks but surrounding text differs.
+    _TAG_2D = re.compile(r'\[([AD])>|<([AD])\]')
+    _MIN_PARA_2D = 50  # minimum chars for a paragraph to be match-worthy
+
+    tail_win_2d = merged[-6000:]
+    head_win_2d = next_chunk[:10000]
+
+    # Build list of (raw_offset_in_window, normalised_stripped_text) for tail
+    tail_paras_2d = []
+    t_pos = 0
+    for t_part in tail_win_2d.split('\n\n'):
+        stripped = ' '.join(_TAG_2D.sub('', t_part).split())
+        if len(stripped) >= _MIN_PARA_2D:
+            tail_paras_2d.append((t_pos, stripped))
+        t_pos += len(t_part) + 2  # +2 for \n\n
+
+    # Build index of tail paragraph text → position for O(1) lookup
+    tail_para_index = {}
+    for t_pos_2d, t_text in tail_paras_2d:
+        tail_para_index.setdefault(t_text, t_pos_2d)
+
+    # Scan head paragraphs and find the first that exactly matches a tail para
+    h_pos = 0
+    first_match_2d = None
+    for h_part in head_win_2d.split('\n\n'):
+        stripped_h = ' '.join(_TAG_2D.sub('', h_part).split())
+        if len(stripped_h) >= _MIN_PARA_2D and stripped_h in tail_para_index:
+            first_match_2d = (h_pos, tail_para_index[stripped_h], stripped_h)
+            break
+        h_pos += len(h_part) + 2
+
+    if first_match_2d:
+        h_cut_pos, t_cut_pos, match_text = first_match_2d
+        # Cut merged at the START of the matching tail paragraph
+        global_cut = len(merged) - len(tail_win_2d) + t_cut_pos
+        # next_chunk from the matching head paragraph onwards
+        candidate_2d = merged[:global_cut].rstrip() + '\n\n' + next_chunk[h_cut_pos:].lstrip('\n')
+        min_expected_2d = max(len(merged), len(next_chunk))
+        if len(candidate_2d) >= min_expected_2d:
+            logging.info(
+                f"   🔗 Chunk {chunk_index}: paragraph-level tag-stripped "
+                f"overlap (matched {len(match_text)} stripped chars, "
+                f"tail cut at -{len(tail_win_2d) - t_cut_pos}, "
+                f"head cut at {h_cut_pos})"
+            )
+            return candidate_2d
+        else:
+            logging.warning(
+                f"   ⚠️  Chunk {chunk_index}: paragraph-level cut would "
+                f"shrink result to {len(candidate_2d):,} "
+                f"(below {min_expected_2d:,}). Skipping."
+            )
+
     # ── Strategy 3: normalised line match ───────────────────────────────
     # IMPORTANT: use ``tail_window`` / ``head_window`` (the full ``window``-
     # sized slices computed at the top of the function) rather than the
@@ -1793,12 +2591,67 @@ def _stitch_two_chunks(merged, next_chunk, *, chunk_index, window=4000):
             return merged[:global_tail_end].rstrip() + '\n\n' + next_chunk[cut_offset_in_head:].lstrip('\n')
 
     # ── Strategy 4: concatenate with separator (last resort) ────────────
+    # When no overlap is found, the LLM likely truncated content at the
+    # chunk boundary.  Both chunks may have corrupt tails/heads:
+    #   merged tail:     "...courts of thi"       (mid-word)
+    #   next_chunk head: "he safety of persons..." (mid-word)
+    #
+    # Fix: strip the last paragraph from merged and the first paragraph
+    # from next_chunk if they look truncated (no terminal punctuation at
+    # the end, or start mid-word without an opening tag).  This loses a
+    # small amount of text at the boundary but avoids corrupt merges and
+    # duplicate content.
     logging.warning(
         f"   ⚠️  Chunk {chunk_index}: no overlap found "
-        f"(tail/head {search_len:,} chars each), concatenating with separator. "
-        f"The post-merge dedup pass will catch any duplicate paragraph runs."
+        f"(tail/head {search_len:,} chars each), concatenating with "
+        f"truncation cleanup."
     )
-    return merged.rstrip() + '\n\n' + next_chunk.lstrip()
+    # Strip truncated tail of merged: if the last non-blank paragraph
+    # does NOT end with sentence-terminal punctuation followed by a
+    # close tag, it's likely truncated.
+    _merged_stripped = merged.rstrip()
+    _tail_paras = _merged_stripped.rsplit('\n\n', 1)
+    if len(_tail_paras) == 2:
+        _last_para = _tail_paras[1].rstrip()
+        # Truncated if: doesn't end with <A] or <D] after terminal punct
+        _ends_clean = bool(re.search(r'[.!?:;]\s*<[AD]\]\s*$', _last_para))
+        _ends_section = bool(re.search(r'^Section\s+\d', _last_para))
+        if not _ends_clean and not _ends_section:
+            logging.info(
+                f"   ✂️  Chunk {chunk_index}: trimming truncated tail paragraph "
+                f"({len(_last_para)} chars): ...{_last_para[-60:]}"
+            )
+            _merged_stripped = _tail_paras[0].rstrip()
+
+    # Strip truncated head of next_chunk: if the first non-blank paragraph
+    # does NOT start with an open tag [A> or [D>, or starts mid-word,
+    # it's the tail of a sentence that was cut at the chunk split.
+    _head_stripped = next_chunk.lstrip()
+    _head_paras = _head_stripped.split('\n\n', 1)
+    if len(_head_paras) == 2:
+        _first_para = _head_paras[0].strip()
+        _starts_clean = (
+            _first_para.startswith('[A>') or _first_para.startswith('[D>')
+            or _first_para.startswith('Section ')
+            or _first_para.startswith('(')
+            or (len(_first_para) > 0 and _first_para[0].isupper())
+        )
+        # Extra guard: a tag like [A>he safety... still looks truncated —
+        # the inner text starts with a lowercase non-subsection character,
+        # meaning the original word was split mid-word (e.g. "the" → "he").
+        if _starts_clean and re.match(r'\[[AD]>', _first_para):
+            _inner = _first_para[3:]          # strip [A> or [D>
+            if (_inner and _inner[0].islower()
+                    and not re.match(r'^[a-z]\.\s', _inner)):
+                _starts_clean = False
+        if not _starts_clean:
+            logging.info(
+                f"   ✂️  Chunk {chunk_index}: trimming truncated head paragraph "
+                f"({len(_first_para)} chars): {_first_para[:60]}..."
+            )
+            _head_stripped = _head_paras[1].lstrip()
+
+    return _merged_stripped.rstrip() + '\n\n' + _head_stripped.lstrip()
 
 
 def _dedupe_consecutive_duplicate_blocks(text, *, min_run_chars=200):
@@ -1845,7 +2698,18 @@ def _dedupe_consecutive_duplicate_blocks(text, *, min_run_chars=200):
     if n < 2:
         return text
 
-    norms = [' '.join(p.lower().split()) for p in paras]
+    # Strip formatting tags before normalising so the same content with
+    # different tag structure (e.g. per-line [D>…<D] vs paragraph-level)
+    # is treated as equivalent.  This catches overlap duplicates that
+    # survived _stitch_two_chunks due to tag formatting differences.
+    _tag_strip_re = re.compile(r'\[([AD])>|<([AD])\]')
+    # Also normalise hyphen-space (PDF line breaks inside hyphenated
+    # words produce "calendar- day" vs "calendar-day").
+    def _norm(p):
+        t = _tag_strip_re.sub('', p)
+        t = re.sub(r'-\s+', '-', t)   # "calendar- day" → "calendar-day"
+        return ' '.join(t.lower().split())
+    norms = [_norm(p) for p in paras]
     keep = [True] * n
 
     max_run = min(50, n // 2)
@@ -1868,7 +2732,51 @@ def _dedupe_consecutive_duplicate_blocks(text, *, min_run_chars=200):
             else:
                 i += 1
 
-    return '\n\n'.join(p for p, k in zip(paras, keep) if k)
+    # ── Near-consecutive dedup (gap ≤ 2 paragraphs) ─────────────────
+    # When Strategy 4 concatenated chunks and the LLM truncated the
+    # overlap, a corrupt stitch paragraph (e.g. "(5)...section. he
+    # safety of persons...") sits between the first and second copy
+    # of the overlapping content.  The strict consecutive check above
+    # misses this because the gap breaks the run.  This pass allows a
+    # gap of 1-2 paragraphs and removes both the gap and the second
+    # copy of the run.
+    for run_len in range(min(20, n // 3), 0, -1):
+        i = 0
+        while i + run_len < n:
+            if not all(keep[j] for j in range(i, i + run_len)):
+                i += 1
+                continue
+            run1 = norms[i : i + run_len]
+            total_chars = sum(len(p) for p in run1)
+            if total_chars < min_run_chars:
+                i += 1
+                continue
+            # Try gaps of 1 and 2 paragraphs after run1
+            for gap in (1, 2):
+                j = i + run_len + gap
+                if j + run_len > n:
+                    continue
+                if not all(keep[k] for k in range(j, j + run_len)):
+                    continue
+                run2 = norms[j : j + run_len]
+                if run1 == run2:
+                    # Drop the gap paragraphs and the second run
+                    for k in range(i + run_len, j + run_len):
+                        keep[k] = False
+                    logging.info(
+                        f"   🧹 Near-consecutive dedup: removed {run_len} "
+                        f"duplicate paragraphs + {gap} gap paragraph(s) "
+                        f"at positions {i+run_len}-{j+run_len-1}"
+                    )
+                    i = j + run_len
+                    break
+            else:
+                i += 1
+
+    # Also strip any stitch sentinels that may survive from older runs
+    result_paras = [p for p, k in zip(paras, keep) if k]
+    result_paras = [p for p in result_paras if p.strip() not in ('--- Chunk Stitch ---', '')]
+    return '\n\n'.join(result_paras)
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -2064,7 +2972,7 @@ def restore_special_symbols(claude_text, pymupdf_text):
     return claude_text
 
 
-def deterministic_cleanup(text, state_config=None):
+def deterministic_cleanup(text, state_config=None, state_code=None):
     """
     Apply deterministic fixes for common Claude output inconsistencies.
     These are formatting errors that Claude makes intermittently regardless
@@ -2216,16 +3124,20 @@ def deterministic_cleanup(text, state_config=None):
 
     # ── Fix 7: Merge adjacent same-type tags ──────────────────────
     # [A>text1<A] [A>text2<A] → [A>text1 text2<A]  (if only spaces/tabs between, NOT newlines)
-    # Using [^\S\n]* instead of \s* to avoid merging tags across lines,
-    # which would incorrectly merge separate underlined spans separated by
-    # plain-text content like subsection labels.
-    merge_a = len(re.findall(r'<A\][^\S\n]*\[A>', text))
-    merge_d = len(re.findall(r'<D\][^\S\n]*\[D>', text))
+    # Using [^\S\n]{0,5} instead of [^\S\n]* to avoid merging tags
+    # that are separated by ≥ 6 horizontal spaces.  A gap of 6+ spaces
+    # signals a tabular column boundary (COLUMN_GAP_MIN_SPACES = 6 in
+    # pymupdf_extractor), and merging those tags destroys the multi-
+    # column layout of DE Grants-in-Aid and IN pension tables.  The
+    # {0,5} threshold mirrors ``consolidate_adjacent_tags`` Phase 1a
+    # which also uses ``[ \t]{1,5}``.
+    merge_a = len(re.findall(r'<A\][^\S\n]{0,5}\[A>', text))
+    merge_d = len(re.findall(r'<D\][^\S\n]{0,5}\[D>', text))
     if merge_a > 0:
-        text = re.sub(r'<A\][^\S\n]*\[A>', ' ', text)
+        text = re.sub(r'<A\][^\S\n]{0,5}\[A>', ' ', text)
         fix_log.append(f"Merged {merge_a} adjacent [A>...<A] tag pairs")
     if merge_d > 0:
-        text = re.sub(r'<D\][^\S\n]*\[D>', ' ', text)
+        text = re.sub(r'<D\][^\S\n]{0,5}\[D>', ' ', text)
         fix_log.append(f"Merged {merge_d} adjacent [D>...<D] tag pairs")
 
     # ── Fix 8: Fix orphaned/mismatched tags ───────────────────────
@@ -2273,11 +3185,237 @@ def deterministic_cleanup(text, state_config=None):
     else:
         logging.info("✅ Deterministic cleanup: no fixes needed")
 
+    # ── Fix 9: Ensure blank line between DIVISION headers and subtitles ──
+    # The LLM often collapses "DIVISION X\nSUBTITLE" onto adjacent lines
+    # without the expected blank separator.  Insert one when the line
+    # immediately after a DIVISION header is an ALL-CAPS subtitle (not a
+    # "Sec." / "Section" line).
+    _div_hdr_re = re.compile(
+        r'^(DIVISION\s+[IVXLCDM]+(?:\s*[-\u2014\u2013]+\s*\S.*)?)$\n'  # DIVISION line
+        r'(?!\n)'                                                        # NOT already followed by blank
+        r'([A-Z][A-Z \u2014\u2013\'&/.,;:\-\(\)]+\S)$',                # ALL-CAPS subtitle (incl. apostrophe, &, /)
+        re.MULTILINE,
+    )
+    div_fixed = _div_hdr_re.sub(r'\1\n\n\2', text)
+    if div_fixed != text:
+        n_div = len(_div_hdr_re.findall(text))
+        fix_log.append(f"Inserted blank line after {n_div} DIVISION header(s)")
+        text = div_fixed
+
+    # ── Fix 10: Normalize enrolled-bill signature block ──────────────
+    # PyMuPDF merges the "Approved ___, YYYY" date and the Governor's
+    # signature line onto one text line because they share the same
+    # vertical position in the PDF.  Split them so the signature line
+    # sits above the Governor's name (matching the visual layout and
+    # the format of other signature blocks in the document).
+    _sig_block_re = re.compile(
+        r'^(Approved\s+_{3,},\s*\d{4})\s+(_{10,})$',
+        re.MULTILINE,
+    )
+    sig_fixed = _sig_block_re.sub(r'\1\n\n\2', text)
+    if sig_fixed != text:
+        fix_log.append("Split Governor signature line from Approved date line")
+        text = sig_fixed
+
+    # ── Fix 11: CA vote fraction — ² outside [D> tag ────────────────
+    # PyMuPDF renders the "⅔" fraction as separate Unicode chars
+    # (² = U+00B2, ⁄ = U+2044, 3) and splits them across a tag
+    # boundary: "²[D>⁄3<D]".  Move the superscript digit inside the
+    # delete tag so the full fraction is tagged correctly: "[D>²⁄3<D]".
+    _frac_re = re.compile(r'([²³⁴⁵⁶⁷⁸⁹])\s*\[D>(⁄\d+)')
+    frac_fixed = _frac_re.sub(r'[D>\1\2', text)
+    if frac_fixed != text:
+        fix_log.append("Moved superscript digit inside [D> tag for vote fraction")
+        text = frac_fixed
+
+    # ── Fix 12: ALL-CAPS-only states — strip [A>] from non-CAPS text ──
+    # When a state uses `all_caps: true` as the ONLY addition marker
+    # (underline/bold/italic are all false), the vision model sometimes
+    # still tags bold section headers (mixed-case) with [A>...<A].
+    # Two-pass fix:
+    #   Pass A — Purely non-CAPS tags: strip [A>...<A] entirely.
+    #   Pass B — Mixed tags (CAPS body + bold header in one tag):
+    #            split at the CAPS/non-CAPS boundary so the CAPS
+    #            portion stays tagged and the bold header becomes
+    #            plain text.
+    add_cfg = (state_config or {}).get("add_markup", {})
+    if (add_cfg.get("all_caps")
+            and not add_cfg.get("underline")
+            and not add_cfg.get("bold")
+            and not add_cfg.get("italic")):
+
+        def _word_is_caps(w: str) -> bool:
+            """True if the word's alphabetic chars are all uppercase."""
+            letters = [c for c in w if c.isalpha()]
+            return len(letters) > 0 and all(c.isupper() for c in letters)
+
+        def _word_is_neutral(w: str) -> bool:
+            """True if word has no letters (numbers, punctuation, parens)."""
+            return not any(c.isalpha() for c in w)
+
+        # Subsection label pattern: standalone (a), (1), (I) OR compound
+        # cross-references like (1)(a)(I), (1)(a)(I);, (2)(c)(II), etc.
+        _subsec_label_re = re.compile(
+            r'^\([a-z]+\)$'                           # (a), (bb)
+            r'|^\(\d+(?:\.\d+)?\)$'                   # (1), (2.5)
+            r'|^\([IVXLC]+\)$'                        # (I), (II)
+            r'|^(?:\([a-zA-Z0-9.]+\)){2,}[;,.:]*$'   # compound: (1)(a)(I), (1)(a)(I);
+        )
+
+        def _is_alphanumeric_ref(w: str) -> bool:
+            """True if word is an alphanumeric reference, not real text.
+
+            Catches statutory section numbers (2000d, 1232g), mixed
+            references ((a.1), 4th), or any token that contains at
+            least one digit and at most 3 lowercase letters.  Real
+            words like 'Investigation', 'and', 'procedures' have many
+            more lowercase letters and no digits, so they stay 'L'.
+            """
+            lower_count = sum(1 for c in w if c.islower())
+            has_digit = any(c.isdigit() for c in w)
+            return has_digit and lower_count <= 3
+
+        # Roman numeral pattern for false-positive detection.
+        # Bare Roman numerals like "VI" in "Title VI" are section/title
+        # references, NOT ALL-CAPS new-text headings.
+        _roman_numeral_re = re.compile(
+            r'^(?=[IVXLCDM])M{0,3}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$'
+        )
+
+        def _split_caps_tag(m):
+            """Split a single [A>...<A] tag at CAPS/non-CAPS boundaries.
+
+            Returns:
+              - The original tag unchanged if ALL content is CAPS.
+              - Plain text if NO content is CAPS.
+              - A mix of [A>CAPS<A] and plain-text segments when the
+                tag contains both (e.g. bold header + CAPS body).
+            """
+            content = m.group(1)
+            words = content.split()
+            if not words:
+                return content
+
+            # Classify each word:
+            #   'C' = caps  (all letters uppercase)
+            #   'L' = lowercase/mixed  (has lowercase letters)
+            #   'N' = neutral  (no letters, or subsection label)
+            classes = []
+            for w in words:
+                if _subsec_label_re.match(w) or _is_alphanumeric_ref(w):
+                    classes.append('N')  # subsection / alphanumeric ref → neutral
+                elif _word_is_caps(w):
+                    classes.append('C')
+                elif _word_is_neutral(w):
+                    classes.append('N')
+                else:
+                    classes.append('L')
+
+            # If no CAPS words at all:
+            if 'C' not in classes:
+                # ALL neutral (subsection labels, numbers, refs) — keep
+                # the tag.  merge_split_tags runs later and will merge
+                # it into the adjacent CAPS tag on the same line.
+                # e.g. [A>(4)<A] [A>(c)<A] [A>ON JULY 1,...<A] → merged
+                if 'L' not in classes:
+                    return m.group(0)      # keep tag
+                # Has real lowercase words → strip entire tag
+                return content
+
+            # If no lowercase words at all → keep entire tag
+            # UNLESS every CAPS word is a bare Roman numeral — that's a
+            # false positive from "Title VI", "Article IX", etc.
+            if 'L' not in classes:
+                caps_words = [w for w, c in zip(words, classes) if c == 'C']
+                if caps_words and all(_roman_numeral_re.match(w) for w in caps_words):
+                    return content          # strip tag – bare Roman numeral
+                return m.group(0)
+
+            # Mixed: split into runs.  Neutral words attach to the
+            # CAPS context when adjacent to CAPS, otherwise to lowercase.
+            # Resolve neutrals: assign each N to C or L based on neighbors.
+            # IMPORTANT: Leading neutrals before CAPS (e.g. "(a)" before
+            # "UPON RECEIVING...") should be tagged WITH the CAPS block
+            # because CO rules say "include the subsection label inside
+            # the [A> tag" when the entire subsection is new.
+            resolved = list(classes)
+            for i, c in enumerate(resolved):
+                if c != 'N':
+                    continue
+                # Look left and right for nearest non-N
+                left = next((resolved[j] for j in range(i - 1, -1, -1) if resolved[j] != 'N'), None)
+                right = next((resolved[j] for j in range(i + 1, len(resolved)) if resolved[j] != 'N'), None)
+                # Prefer CAPS context — if EITHER neighbor is CAPS,
+                # attach the neutral to CAPS.  This ensures leading
+                # subsection labels "(a)", "(4)" etc. are included in
+                # the CAPS tag when followed by ALL-CAPS body text.
+                if left == 'C' or right == 'C':
+                    resolved[i] = 'C'
+                else:
+                    resolved[i] = 'L'
+
+            # Special case: leading neutrals (subsection labels) before
+            # a lowercase run that is followed by CAPS.  Pattern:
+            #   N L L L C C C ...  →  the leading N should become C
+            # (e.g. "(4) Investigation and procedures. IF THE RESPONDENT...")
+            # The N was assigned L because its right neighbor is L.
+            # But since there IS caps content later, the subsection label
+            # is part of the new addition and should get its own tag.
+            if resolved and resolved[0] == 'L' and _subsec_label_re.match(words[0]):
+                if 'C' in resolved:
+                    resolved[0] = 'C'
+
+            # Build output segments
+            segments = []
+            run_start = 0
+            for i in range(1, len(resolved) + 1):
+                if i < len(resolved) and resolved[i] == resolved[run_start]:
+                    continue
+                run_type = resolved[run_start]
+                run_words = words[run_start:i]
+                run_text = ' '.join(run_words)
+                if run_type == 'C':
+                    # Guard: bare Roman numeral runs are false positives
+                    if all(_roman_numeral_re.match(rw) for rw in run_words):
+                        segments.append(run_text)
+                    else:
+                        segments.append(f'[A>{run_text}<A]')
+                else:
+                    segments.append(run_text)
+                run_start = i
+
+            return ' '.join(segments)
+
+        before_caps = text
+        text = re.sub(r'\[A>(.*?)<A\]', _split_caps_tag, text, flags=re.DOTALL)
+        if text != before_caps:
+            n_orig = before_caps.count('[A>')
+            n_now = text.count('[A>')
+            n_stripped = n_orig - n_now
+            if n_stripped > 0:
+                fix_log.append(f"ALL-CAPS enforcement: stripped/split {n_stripped} non-CAPS [A>] tag(s)")
+            elif n_now > n_orig:
+                fix_log.append(f"ALL-CAPS enforcement: split mixed tags into {n_now - n_orig + n_orig} CAPS-only segments")
+            logging.info(f"🔧 ALL-CAPS tag enforcement: {n_orig} → {n_now} [A>] tags")
+
     # ── Final: Fix cross-type overlaps, remove nested tags, merge mid-sentence splits, then split at subsection boundaries ──
     text = fix_overlapping_cross_tags(text)
     text = remove_nested_tags(text)
     text = merge_split_tags(text)
     text = split_tagged_subsections(text)
+
+    # ── Absolute last step: split tabular tags at column boundaries ──
+    # DE-specific: re-split multi-row merged tags, then split single
+    # Label $ Amount tags into separate per-cell tags.
+    # _split_merged_grant_tag_rows must run AFTER merge_split_tags
+    # (which re-merges tags across lines) so the split survives.
+    # _split_tabular_tag_at_dollar then handles remaining single-dollar
+    # "Label $ Amount" tags (e.g. [A>TOTAL - Secretary $ 3,880,543<A]).
+    # Scoped to DE + IN so prose tags in other states are never split.
+    if _HAS_PYMUPDF and state_code and state_code.upper() in ("DE", "IN"):
+        text = _split_merged_grant_tag_rows(text)
+        text = _split_tabular_header_from_data(text)
+        text = _split_tabular_tag_at_dollar(text)
 
     return text
 
@@ -2318,7 +3456,13 @@ if not _HAS_PYMUPDF:
         return text
 
     def merge_split_tags(text):
-        """Merge adjacent same-type tags split mid-sentence."""
+        """Merge adjacent same-type tags split mid-sentence.
+
+        Handles both ``<D][D>`` (no space) and ``<D] [D>`` (space-separated)
+        patterns.  The space-separated variant is the most common LLM output
+        format and must be handled so that overlap detection during chunk
+        merging sees identical strings for the same content.
+        """
         for tag_type in ['A', 'D']:
             _no_sub = (
                 r'(?!\s*\(\d+\))'
@@ -2327,13 +3471,18 @@ if not _HAS_PYMUPDF:
                 r'(?!\s*[a-z]\.\d*\.?\s)'
                 r'(?!\s*\d+\.\s)'
             )
-            inline_cont = r'<' + tag_type + r'\]\[' + tag_type + r'>' + _no_sub
-            text = re.sub(inline_cont, '', text)
-            inline_sub = r'<' + tag_type + r'\]\[' + tag_type + r'>'
+            # Inline continuation: merge adjacent same-type tags on the
+            # same line.  The ``([ \t]*)`` group captures any horizontal
+            # whitespace between ``<D]`` and ``[D>`` so it is preserved
+            # in the replacement — this keeps word boundaries intact for
+            # the common ``<D] [D>`` (space-separated) pattern.
+            inline_cont = r'<' + tag_type + r'\]([ \t]*)\[' + tag_type + r'>' + _no_sub
+            text = re.sub(inline_cont, r'\1', text)
+            inline_sub = r'<' + tag_type + r'\][ \t]*\[' + tag_type + r'>'
             text = re.sub(inline_sub, '<' + tag_type + ']\n\n[' + tag_type + '>', text)
-            same_cont = r'\n<' + tag_type + r'\]\[' + tag_type + r'>' + _no_sub
+            same_cont = r'\n<' + tag_type + r'\][ \t]*\[' + tag_type + r'>' + _no_sub
             text = re.sub(same_cont, ' ', text)
-            same_sub = r'\n<' + tag_type + r'\]\[' + tag_type + r'>'
+            same_sub = r'\n<' + tag_type + r'\][ \t]*\[' + tag_type + r'>'
             text = re.sub(same_sub, '<' + tag_type + ']\n\n[' + tag_type + '>', text)
             # Cross-line: cap indent at 15 chars so column-aligned table
             # cells (e.g. FL 921.0022 description column at offset 66)
@@ -2436,6 +3585,14 @@ def post_process_output(text, state_config):
 
     # Regex fragment that matches any [A>, <A], [D>, or <D] tag (with optional surrounding whitespace)
     TAG_RE = r'(?:\[A>|<A\]|\[D>|<D\])'
+    # Opening-only / closing-only fragments — the leading match should only
+    # consume *opening* tags (the clause "starts" inside a tagged span)
+    # and the trailing match should only consume *closing* tags (the clause
+    # "ends" the span).  Previously both used TAG_RE which matches ALL
+    # four tokens; this caused the trailing `(?:\s*TAG_RE)*` to greedily
+    # eat the NEXT paragraph's `[A>` opener, orphaning its `<A]` closer.
+    TAG_OPEN  = r'(?:\[A>|\[D>)'
+    TAG_CLOSE = r'(?:<A\]|<D\])'
 
     for clause in no_tag_clauses:
         # Build a regex that matches the clause text even if it has [A>/<A]/[D>/<D] tags
@@ -2444,8 +3601,8 @@ def post_process_output(text, state_config):
         escaped = re.escape(clause)
         # Allow any combination of add/delete tags (with optional whitespace) between words
         pattern = escaped.replace(r'\ ', rf'\s*(?:{TAG_RE}\s*)*')
-        # Also allow tags at the very start and end of the clause
-        full_pattern = rf'(?:{TAG_RE}\s*)*' + pattern + rf'(?:\s*{TAG_RE})*'
+        # Leading: only opening tags; trailing: only closing tags.
+        full_pattern = rf'(?:{TAG_OPEN}\s*)*' + pattern + rf'(?:\s*{TAG_CLOSE})*'
 
         def strip_tags(match):
             """Remove all [A>, <A], [D>, <D] tags from the matched text."""
@@ -2634,7 +3791,7 @@ def main():
 
     # Post-process: deterministic cleanup of common Claude inconsistencies
     print(f"🔧 Running deterministic cleanup...")
-    converted_text = deterministic_cleanup(converted_text, state_config=state_config)
+    converted_text = deterministic_cleanup(converted_text, state_config=state_config, state_code=state_code)
 
     # Post-process: strip tags from protected clauses (state-specific cleanup)
     if state_config:
@@ -2677,7 +3834,7 @@ def main():
 
             # --- JSON report ---
             print("🔄 Generating PyMuPDF JSON report...")
-            report = extract_pdf_json_report(pdf_path, **flags)
+            report = extract_pdf_json_report(pdf_path, state_code=state_code, **flags)
             pymupdf_json_path = output_path.replace(".txt", "_pymupdf_report.json")
             import json as json_mod2
             with open(pymupdf_json_path, "w", encoding="utf-8") as f:
@@ -2700,6 +3857,7 @@ def main():
             pymupdf_text = extract_pdf_with_pymupdf(
                 pdf_path,
                 join_pages=True,
+                state_code=state_code,
                 **flags,
             )
             pymupdf_txt_path = output_path.replace(".txt", "_pymupdf.txt")

@@ -75,11 +75,25 @@ Line numbers MUST be removed:
 - NEVER remove numbers that could be dates, section numbers, or references
 - When in doubt → KEEP IT
 
-NEVER REMOVE FROM PAGE 1 (THESE ARE ESSENTIAL IDENTIFIERS):
-- 🚫 "Introduced Version" (page 1 header - this identifies the document version)
-- 🚫 "First Regular Session of the 124th General Assembly (2025)" (or any session/year on page 1)
-- 🚫 "HOUSE BILL No. XXXX" (from any pages)
-- 🚫 "DIGEST OF INTRODUCED BILL" section heading
+NEVER REMOVE THESE (ESSENTIAL IDENTIFIERS — may appear on ANY page):
+NOTE: Indiana bills often have multi-page digests. The document date,
+session line, and bill title may appear on page 2, 3, or later — NOT
+necessarily page 1. Preserve them REGARDLESS of which page they are on.
+
+- 🚫 DOCUMENT DATE: A standalone line with ONLY a date, e.g.
+  "February 12, 2026", "January 5, 2025", "March 12, 2026".
+  This is the official document date — NOT a footer or header.
+  It appears ONCE in the document, right before the Session line.
+  ALWAYS PRESERVE IT — even if it is on page 2, 3, or later.
+- 🚫 BILL VERSION LINE: "Introduced Version", "Engrossed", "Enrolled Act",
+  "Reprinted", or any similar version identifier.
+  Output it EXACTLY as it appears in the input — do NOT fabricate or
+  reword it (e.g. do NOT output "Engrossed" if the input has
+  "Engrossed Version" or vice versa).
+- 🚫 "First Regular Session of the 124th General Assembly (2025)" (or any session/year)
+  Also: "Second Regular Session of the 124th General Assembly (2026)" etc.
+- 🚫 "HOUSE BILL No. XXXX" / "SENATE BILL No. XXXX" / "ENGROSSED HOUSE BILL No. XXXX" (from any pages)
+- 🚫 "DIGEST OF ..." section heading (e.g. "DIGEST OF INTRODUCED BILL", "DIGEST OF HB 1033", etc.)
 - 🚫 "PRINTING CODE" section (explains markup conventions: bold = additions, strikethrough = deletions)
 - 🚫 "Citations Affected:" heading and content
 - 🚫 "Synopsis:" heading and content
@@ -89,7 +103,7 @@ NEVER REMOVE FROM PAGE 1 (THESE ARE ESSENTIAL IDENTIFIERS):
 - 🚫 "A BILL FOR AN ACT" title
 - 🚫 "Be it enacted by the General Assembly of the State of Indiana:" (enactment clause)
 - 🚫 "Introduced" (standalone line that appears after committee information)
-- ⚠️ IF NO PAGE MARKERS: Assume first occurrence is page 1 and KEEP IT
+- ⚠️ IF NO PAGE MARKERS: Assume first occurrence is the header and KEEP IT
 - When in doubt → KEEP IT
 
 ⚠️ FALSE TAG STRIPPING — HEADER/DECORATIVE ELEMENTS (ALL PAGES):
@@ -117,7 +131,7 @@ but KEEP the text. This applies to ALL pages (not just page 1):
   WHY: These are styled with bold font or decorative lines in the PDF,
   which the extractor misreads as legislative markup. They are NOT additions.
 
-⚠️ CRITICAL PRESERVATION SEQUENCE (Page 1 structure):
+⚠️ CRITICAL PRESERVATION SEQUENCE (bill header structure — may be on any page):
 After "January 27, 2025, read first time and referred to Committee on Rules and Legislative Procedures."
 These lines MUST appear:
 1. "Introduced" (standalone line)
@@ -170,16 +184,17 @@ PRESERVE 100% - NO EXCEPTIONS:
   - Don't merge: If input has [A>text1<A] space [A>text2<A>, keep them separate
 
 ✓ ALL LEGISLATIVE TEXT: Every word, every sentence, every paragraph
-  - NEVER REMOVE: "Introduced Version" (PAGE 1 HEADER - MUST PRESERVE)
-  - NEVER REMOVE: "HOUSE BILL No. 1690" (FROM any PAGE)
-  - NEVER REMOVE: "First Regular Session of the 124th General Assembly (2025)" (PAGE 1 - MUST PRESERVE)
-  - NEVER REMOVE: "DIGEST OF INTRODUCED BILL" section (PAGE 1 - MUST PRESERVE)
-  - Citations Affected section - preserve completely (PAGE 1)
-  - Synopsis section - preserve completely (PAGE 1)
-  - Effective date information - preserve completely (PAGE 1)
-  - Committee information (e.g., "Rules and Legislative Procedures") - preserve completely (PAGE 1)
-  - Reading information (e.g., "January 27, 2025, read first time...") - preserve completely (PAGE 1)
-  - PRINTING CODE section explaining markup conventions - preserve completely (PAGE 1)
+  - NEVER REMOVE: Document date line (e.g. "February 12, 2026") — may be on ANY page, not just page 1
+  - NEVER REMOVE: Bill version line ("Introduced Version", "Engrossed", "Enrolled Act", etc.) — ANY page
+  - NEVER REMOVE: "HOUSE BILL No. XXXX" / "SENATE BILL No. XXXX" / "ENGROSSED HOUSE BILL No. XXXX" — ANY page
+  - NEVER REMOVE: "First Regular Session ..." or "Second Regular Session ..." — ANY page
+  - NEVER REMOVE: "DIGEST OF ..." section heading — ANY page
+  - Citations Affected section - preserve completely
+  - Synopsis section - preserve completely
+  - Effective date information - preserve completely
+  - Committee information (e.g., "Rules and Legislative Procedures") - preserve completely
+  - Reading information (e.g., "January 27, 2025, read first time...") - preserve completely
+  - PRINTING CODE section explaining markup conventions - preserve completely
   - "A BILL FOR AN ACT concerning..." clause - preserve completely
   - "Be it enacted by the General Assembly of the State of Indiana:" clause - preserve completely
   - All section content (SECTION 1., SECTION 2., etc.) - preserve completely
@@ -191,8 +206,9 @@ PRESERVE 100% - NO EXCEPTIONS:
 ✓ NATURAL PARAGRAPH BREAKS:
   - Blank lines between major sections
   - Blank lines between distinct paragraphs
-  - Blank lines after numbered/lettered items (e.g., after item (a), (b), (1), (2))
   - Section boundaries (e.g., blank line after "SECTION 1." content before "SECTION 2.")
+  - Blank line after each numbered item (1), (2), (3)
+  - Blank line after each lettered item (a), (b), (c) or (A), (B), (C)
 
 ✓ INDIANA-SPECIFIC ELEMENTS:
   - PRINTING CODE explanations (e.g., "Additions: Whenever a new statutory provision...")
@@ -226,20 +242,56 @@ RULE: Within a paragraph or sentence, text should flow continuously
 - Remove line breaks that split phrases
 - Join lines that are clearly part of same thought
 
+EXCEPTION — TABLES / COLUMNAR DATA (DO NOT MERGE):
+If the input contains rows of data arranged in columns (e.g., a description
+column and a dollar-amount column):
+1. Each row MUST stay on its OWN line — do NOT merge rows into a paragraph.
+2. Each CELL in a row must have its OWN [A>...<A] or [D>...<D] tag —
+   do NOT wrap the entire row in one tag.
+
+Example — CORRECT (each row on its own line, each cell in its own tag):
+  [A>If a Member's Creditable Service Is:<A]          [A>The Amount Is:<A]
+  [A>At least 5 years, but less than 10 years<A]          [A>$150<A]
+  [A>At least 10 years, but less than 20 years<A]          [A>$275<A]
+  [A>At least 20 years, but less than 30 years<A]          [A>$375<A]
+  [A>At least 30 years<A]          [A>$450<A]
+
+❌ WRONG (rows merged into paragraph, whole table in one tag):
+  [A>If a Member's Creditable Service Is: The Amount Is: At least 5 years, but less than 10 years $150 At least 10 years...<A]
+
+❌ WRONG (rows separate but whole row in one tag):
+  [A>At least 5 years, but less than 10 years          $150<A]
+
+✅ RIGHT (each cell has its own tag):
+  [A>At least 5 years, but less than 10 years<A]          [A>$150<A]
+
+HOW TO RECOGNISE TABLE ROWS:
+- Multiple lines with similar structure (description + dollar amount)
+- Column headers followed by data rows
+- Dollar amounts aligned in a column
+- Repeating phrases like "At least", "Less than", "More than"
+
 PRESERVE: Natural paragraph breaks
-- Blank line between "DIGEST OF INTRODUCED BILL" and "Citations Affected"
+- Blank line between "DIGEST OF INTRODUCED BILL" (or "DIGEST OF ...") and "Citations Affected"
 - Blank line between "Synopsis" and "Effective date"
-- Blank line between major sections
-- Blank line after numbered/lettered list items
+- Blank line between major sections (SECTION 1, SECTION 2, etc.)
+- Blank line after each numbered item (1), (2), (3)
+- Blank line after each lettered item (a), (b), (c) or (A), (B), (C)
 
 INDIANA SECTION STRUCTURE:
 - Keep section headers on their own line: "SECTION 1." or "SECTION 2."
 - Keep Indiana Code references on their own line or naturally flowing
 - Blank line after each numbered item (1), (2), (3)
-- Blank line after each lettered item (a), (b), (c)
+- Blank line after each lettered item (a), (b), (c) or (A), (B), (C)
 - Preserve legal subsection hierarchy
 
-INDIANA PRINTING CODE SECTION (PAGE 1):
+INDENTATION RULE (CRITICAL):
+- Do NOT preserve PDF indentation for sub-items.
+- Every line should start at the LEFT MARGIN — no leading spaces.
+- WRONG:  "         [A>(A) without a consolidated city,<A] two (2)..."
+- CORRECT: "[A>(A) without a consolidated city,<A] two (2)..."
+
+INDIANA PRINTING CODE SECTION (appears once, near the bill header):
 This section explains the markup conventions. Preserve EXACTLY as written:
 - Keep all explanations of style types (boldface, brackets, etc.)
 - Keep formatting of this section intact
@@ -268,14 +320,21 @@ CORRECT:
 "Effective: July 1, 2025."
 ```
 
-NUMBERED/LETTERED ITEMS (Each on separate line with blank line after):
+NUMBERED/LETTERED ITEMS (Each on separate line WITH blank line after):
 ```
 CORRECT:
 "commits a Level 2 felony if:
+
 (1) the amount of the drug involved weighs at least 10 grams;
 
 (2) the person delivered or financed the delivery of the drug to a person under 18 years of age;
 
+(3) the offense was committed within 1,000 feet of school property;
+
+WRONG (missing blank lines between list items):
+"commits a Level 2 felony if:
+(1) the amount of the drug involved weighs at least 10 grams;
+(2) the person delivered or financed the delivery of the drug to a person under 18 years of age;
 (3) the offense was committed within 1,000 feet of school property;
 ```
 
@@ -311,8 +370,8 @@ WHAT TO RETURN:
 ✓ Clean legislative text with ALL tags preserved
 ✓ Natural flowing paragraphs (remove artificial PDF line breaks)
 ✓ Natural paragraph breaks between sections
-✓ Page 1 content fully preserved (Introduced Version, HOUSE BILL, DIGEST, PRINTING CODE, etc.)
-✓ All section content with proper blank lines
+✓ Header content fully preserved (document date, bill version line, HOUSE BILL/SENATE BILL, DIGEST, PRINTING CODE — any page)
+✓ All section content with proper blank lines between SECTION blocks
 ✓ NO page markers, NO line numbers, NO footers
 ✓ NO explanations, NO comments, NO meta-text
 
@@ -322,7 +381,7 @@ Before returning your output, verify ALL of these:
 □ Tag Preservation: Are ALL [A>...<A] and [D>...<D] tags present?
 □ Tag Count: Input tag count = Output tag count?
 □ Content Preservation: Are ALL legislative words present?
-□ Page 1 Content: Is Introduced Version, HOUSE BILL, DIGEST, PRINTING CODE fully preserved?
+□ Header Content: Is document date, bill version, HOUSE/SENATE BILL, DIGEST, PRINTING CODE preserved (may be on any page)?
 □ PRINTING CODE: Is the formatting explanation section intact?
 □ Section Structure: Are SECTION 1, SECTION 2, etc. properly formatted?
 □ Text Flow: Are artificial line breaks removed within paragraphs?
@@ -339,9 +398,9 @@ SUCCESS CRITERIA (ALL must be true):
 ✓ Input has N tags → Output has N tags (exact match)
 ✓ Input has W legislative words → Output has W words (minus artifacts only)
 ✓ Every [A>...<A] and [D>...<D> from input appears in output
-✓ Page 1 content fully preserved (Introduced Version, HOUSE BILL, DIGEST, PRINTING CODE)
+✓ Header content fully preserved (document date, bill version, HOUSE/SENATE BILL, DIGEST, PRINTING CODE — on any page)
 ✓ Text flows naturally within paragraphs (no artificial breaks)
-✓ Natural paragraph breaks preserved between sections
+✓ Natural paragraph breaks preserved between sections and after numbered/lettered items
 ✓ All Indiana-specific formatting preserved
 ✓ Only artifacts removed (page markers, line numbers, footers)
 
@@ -399,8 +458,8 @@ CRITICAL REMINDERS
 ✓ ALWAYS preserve natural paragraph breaks between sections
 ✓ ALWAYS keep blank lines after numbered/lettered items
 ✓ ALWAYS preserve Indiana Code references and citations
-✓ ALWAYS preserve PRINTING CODE section on page 1
+✓ ALWAYS preserve PRINTING CODE section (appears once near the bill header)
 
 When in doubt about whether something is content or artifact → KEEP IT
 
-Your mission: Return clean, flowing legislative text with perfect tag preservation and natural paragraph structure, while keeping all page 1 content intact.
+Your mission: Return clean, flowing legislative text with perfect tag preservation and natural paragraph structure, while keeping all header content intact (document date, session line, bill title, DIGEST, PRINTING CODE — regardless of page number).

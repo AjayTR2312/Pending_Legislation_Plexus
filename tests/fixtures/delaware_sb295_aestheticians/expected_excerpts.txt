@@ -1,0 +1,27 @@
+# Page-7 underlines (lines 172-175) MUST be tagged as additions.
+# Pre-fix bug: PyMuPDF's find_tables() falsely flagged the upper half of
+# page 7 as a "table" because the parallel underline strokes looked like
+# table borders.  The "no decoration tagging inside table zones" guard
+# then suppressed ALL [A>…<A] tags for these four lines, silently
+# stripping legislative additions from the output.
+#
+# Fix: _detect_table_zones() now excludes stroked horizontal lines that
+# look like underlines (close below a text baseline + x-aligned with the
+# text) from "table-border evidence" so the false zone is rejected.
+[A>1. Diagnose illness, disease, or injury.<A]
+[A>2. Perform ablation of the dermis or hypodermis.<A]
+[A>3. Prescribe medication or provide medical treatment in the same manner as a<A]
+[A>dermatologist.<A]
+
+# Section heading also previously dropped a tag pair when the false
+# zone was active; verify they're restored too.
+[D>certificate [Repealed]<D] [A>license.<A]
+
+# Page-1 underlined additions that were already being tagged correctly
+# — keep these as guards against any over-correction in future changes
+# to the table-zone validator.  These are checked in the pre-LLM-clean
+# form (one tag per physical line), which is what the deterministic
+# snapshot test sees.
+[A>“Ablation” means any procedure that will excise, vaporize, disintegrate, or remove the epidermis,<A]
+[A>dermis, or hypodermis.<A]
+[A>16. Other cosmetic services of the epidermis.<A]
