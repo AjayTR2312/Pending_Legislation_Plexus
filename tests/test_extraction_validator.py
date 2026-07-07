@@ -645,3 +645,67 @@ def test_split_midline_items_no_false_positive() -> None:
     text2 = "IC 5-10.2-3-7.5 or IC 5-10.4-4-10 to pay"
     result2 = _split_in_midline_items(text2)
     assert result2 == text2  # No change
+
+
+# ── _merge_page_break_paragraph_splits ───────────────────────────────
+
+import importlib.util
+from pathlib import Path as _Path
+
+_opus_path = _Path(__file__).resolve().parent.parent / "Opus4.6" / "Claude_Opus_4.6_Test.py"
+_opus_spec = importlib.util.spec_from_file_location(
+    "claude_opus_converter", str(_opus_path)
+)
+_opus_mod = importlib.util.module_from_spec(_opus_spec)
+_opus_spec.loader.exec_module(_opus_mod)
+_merge_page_break_paragraph_splits = _opus_mod._merge_page_break_paragraph_splits
+
+
+def test_fl_merge_no_merge_list_conclusion_clause() -> None:
+    """FL: (d) list item ending with comma + 'commits a felony…' must stay separate.
+
+    The 'commits a felony…' paragraph completes the sentence started before
+    the (a)-(d) list — it is NOT a continuation of list item (d).
+    """
+    text = (
+        "(d) [A>Provides<A] [D>Provide<D] information to the law "
+        "enforcement agency regarding the career offender which the "
+        "person knows to be false [A>information,<A]\n\n"
+        "[A>commits a felony of the third degree, punishable as "
+        "provided in s. 775.082, s. 775.083, or s. 775.084<A]."
+    )
+    result = _merge_page_break_paragraph_splits(text, state_code="FL")
+    assert "\n\n" in result, (
+        "Conclusion clause should remain a separate paragraph, "
+        f"but was merged into list item: {result!r}"
+    )
+
+
+def test_fl_merge_list_conclusion_per_line_tags() -> None:
+    """FL: per-line tagged version of the same pattern must also stay separate."""
+    text = (
+        "[A>(d) Provides information to the law enforcement agency<A] "
+        "[A>regarding the career offender which the person knows to be "
+        "false<A] [A>information,<A]\n\n"
+        "[A>commits a felony of the third degree, punishable as provided "
+        "in<A] [A>s. 775.082, s. 775.083, or s. 775.084<A]."
+    )
+    result = _merge_page_break_paragraph_splits(text, state_code="FL")
+    assert "\n\n" in result, (
+        "Conclusion clause should remain separate even with per-line tags: "
+        f"{result!r}"
+    )
+
+
+def test_fl_merge_mid_sentence_still_merges() -> None:
+    """FL Pattern 1a should still merge genuine mid-sentence page breaks."""
+    text = (
+        "(d) [A>Provides information to the law enforcement<A]\n\n"
+        "[A>agency regarding the career offender which the person "
+        "knows to be false information,<A]"
+    )
+    result = _merge_page_break_paragraph_splits(text, state_code="FL")
+    # text_before ends with 'enforcement' (not comma) → Pattern 1a merges
+    assert "\n\n" not in result, (
+        "Genuine mid-sentence split should be merged: " f"{result!r}"
+    )

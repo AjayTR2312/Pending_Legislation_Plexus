@@ -2047,6 +2047,25 @@ def _merge_page_break_paragraph_splits(text, state_code=None):
                     if _is_fl:
                         # ── FL-specific enhanced merging ──────────────
                         if not has_terminal:
+                            # Guard: list-item conclusion pattern.
+                            # When the paragraph starts with a letter
+                            # subsection marker like (d), ends with a
+                            # comma, and _p1a_active is False (we are
+                            # NOT in per-line raw merge mode), the next
+                            # paragraph is typically a conclusion/
+                            # penalty clause that completes the sentence
+                            # started *before* the list — e.g.
+                            #   "Any person who …:  (a) …; (b) …;
+                            #    (c) …; or (d) …false information,
+                            #
+                            #    commits a felony …"
+                            # Do NOT merge.
+                            if (not _p1a_active
+                                    and text_before.rstrip()[-1:] == ','
+                                    and re.match(
+                                        r'\([a-z]\)\s',
+                                        _TAG_STRIP.sub('', curr).strip())):
+                                continue
                             # 1a — mid-sentence: no terminal punct →
                             # always merge regardless of B's case
                             curr = text_before + ' ' + nxt_s[len(open_tag):]
