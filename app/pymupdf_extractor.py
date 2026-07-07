@@ -2754,7 +2754,7 @@ _RE_DC_LETTERHEAD_BLOCK = re.compile(
     r"^[ \t]*District\s+of\s+Columbia\s+State\s+Board\s+of\s+Education[ \t]*\n"
     r"(?:.*\n){0,4}?"                       # 0–4 follow-up lines (address, phone)
     r".*?@DCSBOE[ \t]*\n",                  # always ends with the @DCSBOE handle
-    re.IGNORECASE,
+    re.IGNORECASE | re.MULTILINE,           # MULTILINE: block may appear mid-page
 )
 
 
@@ -4661,10 +4661,13 @@ def extract_pdf_with_pymupdf(
         # LLM clean step (in clean_extracted_text) so the LLM never sees
         # confusing nested [D>[…]<D] structures.
 
-        # DC-only: strip Wilson Building footer from each page early so
-        # it doesn't appear in the raw output or confuse the LLM.
+        # DC-only: strip Wilson Building footer and SBOE letterhead from
+        # each page early so they don't appear in the raw output or
+        # confuse the LLM.
         if state_code and state_code.upper() == "DC":
             clean = _strip_dc_wilson_building_footer(clean)
+            clean = _strip_dc_letterhead_footer(clean)
+            clean = _strip_dc_link_underline_tags(clean)
 
         # KS-only: inject underscore text for vector-drawn signature lines
         # on pages that contain the certification/signing block.

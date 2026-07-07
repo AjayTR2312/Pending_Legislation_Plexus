@@ -3228,6 +3228,156 @@ def deterministic_cleanup(text, state_config=None, state_code=None):
         fix_log.append("Moved superscript digit inside [D> tag for vote fraction")
         text = frac_fixed
 
+    # ── Fix 12: ALL-CAPS-only states — strip [A>] from non-CAPS text ──
+    # When a state uses `all_caps: true` as the ONLY addition marker
+    # (underline/bold/italic are all false), the vision model sometimes
+    # still tags bold section headers (mixed-case) with [A>...<A].
+    # Two-pass fix:
+    #   Pass A — Purely non-CAPS tags: strip [A>...<A] entirely.
+    #   Pass B — Mixed tags (CAPS body + bold header in one tag):
+    #            split at the CAPS/non-CAPS boundary so the CAPS
+    #            portion stays tagged and the bold header becomes
+    #            plain text.
+    add_cfg = (state_config or {}).get("add_markup", {})
+    if (add_cfg.get("all_caps")
+            and not add_cfg.get("underline")
+            and not add_cfg.get("bold")
+            and not add_cfg.get("italic")):
+
+        def _word_is_caps(w: str) -> bool:
+            """True if the word's alphabetic chars are all uppercase."""
+            letters = [c for c in w if c.isalpha()]
+            return len(letters) > 0 and all(c.isupper() for c in letters)
+
+        def _word_is_neutral(w: str) -> bool:
+            """True if word has no letters (numbers, punctuation, parens)."""
+            return not any(c.isalpha() for c in w)
+
+        # Subsection label pattern: standalone (a), (1), (I) OR compound
+        # cross-references like (1)(a)(I), (1)(a)(I);, (2)(c)(II), etc.
+        _subsec_label_re = re.compile(
+            r'^\([a-z]+\)$'                           # (a), (bb)
+            r'|^\(\d+(?:\.\d+)?\)$'                   # (1), (2.5)
+            r'|^\([IVXLC]+\)$'                        # (I), (II)
+            r'|^(?:\([a-zA-Z0-9.]+\)){2,}[;,.:]*$'   # compound: (1)(a)(I), (1)(a)(I);
+        )
+
+        # Roman numeral pattern for false-positive detection.
+        # Bare Roman numerals like "VI" in "Title VI" are section/title
+        # references, NOT ALL-CAPS new-text headings.
+        _roman_numeral_re = re.compile(
+            r'^(?=[IVXLCDM])M{0,3}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$'
+        )
+
+        def _split_caps_tag(m):
+            """Split a single [A>...<A] tag at CAPS/non-CAPS boundaries.
+
+            Returns:
+              - The original tag unchanged if ALL content is CAPS.
+              - Plain text if NO content is CAPS.
+              - A mix of [A>CAPS<A] and plain-text segments when the
+                tag contains both (e.g. bold header + CAPS body).
+            """
+            content = m.group(1)
+            words = content.split()
+            if not words:
+                return content
+
+            # Classify each word:
+            #   'C' = caps  (all letters uppercase)
+            #   'L' = lowercase/mixed  (has lowercase letters)
+            #   'N' = neutral  (no letters, or subsection label)
+            classes = []
+            for w in words:
+                if _subsec_label_re.match(w):
+                    classes.append('N')  # subsection label → neutral
+                elif _word_is_caps(w):
+                    classes.append('C')
+                elif _word_is_neutral(w):
+                    classes.append('N')
+                else:
+                    classes.append('L')
+
+            # If no CAPS words at all → strip entire tag
+            if 'C' not in classes:
+                return content
+
+            # If no lowercase words at all → keep entire tag
+            # UNLESS every CAPS word is a bare Roman numeral — that's a
+            # false positive from "Title VI", "Article IX", etc.
+            if 'L' not in classes:
+                caps_words = [w for w, c in zip(words, classes) if c == 'C']
+                if caps_words and all(_roman_numeral_re.match(w) for w in caps_words):
+                    return content          # strip tag – bare Roman numeral
+                return m.group(0)
+
+            # Mixed: split into runs.  Neutral words attach to the
+            # CAPS context when adjacent to CAPS, otherwise to lowercase.
+            # Resolve neutrals: assign each N to C or L based on neighbors.
+            # IMPORTANT: Leading neutrals before CAPS (e.g. "(a)" before
+            # "UPON RECEIVING...") should be tagged WITH the CAPS block
+            # because CO rules say "include the subsection label inside
+            # the [A> tag" when the entire subsection is new.
+            resolved = list(classes)
+            for i, c in enumerate(resolved):
+                if c != 'N':
+                    continue
+                # Look left and right for nearest non-N
+                left = next((resolved[j] for j in range(i - 1, -1, -1) if resolved[j] != 'N'), None)
+                right = next((resolved[j] for j in range(i + 1, len(resolved)) if resolved[j] != 'N'), None)
+                # Prefer CAPS context — if EITHER neighbor is CAPS,
+                # attach the neutral to CAPS.  This ensures leading
+                # subsection labels "(a)", "(4)" etc. are included in
+                # the CAPS tag when followed by ALL-CAPS body text.
+                if left == 'C' or right == 'C':
+                    resolved[i] = 'C'
+                else:
+                    resolved[i] = 'L'
+
+            # Special case: leading neutrals (subsection labels) before
+            # a lowercase run that is followed by CAPS.  Pattern:
+            #   N L L L C C C ...  →  the leading N should become C
+            # (e.g. "(4) Investigation and procedures. IF THE RESPONDENT...")
+            # The N was assigned L because its right neighbor is L.
+            # But since there IS caps content later, the subsection label
+            # is part of the new addition and should get its own tag.
+            if resolved and resolved[0] == 'L' and _subsec_label_re.match(words[0]):
+                if 'C' in resolved:
+                    resolved[0] = 'C'
+
+            # Build output segments
+            segments = []
+            run_start = 0
+            for i in range(1, len(resolved) + 1):
+                if i < len(resolved) and resolved[i] == resolved[run_start]:
+                    continue
+                run_type = resolved[run_start]
+                run_words = words[run_start:i]
+                run_text = ' '.join(run_words)
+                if run_type == 'C':
+                    # Guard: bare Roman numeral runs are false positives
+                    if all(_roman_numeral_re.match(rw) for rw in run_words):
+                        segments.append(run_text)
+                    else:
+                        segments.append(f'[A>{run_text}<A]')
+                else:
+                    segments.append(run_text)
+                run_start = i
+
+            return ' '.join(segments)
+
+        before_caps = text
+        text = re.sub(r'\[A>(.*?)<A\]', _split_caps_tag, text, flags=re.DOTALL)
+        if text != before_caps:
+            n_orig = before_caps.count('[A>')
+            n_now = text.count('[A>')
+            n_stripped = n_orig - n_now
+            if n_stripped > 0:
+                fix_log.append(f"ALL-CAPS enforcement: stripped/split {n_stripped} non-CAPS [A>] tag(s)")
+            elif n_now > n_orig:
+                fix_log.append(f"ALL-CAPS enforcement: split mixed tags into {n_now - n_orig + n_orig} CAPS-only segments")
+            logging.info(f"🔧 ALL-CAPS tag enforcement: {n_orig} → {n_now} [A>] tags")
+
     # ── Final: Fix cross-type overlaps, remove nested tags, merge mid-sentence splits, then split at subsection boundaries ──
     text = fix_overlapping_cross_tags(text)
     text = remove_nested_tags(text)
