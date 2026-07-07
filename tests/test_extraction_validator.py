@@ -213,11 +213,11 @@ def test_vote_fraction_split_clean() -> None:
 
 # ── split_numbered_item_paragraph_welds ──────────────────────────────
 
-from app.pymupdf_extractor import split_numbered_item_paragraph_welds
-from app.pymupdf_extractor import _split_in_section_heading_welds
-from app.pymupdf_extractor import _split_in_merged_table_rows
-from app.pymupdf_extractor import _ensure_in_item_spacing
-from app.pymupdf_extractor import _split_in_midline_items
+from pymupdf_extractor import split_numbered_item_paragraph_welds
+from pymupdf_extractor import _split_in_section_heading_welds
+from pymupdf_extractor import _split_in_merged_table_rows
+from pymupdf_extractor import _ensure_in_item_spacing
+from pymupdf_extractor import _split_in_midline_items
 
 
 def test_split_numbered_item_weld_basic() -> None:
