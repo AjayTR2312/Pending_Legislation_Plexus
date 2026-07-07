@@ -87,7 +87,10 @@ class SessionManager:
             # Get the project root (parent of 'app' directory)
             current_file = Path(__file__).resolve()
             project_root = current_file.parent.parent  # Go up from app/ to project root
-            temp_dir = project_root / 'tmp' / 'sessions'
+            if os.environ.get('APP_TMP_DIR'):
+                temp_dir = Path(os.environ['APP_TMP_DIR']) / 'sessions'
+            else:
+                temp_dir = project_root / 'tmp' / 'sessions'
             temp_dir.mkdir(parents=True, exist_ok=True)
             
             # Test write permission
@@ -466,10 +469,19 @@ class SessionManager:
     # ── Persistent session archive ──────────────────────────────────────────
 
     def _get_persist_dir(self) -> Path:
-        """Return the root persistent-processing directory (tmp/pending_processing/)."""
+        """Return the root persistent-processing directory."""
         current_file = Path(__file__).resolve()
         project_root = current_file.parent.parent
-        return project_root / 'tmp' / 'pending_processing'
+        if os.environ.get("APP_TMP_DIR"):
+            return Path(os.environ["APP_TMP_DIR"]) / 'pending_processing'
+        candidate = project_root / 'tmp' / 'pending_processing'
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            return candidate
+        except OSError:
+            fallback = Path('/tmp/pending_legislation/pending_processing')
+            fallback.mkdir(parents=True, exist_ok=True)
+            return fallback
 
     def _get_today_folder(self) -> Path:
         """Return today's date-stamped folder (MMddyyyy) inside pending_processing/."""

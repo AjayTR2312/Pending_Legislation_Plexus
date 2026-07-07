@@ -4179,7 +4179,11 @@ def show_simple_ui():
             # ── Process files from pending_downloads/ ─────────────────────
             st.header("📥 Downloaded Files")
             uploaded_files = []
-            _downloads_dir = Path(__file__).resolve().parent.parent / "tmp" / "pending_downloads"
+            _proj_root = Path(__file__).resolve().parent.parent
+            if os.environ.get('APP_TMP_DIR'):
+                _downloads_dir = Path(os.environ['APP_TMP_DIR']) / "pending_downloads"
+            else:
+                _downloads_dir = _proj_root / "tmp" / "pending_downloads"
             _downloads_dir.mkdir(parents=True, exist_ok=True)
             st.caption(f"📂 `{_downloads_dir}`")
 
