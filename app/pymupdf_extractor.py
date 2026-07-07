@@ -1598,6 +1598,30 @@ def _extract_page_tagged_text(
         _blks.sort(key=lambda b: b.get("bbox", (0, 0, 0, 0))[1])
     text_dict["blocks"] = _blks
 
+    # -- 2d. Detect OCR-only pages (all text in GlyphLessFont) --
+    # Scanned PDFs embed invisible OCR text layers that we normally
+    # skip (_RE_HIDDEN_OCR_FONT) because they duplicate native text
+    # and produce garbage from signature-image recognition.  BUT some
+    # pages are *entirely* OCR — every span is GlyphLessFont with
+    # zero native-text spans.  On those pages the OCR text is the
+    # ONLY content and must be kept.
+    _total_spans = 0
+    _ocr_spans = 0
+    for _blk in text_dict.get("blocks", []):
+        if _blk.get("type") != 0:
+            continue
+        for _ln in _blk.get("lines", []):
+            for _sp in _ln.get("spans", []):
+                _total_spans += 1
+                if _RE_HIDDEN_OCR_FONT.search(_sp.get("font", "")):
+                    _ocr_spans += 1
+    _page_is_ocr_only = (_total_spans > 0 and _ocr_spans == _total_spans)
+    if _page_is_ocr_only:
+        logger.debug(
+            "Page is OCR-only (%d/%d spans are OCR font) — keeping OCR text",
+            _ocr_spans, _total_spans,
+        )
+
     output: List[str] = []
     in_add = False
     in_del = False
@@ -1860,7 +1884,9 @@ def _extract_page_tagged_text(
                 # --- Skip hidden OCR text (e.g. HiddenHorzOCR) ---
                 # Scanned PDFs embed invisible OCR layers whose text
                 # is garbage ("~", "/", etc.) from signature images.
-                if _RE_HIDDEN_OCR_FONT.search(font_name):
+                # EXCEPTION: OCR-only pages — no native text exists,
+                # so the OCR layer IS the content.
+                if _RE_HIDDEN_OCR_FONT.search(font_name) and not _page_is_ocr_only:
                     continue
 
                 # --- Detect italic (bit 1) and bold (bit 4) from span flags ---
