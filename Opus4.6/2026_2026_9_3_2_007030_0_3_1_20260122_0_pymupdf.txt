@@ -1,0 +1,1040 @@
+--- PAGE 1 ---
+Florida Senate - 2026 SB 7030 
+
+ 
+
+ 
+  
+By the Committee on Commerce and Tourism 
+ 
+ 
+ 
+ 
+ 
+577-02072-26 20267030__ 
+
+  Page 1 of 14   
+
+CODING: Words [D>stricken<D] are deletions; words [A>underlined<A] are additions. 
+
+A bill to be entitled 1 
+
+An act relating to public records; amending s. 2 
+
+501.9984, F.S.; providing an exemption from public 3 
+
+records requirements for information held by the 4 
+
+Department of Legal Affairs relating to notifications 5 
+
+or investigations of certain companion chatbot 6 
+
+violations; providing construction; authorizing the 7 
+
+department to disclose such information during an 8 
+
+active investigation for specified purposes; requiring 9 
+
+that certain information remain confidential and 10 
+
+exempt upon the completion or cessation of an 11 
+
+investigation; defining the term “proprietary 12 
+
+information”; providing for future legislative review 13 
+
+and repeal of the exemption; providing a statement of 14 
+
+public necessity; amending s. 501.9985, F.S.; 15 
+
+providing an exemption from public records 16 
+
+requirements for information held by the department 17 
+
+relating to notifications or investigations of certain 18 
+
+bot-related consumer protection violations; providing 19 
+
+construction; authorizing the department to disclose 20 
+
+such information during an active investigation for 21 
+
+specified purposes; requiring that certain information 22 
+
+remain confidential and exempt upon the completion or 23 
+
+cessation of an investigation; defining the term 24 
+
+“proprietary information”; providing for future 25 
+
+legislative review and repeal of the exemption; 26 
+
+providing a statement of public necessity; amending s. 27 
+
+501.9986, F.S.; providing an exemption from public 28 
+
+records requirements for information held by the 29
+--- PAGE 2 ---
+Florida Senate - 2026 SB 7030 
+
+ 
+
+ 
+  
+ 
+ 
+ 
+ 
+ 
+ 
+577-02072-26 20267030__ 
+
+  Page 2 of 14   
+
+CODING: Words [D>stricken<D] are deletions; words [A>underlined<A] are additions. 
+
+department relating to notifications or investigations 30 
+
+of certain deidentified data-related consumer 31 
+
+protection violations; providing construction; 32 
+
+authorizing the department to disclose such 33 
+
+information during an active investigation for 34 
+
+specified purposes; requiring that certain information 35 
+
+remain confidential and exempt upon the completion or 36 
+
+cessation of an investigation; defining the term 37 
+
+“proprietary information”; providing for future 38 
+
+legislative review and repeal of the exemption; 39 
+
+providing a statement of public necessity; providing a 40 
+
+contingent effective date. 41 
+
+   42 
+
+Be It Enacted by the Legislature of the State of Florida: 43 
+
+  44 
+
+Section 1. Present subsection (8) of section 501.9984, 45 
+
+Florida Statutes, as created by SB 482 or similar legislation, 46 
+
+2026 Regular Session, is redesignated as subsection (9), and a 47 
+
+new subsection (8) is added to that section, to read: 48 
+
+501.9984 Companion chatbot use for minors.— 49 
+
+[A>(8)(a) All information held by the department pursuant to a<A] 50 
+
+[A>notification of a violation of this section or an investigation<A] 51 
+
+[A>of a violation of this section is confidential and exempt from<A] 52 
+
+[A>s. 119.07(1) and s. 24(a), Art. I of the State Constitution,<A] 53 
+
+[A>until such time as the investigation is completed or ceases to<A] 54 
+
+[A>be active. This exemption shall be construed in conformity with<A] 55 
+
+[A>s. 119.071(2)(c).<A] 56 
+
+[A>(b) During an active investigation, information made<A] 57 
+
+[A>confidential and exempt pursuant to paragraph (a) may be<A] 58
+--- PAGE 3 ---
+Florida Senate - 2026 SB 7030 
+
+ 
+
+ 
+  
+ 
+ 
+ 
+ 
+ 
+ 
+577-02072-26 20267030__ 
+
+  Page 3 of 14   
+
+CODING: Words [D>stricken<D] are deletions; words [A>underlined<A] are additions. 
+
+[A>disclosed by the department:<A] 59 
+
+[A>1. In the furtherance of its official duties and<A] 60 
+
+[A>responsibilities;<A] 61 
+
+[A>2. For print, publication, or broadcast if the department<A] 62 
+
+[A>determines that such release would assist in notifying the<A] 63 
+
+[A>public or locating or identifying a person whom the department<A] 64 
+
+[A>believes to be a victim of an improper use or disposal of<A] 65 
+
+[A>customer records, except that information made confidential and<A] 66 
+
+[A>exempt by paragraph (c) may not be released pursuant to this<A] 67 
+
+[A>subparagraph; or<A] 68 
+
+[A>3. To another governmental entity in the furtherance of<A] 69 
+
+[A>such entity’s official duties and responsibilities.<A] 70 
+
+[A>(c) Upon completion of an investigation or once an<A] 71 
+
+[A>investigation ceases to be active, the following information<A] 72 
+
+[A>held by the department remains confidential and exempt from s.<A] 73 
+
+[A>119.07(1) and s. 24(a), Art. I of the State Constitution:<A] 74 
+
+[A>1. Information that is otherwise confidential or exempt<A] 75 
+
+[A>from s. 119.07(1) and s. 24(a), Art. I of the State<A] 76 
+
+[A>Constitution.<A] 77 
+
+[A>2. Personal identifying information.<A] 78 
+
+[A>3. A computer forensic report.<A] 79 
+
+[A>4. Information that would otherwise reveal weaknesses in<A] 80 
+
+[A>the data security of a companion chatbot platform.<A] 81 
+
+[A>5. Information that would disclose the proprietary<A] 82 
+
+[A>information of a companion chatbot platform.<A] 83 
+
+[A>(d) For purposes of this section, the term “proprietary<A] 84 
+
+[A>information” means information that:<A] 85 
+
+[A>1. Is owned or controlled by the companion chatbot<A] 86 
+
+[A>platform.<A] 87
+--- PAGE 4 ---
+Florida Senate - 2026 SB 7030 
+
+ 
+
+ 
+  
+ 
+ 
+ 
+ 
+ 
+ 
+577-02072-26 20267030__ 
+
+  Page 4 of 14   
+
+CODING: Words [D>stricken<D] are deletions; words [A>underlined<A] are additions. 
+
+[A>2. Is intended to be private and is treated by the<A] 88 
+
+[A>companion chatbot platform as private because disclosure would<A] 89 
+
+[A>harm the companion chatbot platform or its business operations.<A] 90 
+
+[A>3. Has not been disclosed except as required by law or a<A] 91 
+
+[A>private agreement that provides that the information will not be<A] 92 
+
+[A>released to the public.<A] 93 
+
+[A>4. Is not publicly available or otherwise readily<A] 94 
+
+[A>ascertainable through proper means from another source in the<A] 95 
+
+[A>same configuration as received by the department.<A] 96 
+
+[A>5. Reveals competitive interests, the disclosure of which<A] 97 
+
+[A>would impair the competitive advantage of the companion chatbot<A] 98 
+
+[A>platform that is the subject of the information.<A] 99 
+
+[A>(e) This subsection is subject to the Open Government<A] 100 
+
+[A>Sunset Review Act in accordance with s. 119.15 and shall stand<A] 101 
+
+[A>repealed on October 2, 2031, unless reviewed and saved from<A] 102 
+
+[A>repeal through reenactment by the Legislature.<A] 103 
+
+Section 2. [A>The Legislature finds that it is a public<A] 104 
+
+[A>necessity that all information held by the Department of Legal<A] 105 
+
+[A>Affairs pursuant to a notification or investigation of a<A] 106 
+
+[A>violation of s. 501.9984, Florida Statutes, be made confidential<A] 107 
+
+[A>and exempt from s. 119.07(1), Florida Statutes, and s. 24(a),<A] 108 
+
+[A>Article I of the State Constitution for the following reasons:<A] 109 
+
+[A>(1) A notification of a violation of s. 501.9984, Florida<A] 110 
+
+[A>Statutes, may result in an investigation of such violation. The<A] 111 
+
+[A>premature release of such information could frustrate or thwart<A] 112 
+
+[A>the investigation and impair the ability of the department to<A] 113 
+
+[A>effectively and efficiently administer s. 501.9984, Florida<A] 114 
+
+[A>Statutes. In addition, release of such information before<A] 115 
+
+[A>completion of an active investigation could jeopardize the<A] 116
+--- PAGE 5 ---
+Florida Senate - 2026 SB 7030 
+
+ 
+
+ 
+  
+ 
+ 
+ 
+ 
+ 
+ 
+577-02072-26 20267030__ 
+
+  Page 5 of 14   
+
+CODING: Words [D>stricken<D] are deletions; words [A>underlined<A] are additions. 
+
+[A>ongoing investigation.<A] 117 
+
+[A>(2) The release of information that is otherwise<A] 118 
+
+[A>confidential or exempt from public records requirements once an<A] 119 
+
+[A>investigation is completed or ceases to be active would undo the<A] 120 
+
+[A>specific statutory exemption protecting that information, thus<A] 121 
+
+[A>affirming that any protections currently afforded to such<A] 122 
+
+[A>information are not removed.<A] 123 
+
+[A>(3) An investigation of a violation of s. 501.9984, Florida<A] 124 
+
+[A>Statutes, is likely to result in the gathering of sensitive<A] 125 
+
+[A>personal identifying information, which could include<A] 126 
+
+[A>identification numbers, unique identifiers, professional or<A] 127 
+
+[A>employment-related information, and personal financial<A] 128 
+
+[A>information. Such information could be used for the purpose of<A] 129 
+
+[A>identity theft. The release of such information could subject<A] 130 
+
+[A>families to possible privacy violations, as it would reveal<A] 131 
+
+[A>information of a sensitive personal nature.<A] 132 
+
+[A>(4) Notices received by the department and information<A] 133 
+
+[A>generated during an investigation of a violation of s. 501.9984,<A] 134 
+
+[A>Florida Statutes, are likely to contain proprietary information.<A] 135 
+
+[A>Such information derives independent economic value, actual or<A] 136 
+
+[A>potential, from being generally unknown to, and not readily<A] 137 
+
+[A>ascertainable by, other persons who might obtain economic value<A] 138 
+
+[A>from its disclosure or use. Allowing public access to<A] 139 
+
+[A>proprietary information through a public records request could<A] 140 
+
+[A>destroy the value of the proprietary information and cause a<A] 141 
+
+[A>financial loss to the companion chatbot platform. Release of<A] 142 
+
+[A>such information could give business competitors an unfair<A] 143 
+
+[A>advantage.<A] 144 
+
+[A>(5) Information held by the department may contain a<A] 145
+--- PAGE 6 ---
+Florida Senate - 2026 SB 7030 
+
+ 
+
+ 
+  
+ 
+ 
+ 
+ 
+ 
+ 
+577-02072-26 20267030__ 
+
+  Page 6 of 14   
+
+CODING: Words [D>stricken<D] are deletions; words [A>underlined<A] are additions. 
+
+[A>computer forensic report or information that could reveal<A] 146 
+
+[A>weaknesses in the data security of a companion chatbot platform.<A] 147 
+
+[A>The release of this information could result in the<A] 148 
+
+[A>identification of vulnerabilities in the cybersecurity system of<A] 149 
+
+[A>the companion chatbot platform and be used to harm the companion<A] 150 
+
+[A>chatbot platform and its clients.<A] 151 
+
+[A>(6) The harm that may result from the release of<A] 152 
+
+[A>information held by the department pursuant to a notification or<A] 153 
+
+[A>an investigation of a violation of s. 501.9984, Florida<A] 154 
+
+[A>Statutes, could impair the effective and efficient<A] 155 
+
+[A>administration of the investigation and thus outweighs the<A] 156 
+
+[A>public benefit that may be derived from the disclosure of the<A] 157 
+
+[A>information.<A] 158 
+
+Section 3. Present subsection (5) of section 501.9985, 159 
+
+Florida Statutes, as created by SB 482 or similar legislation, 160 
+
+2026 Regular Session, is redesignated as subsection (6), and a 161 
+
+new subsection (5) is added to that section, to read: 162 
+
+501.9985 Consumer protections regarding bots.— 163 
+
+[A>(5)(a) All information held by the department pursuant to a<A] 164 
+
+[A>notification of a violation of this section or an investigation<A] 165 
+
+[A>of a violation of this section is confidential and exempt from<A] 166 
+
+[A>s. 119.07(1) and s. 24(a), Art. I of the State Constitution,<A] 167 
+
+[A>until such time as the investigation is completed or ceases to<A] 168 
+
+[A>be active. This exemption shall be construed in conformity with<A] 169 
+
+[A>s. 119.071(2)(c).<A] 170 
+
+[A>(b) During an active investigation, information made<A] 171 
+
+[A>confidential and exempt pursuant to paragraph (a) may be<A] 172 
+
+[A>disclosed by the department:<A] 173 
+
+[A>1. In the furtherance of its official duties and<A] 174
+--- PAGE 7 ---
+Florida Senate - 2026 SB 7030 
+
+ 
+
+ 
+  
+ 
+ 
+ 
+ 
+ 
+ 
+577-02072-26 20267030__ 
+
+  Page 7 of 14   
+
+CODING: Words [D>stricken<D] are deletions; words [A>underlined<A] are additions. 
+
+[A>responsibilities;<A] 175 
+
+[A>2. For print, publication, or broadcast if the department<A] 176 
+
+[A>determines that such release would assist in notifying the<A] 177 
+
+[A>public or locating or identifying a person who the department<A] 178 
+
+[A>believes to be a victim of an improper use or disposal of<A] 179 
+
+[A>customer records, except that information made confidential and<A] 180 
+
+[A>exempt by paragraph (c) may not be released pursuant to this<A] 181 
+
+[A>subparagraph; or<A] 182 
+
+[A>3. To another governmental entity in the furtherance of<A] 183 
+
+[A>such entity’s official duties and responsibilities.<A] 184 
+
+[A>(c) Upon completion of an investigation or once an<A] 185 
+
+[A>investigation ceases to be active, the following information<A] 186 
+
+[A>held by the department shall remain confidential and exempt from<A] 187 
+
+[A>s. 119.07(1) and s. 24(a), Art. I of the State Constitution:<A] 188 
+
+[A>1. Information that is otherwise confidential or exempt<A] 189 
+
+[A>from s. 119.07(1) and s. 24(a), Art. I of the State<A] 190 
+
+[A>Constitution.<A] 191 
+
+[A>2. Personal identifying information.<A] 192 
+
+[A>3. A computer forensic report.<A] 193 
+
+[A>4. Information that would otherwise reveal weaknesses in<A] 194 
+
+[A>the data security of a bot.<A] 195 
+
+[A>5. Information that would disclose the proprietary<A] 196 
+
+[A>information of a bot.<A] 197 
+
+[A>(d) For purposes of this section, the term “proprietary<A] 198 
+
+[A>information” means information that:<A] 199 
+
+[A>1. Is owned or controlled by the operator of a bot.<A] 200 
+
+[A>2. Is intended to be private and is treated by the operator<A] 201 
+
+[A>of a bot as private because disclosure would harm the operator<A] 202 
+
+[A>of the bot or its business operations.<A] 203
+--- PAGE 8 ---
+Florida Senate - 2026 SB 7030 
+
+ 
+
+ 
+  
+ 
+ 
+ 
+ 
+ 
+ 
+577-02072-26 20267030__ 
+
+  Page 8 of 14   
+
+CODING: Words [D>stricken<D] are deletions; words [A>underlined<A] are additions. 
+
+[A>3. Has not been disclosed except as required by law or a<A] 204 
+
+[A>private agreement that provides that the information will not be<A] 205 
+
+[A>released to the public.<A] 206 
+
+[A>4. Is not publicly available or otherwise readily<A] 207 
+
+[A>ascertainable through proper means from another source in the<A] 208 
+
+[A>same configuration as received by the department.<A] 209 
+
+[A>5. Reveals competitive interests, the disclosure of which<A] 210 
+
+[A>would impair the competitive advantage of the operator of the<A] 211 
+
+[A>bot that is the subject of the information.<A] 212 
+
+[A>(e) This subsection is subject to the Open Government<A] 213 
+
+[A>Sunset Review Act in accordance with s. 119.15 and shall stand<A] 214 
+
+[A>repealed on October 2, 2031, unless reviewed and saved from<A] 215 
+
+[A>repeal through reenactment by the Legislature.<A] 216 
+
+Section 4. [A>The Legislature finds that it is a public<A] 217 
+
+[A>necessity that all information held by the Department of Legal<A] 218 
+
+[A>Affairs pursuant to a notification of a violation of s.<A] 219 
+
+[A>501.9985, Florida Statutes, or an investigation of a violation<A] 220 
+
+[A>of that section, be made confidential and exempt from s.<A] 221 
+
+[A>119.07(1), Florida Statutes, and s. 24(a), Article I of the<A] 222 
+
+[A>State Constitution for the following reasons:<A] 223 
+
+[A>(1) A notification of a violation of s. 501.9985, Florida<A] 224 
+
+[A>Statutes, may result in an investigation of such violation. The<A] 225 
+
+[A>premature release of such information could frustrate or thwart<A] 226 
+
+[A>the investigation and impair the ability of the department to<A] 227 
+
+[A>effectively and efficiently administer s. 501.9985, Florida<A] 228 
+
+[A>Statutes. In addition, release of such information before<A] 229 
+
+[A>completion of an active investigation could jeopardize the<A] 230 
+
+[A>ongoing investigation.<A] 231 
+
+[A>(2) The release of information that is otherwise<A] 232
+--- PAGE 9 ---
+Florida Senate - 2026 SB 7030 
+
+ 
+
+ 
+  
+ 
+ 
+ 
+ 
+ 
+ 
+577-02072-26 20267030__ 
+
+  Page 9 of 14   
+
+CODING: Words [D>stricken<D] are deletions; words [A>underlined<A] are additions. 
+
+[A>confidential or exempt from public records requirements once an<A] 233 
+
+[A>investigation is completed or ceases to be active would undo the<A] 234 
+
+[A>specific statutory exemption protecting that information, thus<A] 235 
+
+[A>affirming that any protections currently afforded to such<A] 236 
+
+[A>information are not removed.<A] 237 
+
+[A>(3) An investigation of a violation of s. 501.9985, Florida<A] 238 
+
+[A>Statutes, is likely to result in the gathering of sensitive<A] 239 
+
+[A>personal identifying information, which could include<A] 240 
+
+[A>identification numbers, unique identifiers, professional or<A] 241 
+
+[A>employment-related information, and personal financial<A] 242 
+
+[A>information. Such information could be used for the purpose of<A] 243 
+
+[A>identity theft. The release of such information could subject<A] 244 
+
+[A>families to possible privacy violations, as it would reveal<A] 245 
+
+[A>information of a sensitive personal nature.<A] 246 
+
+[A>(4) Notices received by the department and information<A] 247 
+
+[A>generated during an investigation of a violation of s. 501.9985,<A] 248 
+
+[A>Florida Statutes, are likely to contain proprietary information.<A] 249 
+
+[A>Such information derives independent economic value, actual or<A] 250 
+
+[A>potential, from being generally unknown to, and not readily<A] 251 
+
+[A>ascertainable by, other persons who might obtain economic value<A] 252 
+
+[A>from its disclosure or use. Allowing public access to<A] 253 
+
+[A>proprietary information through a public records request could<A] 254 
+
+[A>destroy the value of the proprietary information and cause a<A] 255 
+
+[A>financial loss to the operator of a bot. Release of such<A] 256 
+
+[A>information could give business competitors an unfair advantage.<A] 257 
+
+[A>(5) Information held by the department may contain a<A] 258 
+
+[A>computer forensic report or information that could reveal<A] 259 
+
+[A>weaknesses in the data security of an operator of a bot. The<A] 260 
+
+[A>release of this information could result in the identification<A] 261
+--- PAGE 10 ---
+Florida Senate - 2026 SB 7030 
+
+ 
+
+ 
+  
+ 
+ 
+ 
+ 
+ 
+ 
+577-02072-26 20267030__ 
+
+  Page 10 of 14   
+
+CODING: Words [D>stricken<D] are deletions; words [A>underlined<A] are additions. 
+
+[A>of vulnerabilities in the cybersecurity system of the operator<A] 262 
+
+[A>of a bot and be used to harm the operator of the bot and its<A] 263 
+
+[A>clients.<A] 264 
+
+[A>(6) The harm that may result from the release of<A] 265 
+
+[A>information held by the department pursuant to a notification or<A] 266 
+
+[A>an investigation of a violation of s. 501.9985, Florida<A] 267 
+
+[A>Statutes, could impair the effective and efficient<A] 268 
+
+[A>administration of the investigation and thus outweighs the<A] 269 
+
+[A>public benefit that may be derived from the disclosure of the<A] 270 
+
+[A>information.<A] 271 
+
+Section 5. Present subsection (5) of section 501.9986, 272 
+
+Florida Statutes, as created by SB 482 or similar legislation, 273 
+
+2026 Regular Session, is redesignated as subsection (6), and a 274 
+
+new subsection (5) is added to that section, to read: 275 
+
+501.9986 Consumer protections regarding deidentified data.— 276 
+
+[A>(5)(a) All information held by the department pursuant to a<A] 277 
+
+[A>notification of a violation of this section or an investigation<A] 278 
+
+[A>of a violation of this section is confidential and exempt from<A] 279 
+
+[A>s. 119.07(1) and s. 24(a), Art. I of the State Constitution,<A] 280 
+
+[A>until such time as the investigation is completed or ceases to<A] 281 
+
+[A>be active. This exemption shall be construed in conformity with<A] 282 
+
+[A>s. 119.071(2)(c).<A] 283 
+
+[A>(b) During an active investigation, information made<A] 284 
+
+[A>confidential and exempt pursuant to paragraph (a) may be<A] 285 
+
+[A>disclosed by the department:<A] 286 
+
+[A>1. In the furtherance of its official duties and<A] 287 
+
+[A>responsibilities;<A] 288 
+
+[A>2. For print, publication, or broadcast if the department<A] 289 
+
+[A>determines that such release would assist in notifying the<A] 290
+--- PAGE 11 ---
+Florida Senate - 2026 SB 7030 
+
+ 
+
+ 
+  
+ 
+ 
+ 
+ 
+ 
+ 
+577-02072-26 20267030__ 
+
+  Page 11 of 14   
+
+CODING: Words [D>stricken<D] are deletions; words [A>underlined<A] are additions. 
+
+[A>public or locating or identifying a person who the department<A] 291 
+
+[A>believes to be a victim of an improper use or disposal of<A] 292 
+
+[A>customer records, except that information made confidential and<A] 293 
+
+[A>exempt by paragraph (c) may not be released pursuant to this<A] 294 
+
+[A>subparagraph; or<A] 295 
+
+[A>3. To another governmental entity in the furtherance of<A] 296 
+
+[A>such entity’s official duties and responsibilities.<A] 297 
+
+[A>(c) Upon completion of an investigation or once an<A] 298 
+
+[A>investigation ceases to be active, the following information<A] 299 
+
+[A>held by the department shall remain confidential and exempt from<A] 300 
+
+[A>s. 119.07(1) and s. 24(a), Art. I of the State Constitution:<A] 301 
+
+[A>1. Information that is otherwise confidential or exempt<A] 302 
+
+[A>from s. 119.07(1) and s. 24(a), Art. I of the State<A] 303 
+
+[A>Constitution.<A] 304 
+
+[A>2. Personal identifying information.<A] 305 
+
+[A>3. A computer forensic report.<A] 306 
+
+[A>4. Information that would otherwise reveal weaknesses in<A] 307 
+
+[A>the data security of an artificial intelligence technology<A] 308 
+
+[A>company.<A] 309 
+
+[A>5. Information that would disclose the proprietary<A] 310 
+
+[A>information of an artificial intelligence technology company.<A] 311 
+
+[A>(d) For purposes of this section, the term “proprietary<A] 312 
+
+[A>information” means information that:<A] 313 
+
+[A>1. Is owned or controlled by the artificial intelligence<A] 314 
+
+[A>technology company.<A] 315 
+
+[A>2. Is intended to be private and is treated by the<A] 316 
+
+[A>artificial intelligence technology company as private because<A] 317 
+
+[A>disclosure would harm the artificial intelligence technology<A] 318 
+
+[A>company or its business operations.<A] 319
+--- PAGE 12 ---
+Florida Senate - 2026 SB 7030 
+
+ 
+
+ 
+  
+ 
+ 
+ 
+ 
+ 
+ 
+577-02072-26 20267030__ 
+
+  Page 12 of 14   
+
+CODING: Words [D>stricken<D] are deletions; words [A>underlined<A] are additions. 
+
+[A>3. Has not been disclosed except as required by law or a<A] 320 
+
+[A>private agreement that provides that the information will not be<A] 321 
+
+[A>released to the public.<A] 322 
+
+[A>4. Is not publicly available or otherwise readily<A] 323 
+
+[A>ascertainable through proper means from another source in the<A] 324 
+
+[A>same configuration as received by the department.<A] 325 
+
+[A>5. Reveals competitive interests, the disclosure of which<A] 326 
+
+[A>would impair the competitive advantage of the artificial<A] 327 
+
+[A>intelligence technology company that is the subject of the<A] 328 
+
+[A>information.<A] 329 
+
+[A>(e) This subsection is subject to the Open Government<A] 330 
+
+[A>Sunset Review Act in accordance with s. 119.15 and shall stand<A] 331 
+
+[A>repealed on October 2, 2031, unless reviewed and saved from<A] 332 
+
+[A>repeal through reenactment by the Legislature.<A] 333 
+
+Section 6. [A>The Legislature finds that it is a public<A] 334 
+
+[A>necessity that all information held by the Department of Legal<A] 335 
+
+[A>Affairs pursuant to a notification of a violation of s.<A] 336 
+
+[A>501.9986, Florida Statutes, or an investigation of a violation<A] 337 
+
+[A>of that section, be made confidential and exempt from s.<A] 338 
+
+[A>119.07(1), Florida Statutes, and s. 24(a), Article I of the<A] 339 
+
+[A>State Constitution for the following reasons:<A] 340 
+
+[A>(1) A notification of a violation of s. 501.9986, Florida<A] 341 
+
+[A>Statutes, may result in an investigation of such violation. The<A] 342 
+
+[A>premature release of such information could frustrate or thwart<A] 343 
+
+[A>the investigation and impair the ability of the department to<A] 344 
+
+[A>effectively and efficiently administer s. 501.9986, Florida<A] 345 
+
+[A>Statutes. In addition, release of such information before<A] 346 
+
+[A>completion of an active investigation could jeopardize the<A] 347 
+
+[A>ongoing investigation.<A] 348
+--- PAGE 13 ---
+Florida Senate - 2026 SB 7030 
+
+ 
+
+ 
+  
+ 
+ 
+ 
+ 
+ 
+ 
+577-02072-26 20267030__ 
+
+  Page 13 of 14   
+
+CODING: Words [D>stricken<D] are deletions; words [A>underlined<A] are additions. 
+
+[A>(2) The release of information that is otherwise<A] 349 
+
+[A>confidential or exempt from public records requirements once an<A] 350 
+
+[A>investigation is completed or ceases to be active would undo the<A] 351 
+
+[A>specific statutory exemption protecting that information, thus<A] 352 
+
+[A>affirming that any protections currently afforded to such<A] 353 
+
+[A>information are not removed.<A] 354 
+
+[A>(3) An investigation of a violation of s. 501.9986, Florida<A] 355 
+
+[A>Statutes, is likely to result in the gathering of sensitive<A] 356 
+
+[A>personal identifying information, which could include<A] 357 
+
+[A>identification numbers, unique identifiers, professional or<A] 358 
+
+[A>employment-related information, and personal financial<A] 359 
+
+[A>information. Such information could be used for the purpose of<A] 360 
+
+[A>identity theft. The release of such information could subject<A] 361 
+
+[A>families to possible privacy violations, as it would reveal<A] 362 
+
+[A>information of a sensitive personal nature.<A] 363 
+
+[A>(4) Notices received by the department and information<A] 364 
+
+[A>generated during an investigation of a violation of s. 501.9986,<A] 365 
+
+[A>Florida Statutes, are likely to contain proprietary information.<A] 366 
+
+[A>Such information derives independent economic value, actual or<A] 367 
+
+[A>potential, from being generally unknown to, and not readily<A] 368 
+
+[A>ascertainable by, other persons who might obtain economic value<A] 369 
+
+[A>from its disclosure or use. Allowing public access to<A] 370 
+
+[A>proprietary information through a public records request could<A] 371 
+
+[A>destroy the value of the proprietary information and cause a<A] 372 
+
+[A>financial loss to the artificial intelligence technology<A] 373 
+
+[A>company. Release of such information could give business<A] 374 
+
+[A>competitors an unfair advantage.<A] 375 
+
+[A>(5) Information held by the department may contain a<A] 376 
+
+[A>computer forensic report or information that could reveal<A] 377
+--- PAGE 14 ---
+Florida Senate - 2026 SB 7030 
+
+ 
+
+ 
+  
+ 
+ 
+ 
+ 
+ 
+ 
+577-02072-26 20267030__ 
+
+  Page 14 of 14   
+
+CODING: Words [D>stricken<D] are deletions; words [A>underlined<A] are additions. 
+
+[A>weaknesses in the data security of an artificial intelligence<A] 378 
+
+[A>technology company. The release of this information could result<A] 379 
+
+[A>in the identification of vulnerabilities in the cybersecurity<A] 380 
+
+[A>system of the artificial intelligence technology company and be<A] 381 
+
+[A>used to harm the artificial intelligence technology company and<A] 382 
+
+[A>its clients.<A] 383 
+
+[A>(6) The harm that may result from the release of<A] 384 
+
+[A>information held by the department pursuant to a notification or<A] 385 
+
+[A>an investigation of a violation of s. 501.9986, Florida<A] 386 
+
+[A>Statutes, could impair the effective and efficient<A] 387 
+
+[A>administration of the investigation and thus outweighs the<A] 388 
+
+[A>public benefit that may be derived from the disclosure of the<A] 389 
+
+[A>information.<A] 390 
+
+Section 7. This act shall take effect on the same date that 391 
+
+SB 482 or similar legislation takes effect, if such legislation 392 
+
+is adopted in the same legislative session or an extension 393 
+
+thereof and becomes a law. 394

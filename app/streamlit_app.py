@@ -10,8 +10,9 @@ import logging
 import threading
 import copy
 
-# Add the current directory to the Python path
+# Add the current directory and the project root to the Python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import our processing functions
 try:
@@ -93,11 +94,56 @@ try:
         extract_word_bboxes as compare_extract_word_bboxes,
         build_word_level_map as compare_build_word_level_map,
         build_viewer_html as compare_build_viewer_html,
+        compute_diff_map as compare_compute_diff_map,
     )
 except ImportError:
     compare_render_pdf_pages = compare_extract_word_bboxes = None
     compare_build_word_level_map = compare_build_viewer_html = None
+    compare_compute_diff_map = None
     logging.warning("⚠️ pdf_compare_viewer module not found — PDF↔Text compare viewer disabled")
+
+# ── SFTP Submit to Keyed helper ────────────────────────────────────────────
+def _submit_to_keyed_sftp(file_path: str, edited_text: str = None):
+    """Upload file to SFTP /ftp/keyed directly from its session folder.
+
+    If edited_text is provided, the file is updated in-place before uploading.
+    """
+    from dotenv import load_dotenv as _ld
+    _ld()
+    import paramiko
+
+    src = Path(file_path)
+
+    # Update the file with edited text if provided (HITL edits saved back)
+    if edited_text is not None:
+        with open(src, "w", encoding="utf-8") as f:
+            f.write(edited_text)
+        logging.info(f"[HITL] Updated {src.name} with validated edits")
+
+    # SFTP upload directly from source
+    _host = "10.17.38.130"
+    _port = 22
+    _user = "mag2ftp"
+    _remote_dir = "/apps/Codes/MP2/LandingStrips/LCPR/ftp/keyed"
+    _password = os.environ.get("FTP_PASSWORD", "")
+
+    if not _password:
+        raise RuntimeError("FTP_PASSWORD not configured in environment")
+
+    transport = paramiko.Transport((_host, _port))
+    transport.connect(username=_user, password=_password)
+    sftp = paramiko.SFTPClient.from_transport(transport)
+    try:
+        sftp.put(str(src), f"{_remote_dir}/{src.name}")
+        logging.info(f"[SFTP] Uploaded {src.name} to {_remote_dir}")
+
+        # Write upload log via session manager
+        session_mgr = st.session_state.get('session_manager') or get_session_manager()
+        session_mgr.write_upload_log(f"UPLOADED {src.name} → {_remote_dir}/{src.name}")
+    finally:
+        sftp.close()
+        transport.close()
+
 
 # Full state name lookup for display
 
@@ -215,7 +261,7 @@ st.set_page_config(
     page_title="Pending Legislation Processor",
     page_icon="🤖",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded"
 )
 
 
@@ -2090,7 +2136,7 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
         if status_placeholder:
             status_placeholder.info("💾 Saving output...")
 
-        output_filename = Path(pdf_path).stem + "_claude_opus.txt"
+        output_filename = Path(pdf_path).stem + ".txt"
         output_path = os.path.join(session_folders['output_folder'], output_filename)
         os.makedirs(session_folders['output_folder'], exist_ok=True)
 
@@ -2603,7 +2649,7 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
             _mark_flags["mark_brackets"] = add_cfg.get("brackets", False) or del_cfg.get("brackets", False)
 
         # Output paths
-        output_filename = Path(pdf_path).stem + "_claude_opus_pymupdf_clean.txt"
+        output_filename = Path(pdf_path).stem + ".txt"
         output_path = os.path.join(session_folders['output_folder'], output_filename)
         os.makedirs(session_folders['output_folder'], exist_ok=True)
 
@@ -3109,7 +3155,7 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
         if status_placeholder:
             status_placeholder.info("💾 Saving output...")
 
-        output_filename = Path(pdf_path).stem + "_hybrid.txt"
+        output_filename = Path(pdf_path).stem + ".txt"
         output_path = os.path.join(session_folders['output_folder'], output_filename)
         os.makedirs(session_folders['output_folder'], exist_ok=True)
 
@@ -3976,11 +4022,7 @@ def show_simple_ui():
 
     if _has_results and (_is_single_done or _is_batch_done):
         # ── Clean results header — hide upload clutter ────────────────────
-        # vertical_alignment="center" keeps the small button vertically
-        # centred next to the file-info pill, so the row is one line tall.
-        # Ratio [9, 1] gives the button column ~10% width — enough for the
-        # "➕ New" label without forcing a multi-line wrap.
-        _col_info, _col_btn = st.columns([9, 1], vertical_alignment="center")
+        _col_info, _col_submit_btn, _col_btn = st.columns([5, 1, 1])
         with _col_info:
             if _is_batch_done:
                 _n_total = len(st.session_state.get('batch_pdf_paths', st.session_state.batch_results))
@@ -3997,7 +4039,8 @@ def show_simple_ui():
                     unsafe_allow_html=True,
                 )
             elif st.session_state.get('temp_pdf_path'):
-                _fname = st.session_state.get('last_uploaded_file_id', '').rsplit('_', 1)[0] or Path(st.session_state.temp_pdf_path).name
+                _upload_id = st.session_state.get('last_uploaded_file_id') or ''
+                _fname = _upload_id.rsplit('_', 1)[0] if _upload_id else Path(st.session_state.temp_pdf_path).name
                 _state_code = st.session_state.get('detected_state', '')
                 _state_name = US_STATE_NAMES.get(_state_code, '') if _state_code else ''
                 _state_badge = (
@@ -4016,6 +4059,34 @@ def show_simple_ui():
                     f'</div>',
                     unsafe_allow_html=True,
                 )
+        with _col_submit_btn:
+            _file_to_submit = st.session_state.get('processed_file_path')
+            if _file_to_submit and os.path.exists(_file_to_submit):
+                if st.button("🚀 Submit to Keyed", use_container_width=True, key="header_submit_keyed_btn"):
+                    try:
+                        _edited_text = None
+                        _cached = st.session_state.get('processed_file_data')
+                        if _cached is not None:
+                            _edited_text = _cached.decode('utf-8', errors='replace') if isinstance(_cached, bytes) else _cached
+                        _submit_to_keyed_sftp(_file_to_submit, edited_text=_edited_text)
+                        st.session_state['_last_submitted_name'] = Path(_file_to_submit).name
+                        st.toast(f"Submitted to /ftp/keyed", icon="✅")
+                    except Exception as _upload_err:
+                        st.error(f"❌ Upload failed: {_upload_err}")
+        # Show submitted confirmation bar below file info (full width, matches info bar style)
+        if st.session_state.get('_last_submitted_name'):
+            _sub_name = st.session_state.pop('_last_submitted_name')
+            st.markdown(
+                f'<div style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:10px; '
+                f'padding:12px 20px; display:flex; align-items:center; gap:12px; margin-bottom:8px; '
+                f'box-shadow:0 1px 4px rgba(0,0,0,.04);">'
+                f'<span style="font-size:1.2rem;">✅</span>'
+                f'<span style="font-weight:600; color:#166534;">Submitted</span>'
+                f'<span style="font-size:0.88rem; color:#1e293b; word-break:break-all;">{_sub_name}</span>'
+                f'<span style="margin-left:auto; color:#64748b; font-size:0.85rem;">→ /ftp/keyed</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
         with _col_btn:
             if st.button("➕ New", type="primary", help="Process a new document"):
                 # Reset all processing state so user can upload a fresh file
@@ -4085,17 +4156,229 @@ def show_simple_ui():
         )
         uploaded_files = []
     else:
-        # Full upload section — before processing
-        st.header("📁 Upload PDF Files")
-        st.caption("Upload one file for single processing, or multiple files (up to 20, max 2 MB total) for serial batch processing.")
-        _uploader_key = f"pdf_uploader_{st.session_state.uploader_key_counter}"
-        uploaded_files = st.file_uploader(
-            "Choose PDF file(s) to process",
-            type=['pdf'],
-            accept_multiple_files=True,
-            key=_uploader_key,
-            help="Upload one or more PDF files (max 15 pages each)"
+        # Radio toggle between Upload, Downloads, and Pipeline Sessions
+        _input_mode = st.radio(
+            "Input source",
+            ["📁 Upload PDF Files", "📥 Downloaded Files", "📂 Pipeline Sessions"],
+            horizontal=True,
+            key="input_mode_radio",
+            label_visibility="collapsed",
         )
+
+        if _input_mode == "📁 Upload PDF Files":
+            # Full upload section — before processing
+            st.header("📁 Upload PDF Files")
+            st.caption("Upload one file for single processing, or multiple files (up to 20, max 2 MB total) for serial batch processing.")
+            _uploader_key = f"pdf_uploader_{st.session_state.uploader_key_counter}"
+            uploaded_files = st.file_uploader(
+                "Choose PDF file(s) to process",
+                type=['pdf'],
+                accept_multiple_files=True,
+                key=_uploader_key,
+                help="Upload one or more PDF files (max 15 pages each)"
+            )
+        elif _input_mode == "📥 Downloaded Files":
+            # ── Process files from pending_downloads/ ─────────────────────
+            st.header("📥 Downloaded Files")
+            uploaded_files = []
+            _downloads_dir = Path(__file__).resolve().parent.parent / "tmp" / "pending_downloads"
+            _downloads_dir.mkdir(parents=True, exist_ok=True)
+            st.caption(f"📂 `{_downloads_dir}`")
+
+            # Check SFTP button
+            if st.button("🔄 Check SFTP for New Files", use_container_width=True, key="dl_check_sftp_btn"):
+                from pipeline_runner import download_new_files
+                with st.spinner("Connecting to SFTP..."):
+                    _new_files = download_new_files()
+                if _new_files:
+                    st.success(f"📥 Downloaded {len(_new_files)} new file(s) from SFTP")
+                    st.rerun()
+                else:
+                    st.info("No new files on SFTP server")
+
+            # List available ZIPs
+            _zip_files = sorted(_downloads_dir.glob("*.zip"), key=lambda x: x.stat().st_mtime, reverse=True)
+            if _zip_files:
+                _zip_labels = [f"{z.name}  ({z.stat().st_size // 1024} KB)" for z in _zip_files]
+                _selected_zips = st.multiselect(
+                    "Select ZIP file(s) to process",
+                    range(len(_zip_files)),
+                    format_func=lambda i: _zip_labels[i],
+                    key="dl_zip_select",
+                )
+
+                if _selected_zips:
+                    st.caption(f"Selected {len(_selected_zips)} ZIP(s) for conversion")
+                    if st.button("⚙️ Extract & Convert", type="primary", use_container_width=True, key="dl_convert_btn"):
+                        import shutil as _shutil2
+                        from pipeline_runner import extract_zips, convert_pdf, get_today_folder
+
+                        _chosen_zips = [_zip_files[i] for i in _selected_zips]
+                        with st.spinner(f"Extracting {len(_chosen_zips)} ZIP(s)..."):
+                            _extracted = extract_zips(_chosen_zips)
+
+                        if _extracted:
+                            _progress = st.progress(0, text="Converting...")
+                            _total = len(_extracted)
+                            _success = 0
+                            _converted_paths = []
+                            for _idx, _item in enumerate(_extracted):
+                                _progress.progress((_idx + 1) / _total, text=f"Converting {_idx + 1}/{_total}: {Path(_item['pdf_path']).name}")
+                                _out_dir = Path(_item['date_folder']) / _item['session_id'] / 'output'
+                                _result = convert_pdf(_item['pdf_path'], _item['state'], _out_dir)
+                                if _result:
+                                    _success += 1
+                                    _converted_paths.append(_result)
+                            _progress.progress(1.0, text="Uploading...")
+
+                            # Upload to SFTP /ftp/keyed
+                            _upload_ok = 0
+                            _upload_log_entries = []
+                            try:
+                                from ftp_upload import connect_sftp as _up_connect, SFTP_USER as _up_user, REMOTE_DIR as _up_remote
+                                _ftp_pw = os.environ.get("FTP_PASSWORD", "")
+                                if _ftp_pw and _converted_paths:
+                                    _transport, _sftp = _up_connect(_up_user, _ftp_pw)
+                                    try:
+                                        for _cp in _converted_paths:
+                                            _sftp.put(_cp, f"{_up_remote}/{Path(_cp).name}")
+                                            _upload_ok += 1
+                                            _upload_log_entries.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] UPLOADED {Path(_cp).name} → {_up_remote}/{Path(_cp).name}")
+                                            logging.info(f"[SFTP] Uploaded {Path(_cp).name} to {_up_remote}")
+                                    finally:
+                                        _sftp.close()
+                                        _transport.close()
+                            except Exception as _ue:
+                                st.warning(f"⚠️ SFTP upload error: {_ue}")
+                                _upload_log_entries.append(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ERROR: {_ue}")
+
+                            # Write upload log via session manager
+                            if _upload_log_entries:
+                                _sm = st.session_state.get('session_manager') or get_session_manager()
+                                for _entry in _upload_log_entries:
+                                    _sm.write_upload_log(_entry)
+
+                            _progress.empty()
+                            st.markdown(
+                                f'<div style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:10px; '
+                                f'padding:12px 20px; display:flex; align-items:center; gap:12px; margin-bottom:8px; '
+                                f'box-shadow:0 1px 4px rgba(0,0,0,.04);">'
+                                f'<span style="font-size:1.2rem;">✅</span>'
+                                f'<span style="font-weight:600; color:#166534;">Done</span>'
+                                f'<span style="font-size:0.88rem; color:#1e293b;">{_success}/{_total} converted</span>'
+                                f'<span style="font-size:0.82rem; color:#475569;">| {_upload_ok} uploaded to /ftp/keyed</span>'
+                                f'<span style="margin-left:auto; color:#64748b; font-size:0.85rem;">→ tmp/pending_processing/{get_today_folder().name}/</span>'
+                                f'</div>',
+                                unsafe_allow_html=True,
+                            )
+                            st.rerun()
+                        else:
+                            st.warning("No new PDFs to extract (already processed)")
+            else:
+                st.info("No ZIP files in pending_downloads/. Click 'Check SFTP' to download.")
+        else:
+            # ── Pipeline Sessions (SFTP → Convert → Review) ───────────────
+            st.header("📂 Pipeline Sessions")
+            uploaded_files = []
+
+            _pipeline_sm = st.session_state.get('session_manager') or get_session_manager()
+            _p_sessions = _pipeline_sm.list_persisted_sessions()
+            if _p_sessions:
+                    _session_labels = []
+                    for _ps in _p_sessions:
+                        _prefix = f"[{_ps['date_label']}] " if _ps['date_label'] else ""
+                        _label = f"{_prefix}{_ps['state']} | {_ps['n_pdfs']} PDFs | {_ps['n_outputs']} converted"
+                        _session_labels.append(_label)
+
+                    _sel_idx = st.selectbox(
+                        "Select session",
+                        range(len(_p_sessions)),
+                        format_func=lambda i: _session_labels[i],
+                        key="pipeline_session_select",
+                    )
+                    _selected_ps = _p_sessions[_sel_idx]
+                    _selected_session = _selected_ps['path']
+                    _sel_output_dir = _selected_session / "output"
+                    _sel_input_dir = _selected_session / "input"
+
+                    _converted_files = _selected_ps['output_files']
+                    if _converted_files:
+                        st.caption(f"✅ {len(_converted_files)} file(s) ready for review")
+                        _file_choice = st.selectbox(
+                            "Pick file to review",
+                            range(len(_converted_files)),
+                            format_func=lambda i: _converted_files[i].name,
+                            key="pipeline_file_select",
+                        )
+                        _chosen_file = _converted_files[_file_choice]
+
+                        _col_load, _col_submit_one, _col_submit_all = st.columns(3)
+                        with _col_load:
+                            if st.button("📄 Load for Review", use_container_width=True, key="load_pipeline_file_btn"):
+                                st.session_state.processed_file_path = str(_chosen_file)
+                                try:
+                                    with open(_chosen_file, 'rb') as _f:
+                                        st.session_state.processed_file_data = _f.read()
+                                except Exception:
+                                    st.session_state.processed_file_data = None
+                                _src_pdf = _sel_input_dir / (_chosen_file.stem + ".pdf")
+                                if not _src_pdf.exists():
+                                    _src_pdf = _selected_session / (_chosen_file.stem + ".pdf")
+                                if _src_pdf.exists():
+                                    st.session_state.temp_pdf_path = str(_src_pdf)
+                                _det_state = _selected_session.name.split("_")[0]
+                                st.session_state.detected_state = _det_state
+                                st.session_state.processing_time = "pipeline"
+                                st.success(f"Loaded: {_chosen_file.name}")
+                                st.rerun()
+                        with _col_submit_one:
+                            if st.button("🚀 Submit File", type="primary", use_container_width=True, key="submit_one_keyed_btn"):
+                                try:
+                                    _submit_to_keyed_sftp(str(_chosen_file))
+                                    st.toast(f"Submitted to /ftp/keyed", icon="✅")
+                                    st.markdown(
+                                        f'<div style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:10px; '
+                                        f'padding:12px 20px; display:flex; align-items:center; gap:12px; margin-bottom:8px; '
+                                        f'box-shadow:0 1px 4px rgba(0,0,0,.04);">'
+                                        f'<span style="font-size:1.2rem;">✅</span>'
+                                        f'<span style="font-weight:600; color:#166534;">Submitted</span>'
+                                        f'<span style="font-size:0.88rem; color:#1e293b; word-break:break-all;">{_chosen_file.name}</span>'
+                                        f'<span style="margin-left:auto; color:#64748b; font-size:0.85rem;">→ /ftp/keyed</span>'
+                                        f'</div>',
+                                        unsafe_allow_html=True,
+                                    )
+                                except Exception as _e:
+                                    st.error(f"❌ Upload failed: {_e}")
+                        with _col_submit_all:
+                            if st.button("🚀 Submit All", use_container_width=True, key="submit_all_keyed_btn"):
+                                _submitted = 0
+                                for _cf in _converted_files:
+                                    try:
+                                        _submit_to_keyed_sftp(str(_cf))
+                                        _submitted += 1
+                                    except Exception as _e:
+                                        st.error(f"❌ {_cf.name}: {_e}")
+                                if _submitted:
+                                    st.toast(f"{_submitted} file(s) submitted", icon="✅")
+                                    st.markdown(
+                                        f'<div style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:10px; '
+                                        f'padding:12px 20px; display:flex; align-items:center; gap:12px; margin-bottom:8px; '
+                                        f'box-shadow:0 1px 4px rgba(0,0,0,.04);">'
+                                        f'<span style="font-size:1.2rem;">✅</span>'
+                                        f'<span style="font-weight:600; color:#166534;">Submitted</span>'
+                                        f'<span style="font-size:0.88rem; color:#1e293b;">{_submitted}/{len(_converted_files)} files</span>'
+                                        f'<span style="margin-left:auto; color:#64748b; font-size:0.85rem;">→ /ftp/keyed</span>'
+                                        f'</div>',
+                                        unsafe_allow_html=True,
+                                    )
+                    else:
+                        _pdfs = sorted(_sel_input_dir.glob("*.pdf")) if _sel_input_dir.exists() else sorted(_selected_session.glob("*.pdf"))
+                        if _pdfs:
+                            st.caption(f"⏳ {len(_pdfs)} PDF(s) awaiting conversion")
+                        else:
+                            st.caption("Empty session")
+            else:
+                st.info("No pipeline sessions yet")
 
     # Normalize: uploaded_files is always a list (possibly empty)
     if uploaded_files is None:
@@ -4498,7 +4781,8 @@ def show_simple_ui():
                 # Partial results exist but worker stopped — show what we have
                 show_batch_results_section()
         else:
-            st.info("👆 Please upload one or more PDF files to begin processing")
+            if st.session_state.get('input_mode_radio') == "📁 Upload PDF Files":
+                st.info("👆 Please upload one or more PDF files to begin processing")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -4827,10 +5111,17 @@ def show_results_section():
                 with st.spinner("Extracting words & mapping…"):
                     _words = compare_extract_word_bboxes(_pdf_bytes)
                     _word_map = compare_build_word_level_map(_clean_lines, _words)
+                    if compare_compute_diff_map:
+                        _dev_map, _miss_map, _n_pdf_missing = compare_compute_diff_map(_clean_lines, _words)
+                    else:
+                        _dev_map, _miss_map, _n_pdf_missing = {}, {}, 0
 
                 _viewer_html = compare_build_viewer_html(
                     _pdf_bytes, _clean_lines, _word_map,
                     filename=Path(_txt_path).name,
+                    dev_map=_dev_map,
+                    miss_map=_miss_map,
+                    n_pdf_missing=_n_pdf_missing,
                 )
                 # ── Iframe height strategy ─────────────────────────
                 # The iframe is sized via THREE mechanisms in priority
@@ -5024,20 +5315,47 @@ def show_results_section():
                         <span style="font-size:1.6rem; font-weight:800; color:#0f172a;">{_n_total}</span>
                         <span style="font-size:0.78rem; color:#64748b; margin-top:2px;">Total Items</span>
                     </div>
-                    <div style="{_card} background:#f0fdf4; border:1px solid #bbf7d0;">
-                        <span style="font-size:1.6rem; font-weight:800; color:#166534;">{_n_pass}</span>
-                        <span style="font-size:0.78rem; color:#166534; margin-top:2px;">✅ Pass</span>
-                    </div>
-                    <div style="{_card} background:#fefce8; border:1px solid #fde68a;">
-                        <span style="font-size:1.6rem; font-weight:800; color:#854d0e;">{_n_warn}</span>
-                        <span style="font-size:0.78rem; color:#854d0e; margin-top:2px;">⚠️ Warnings</span>
-                    </div>
-                    <div style="{_card} background:#fef2f2; border:1px solid #fecaca;">
-                        <span style="font-size:1.6rem; font-weight:800; color:#991b1b;">{_n_err}</span>
-                        <span style="font-size:0.78rem; color:#991b1b; margin-top:2px;">❌ Errors</span>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
+                    """, unsafe_allow_html=True)
+            except Exception:
+                pass  # audit metrics are nice-to-have; don't break Summary tab
+
+        # ── Submit to Keyed (SFTP Upload) ─────────────────────────────────────
+        st.markdown("---")
+        _submit_col1, _submit_col2 = st.columns([3, 1])
+        with _submit_col1:
+            st.markdown(
+                '<p style="font-size:0.88rem; color:#475569; margin:4px 0;">'
+                '📤 Submit approved file to <code>/ftp/keyed</code> for downstream processing.</p>',
+                unsafe_allow_html=True,
+            )
+        with _submit_col2:
+            if st.button("🚀 Submit to Keyed", type="primary", use_container_width=True, key="submit_to_keyed_btn"):
+                _file_to_submit = st.session_state.processed_file_path
+                if _file_to_submit and os.path.exists(_file_to_submit):
+                    try:
+                        # Get the latest text content (may have been edited by HITL)
+                        _edited_text = None
+                        _cached = st.session_state.get('processed_file_data')
+                        if _cached is not None:
+                            _edited_text = _cached.decode('utf-8', errors='replace') if isinstance(_cached, bytes) else _cached
+                        _submit_to_keyed_sftp(_file_to_submit, edited_text=_edited_text)
+                        st.toast(f"Submitted to /ftp/keyed", icon="✅")
+                        st.markdown(
+                            f'<div style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:10px; '
+                            f'padding:12px 20px; display:flex; align-items:center; gap:12px; margin-bottom:8px; '
+                            f'box-shadow:0 1px 4px rgba(0,0,0,.04);">'
+                            f'<span style="font-size:1.2rem;">✅</span>'
+                            f'<span style="font-weight:600; color:#166534;">Submitted</span>'
+                            f'<span style="font-size:0.88rem; color:#1e293b; word-break:break-all;">{Path(_file_to_submit).name}</span>'
+                            f'<span style="margin-left:auto; color:#64748b; font-size:0.85rem;">→ /ftp/keyed</span>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+                    except Exception as _upload_err:
+                        st.error(f"❌ Upload failed: {_upload_err}")
+                else:
+                    st.warning("No processed file available to submit.")
+
     _tab_idx += 1
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -5350,7 +5668,7 @@ class BatchWorker:
         add_log(f"🏁 PDF Conversion complete in {conversion_time_str}")
         add_log("💾 Saving converted output...")
 
-        output_filename = Path(pdf_path).stem + "_claude_opus.txt"
+        output_filename = Path(pdf_path).stem + ".txt"
         output_path = os.path.join(session_folders['output_folder'], output_filename)
         os.makedirs(session_folders['output_folder'], exist_ok=True)
         if not opus.save_text_file(converted_text, output_path):
@@ -6453,6 +6771,18 @@ def show_single_file_processing():
             except Exception as _read_err:
                 logging.warning(f"Could not cache output file bytes: {_read_err}")
                 st.session_state.processed_file_data = None
+
+            # ── Persist input + output via SessionManager ────────────
+            try:
+                _pdf_src = st.session_state.temp_pdf_path
+                _state_code = st.session_state.get('detected_state', 'UNK') or 'UNK'
+                _persist_sm = st.session_state.get('session_manager') or get_session_manager()
+                _pp_dir = _persist_sm.persist_session(_pdf_src, result, _state_code)
+                if _pp_dir:
+                    logging.info(f"[Pipeline] Persisted session: {_pp_dir}")
+            except Exception as _pp_err:
+                logging.warning(f"Could not persist session: {_pp_err}")
+
             success_msg = "🎉 Processing completed successfully!"
             if st.session_state.processing_time:
                 success_msg += f" ⏱️ Total time: {st.session_state.processing_time}"

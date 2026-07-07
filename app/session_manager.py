@@ -463,6 +463,93 @@ class SessionManager:
             except Exception as e:
                 logging.warning(f"Failed to cleanup session {session_id} during shutdown: {e}")
 
+    # ── Persistent session archive ──────────────────────────────────────────
+
+    def _get_persist_dir(self) -> Path:
+        """Return the root persistent-processing directory (tmp/pending_processing/)."""
+        current_file = Path(__file__).resolve()
+        project_root = current_file.parent.parent
+        return project_root / 'tmp' / 'pending_processing'
+
+    def _get_today_folder(self) -> Path:
+        """Return today's date-stamped folder (MMddyyyy) inside pending_processing/."""
+        from datetime import datetime as _dt
+        today = _dt.now().strftime("%m%d%Y")
+        folder = self._get_persist_dir() / today
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
+    def persist_session(self, pdf_path: str, output_path: str, state_code: str = None) -> Optional[str]:
+        """Archive a processed session's input + output to pending_processing/{date}/{name}/.
+
+        Returns the persisted session directory path, or None on failure.
+        """
+        try:
+            _state = state_code or 'UNK'
+            _ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            _pdf_stem = Path(pdf_path).stem
+            _session_name = f"{_state}_{_ts}_{_pdf_stem}"
+            _pp_dir = self._get_today_folder() / _session_name
+            _pp_input = _pp_dir / "input"
+            _pp_output = _pp_dir / "output"
+            _pp_input.mkdir(parents=True, exist_ok=True)
+            _pp_output.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(pdf_path, _pp_input / Path(pdf_path).name)
+            shutil.copy2(output_path, _pp_output / Path(output_path).name)
+            logging.info(f"[SessionManager] Persisted session: {_pp_dir}")
+            return str(_pp_dir)
+        except Exception as e:
+            logging.warning(f"[SessionManager] Could not persist session: {e}")
+            return None
+
+    def list_persisted_sessions(self) -> List[dict]:
+        """List all persisted sessions from pending_processing/, newest first.
+
+        Returns list of dicts:
+            {date_label, name, path, state, n_pdfs, n_outputs, output_files}
+        """
+        persist_dir = self._get_persist_dir()
+        if not persist_dir.exists():
+            return []
+
+        results = []
+        for entry in sorted(persist_dir.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+            if not entry.is_dir() or entry.name.startswith("."):
+                continue
+            # Date-stamped folder (MMddyyyy)
+            if len(entry.name) == 8 and entry.name.isdigit():
+                for sub in sorted(entry.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+                    if sub.is_dir():
+                        results.append(self._describe_persisted(entry.name, sub))
+            else:
+                # Legacy flat session
+                results.append(self._describe_persisted("", entry))
+        return results
+
+    @staticmethod
+    def _describe_persisted(date_label: str, session_path: Path) -> dict:
+        out_dir = session_path / "output"
+        in_dir = session_path / "input"
+        output_files = sorted(out_dir.glob("*.txt")) if out_dir.exists() else []
+        n_pdfs = len(list(in_dir.glob("*.pdf"))) if in_dir.exists() else len(list(session_path.glob("*.pdf")))
+        state = session_path.name.split("_")[0]
+        return {
+            "date_label": date_label,
+            "name": session_path.name,
+            "path": session_path,
+            "state": state,
+            "n_pdfs": n_pdfs,
+            "n_outputs": len(output_files),
+            "output_files": output_files,
+        }
+
+    def write_upload_log(self, message: str):
+        """Append an upload log entry to today's date folder."""
+        _log_file = self._get_today_folder() / "upload_log.txt"
+        _ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        with open(_log_file, "a", encoding="utf-8") as f:
+            f.write(f"[{_ts}] {message}\n")
+
 
 # Global session manager instance
 session_manager = None

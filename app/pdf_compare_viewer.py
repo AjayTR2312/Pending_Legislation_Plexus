@@ -12,6 +12,7 @@ import base64
 import json
 import re
 import os
+import difflib
 from typing import List, Dict, Tuple
 
 # Only set page config when running as standalone (not when imported)
@@ -23,7 +24,7 @@ if __name__ == "__main__":
         initial_sidebar_state="collapsed",
     )
 
-PDF_RENDER_DPI = 400
+PDF_RENDER_DPI = 150
 
 
 # ── Caching helpers ──────────────────────────────────────────────────────────
@@ -44,11 +45,22 @@ def render_pdf_pages(pdf_bytes: bytes, dpi: int = PDF_RENDER_DPI) -> List[str]:
 def extract_word_bboxes(pdf_bytes: bytes) -> List[dict]:
     """Extract words from PDF pages; uses OCR for scanned/image-only pages."""
     import os
-    # Set up Tesseract path for OCR fallback
-    _tess_dir = r"C:\Users\C302602\AppData\Local\Programs\Tesseract-OCR"
-    _tessdata = os.path.join(_tess_dir, "tessdata")
-    if os.path.isdir(_tessdata):
-        os.environ.setdefault("TESSDATA_PREFIX", _tessdata)
+    import shutil
+    # Set up Tesseract path for OCR fallback (Linux / Windows)
+    _tess_bin = shutil.which("tesseract")
+    if _tess_bin:
+        _tess_dir = os.path.dirname(_tess_bin)
+        _tessdata = os.path.join(os.path.dirname(_tess_dir), "share", "tessdata")
+        if not os.path.isdir(_tessdata):
+            _tessdata = os.path.join(_tess_dir, "tessdata")
+        if os.path.isdir(_tessdata):
+            os.environ.setdefault("TESSDATA_PREFIX", _tessdata)
+    else:
+        # Windows fallback
+        _tess_dir = r"C:\Users\C302602\AppData\Local\Programs\Tesseract-OCR"
+        _tessdata = os.path.join(_tess_dir, "tessdata")
+        if os.path.isdir(_tessdata):
+            os.environ.setdefault("TESSDATA_PREFIX", _tessdata)
 
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     words_all = []
@@ -144,6 +156,9 @@ def build_word_level_map(
         if not tokens:
             continue
 
+        # Search outward from cursor in expanding windows so the
+        # closest match is always preferred.  This prevents common words
+        # from producing false hits on distant pages.
         best_pos, best_n = -1, 0
         threshold_good = max(1, int(len(tokens) * 0.7))
         threshold_min  = max(1, int(len(tokens) * 0.3))
@@ -203,6 +218,87 @@ def build_word_level_map(
             cursor = pi  # advance — allows jumps for reordered text
 
     return mapping
+
+
+# ── Word-level deviation diff ────────────────────────────────────────────────
+
+def compute_diff_map(
+    clean_lines: List[str],
+    pdf_word_infos: List[dict],
+) -> Tuple[Dict[str, str], Dict[str, int], int]:
+    """
+    Compare the converted text words against the PDF-extracted word sequence
+    using difflib.SequenceMatcher at word level.
+
+    Returns:
+        dev_map   : {'li_wi': 'match'|'insert'|'replace'}  — status for each
+                    word span in the converted text (keyed the same way as wordMap)
+        miss_map  : {'li_wi': count}  — nearest wordMap key to where PDF words
+                    were deleted (for drawing red overlays on the PDF)
+        n_missing : total count of PDF words not found in converted text
+    """
+    # ── Build PDF word sequence (normalised) ────────────────────────────────
+    pdf_seq: List[str] = []
+    for w in pdf_word_infos:
+        norm = re.sub(r"[^\w]", "", w["text"].lower())
+        if norm:
+            pdf_seq.append(norm)
+
+    # ── Build converted-text word sequence + position mapping ───────────────
+    # We split each tagged line by single space (same as the viewer's rendering)
+    # so that wi indices align with the 'tw' spans in the HTML.
+    conv_seq: List[str] = []
+    pos_map: List[Tuple[int, int]] = []   # index in conv_seq -> (li, wi)
+
+    for li, line in enumerate(clean_lines):
+        raw_words = line.split(" ")
+        for wi, rw in enumerate(raw_words):
+            clean_w = _strip_tags(rw).strip()
+            norm = re.sub(r"[^\w]", "", clean_w.lower())
+            if norm:
+                conv_seq.append(norm)
+                pos_map.append((li, wi))
+
+    # ── SequenceMatcher ──────────────────────────────────────────────────────
+    matcher = difflib.SequenceMatcher(None, pdf_seq, conv_seq, autojunk=False)
+
+    dev_map: Dict[str, str] = {}
+    # For PDF-delete ops we need to map them to the nearest converted position
+    # so we can draw an overlay on the PDF image.
+    miss_map: Dict[str, int] = {}
+    n_missing = 0
+    last_conv_idx = 0   # tracks nearest preceding converted word
+
+    for op, i1, i2, j1, j2 in matcher.get_opcodes():
+        if op == "equal":
+            for ci in range(j1, j2):
+                li, wi = pos_map[ci]
+                dev_map[f"{li}_{wi}"] = "match"
+            last_conv_idx = j2 - 1 if j2 > j1 else last_conv_idx
+
+        elif op == "insert":
+            for ci in range(j1, j2):
+                li, wi = pos_map[ci]
+                dev_map[f"{li}_{wi}"] = "insert"
+            last_conv_idx = j2 - 1 if j2 > j1 else last_conv_idx
+
+        elif op == "replace":
+            for ci in range(j1, j2):
+                li, wi = pos_map[ci]
+                dev_map[f"{li}_{wi}"] = "replace"
+            last_conv_idx = j2 - 1 if j2 > j1 else last_conv_idx
+
+        elif op == "delete":
+            # These PDF words have no counterpart in converted text.
+            n_missing += i2 - i1
+            # Anchor to nearest preceding converted word for PDF overlay.
+            anchor_ci = min(last_conv_idx, len(pos_map) - 1)
+            if anchor_ci >= 0 and anchor_ci < len(pos_map):
+                li, wi = pos_map[anchor_ci]
+                key = f"{li}_{wi}"
+                miss_map[key] = miss_map.get(key, 0) + (i2 - i1)
+
+    return dev_map, miss_map, n_missing
 
 
 # ── HTML template ────────────────────────────────────────────────────────────
@@ -311,6 +407,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,san
   border-left:3px solid transparent;
   white-space:pre-wrap;word-wrap:break-word;display:flex;
   transition:background .08s;cursor:text;
+  content-visibility:auto;contain-intrinsic-size:auto 29px;
 }
 .tl:hover{background:var(--hover)}
 .tl.active{background:var(--hl)!important;border-left-color:var(--hl-border)}
@@ -405,6 +502,43 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,san
 ::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-thumb{background:#c1c8ce;border-radius:4px}
 ::-webkit-scrollbar-thumb:hover{background:#9ca3ab}
+
+/* ── Deviation highlighting ─────────────────────────── */
+/* Word in converted text that is NOT in the PDF source (inserted) */
+.tw.dev-ins{background:rgba(255,163,0,.30);border-bottom:2px solid #cc7a00;border-radius:2px}
+/* Word in converted text that differs from the PDF word (substituted) */
+.tw.dev-sub{background:rgba(220,53,69,.18);border-bottom:2px dotted #dc3545;border-radius:2px}
+/* Annotation badge on dev-ins / dev-sub */
+.tw.dev-ins::after,.tw.dev-sub::after{
+  font-size:7px;vertical-align:super;margin-left:1px;font-family:monospace;font-weight:700;
+  padding:0 2px;border-radius:2px;
+}
+.tw.dev-ins::after{content:'INS';color:#7c4e00;background:#ffe0a0}
+.tw.dev-sub::after{content:'CHG';color:#7a1a22;background:#f8d7da}
+/* Suppress badges when annotation mode is off (default) */
+.tw.dev-no-badge.dev-ins::after,.tw.dev-no-badge.dev-sub::after{display:none}
+/* Sticky deviation summary strip below toolbar */
+.dev-strip{
+  display:none;padding:5px 14px;font-size:12px;font-weight:500;
+  background:#fff8e6;border-bottom:1px solid #ffc107;color:#664d00;
+  flex-wrap:wrap;gap:8px;align-items:center;
+}
+.dev-strip.visible{display:flex}
+.dev-pill{display:inline-flex;align-items:center;gap:4px;
+          padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600}
+.dev-pill.ins{background:#ffe0a0;color:#7c4e00;border:1px solid #cc7a00}
+.dev-pill.sub{background:#f8d7da;color:#7a1a22;border:1px solid #dc3545}
+.dev-pill.del{background:#e2e3e5;color:#383d41;border:1px solid #adb5bd}
+.dev-pill.ok{background:#d4edda;color:#155724;border:1px solid #28a745}
+/* Deviation nav arrows */
+.top-bar .btn.dev-on{background:#e67e00;color:#fff;border-color:#e67e00}
+.top-bar .btn.dev-on:hover{background:#cc6d00}
+/* PDF panel: missing-word overlays */
+.hl-missing{
+  position:absolute;background:rgba(220,53,69,.15);
+  border:2px solid rgba(220,53,69,.5);border-radius:2px;
+  pointer-events:none;z-index:5;
+}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
 </head>
@@ -413,8 +547,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,san
 <div class="top-bar">
   <span class="logo">📄 PDF ↔ Text Comparator</span>
   <span class="sep"></span>
-  <button class="btn" onclick="navDiff(-1)" title="Previous diff">◀</button>
-  <button class="btn" onclick="navDiff(1)" title="Next diff">▶</button>
+  <button class="btn" onclick="navDiff(-1)" title="Previous diff (markup tags)">◀</button>
+  <button class="btn" onclick="navDiff(1)" title="Next diff (markup tags)">▶</button>
   <label style="font-size:12px;color:var(--text2);display:flex;align-items:center;gap:4px;margin-left:8px;cursor:pointer">
     <input type="checkbox" id="focusCb" onchange="toggleFocus(this.checked)"> Focus on changes
   </label>
@@ -424,6 +558,17 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,san
   <button class="btn" id="syncBtn" onclick="toggleSyncScroll()" title="Sync scroll between PDF and Text panels">⇔ Sync</button>
   <span class="stat" id="statBar">Ready</span>
   <button class="btn" id="dlBtn" onclick="downloadText()">⬇️ Download</button>
+</div>
+<!-- Deviation summary strip (shown when dev mode is on) -->
+<div class="dev-strip" id="devStrip">
+  <strong>Deviations vs. PDF source:</strong>
+  <span class="dev-pill ins" id="devIns">— inserted</span>
+  <span class="dev-pill sub" id="devSub">— changed</span>
+  <span class="dev-pill del" id="devDel">— PDF words missing</span>
+  <span class="dev-pill ok" id="devOk">— matched</span>
+  <span style="margin-left:auto;font-size:11px;color:#664d00" id="devAccuracy"></span>
+  <button class="btn" style="font-size:11px;padding:2px 8px" onclick="navDevDiff(-1)">◀ prev</button>
+  <button class="btn" style="font-size:11px;padding:2px 8px" onclick="navDevDiff(1)">next ▶</button>
 </div>
 
 <div class="panels">
@@ -535,17 +680,23 @@ function syncTextLayers(){
 
 // Recompute and mark changed lines
 function refreshChangeMeta(){
+  // Scan the source array — much faster than querying the DOM
+  var changeSet={};
   changeLines=[];
-  document.querySelectorAll('.tl').forEach(function(tl){
-    tl.classList.remove('has-change');
-    var li=parseInt(tl.dataset.li||'-1');
-    var txt=(tl.querySelector('.lc')?tl.querySelector('.lc').textContent:'');
-    if(txt.indexOf('[A>')>=0||txt.indexOf('[D>')>=0||txt.indexOf('<A]')>=0||txt.indexOf('<D]')>=0){
-      tl.classList.add('has-change');
-      if(li>=0)changeLines.push(li);
+  originalLines.forEach(function(line,li){
+    if(line.indexOf('[A>')>=0||line.indexOf('[D>')>=0||
+       line.indexOf('<A]')>=0||line.indexOf('<D]')>=0){
+      changeLines.push(li); changeSet[li]=true;
     }
   });
   diffsCount=changeLines.length;
+  // Batch-sync DOM classes without forcing layout on each element
+  requestAnimationFrame(function(){
+    document.querySelectorAll('.tl').forEach(function(tl){
+      var li=parseInt(tl.dataset.li||'-1');
+      tl.classList.toggle('has-change',!!changeSet[li]);
+    });
+  });
 }
 refreshChangeMeta();
 
@@ -585,15 +736,33 @@ function navDiff(dir){
   clearHL();
   var tl=document.querySelector('.tl[data-li="'+li+'"]');
   if(tl){
+    syncLock=true;  // block cross-panel sync during navigation
     tl.classList.add('active');
     scrollElIntoPanel(tl, document.getElementById('textPanel'), 'center');
     // Also highlight on PDF
+    var firstWd=null;
     tl.querySelectorAll('.tw').forEach(function(t){
       t.classList.add('sel');
       var k=t.dataset.li+'_'+t.dataset.wi,wd=wordMap[k];
-      if(wd)hlWord(wd,t.dataset.li);
+      if(wd){hlWord(wd,t.dataset.li);if(!firstWd)firstWd=wd;}
     });
     flushHL();
+    // Explicitly scroll PDF to the correct page
+    if(firstWd){
+      var nc=containers[firstWd.page];
+      ensurePageLoaded(firstWd.page,function(){
+        var ni=nc.querySelector('img');
+        if(ni&&ni.naturalWidth){
+          var nds=ni.clientWidth/ni.naturalWidth;
+          pdfPanel.scrollTo({top:nc.offsetTop+firstWd.y0*S*nds-120,behavior:'smooth'});
+        } else {
+          pdfPanel.scrollTo({top:nc.offsetTop-60,behavior:'smooth'});
+        }
+        setTimeout(function(){syncLock=false;},600);
+      });
+    } else {
+      setTimeout(function(){syncLock=false;},600);
+    }
   }
   document.getElementById('statBar').textContent='Diff '+(currentDiffIdx+1)+' / '+changeLines.length+' (Line '+(li+1)+')';
 }
@@ -602,12 +771,53 @@ function navDiff(dir){
 var totalPages=_pageCount;
 document.getElementById('pageLbl').textContent='1 / '+totalPages;
 var pdfPanel=document.getElementById('pdfPanel');
+var syncLock=false,pdfScrollTmr=null,textScrollTmr=null;
+
 pdfPanel.addEventListener('scroll',function(){
   var scrollTop=pdfPanel.scrollTop;
   var best=0;
   containers.forEach(function(c,i){if(c.offsetTop-60<=scrollTop)best=i;});
   document.getElementById('pageLbl').textContent=(best+1)+' / '+totalPages;
-});
+  // PDF→Text sync: scroll text panel to first line of current page
+  if(syncLock)return;
+  clearTimeout(pdfScrollTmr);
+  pdfScrollTmr=setTimeout(function(){
+    var li=pageFirstLine[best];
+    if(li===undefined)return;
+    var tl=document.querySelector('.tl[data-li="'+li+'"]');
+    if(!tl)return;
+    syncLock=true;
+    document.getElementById('textPanel').scrollTop=tl.offsetTop-80;
+    setTimeout(function(){syncLock=false;},350);
+  },80);
+},{passive:true});
+
+// Text→PDF sync: binary-search the line-offset index (O(log n))
+document.getElementById('textPanel').addEventListener('scroll',function(){
+  if(syncLock)return;
+  clearTimeout(textScrollTmr);
+  textScrollTmr=setTimeout(function(){
+    var scrollTop=document.getElementById('textPanel').scrollTop;
+    var li=firstVisibleLine(scrollTop);
+    var wd=null;
+    for(var la=0;la<8&&!wd;la++){if(lineFirstWord[li+la])wd=lineFirstWord[li+la];}
+    if(!wd)return;
+    var ctr=containers[wd.page];
+    ensurePageLoaded(wd.page,function(){
+      var img=ctr.querySelector('img');
+      if(!img||!img.naturalWidth){
+        syncLock=true;
+        pdfPanel.scrollTop=ctr.offsetTop-60;
+        setTimeout(function(){syncLock=false;},350);
+        return;
+      }
+      var ds=img.clientWidth/img.naturalWidth;
+      syncLock=true;
+      pdfPanel.scrollTop=ctr.offsetTop+wd.y0*S*ds-80;
+      setTimeout(function(){syncLock=false;},350);
+    });
+  },80);
+},{passive:true});
 function navPage(dir){
   var cur=parseInt(document.getElementById('pageLbl').textContent.split('/')[0].trim())-1;
   var next=Math.max(0,Math.min(totalPages-1,cur+dir));
@@ -773,6 +983,129 @@ function toggleFocus(on){
   document.getElementById('textWrap').classList.toggle('focus',on);
 }
 
+// ── Deviation Mode ─────────────────────────────────────────────────────────
+function toggleDevMode(){
+  devActive=!devActive;
+  var btn=document.getElementById('devBtn');
+  btn.classList.toggle('dev-on',devActive);
+  var strip=document.getElementById('devStrip');
+  strip.classList.toggle('visible',devActive);
+  if(devActive){
+    document.getElementById('statBar').textContent='⚡ Applying deviation highlights…';
+    applyDevHighlights(function(){
+      computeDevStats();
+      addMissingWordOverlays();
+    });
+  } else {
+    applyDevHighlights(function(){
+      removeMissingWordOverlays();
+      document.getElementById('statBar').textContent='Ready';
+    });
+  }
+}
+
+function toggleBadges(on){
+  showBadges=on;
+  document.querySelectorAll('.tw.dev-ins,.tw.dev-sub').forEach(function(tw){
+    tw.classList.toggle('dev-no-badge',!on);
+  });
+}
+
+function applyDevHighlights(onDone){
+  // Pre-build devDiffLines from the map (no DOM needed)
+  var devLineSet={};
+  devDiffLines=[];
+  Object.keys(devMap).forEach(function(k){
+    var s=devMap[k];
+    if(s==='insert'||s==='replace'){var li=k.split('_')[0];devLineSet[li]=true;}
+  });
+  devDiffLines=Object.keys(devLineSet).map(Number).sort(function(a,b){return a-b;});
+  devDiffIdx=-1;
+
+  // Process .tw spans in chunks so the UI stays responsive
+  var allTw=[].slice.call(document.querySelectorAll('.tw'));
+  var CHUNK=400, idx=0;
+  function processChunk(){
+    var end=Math.min(idx+CHUNK,allTw.length);
+    for(;idx<end;idx++){
+      var tw=allTw[idx];
+      tw.classList.remove('dev-ins','dev-sub','dev-no-badge');
+      if(devActive){
+        var k=tw.dataset.li+'_'+tw.dataset.wi;
+        var status=devMap[k];
+        if(status==='insert'){
+          tw.classList.add('dev-ins');
+          if(!showBadges)tw.classList.add('dev-no-badge');
+        } else if(status==='replace'){
+          tw.classList.add('dev-sub');
+          if(!showBadges)tw.classList.add('dev-no-badge');
+        }
+      }
+    }
+    if(idx<allTw.length){ requestAnimationFrame(processChunk); }
+    else if(onDone){ onDone(); }
+  }
+  requestAnimationFrame(processChunk);
+}
+
+function computeDevStats(){
+  var nIns=0,nSub=0,nOk=0;
+  Object.values(devMap).forEach(function(v){
+    if(v==='insert')nIns++;
+    else if(v==='replace')nSub++;
+    else if(v==='match')nOk++;
+  });
+  var total=nIns+nSub+nOk+nPdfMissing;
+  var acc=total>0?Math.round(nOk/total*1000)/10:100;
+  document.getElementById('devIns').textContent=nIns+' inserted';
+  document.getElementById('devSub').textContent=nSub+' changed';
+  document.getElementById('devDel').textContent=nPdfMissing+' PDF words missing';
+  document.getElementById('devOk').textContent=nOk+' matched';
+  document.getElementById('devAccuracy').textContent='Match rate: '+acc+'%';
+  document.getElementById('statBar').textContent=
+    '⚡ '+nIns+' inserted · '+nSub+' changed · '+nPdfMissing+' missing · '+acc+'% match';
+}
+
+// Navigate between deviation lines
+function navDevDiff(dir){
+  if(!devDiffLines.length){document.getElementById('statBar').textContent='No deviations found';return;}
+  devDiffIdx+=dir;
+  if(devDiffIdx<0)devDiffIdx=devDiffLines.length-1;
+  if(devDiffIdx>=devDiffLines.length)devDiffIdx=0;
+  var li=devDiffLines[devDiffIdx];
+  var tl=document.querySelector('.tl[data-li="'+li+'"]');
+  if(tl){
+    tl.scrollIntoView({behavior:'smooth',block:'center'});
+    // Briefly flash the row
+    tl.style.outline='2px solid #e67e00';
+    setTimeout(function(){tl.style.outline='';},800);
+  }
+  document.getElementById('statBar').textContent=
+    '⚡ Dev '+(devDiffIdx+1)+'/'+devDiffLines.length+' — Line '+(li+1);
+}
+
+// Draw red overlays on PDF for PDF words that were dropped from the converted text
+var missingHlEls=[];
+function addMissingWordOverlays(){
+  removeMissingWordOverlays();
+  Object.keys(devMissMap).forEach(function(k){
+    var wd=wordMap[k];
+    if(!wd)return;
+    var ctr=containers[wd.page],img=ctr.querySelector('img');if(!img)return;
+    var ds=img.clientWidth/img.naturalWidth;
+    var el=document.createElement('div');el.className='hl-missing';
+    el.style.left=(wd.x0*S*ds)+'px';
+    el.style.top=(wd.y0*S*ds+img.offsetTop)+'px';
+    el.style.width=((wd.x1-wd.x0)*S*ds)+'px';
+    el.style.height=((wd.y1-wd.y0)*S*ds)+'px';
+    el.title='PDF word possibly missing from converted text';
+    ctr.appendChild(el);missingHlEls.push(el);
+  });
+}
+function removeMissingWordOverlays(){
+  missingHlEls.forEach(function(e){e.remove();});missingHlEls=[];
+}
+
 // Collapse unchanged blocks
 var collapseActive=false;
 function toggleCollapse(on){
@@ -817,6 +1150,13 @@ function toggleCollapse(on){
 // Group by line for PDF click zones
 var lg={};
 Object.keys(wordMap).forEach(function(k){var li=k.split('_')[0];if(!lg[li])lg[li]=[];lg[li].push(wordMap[k]);});
+// Precompute lookup tables for scroll sync
+var pageFirstLine={},lineFirstWord={};
+Object.keys(wordMap).forEach(function(k){
+  var li=parseInt(k.split('_')[0]),wd=wordMap[k],pg=wd.page;
+  if(!lineFirstWord[li])lineFirstWord[li]=wd;
+  if(pageFirstLine[pg]===undefined||li<pageFirstLine[pg])pageFirstLine[pg]=li;
+});
 
 // Show mapping diagnostic in stat bar
 (function(){
@@ -853,6 +1193,27 @@ function rebuildPdfOverlays(){
 // PDF.js renders text layers once; on resize we just re-sync transforms
 window.addEventListener('resize',function(){clearHL();syncTextLayers();rebuildPdfOverlays();});
 
+// ── Force-load a lazy page image, then call back ──────────────────────────
+function ensurePageLoaded(pgIdx,cb){
+  var ctr=containers[pgIdx],img=ctr.querySelector('img');
+  if(!img){if(cb)cb();return;}
+  if(img.naturalWidth&&!img.dataset.pgidx){
+    if(cb)cb();return;  // already loaded
+  }
+  // Force eager load
+  if(img.dataset.pgidx){
+    img.src='data:image/png;base64,'+pageImages[pgIdx];
+    img.style.minHeight='';img.removeAttribute('data-pgidx');
+    _lazyObs.unobserve(img);
+  }
+  img.addEventListener('load',function(){
+    buildZonesForPage(pgIdx);
+    if(cb)cb();
+  },{once:true});
+  // If already loaded (cached), fire immediately
+  if(img.naturalWidth&&cb){cb();}
+}
+
 // Highlights
 var hlEls=[];
 function clearHL(){
@@ -871,7 +1232,6 @@ function flushHL(){
   // Group by page + text-line-key + PDF-line (same y-range)
   var groups={};
   hlQueue.forEach(function(wd){
-    // Key: page_textline_pdflineY (round y0 to nearest 3pt to group same PDF line)
     var yKey=Math.round(wd.y0/3)*3;
     var gk=wd.page+'_'+wd.lk+'_'+yKey;
     if(!groups[gk])groups[gk]={x0:wd.x0,y0:wd.y0,x1:wd.x1,y1:wd.y1,page:wd.page};
@@ -892,6 +1252,7 @@ function flushHL(){
     ctr.appendChild(el);hlEls.push(el);
   });
   hlQueue=[];
+  pagesToLoad.forEach(function(pg){ensurePageLoaded(pg,drawAfterLoad);});
 }
 function scrollPdf(wd){
   var ctr=containers[wd.page],cv=ctr.querySelector('canvas');if(!cv)return;
@@ -1043,6 +1404,7 @@ function highlightFromSelection(){
 // PDF → Text
 function clickPdfLine(li){
   clearHL();
+  syncLock=true;  // block text→PDF sync from moving the PDF away
   var tl=document.querySelector('.tl[data-li="'+li+'"]');
   if(tl){tl.classList.add('active');scrollElIntoPanel(tl, document.getElementById('textPanel'), 'center');
     tl.querySelectorAll('.tw').forEach(function(t){
@@ -1050,6 +1412,7 @@ function clickPdfLine(li){
     });
     flushHL();
   }
+  setTimeout(function(){syncLock=false;},600);
   document.getElementById('statBar').textContent='PDF → Line '+(parseInt(li)+1);
 }
 
@@ -2110,7 +2473,7 @@ function rebuildEditor(skipUndo, restoreLi, restoreOff){
 
 // ── Enhanced keyboard: Enter=tag-aware split, Backspace@0=simple merge ──
 document.getElementById('textWrap').addEventListener('keydown',function(e){
-  var sel=window.getSelection();
+;
   if(!sel||!sel.rangeCount)return;
   var range=sel.getRangeAt(0);
   var lc=range.startContainer;
@@ -2275,7 +2638,6 @@ def _split_at_tags(word: str) -> list:
     remaining = word
 
     while remaining:
-        # Find the earliest tag marker in remaining
         earliest_pos = len(remaining)
         earliest_marker = None
         earliest_type = None
@@ -2287,15 +2649,12 @@ def _split_at_tags(word: str) -> list:
                 earliest_type = mtype
 
         if earliest_marker is None:
-            # No more markers — rest is plain text
             if remaining:
                 segments.append((remaining, False, None))
             break
 
-        # Text before the marker
         if earliest_pos > 0:
             segments.append((remaining[:earliest_pos], False, None))
-        # The marker itself
         segments.append((earliest_marker, True, earliest_type))
         remaining = remaining[earliest_pos + len(earliest_marker):]
 
@@ -2334,18 +2693,16 @@ def build_viewer_html(
     in_del = False
     for li, line in enumerate(clean_lines):
         raw_words = line.split(' ')
-        # First pass: build each word's HTML and record state-before / state-after
-        word_entries = []  # list of (tw_html, state_before, state_after)
+        word_entries = []
         for wi, rw in enumerate(raw_words):
             if not rw:
-                st = 'add' if in_add else ('del' if in_del else 'none')
-                word_entries.append(('', st, st))
+                st_val = 'add' if in_add else ('del' if in_del else 'none')
+                word_entries.append(('', st_val, st_val))
                 continue
 
             state_before = 'add' if in_add else ('del' if in_del else 'none')
             segments = _split_at_tags(rw)
 
-            # Build inner HTML with per-segment styling
             inner_html = ''
             for seg_text, is_marker, marker_type in segments:
                 esc = seg_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -2378,11 +2735,9 @@ def build_viewer_html(
             )
             word_entries.append((tw, state_before, state_after))
 
-        # Second pass: join words with spaces, decorating spaces when inside a tag
         line_parts = []
         for idx, (wh, sb, sa) in enumerate(word_entries):
             if idx > 0:
-                # The space sits AFTER the previous word — use previous word's state_after
                 prev_sa = word_entries[idx - 1][2]
                 if prev_sa == 'add':
                     line_parts.append('<span class="tg-a"> </span>')
@@ -2393,21 +2748,23 @@ def build_viewer_html(
             line_parts.append(wh)
 
         ln = li + 1
+        _hc = ' has-change' if ('[A>' in line or '[D>' in line or '<A]' in line or '<D]' in line) else ''
         text_lines_html.append(
-            '<div class="tl" data-li="{}"><span class="ln">{}</span>'
-            '<span class="lc">{}</span></div>'.format(li, ln, ''.join(line_parts))
+            '<div class="tl{}" data-li="{}"><span class="ln">{}</span>'
+            '<span class="lc">{}</span></div>'.format(_hc, li, ln, ''.join(line_parts))
         )
 
     text_block = "\n".join(text_lines_html)
     wordmap_js = json.dumps(word_map)
     lines_js = json.dumps(clean_lines)
 
-    # Compute change lines and stats
     change_lines = []
     for li, line in enumerate(clean_lines):
         if '[A>' in line or '[D>' in line or '<A]' in line or '<D]' in line:
             change_lines.append(li)
-    diffs_count = len(change_lines)
+
+    devmap_js = _json.dumps(dev_map or {})
+    missmap_js = _json.dumps(miss_map or {})
 
     return (_TEMPLATE
             .replace("__TEXT_BLOCK__", text_block)
@@ -2416,7 +2773,10 @@ def build_viewer_html(
             .replace("__WORDMAP_JS__", wordmap_js)
             .replace("__LINES_JS__", lines_js)
             .replace("__FILENAME__", filename)
-            .replace("__CHANGELINES_JS__", json.dumps(change_lines)))
+            .replace("__CHANGELINES_JS__", _json.dumps(change_lines))
+            .replace("__DEVMAP_JS__", devmap_js)
+            .replace("__DEVMISSMAP_JS__", missmap_js)
+            .replace("__N_PDF_MISSING__", str(n_pdf_missing)))
 
 
 # ── Streamlit app ────────────────────────────────────────────────────────────
@@ -2430,7 +2790,6 @@ def main():
         .appview-container { padding-top: 0 !important; }
         [data-testid="stAppViewBlockContainer"] { padding: 0 !important; }
         iframe { border: none !important; }
-        /* Clean drop zone styling */
         .drop-zone-row .stFileUploader label { display: none !important; }
         .drop-zone-row [data-testid="stFileUploaderDropzone"] {
             border: 2px dashed #555 !important;
@@ -2453,12 +2812,10 @@ def main():
         .stAlert { padding: 0.3rem 0.5rem !important; font-size: 12px !important; }
     </style>""", unsafe_allow_html=True)
 
-    # Check if files are already uploaded
     pdf_file = st.session_state.get("pdf")
     txt_file = st.session_state.get("txt")
 
     if not pdf_file or not txt_file:
-        # Show two drop zones side by side
         st.markdown("""
         <div style="text-align:center;padding:10px 0 6px;font-size:14px;font-weight:600;color:#333;">
             📄 PDF ↔ Text Comparator — Drop files below
@@ -2488,17 +2845,15 @@ def main():
     with st.spinner("Extracting words & mapping…"):
         words = extract_word_bboxes(pdf_bytes)
 
-    # --- Edit mode via session state ---
     if "edit_mode" not in st.session_state:
         st.session_state.edit_mode = False
     if "edited_text" not in st.session_state:
         st.session_state.edited_text = None
 
-    # Use edited text if available, otherwise original
     display_text = st.session_state.edited_text if st.session_state.edited_text is not None else clean_text
     display_lines = display_text.splitlines()
 
-    with st.spinner("Mapping words…"):
+    with st.spinner("Mapping words & computing deviations…"):
         word_map = build_word_level_map(display_lines, words)
 
     html = build_viewer_html(pdf_bytes, display_lines, word_map, filename=txt_file.name)
