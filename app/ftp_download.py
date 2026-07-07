@@ -15,8 +15,6 @@ except ImportError:
 
 import paramiko
 
-load_dotenv()
-
 
 SFTP_HOST = "10.17.38.130"
 SFTP_PORT = 22
