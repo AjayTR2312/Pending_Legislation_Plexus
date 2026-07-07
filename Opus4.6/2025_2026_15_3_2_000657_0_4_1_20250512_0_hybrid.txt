@@ -1,0 +1,1334 @@
+Senate File 657 - Introduced
+
+SENATE FILE 657
+BY COMMITTEE ON WAYS AND MEANS
+
+(SUCCESSOR TO SSB 1205)
+
+A BILL FOR
+
+An Act relating to matters under the purview of the Iowa economic development authority, including tax credit limits, targeted jobs tax credits, and the major economic growth attraction program; creation of the business incentives for growth program, the seed investor tax credit program, the Iowa film production incentive program, the research and development tax credit program, and the sustainable aviation fuel production tax credit program; elimination of the high quality jobs program, the investments in qualifying businesses tax credit, employer child care tax credits, assistive device tax credits, endow Iowa tax credits, and research activities tax credits; and including effective date provisions and criminal penalties.
+
+BE IT ENACTED BY THE GENERAL ASSEMBLY OF THE STATE OF IOWA:
+
+DIVISION I
+ECONOMIC DEVELOPMENT PROGRAMS —— TAX CREDIT LIMITS
+
+Section 1. Section 15.119, Code 2025, is amended to read as follows:
+
+15.119 Aggregate tax credit limit for certain [D>economic<D] [A>business<A] development programs.
+
+1. a. Notwithstanding any provision to the contrary in any of the [A>business development<A] programs listed in subsection 2, the authority, except as provided in paragraph "b", shall not authorize for any one fiscal year an amount of tax credits for the programs specified in subsection 2 that is in excess of one hundred [D>seventy<D] [A>ten<A] million dollars.
+
+b. (1) The authority may authorize an amount of tax credits during a fiscal year that is in excess of the amount specified in paragraph "a", but the amount of such excess shall not exceed twenty percent of the amount specified in paragraph "a", and shall be counted against the total amount of tax credits that may be authorized for the next fiscal year.
+
+(2) Any amount of tax credits authorized and awarded during a fiscal year for a program specified in subsection 2 which are irrevocably declined by the awarded business on or before June 30 of the next fiscal year may be reallocated, authorized, and awarded during the fiscal year in which the declination occurs. Tax credits authorized pursuant to this subparagraph shall not be considered for purposes of subparagraph (1).
+
+2. [D>The authority, with the approval of the board, shall adopt by rule a procedure for allocating the aggregate tax credit limit established in this section among the following<D] [A>The aggregate tax credit limit specified in subsection 1 shall be allocated to business development<A] programs [A>as follows<A]:
+
+[D>a. (1) The high quality jobs program administered pursuant to subchapter II, part 13.<D]
+
+[D>(2) In allocating tax credits pursuant to this subsection for the fiscal year beginning July 1, 2022, and for each fiscal year thereafter, the authority shall not allocate more than sixty-eight million dollars for purposes of this paragraph.<D]
+
+[D>(3) In allocating tax credits pursuant to this subsection, the authority shall prioritize issuing additional research activities tax credits pursuant to section 15.335.<D]
+
+[D>b. The enterprise zones program administered pursuant to sections 15E.191 through 15E.197, Code 2014.<D]
+
+[D>c. The assistive device tax credit program administered pursuant to section 422.33, subsection 9.<D]
+
+[D>d. The tax credits for investments in qualifying businesses issued pursuant to section 15E.43. In allocating tax credits pursuant to this subsection, the authority shall allocate two million dollars for purposes of this paragraph, unless the authority determines that the tax credits awarded will be less than that amount.<D]
+
+[D>e.<D] [A>a.<A] The tax credits for investments in an innovation fund pursuant to [D>section 15E.52<D] [A>chapter 15E, subchapter VI, and the seed investor tax credit pursuant to chapter 15E, subchapter IV<A]. In allocating tax credits pursuant to this subsection, the authority shall allocate [D>eight<D] [A>ten<A] million dollars for purposes of this paragraph, [D>unless the authority determines that the tax credits awarded will be less than that amount<D] [A>and the board shall determine the tax credit amount allocated to each program under this paragraph each fiscal year<A].
+
+[D>f. The redevelopment tax credit program for brownfields and grayfields administered pursuant to sections 15.293A and 15.293B.<D]
+
+[D>g. The workforce housing tax incentives program administered pursuant to subchapter II, part 17. In allocating tax credits pursuant to this subsection, the authority shall not allocate more than thirty-five million dollars for purposes of this paragraph. Of the moneys allocated under this paragraph, seventeen million five hundred thousand dollars shall be reserved for allocation to qualified housing projects in small cities, as defined in section 15.352, that are registered on or after July 1, 2017.<D]
+
+[D>h. The renewable chemical production tax credit program administered pursuant to subchapter II, part 12. In allocating tax credits pursuant to this subsection for the fiscal year beginning July 1, 2021, and for each fiscal year beginning before July 1, 2037, the authority shall not allocate more than five million dollars for purposes of this paragraph. This paragraph is repealed July 1, 2039.<D]
+
+[D>3. In allocating the amount of tax credits authorized pursuant to subsection 1 among the programs specified in subsection 2, the authority shall not allocate more than fifteen million dollars for purposes of subsection 2, paragraph "f".<D]
+
+[A>b. The renewable chemical production tax credit pursuant to subchapter II, part 12, and the sustainable aviation fuel production tax credit program pursuant to subchapter II, part 36. In allocating tax credits pursuant to this subsection, the authority shall allocate ten million dollars for purposes of this paragraph, and the board shall determine the tax credit amount allocated to each program specified in this paragraph for each fiscal year.<A]
+
+[A>c. The research and development tax credit program pursuant to subchapter II, part 35. In allocating tax credits pursuant to this subsection, the authority shall allocate forty million dollars for purposes of this paragraph.<A]
+
+[A>d. The business incentives for growth program administered pursuant to subchapter II, part 33. In allocating tax credits pursuant to this subsection for the calendar year beginning January 1, 2026, and for each fiscal year thereafter, the authority shall not allocate more than fifty million dollars for purposes of this paragraph.<A]
+
+[D>4.<D] [A>3.<A] The authority shall submit to the department of revenue on or before August 15 of each year a report on [D>the tax credits allocated pursuant to this section and<D] the tax credits awarded under each of the programs described in subsection 2.
+
+DIVISION II
+ECONOMIC DEVELOPMENT PROGRAMS —— TAX CREDIT LIMITS
+CONFORMING CHANGES
+
+Sec. 2. Section 15.293A, subsection 6, Code 2025, is amended to read as follows:
+
+6. [D>The amount of tax credits that may be awarded by the board shall be subject to the limitation in section 15.119<D] [A>Except as provided in section 15.293B, subsection 6, the board shall not award in any one fiscal year an amount of tax credits that exceeds fifteen million dollars<A].
+
+Sec. 3. Section 15.293B, subsection 6, Code 2025, is amended to read as follows:
+
+6. a. [A>(1)<A] Tax credits revoked under subsection 3 including tax credits revoked up to five years prior to July 1, 2021, and tax credits not awarded under subsection 4 or 5, may be awarded in the next annual application period established in subsection 1, paragraph "c".
+
+[A>(2) Any amount of tax credits authorized and awarded during a fiscal year which are irrevocably declined by the awarded investor on or before June 30 of the immediately succeeding fiscal year may be awarded in the next annual application period established in subsection 1, paragraph "c".<A]
+
+b. Tax credits awarded pursuant to paragraph "a" shall not be counted against the limit under section [D>15.119, subsection 3<D] [A>15.293A, subsection 6<A].
+
+Sec. 4. Section 15.318, subsection 3, paragraph e, Code 2025, is amended to read as follows:
+
+e. In each fiscal year beginning on or after July 1, [D>2023<D] [A>2025<A], and ending on or before June 30, 2036, the authority may award an amount of tax credits under the program not to exceed the maximum aggregate amount [D>allocated in<D] [A>determined by the board pursuant to<A] section 15.119, subsection 2, paragraph [D>"h"<D][A>"b"<A].
+
+Sec. 5. Section 15.354, subsection 4, Code 2025, is amended by striking the subsection and inserting in lieu thereof the following:
+
+4. Maximum tax incentives amount.
+
+a. (1) In the fiscal year beginning July 1, 2025, and ending June 30, 2026, the authority shall not award an amount of tax credits in excess of forty-three million dollars.
+
+(2) In the fiscal year beginning July 1, 2026, and ending June 30, 2027, the authority shall not award an amount of tax credits in excess of forty million dollars.
+
+(3) In the fiscal year beginning July 1, 2027, and for each fiscal year thereafter, the authority shall not award an amount of tax credits in excess of thirty-five million dollars.
+
+b. Of the tax credits allocated under paragraph "a", fifty percent of the allocation available in each fiscal year shall be reserved for allocation to qualified housing projects in small cities.
+
+c. Notwithstanding paragraph "b", if the sum of the amount of tax incentives awarded in a given fiscal year for housing projects located in small cities based on the authority's review and scoring of applications does not exceed the amount reserved for housing projects located in small cities pursuant to paragraph "b", the authority may award the remaining amount of tax incentives reserved for housing projects located in small cities to other housing projects during that same fiscal year.
+
+d. Tax credits revoked by the authority or irrevocably declined by a housing business before June 30 of the fiscal year following the award may be awarded during the fiscal year the revocation or declination occurs.
+
+e. The maximum aggregate amount of tax incentives that may be awarded and issued under section 15.355 to a housing business for a housing project shall not exceed one million dollars.
+
+f. If a housing business qualifies for a higher amount of tax incentives under section 15.355 than is allowed by the limitation imposed in paragraph "e", the authority and the housing business may negotiate an apportionment of the reduction in tax incentives between the sales tax refund provided in section 15.355, subsection 2, and the workforce housing investment tax credits provided in section 15.355, subsection 3, provided the total aggregate amount of tax incentives after the apportioned reduction does not exceed the amount in paragraph "e".
+
+g. The authority shall issue tax incentives under the program on a first-come, first-served basis until the maximum amount of tax incentives allowed under paragraph "a" is reached.
+
+Sec. 6. Section 15.354, subsection 6, paragraph d, Code 2025, is amended to read as follows:
+
+d. The authority shall administer tax credit allocations for disaster recovery housing projects separately from the [D>general allocation and separately from the allocation reserved for small cities in section 15.119, subsection 2, paragraph "g". The authority shall issue tax incentives under the program for disaster recovery housing projects on a first-come, first-served basis until the maximum amount of tax incentives allocated under section 15.119, subsection 5, is reached. The authority shall maintain a list of disaster recovery housing projects awarded tax incentives under the program, so that if the maximum aggregate amount of tax incentives allocated for disaster recovery housing projects under the program is reached in a given fiscal year, such disaster recovery housing projects that were completed but for which tax incentives were not issued shall be placed on a wait list in the order the disaster recovery housing projects were awarded tax incentives pursuant to paragraph "c", and shall be given priority for receiving tax incentives in succeeding fiscal years<D] [A>maximum tax credit amounts specified in section 15.354, subsection 4, paragraphs "a" and "b"<A].
+
+DIVISION III
+BUSINESS INCENTIVES FOR GROWTH PROGRAM
+
+Sec. 7. [A>NEW SECTION<A]. 15.111 Assistance for certain programs and projects.
+
+1. a. Under the authority provided in section 15.106A, there shall be established one or more funds within the state treasury, under the control of the authority, to be used for purposes of this section.
+
+b. A fund established for purposes of this section shall consist of any moneys appropriated to the authority for purposes of this section, or moneys otherwise accruing to the authority and deposited in the fund for purposes of this section.
+
+c. Interest or earnings on moneys in a fund used for the purposes of this section, and all repayments or recaptures of the assistance provided under this section, shall accrue to the authority and shall be used for purposes of this section, notwithstanding section 12C.7. Moneys in a fund are not subject to section 8.33.
+
+2. a. The moneys in a fund established for purposes of this section, as described in subsection 1, shall be allocated by the authority in appropriate amounts to be used for the following purposes:
+
+(1) For program support.
+
+(2) For deposit in the innovation and commercialization development fund created pursuant to section 15.412.
+
+(3) For providing financial assistance to businesses engaged in disaster recovery. For purposes of this subparagraph, "business engaged in disaster recovery" means a business located in an area declared a disaster area by a federal official, that has sustained physical damage, has closed as a result of a natural disaster, and has a plan for reopening that includes employing a substantial number of the employees the business employed before the natural disaster occurred.
+
+(4) For deposit in the entrepreneur investment awards program fund pursuant to section 15E.363.
+
+(5) For deposit in a fund created for purposes of the strategic infrastructure program established pursuant to section 15.313.
+
+(6) For deposit in the nuisance property remediation fund established pursuant to section 15.338.
+
+(7) For deposit in the community catalyst building remediation fund established pursuant to section 15.231.
+
+(8) For providing financial assistance to eligible businesses for the business incentives for growth program pursuant to section 15.504.
+
+b. Each fiscal year, the authority shall estimate the amount of revenues available for purposes of this section and shall develop a budget appropriate for the expenditure of the revenues available.
+
+Sec. 8. [A>NEW SECTION<A]. 15.502 Short title.
+
+This part shall be known and may be cited as the "Business Incentives for Growth Program" or "BIG Program".
+
+Sec. 9. [A>NEW SECTION<A]. 15.503 Definitions.
+
+As used in this part, unless the context otherwise requires:
+
+1. "Base employment level" means the number of full-time equivalent positions at a business, as established by the authority and the business using the business's payroll records, as of the date the business applies for tax incentives under the program.
+
+2. "Benefits" means nonwage compensation provided to an employee. "Benefits" include medical and dental insurance, a pension, a retirement plan, a profit-sharing plan, child care, life insurance, vision insurance, and disability insurance.
+
+3. "Community" means a city, county, or entity established pursuant to chapter 28E.
+
+4. "Contract completion" means the date of completion of the terms of a contract between a contractor and an eligible business.
+
+5. "Contractor" means a person that has executed a contract with an eligible business for the provision of property, materials, or services for the construction or equipping of a facility that is part of the eligible business's project.
+
+6. "Created jobs" or "create jobs" means new, permanent, full-time equivalent positions added to an eligible business's payroll, at the location of the eligible business's project, in excess of the eligible business's base employment level.
+
+7. "Data center business" means the same as defined in section 423.3, subsection 95.
+
+8. "Eligible business" means a business that meets the requirements of section 15.504.
+
+9. "Full-time equivalent position" means a non-part-time position for the number of hours or days per week considered to be full-time work for the kind of service or work performed for an employer. Typically, a full-time equivalent position requires two thousand eighty hours of work in a calendar year, including all paid holidays, vacations, sick time, and other paid leave.
+
+10. "Program" means the business incentives for growth program.
+
+11. "Project" means an activity or set of activities directly related to the start-up or location of an eligible business, proposed in an eligible business's application to the program, that will accomplish the goals of the program.
+
+12. "Project completion date" means the date by which an eligible business that has been approved by the authority to participate in the program agrees to complete the terms and conditions of the agreement under section 15.506.
+
+13. "Project completion period" means the period of time between the date the authority approves an eligible business to participate in the program and the project completion date.
+
+14. "Qualifying investment" means a capital investment in real property, including the purchase price of the land, site preparation, infrastructure, and building construction for use in the operation of an eligible business. "Qualifying investment" also means a capital investment in depreciable assets for use in the operation of an eligible business.
+
+15. "Qualifying wage threshold" means the mean wage level represented by the wages within two standard deviations of the mean wage within the laborshed area in which the eligible business is located, as calculated by the authority by rule, using the most current covered wage and employment data available from the department of workforce development for the laborshed area in which the eligible business is located.
+
+16. "Subcontractor" means a person that contracts with a contractor for the provision of property, materials, or services for the construction or equipping of a facility that is part of an eligible business's project.
+
+17. "Tax incentives" means tax credits, tax refunds, or tax exemptions authorized under the program by the authority for an eligible business.
+
+Sec. 10. [A>NEW SECTION<A]. 15.504 Eligible business.
+
+1. To be eligible to receive tax incentives under the program, a business must meet all of the following requirements:
+
+a. The community in which the proposed project is located must approve the project either by ordinance or resolution.
+
+b. (1) The business must be primarily engaged in advanced manufacturing, bioscience, insurance and finance, or technology and innovation. The business shall not be a data center business, a retail business, or a business where a cover charge or membership requirement restricts certain individuals from entering the business.
+
+(2) Factors the authority shall consider to determine if a business is primarily engaged in advanced manufacturing, biosciences, insurance and finance, or technology and innovation shall include but are not limited to all of the following:
+
+(a) The business's North American industry classification system code.
+
+(b) The business's main sources of revenue.
+
+(c) The business's customer base.
+
+c. (1) The business must not be solely relocating operations from one area of the state to another area of the state. A proposed project that does not create jobs or involve a substantial amount of new capital investment shall be presumed to be a relocation of operations. For purposes of this subparagraph, the authority shall consider a letter from the affected local community's government officials supporting the business's move away from the affected local community in making a determination whether the business is solely relocating operations.
+
+(2) This paragraph shall not be construed to prohibit a business from expanding the business's operations in a community if the business has similar operations in this state that are not closing or undergoing a substantial reduction in operations.
+
+d. The business must provide comprehensive benefits to each full-time equivalent employee employed at the project. The authority may adopt rules under chapter 17A to determine the procedure for establishing requirements for comprehensive benefits.
+
+e. (1) The business must not have a record of violations of the law or of rules, including but not limited to antitrust, environmental, trade, or worker safety, that over a period of time show a consistent pattern or that establish the business's intentional, criminal, or reckless conduct in violation of such laws or rules.
+
+(2) If the authority determines that the business has a record of violations described in subparagraph (1), and the authority finds that the violations did not seriously affect public health, public safety, or the environment, the business may be eligible to qualify for the program.
+
+(3) If the authority determines that the business has a record of violations described in subparagraph (1), and the authority finds that there were mitigating circumstances related to the violations, the business may be eligible to qualify for the program.
+
+(4) In making determinations and findings under subparagraphs (2) and (3), and making a determination whether a business is disqualified from the program, the authority shall be exempt from chapter 17A.
+
+2. In determining if a business is eligible to participate in the program, the authority shall consider a variety of factors, including but not limited to all of the following:
+
+a. The impact of the business's proposed project on businesses that are in competition with the business. The authority shall make a good-faith effort to identify existing Iowa businesses in competition with the business being considered for the program. The authority shall make a good-faith effort to determine the probability that any proposed tax incentives will displace employees of the competing businesses.
+
+b. The business's proposed project's economic impact on the state. The authority shall place greater emphasis on businesses and proposed projects that meet the following requirements:
+
+(1) The business has a high proportion of in-state suppliers.
+
+(2) The proposed project will diversify the state economy.
+
+(3) The business has few in-state competitors.
+
+(4) The proposed project has the potential to create jobs on an ongoing basis.
+
+(5) The proposed project has the potential to increase productivity, efficiency, and competitiveness through adoption and integration of smart technologies including specialized hardware, software, or other equipment.
+
+(6) The proposed project has the potential to increase the state's overall gross domestic product.
+
+(7) Any other factors the authority deems relevant in determining the economic impact of a proposed project.
+
+Sec. 11. [A>NEW SECTION<A]. 15.505 Applications —— authorization of tax credits and exemptions.
+
+1. a. Applications for the program shall be submitted to the authority in the form and manner prescribed by the authority by rule. Each application must be accompanied by an application fee in an amount determined by the authority by rule.
+
+b. For a proposed project that will result in elevated water consumption by the business, the application shall be accompanied by a water conservation and waste reduction plan, and shall be submitted to the authority in the form and manner prescribed by the authority by rule.
+
+2. In determining the eligibility of a business to participate in the program, the authority may engage outside experts to complete a technical, financial, or other review of an application submitted by a business.
+
+3. a. The authority and the board may negotiate with an eligible business regarding the terms of, and the aggregate value of, the tax incentives the eligible business may receive under the program. The maximum aggregate value of the tax incentives that any one eligible business may receive shall not exceed five percent of the eligible business's qualifying investment.
+
+b. The board may authorize any combination of tax incentives available under the program for an eligible business.
+
+4. The board shall not authorize an award under this part before January 1, 2026.
+
+Sec. 12. [A>NEW SECTION<A]. 15.506 Agreement.
+
+1. An eligible business that is approved by the authority to participate in the program shall enter into an agreement with the authority that specifies the criteria for the successful completion of all requirements of the program. The agreement must contain, at a minimum, provisions related to all of the following:
+
+a. The eligible business must certify to the authority annually that the business is in compliance with the agreement.
+
+b. If the eligible business fails to comply with any requirements of the program or the agreement, as determined by the authority, the eligible business may be required to repay any tax incentives the authority issued to the eligible business. The authority will notify the department of revenue of any required repayment of a tax incentive, which shall be considered a tax payment due and payable to the department of revenue by any taxpayer that claimed the tax incentive, and the failure to make the repayment may be treated by the department of revenue in the same manner as a failure to pay the tax shown due, or required to be shown due, with the filing of a return or deposit form. A county shall have the authority to take action to recover the value of property taxes not collected as a result of the exemption provided to the business under this part.
+
+c. If the eligible business undergoes a layoff or permanently closes any of its facilities within the state, the eligible business may be subject to all of the following:
+
+(1) A reduction or elimination of some or all of the tax incentives the authority issued to the eligible business.
+
+(2) Repayment of any tax incentives that the business has claimed, and payment of any penalties assessed by the department of revenue.
+
+d. The project completion date, the number of created jobs, the qualifying wage threshold that is applicable to the project, the amount of qualifying investment, the maximum aggregate value of the tax incentives authorized by the board, and any other terms and obligations the authority deems necessary.
+
+e. The eligible business shall only employ individuals legally authorized to work in this state. If the eligible business is found to knowingly employ individuals who are not legally authorized to work in this state, in addition to any penalties provided by law, all or a portion of any tax incentives issued by the authority shall be subject to repayment as described in section 15.506, subsection 1, paragraph "b".
+
+f. Any terms deemed necessary by the authority to effect the eligible business's ongoing compliance with section 15.504.
+
+2. The business shall satisfy all applicable terms of the agreement by the project completion date; however, the board may for good cause extend the project completion date or otherwise amend the terms of the agreement. The board shall not amend the terms of the agreement to allow an increase in the maximum aggregate value of the tax incentives authorized by the board under section 15.505, subsection 3.
+
+3. The eligible business shall comply with all applicable terms of the agreement during the term of the agreement.
+
+4. The eligible business shall not assign the agreement to another entity without the advance written approval of the board.
+
+5. The authority may enforce the terms of the agreement as necessary and appropriate.
+
+Sec. 13. [A>NEW SECTION<A]. 15.507 Sales and use tax refund.
+
+1. An eligible business that has been issued a tax incentive certificate under the program shall be entitled to a refund, as negotiated under section 15.505, subsection 3, of the sales and use taxes paid under chapter 423 for gas, electricity, water, and sewer utility services, tangible personal property, or on services rendered, furnished, or performed to or for a contractor or subcontractor and used in the fulfillment of a written contract for the construction or equipping of a facility that is part of the eligible business's project. Taxes attributable to intangible property and furniture and furnishings shall not be refunded.
+
+2. To receive the sales and use tax refund, the eligible business shall file a claim with the department of revenue as follows:
+
+a. The contractor or subcontractor shall state under oath, on forms provided by the department of revenue, the amount of the sales of tangible personal property or services rendered, furnished, or performed including water, sewer, gas, and electric utility services upon which sales or use tax has been paid prior to contract completion, and shall submit the forms to the eligible business before contract completion.
+
+b. The eligible business shall inform the department of revenue in writing of contract completion. The eligible business shall, after contract completion, submit an application to the department of revenue for a refund of the amount of the sales and use taxes paid pursuant to chapter 423 upon any tangible personal property, or services rendered, furnished, or performed, including water, sewer, gas, and electric utility services. The application shall be submitted in the form and manner prescribed by the department of revenue. The department of revenue shall audit the application and, if approved, issue a warrant or warrants to the eligible business in the amount of the sales or use tax which has been paid to the state of Iowa under subsection 1. The eligible business's application must be submitted to the department of revenue within one year after the project completion date. An application filed by the eligible business in accordance with this section shall not be denied by reason of a limitation set forth in chapter 421 or 423.
+
+c. The refund shall be remitted by the department of revenue to the eligible business on a quarterly basis. Interest shall not accrue on any part of the refund that has not yet been remitted by the department of revenue to the eligible business.
+
+3. A contractor or subcontractor that willfully makes a false report of tax paid under this section is guilty of an aggravated misdemeanor, and shall be liable for payment of the tax and any applicable penalty and interest.
+
+Sec. 14. [A>NEW SECTION<A]. 15.508 Qualifying investment tax credit.
+
+1. The authority may authorize a tax credit for an eligible business pursuant to section 15.505, subsection 3. The authority shall not issue a tax credit certificate to the eligible business until the eligible business's project or a portion of the project has been placed in service. The department of revenue shall remit the tax credit to the eligible business equally over five tax years. The tax credit shall be allowed against taxes imposed under chapter 422, subchapter II, III, or V, and against the moneys and credits tax imposed in section 533.329. If the eligible business is a partnership, S corporation, limited liability company, cooperative organized under chapter 501 and filing as a partnership for federal tax purposes, or estate or trust electing to have the income taxed directly to the individual, an individual may claim the tax credit allowed. The amount claimed by the individual shall be based upon the pro rata share of the individual's earnings of the partnership, S corporation, limited liability company, cooperative organized under chapter 501 and filing as a partnership for federal tax purposes, or estate or trust. Any tax credit in excess of the eligible business's tax liability for the tax year may be refunded. A tax credit shall not be carried back to a tax year prior to the tax year in which the tax credit is first claimed by the eligible business.
+
+2. If within five years of the date the authority issues an eligible business a tax credit under subsection 1 the eligible business sells, disposes of, razes, or otherwise renders unusable all or a part of the land, buildings, or other structures for which the tax credit was claimed under this section, the tax liability of the eligible business for the year in which all or part of the land, buildings, or other existing structures are sold, disposed of, razed, or otherwise rendered unusable shall be increased by one of the following amounts:
+
+a. One hundred percent of the tax credit claimed under this section if all or a part of the land, buildings, or other structures for which the tax credit was claimed under this section cease to be eligible for the tax credit within one year after the date the authority issued the tax credit to the eligible business.
+
+b. Eighty percent of the tax credit claimed under this section if all or a part of the land, buildings, or other structures for which the tax credit was claimed under this section cease to be eligible for the tax credit within two years after the date the authority issued the tax credit to the eligible business.
+
+c. Sixty percent of the tax credit claimed under this section if all or a part of the land, buildings, or other structures for which the tax credit was claimed under this section cease to be eligible for the tax credit within three years after the date the authority issued the tax credit to the eligible business.
+
+d. Forty percent of the tax credit claimed under this section if all or a part of the land, buildings, or other structures for which the tax credit was claimed under this section cease to be eligible for the tax credit within four years after the date the authority issued the tax credit to the eligible business.
+
+e. Twenty percent of the tax credit claimed under this section if all or a part of the land, buildings, or other structures for which the tax credit was claimed under this section cease to be eligible for the tax credit within five years after the date the authority issued the tax credit to the eligible business.
+
+Sec. 15. [A>NEW SECTION<A]. 15.509 Other incentives.
+
+1. An eligible business may apply for and be eligible to receive other federal, state, and local incentives in addition to the tax incentives issued by the authority to the eligible business under the program.
+
+2. The authority, in its discretion, may prohibit an eligible business that has been issued tax incentives under the program from receiving any additional tax incentive, tax credit, grant, loan, or other financial assistance under any program administered by the authority.
+
+Sec. 16. [A>NEW SECTION<A]. 15.510 Property tax exemption.
+
+1. A community in which an eligible business's project is located may grant the eligible business a property tax exemption for a portion of the actual value added by improvements to real property through the project. The community may allow a property tax exemption for a period not to exceed ten years beginning the year that the improvements to real property are first assessed for taxation.
+
+2. For purposes of this section, "improvements" means new construction, and rehabilitation of and additions to existing structures.
+
+3. A property tax exemption granted under subsection 1 shall apply to all taxing districts, except for school districts, in which the real property is located.
+
+Sec. 17. [A>NEW SECTION<A]. 15.511 Financial assistance for certain eligible businesses.
+
+1. The authority may provide financial assistance pursuant to section 15.111, subsection 2, paragraph "a", subparagraph (8), if the authority and the board find such assistance necessary to facilitate the project's successful completion, that the project has an extensive economic impact, or that financial assistance will incentivize an eligible business to choose an Iowa location, rather than an out-of-state location, for an eligible business's location.
+
+2. Each eligible business receiving assistance under this section shall enter into an agreement with the authority and the agreement shall meet the requirements of section 15.506.
+
+3. If the authority and the board determine financial assistance should be awarded, the authority and the board shall determine the appropriate amount and type of assistance for facilitating the eligible business's project.
+
+Sec. 18. CODE EDITOR DIRECTIVE. The Code editor is directed to designate sections 15.502 through 15.511, as enacted in this division of this Act, as part 33 of subchapter II.
+
+Sec. 19. EFFECTIVE DATE. This division of this Act, being deemed of immediate importance, takes effect upon enactment.
+
+DIVISION IV
+ELIMINATION OF THE HIGH QUALITY JOBS PROGRAM
+
+Sec. 20. REPEAL. Sections 15.326, 15.327, 15.329, 15.330, 15.330A, 15.331A, 15.331C, 15.332, 15.333, 15.333A, 15.335, 15.335A, 15.335B, 15.335C, and 15.336, Code 2025, are repealed.
+
+Sec. 21. TRANSITION PROVISIONS. An agreement entered into on or before December 31, 2025, by a business and the economic development authority pursuant to section 15.330, Code 2025, or amended pursuant to section 15.330A, Code 2025, shall be valid and continue per the terms of the agreement.
+
+Sec. 22. PRESERVATION OF EXISTING RIGHTS. This division of this Act shall not limit, modify, or otherwise adversely affect any amount of tax incentive issued, awarded, or allowed before December 31, 2025, nor shall it limit, modify, or otherwise adversely affect a taxpayer's right to claim or redeem a tax incentive issued, awarded, or allowed before December 31, 2025, including but not limited to any tax credit carry forward amount.
+
+Sec. 23. EFFECTIVE DATE. This division of this Act takes effect December 31, 2025.
+
+DIVISION V
+HIGH QUALITY JOBS PROGRAM
+CONFORMING CHANGES
+
+Sec. 24. Section 2.48, subsection 3, paragraph a, subparagraph (1), Code 2025, is amended by striking the subparagraph.
+
+Sec. 25. Section 2.48, subsection 3, paragraph a, subparagraph (2), Code 2025, is amended to read as follows:
+
+(2) The tax credits for increasing research activities available under sections [D>15.335,<D] 422.10[D>,<D] and 422.33.
+
+Sec. 26. Section 8G.3, subsection 8, Code 2025, is amended to read as follows:
+
+8. "Tax exemption or credit" means an exclusion from the operation or collection of a tax imposed in this state. Tax exemption or credit includes tax credits, exemptions, deductions, and rebates. "Tax exemption or credit" also includes sales tax refunds if such refunds are applied for and granted as a form of financial assistance, including but not limited to the refunds allowed in sections [D>15.331A<D] [A>15.507<A] and 423.4.
+
+Sec. 27. Section 15.106B, subsection 5, paragraph b, Code 2025, is amended to read as follows:
+
+b. Fees collected by the authority pursuant to this subsection shall be deposited in a fund within the state treasury created pursuant to section 15.106A, subsection 1, paragraph "o", and are appropriated to the authority for the purposes set out in section 15.106A, subsection 1, paragraph "o". However, fees collected by the authority pursuant to [D>section 15.330, subsection 12, section 15E.198, Code 2014, and<D] section 15.354, subsection 3, paragraph "b", shall be used exclusively for costs associated with the administration of due diligence and compliance.
+
+Sec. 28. Section 15.293B, subsection 3, Code 2025, is amended to read as follows:
+
+3. If an investor is awarded a tax credit pursuant to this section, the authority and the investor shall enter into an agreement concerning the qualifying redevelopment project. If the investor fails to comply with any of the requirements of the agreement, the authority may find the investor in default under the agreement and may revoke all or a portion of the tax credit award. The department of revenue, upon notification by the authority of an event of default, shall seek repayment of the value of any such tax credit already claimed [D>in the same manner as provided in section 15.330, subsection 2<D]. [A>The repayment of incentives pursuant to this subsection shall be considered a tax payment due and payable to the department of revenue by any taxpayer who has claimed such incentives, and the failure to make such a repayment may be treated by the department of revenue in the same manner as a failure to pay the tax shown due or required to be shown due with the filing of a return or deposit form. In addition, the county shall have the authority to take action to recover the value of property taxes not collected as a result of the exemption provided to the business under this part.<A]
+
+Sec. 29. Section 15.317, subsection 5, Code 2025, is amended to read as follows:
+
+5. The business shall not be relocating or reducing operations as [D>described in section 15.329, subsection 1, paragraph "b"<D] [A>follows<A], and as determined under the discretion of the authority[D>.<D][A>:<A]
+
+[A>a. The business shall not be solely relocating operations from one area of the state. A project that does not create new jobs or involve a substantial amount of new capital investment shall be presumed to be a relocation. In determining whether a business is solely relocating operations for purposes of this paragraph, the authority shall consider a letter of support for the move from the affected local community.<A]
+
+[A>b. The business shall not be in the process of reducing operations in one community while simultaneously applying for the program. For purposes of this paragraph, a reduction in operations within twelve months before or after an application is submitted to the authority shall be presumed to be a reduction in operations while simultaneously applying for assistance under the program.<A]
+
+[A>c. This subsection shall not be construed to prohibit a business from expanding its operation in a community if existing operations of a similar nature in this state are not closed or substantially reduced.<A]
+
+Sec. 30. Section 15.318, subsection 2, paragraph b, Code 2025, is amended to read as follows:
+
+b. [D>The compliance<D] [A>Compliance<A] cost fees [D>authorized in section 15.330, subsection 12,<D] shall apply to all agreements entered into under this program and shall be collected by the authority [D>in the same manner and to the same extent as described in that subsection.<D] [A>in the amount and manner as follows:<A]
+
+[A>(1) The imposition of a one-time compliance cost fee of five hundred dollars to be collected by the authority prior to the issuance of a tax incentive certificate.<A]
+
+[A>(2) The imposition of a compliance cost fee equal to one-half of one percent of the value of tax incentives claimed pursuant to an agreement that has an aggregate tax incentive value of one hundred thousand dollars or greater. The authority shall collect the fee from the business after the tax incentive is claimed by the business from the department of revenue.<A]
+
+Sec. 31. Section 15.318, subsection 4, Code 2025, is amended to read as follows:
+
+4. Termination and repayment. The failure by an eligible business in fulfilling any requirement of the program or any of the terms and obligations of an agreement entered into pursuant to this section may result in the reduction, termination, or rescission of the tax credits under section 15.319 and may subject the eligible business to the repayment or recapture of tax credits claimed. The repayment or recapture of tax credits pursuant to this subsection shall be [D>accomplished in the same manner as provided in section 15.330, subsection 2<D] [A>considered a tax payment due and payable to the department of revenue by any taxpayer who has claimed such incentives, and the failure to make such a repayment may be treated by the department of revenue in the same manner as a failure to pay the tax shown due or required to be shown due with the filing of a return or deposit form<A].
+
+Sec. 32. Section 15.354, subsection 1, paragraph b, subparagraph (2), Code 2025, is amended to read as follows:
+
+(2) A report [D>that meets the requirements and conditions of section 15.330, subsection 9<D] [A>submitted to the authority by a business together with its application describing all violations of environmental law or worker safety law within the last five years<A]. [A>If, upon review of the application, the authority finds that the business has a record of violations of the law, statutes, or rules that tends to show a consistent pattern, the authority shall not provide incentives or assistance to the business unless the authority finds either that the violations did not seriously affect public health, public safety, or the environment, or, if such violations did seriously affect public health, public safety, or the environment, that mitigating circumstances were present.<A]
+
+Sec. 33. Section 15.354, subsection 1, paragraph c, Code 2025, is amended by striking the paragraph.
+
+Sec. 34. Section 15.354, subsection 3, paragraph b, Code 2025, is amended to read as follows:
+
+b. [D>The compliance<D] [A>Compliance<A] cost fees [D>imposed in section 15.330, subsection 12,<D] shall apply to all agreements entered into under this program and shall be collected by the authority [D>in the same manner and to the same extent as described in that subsection.<D] [A>in the amount and manner as follows:<A]
+
+[A>(1) The imposition of a one-time compliance cost fee of five hundred dollars to be collected by the authority prior to the issuance of a tax incentive certificate or the disbursement of financial assistance.<A]
+
+[A>(2) The imposition of a compliance cost fee equal to one-half of one percent of the value of tax incentives claimed pursuant to an agreement that has an aggregate tax incentive value of one hundred thousand dollars or greater. The authority shall collect the fee from the business after the tax incentive is claimed by the business from the department of revenue.<A]
+
+Sec. 35. Section 15.354, subsection 5, Code 2025, is amended to read as follows:
+
+5. Termination and repayment. The failure by a housing business in completing a housing project to comply with any requirement of this program or any of the terms and obligations of an agreement entered into pursuant to this section may result in the revocation, reduction, termination, or rescission of the tax incentive award or the approved tax incentives and may subject the housing business to the repayment or recapture of tax incentives claimed under section 15.355. The repayment or recapture of tax incentives pursuant to this section shall be [D>accomplished in the same manner as provided in section 15.330, subsection 2<D] [A>considered a tax payment due and payable to the department of revenue by any taxpayer who has claimed such incentives, and the failure to make such a repayment may be treated by the department of revenue in the same manner as a failure to pay the tax shown due or required to be shown due with the filing of a return or deposit form<A].
+
+Sec. 36. Section 15.499, subsection 1, Code 2025, is amended to read as follows:
+
+1. Except for the [D>high quality jobs program administered by the authority pursuant to sections 15.326 through 15.336, and the<D] targeted jobs withholding credit pursuant to section 403.19A, an eligible business may apply for and be eligible to receive other federal, state, and local incentives in addition to the tax incentives issued by the authority to the eligible business under the program.
+
+Sec. 37. Section 15E.351, subsection 1, Code 2025, is amended to read as follows:
+
+1. The authority shall establish and administer a business accelerator program to provide financial assistance for the establishment and operation of a business accelerator for technology-based, value-added agricultural, information solutions, alternative and renewable energy including the alternative and renewable energy sectors listed in section 476.42, subsection 1, paragraph "a", subparagraph (1), or advanced manufacturing start-up businesses or for a satellite of an existing business accelerator. The program shall be designed to foster the accelerated growth of new and existing businesses through the provision of technical assistance. [D>The authority may provide financial assistance under this section from moneys allocated for financial assistance for business accelerators pursuant to section 15.335B, subsection 2.<D]
+
+Sec. 38. Section 15E.362, subsection 1, paragraph c, Code 2025, is amended to read as follows:
+
+c. "Financial assistance" means [D>the same as defined in section 15.327<D] [A>assistance provided only from the funds, rights, and assets legally available to the authority pursuant to chapter 15 and includes but is not limited to assistance in the form of grants, loans, forgivable loans, and royalty payments<A].
+
+Sec. 39. Section 15H.5, subsection 2, Code 2025, is amended to read as follows:
+
+2. The Iowa summer youth corps program is established to provide meaningful summer enrichment programming to Iowa youth. The program shall be administered by the commission using a competitive grant process to implement projects in accordance with program requirements. The commission shall adopt administrative rules for the program, including but not limited to incentives, grant criteria, and grantee selection processes. A percentage of the grants shall be designated by the commission to address the needs of economically distressed areas [D>as defined in section 15.335C<D].
+
+Sec. 40. Section 15H.5, subsection 5, paragraph c, Code 2025, is amended to read as follows:
+
+c. The commission shall give priority consideration to approving those projects that target communities that have disproportionately high rates of juvenile crime or low rates of high school graduation or that have been designated as [A>an<A] economically distressed [D>areas as defined in section 15.335C<D][A>area<A].
+
+Sec. 41. Section 15H.5, Code 2025, is amended by adding the following new subsection:
+
+[A>NEW SUBSECTION<A]. 7. For purposes of this section, "economically distressed area" means a county that meets at least three of the following criteria:
+
+a. The county ranks among the thirty-three Iowa counties with the highest average monthly unemployment rates for the most recent twelve-month period based on the applicable local area unemployment statistics produced by the United States department of labor, bureau of labor statistics.
+
+b. The county ranks among the thirty-three Iowa counties with the highest average annualized unemployment rates for the most recent five-year period based on the applicable local area unemployment statistics produced by the United States department of labor, bureau of labor statistics.
+
+c. The county ranks among the thirty-three Iowa counties with the lowest annual average weekly wages based on the most recent quarterly census of employment and wages published by the United States department of labor, bureau of labor statistics.
+
+d. The county ranks among the thirty-three Iowa counties with the highest family poverty rates based on the most recent American community survey five-year estimate released by the United States census bureau.
+
+e. The county ranks among the thirty-three Iowa counties with the highest percentage population loss. Percentage population loss shall be calculated by comparing the most recent population estimate produced by the United States census bureau to the most recent decennial census released by the United States census bureau, except for a calendar year in which the decennial census data is released, then the percentage population loss shall be calculated by comparing the population in the decennial census released that calendar year to the population in the decennial census released ten years prior.
+
+f. The county ranks among the thirty-three Iowa counties with the highest percentage of persons sixty-five years of age or older based on the most recent American community survey five-year estimate released by the United States census bureau.
+
+Sec. 42. Section 159A.6B, subsection 2, Code 2025, is amended to read as follows:
+
+2. The office may execute contracts in order to provide technical support and outreach services for purposes of assisting and educating interested persons as provided in this section. The office may also contract with a consultant to provide part or all of these services. The office may require that a person receiving assistance pursuant to this section contribute up to fifty percent of the amount required to support the costs of contracting with the consultant to provide assistance to the person. The office shall assist the person in completing any technical information required in order to receive [A>financial<A] assistance by the economic development authority pursuant to section [D>15.335B<D] [A>15.511<A].
+
+Sec. 43. Section 266.19, Code 2025, is amended to read as follows:
+
+266.19 Renewable fuel —— assistance.
+
+The university shall cooperate in assisting renewable fuel production facilities supporting livestock operations managed by persons receiving [A>financial<A] assistance pursuant to section [D>15.335B<D] [A>15.511<A].
+
+Sec. 44. Section 422.10, subsection 5, Code 2025, is amended by striking the subsection.
+
+Sec. 45. Section 422.11F, subsection 2, Code 2025, is amended by striking the subsection.
+
+Sec. 46. Section 422.33, subsection 5, paragraph h, Code 2025, is amended by striking the paragraph.
+
+Sec. 47. Section 422.33, subsection 12, paragraph b, Code 2025, is amended by striking the paragraph.
+
+Sec. 48. Section 422.33, subsection 19, Code 2025, is amended by striking the subsection.
+
+Sec. 49. Section 422.60, subsection 5, paragraph b, Code 2025, is amended by striking the paragraph.
+
+Sec. 50. Section 422.60, subsection 8, Code 2025, is amended by striking the subsection.
+
+Sec. 51. Section 427B.17, subsection 8, paragraph b, Code 2025, is amended to read as follows:
+
+b. Any electric power generating plant which operated during the preceding assessment year at a net capacity factor of more than twenty percent, shall not receive the benefits of this section [D>or of section 15.332<D].
+
+Sec. 52. Section 432.12C, subsection 2, Code 2025, is amended by striking the subsection.
+
+Sec. 53. Section 455B.104, subsection 2, Code 2025, is amended to read as follows:
+
+2. The department shall assist persons applying for [A>financial<A] assistance to establish and operate renewable fuel production facilities pursuant to section [D>15.335B<D] [A>15.511<A].
+
+Sec. 54. Section 533.329, subsection 2, paragraphs c and d, Code 2025, are amended by striking the paragraphs.
+
+Sec. 55. REPEAL. Sections 15E.231, 15E.232, 15E.233, 422.11U, and 432.12H, Code 2025, are repealed.
+
+Sec. 56. PRESERVATION OF EXISTING RIGHTS. The sections of this division of this Act amending sections 422.10, 422.11F, 422.11U, 422.33, 422.60, 432.12C, 432.12H, and 533.329 shall not limit, modify, or otherwise adversely affect any amount of tax incentive issued, awarded, or allowed before December 31, 2025, nor shall it limit, modify, or otherwise adversely affect a taxpayer's right to claim or redeem a tax incentive issued, awarded, or allowed before December 31, 2025, including but not limited to any tax credit carryforward amount.
+
+Sec. 57. EFFECTIVE DATE. This division of this Act takes effect December 31, 2025.
+
+DIVISION VI
+SEED INVESTOR TAX CREDIT PROGRAM
+
+Sec. 58. [A>NEW SECTION<A]. 15E.25 Purpose.
+
+The purpose of this subchapter is to stimulate job growth, create wealth, and accelerate the creation of new ventures by using investment tax credits to incentivize the transfer of capital from investors to entrepreneurs, particularly during early-stage growth.
+
+Sec. 59. [A>NEW SECTION<A]. 15E.26 Definitions.
+
+For purposes of this subchapter, unless the context otherwise requires:
+
+1. "Affiliate" means a spouse, child, or sibling of an investor or a corporation, partnership, or trust in which an investor has a controlling equity interest or in which an investor exercises management control.
+
+2. "Authority" means the economic development authority created in section 15.105.
+
+3. "Entrepreneurial assistance program" includes the entrepreneur investment awards program administered under section 15E.362, the receipt of services from a service provider engaged pursuant to section 15.411, subsection 1, or the program administered under section 15.411, subsection 2.
+
+4. "Investment" means a minimum cash investment of ten thousand dollars in a qualifying business.
+
+5. "Investor" means a person making a cash investment in a qualifying business. "Investor" does not include a person that holds at least a seventy percent ownership interest as an owner, member, or shareholder in a qualifying business.
+
+6. "Qualifying business" means a business meeting the criteria defined in section 15E.28.
+
+7. "Rural area" means a city that has a population of fifteen thousand or less.
+
+8. "Urban area" means a city that has a population of greater than fifteen thousand.
+
+Sec. 60. [A>NEW SECTION<A]. 15E.27 Investment tax credits.
+
+1. a. For tax years beginning on or after January 1, 2025, a tax credit shall be allowed against the taxes imposed in chapter 422, subchapters II, III, and V, and in chapter 432, and against the moneys and credits tax imposed in section 533.329, for a portion of a taxpayer's equity investment, as provided in subsection 2, in a qualifying business.
+
+b. An individual may claim a tax credit under this section of a partnership, limited liability company, S corporation, estate, or trust electing to have income taxed directly to the individual. The amount claimed by the individual shall be based upon the pro rata share of the individual's earnings from the partnership, limited liability company, S corporation, estate, or trust.
+
+c. A tax credit shall be allowed only for an investment made in the form of cash to purchase equity in a qualifying business.
+
+d. An affiliate of a qualifying business or an affiliate of a qualifying business's principals shall not be eligible for a tax credit under this section.
+
+e. (1) For a tax credit claimed against the taxes imposed on any of the following, any tax credit in excess of the tax liability is refundable:
+
+(a) A tax credit claimed against the taxes imposed in chapter 422, subchapters II, III, and V.
+
+(b) A tax credit claimed against the taxes imposed in chapter 432.
+
+(c) A tax credit claimed against the moneys and credits tax imposed in section 533.329.
+
+(2) A tax credit shall not be carried back to a tax year prior to the tax year in which the taxpayer redeems the tax credit.
+
+2. a. The amount of the tax credit shall equal twenty percent of the taxpayer's equity investment if the qualifying business is located in an urban area at the time of the investment. The amount of the tax credit shall equal thirty-five percent of the taxpayer's equity investment if the qualifying business is located in a rural area at the time of the investment.
+
+b. The maximum amount of a tax credit that may be issued per fiscal year to a natural person and the person's spouse or dependent shall not exceed one hundred thousand dollars combined. For purposes of this paragraph, a tax credit issued to a partnership, limited liability company, S corporation, estate, or trust electing to have income taxed directly to the individual shall be deemed to be issued to the individual owners based upon the pro rata share of the individual's earnings from the entity. For purposes of this paragraph, "dependent" has the same meaning as provided by the Internal Revenue Code.
+
+c. The maximum amount of tax credits that may be issued per fiscal year for equity investments in any one qualifying business shall not exceed five hundred thousand dollars.
+
+3. An investment shall be deemed to have been made on the same date as the date of acquisition of the equity interest as determined by the Internal Revenue Code.
+
+4. The authority shall not issue tax credits under this section in excess of the amount approved by the authority for any one fiscal year pursuant to section 15.119, subsection 2, paragraph "a".
+
+5. A tax credit shall not be transferred to any other person.
+
+6. The authority shall develop a system for registration and issuance of tax credits authorized pursuant to this subchapter and shall control distribution of all tax credit certificates to investors pursuant to this subchapter. The authority shall develop rules for the qualification and administration of qualifying businesses. The department of revenue shall adopt rules pursuant to chapter 17A as necessary for the administration of this subchapter.
+
+Sec. 61. [A>NEW SECTION<A]. 15E.28 Qualifying businesses.
+
+1. a. In order for an equity investment to qualify for a tax credit, the qualifying business shall submit a joint application to the authority consisting of an investor section and a section for the business. An application shall not be considered to be submitted unless or until both the investor and the business have completed and submitted the investor's and business's parts of the application, including payment of a nonrefundable application fee.
+
+b. Applications shall be submitted to the authority by March 31 of each year. The authority shall award the tax credits based upon the amount received.
+
+2. In order to be a qualifying business, a business must meet all of the following criteria:
+
+a. The principal business operations, and a majority of employees, of the business are located in this state.
+
+b. The business has been in operation for five years or less.
+
+c. The business has at least one full-time equivalent employee.
+
+d. The business's primary operations are in advanced manufacturing, bioscience, insurance and finance, and technologies.
+
+e. The business is an independent organization that is not part of, or an affiliate of, a larger parent company.
+
+f. The business shall establish that its owners, directors, officers, and employees have an appropriate level of experience consistent with the nature of the business. The authority may consult with outside service providers to determine whether a business meets the requirement of this paragraph. A business that has participated in an entrepreneurial assistance program shall be presumed to meet the requirement of this paragraph.
+
+g. The business is not a business engaged primarily in retail sales, real estate, or the provision of health care or other services that require a professional license.
+
+h. The business shall not have a net worth that exceeds two million dollars.
+
+i. The business shall have secured all of the following at the time of application for tax credits:
+
+(1) At least two investors. For purposes of this subparagraph, "investor" includes a person who executes a binding investment commitment to a business.
+
+(2) Total equity financing, binding investment commitments, or some combination thereof, equal to at least five hundred thousand dollars, from investors.
+
+3. A qualifying business shall have the burden of proof to demonstrate to the authority its qualifications under this section, and shall have the obligation to notify the authority in a timely manner of any changes in the qualifications of the business or in the eligibility of investors to redeem the investment tax credits in any tax year.
+
+4. After verifying the eligibility of a qualifying business, the authority shall issue a tax credit certificate to be included with the equity investor's tax return. The tax credit certificate must contain the taxpayer's name, address, tax identification number, the amount of credit, the name of the qualifying business, and other information required by the department of revenue. The tax credit certificate, unless rescinded by the authority, shall be accepted by the department of revenue as payment for taxes imposed pursuant to chapter 422, subchapters II, III, and V, and in chapter 432, and for the moneys and credits tax imposed in section 533.329, subject to any conditions or restrictions placed by the authority upon the face of the tax credit certificate and subject to the limitations of section 15E.27.
+
+Sec. 62. [A>NEW SECTION<A]. 15E.29 Confidentiality —— reports.
+
+1. Except as provided in subsection 2, all information or records in the possession of the authority with respect to this subchapter shall be presumed by the authority to be a trade secret protected under chapter 550 or common law, and shall be kept confidential by the authority unless otherwise ordered by a court.
+
+2. All of the following shall be considered public information under chapter 22:
+
+a. The identity of a qualifying business.
+
+b. The identity of an investor and the qualifying business in which the investor made an equity investment.
+
+c. The number of tax credit certificates issued by the authority.
+
+d. The total dollar amount of tax credits issued by the authority.
+
+3. The authority shall include as part of the annual report under section 15.107B a listing of eligible qualifying businesses, the number of tax credit certificates, and the amount of tax credits issued by the authority in each fiscal year.
+
+Sec. 63. Section 15E.52, subsection 5, paragraph a, Code 2025, is amended to read as follows:
+
+a. To receive a tax credit, a taxpayer must submit an application to the board. The board shall issue certificates under this section on a first-come, first-served basis, which certificates may be redeemed for tax credits. The board shall issue such certificates so that not more than the amount allocated for such tax credits under section 15.119, subsection 2, [A>paragraph "a",<A] may be claimed. The board shall not issue a certificate before September 1, 2014.
+
+Sec. 64. Section 15E.52, subsection 7, paragraph g, Code 2025, is amended to read as follows:
+
+g. The fund proposes to obtain at least [D>fifteen<D] [A>three<A] million dollars in binding investment commitments and to invest a minimum of [D>fifteen<D] [A>three<A] million dollars in companies that have a principal place of business in the state.
+
+Sec. 65. CODE EDITOR DIRECTIVE. The Code editor is directed to do the following:
+
+1. Entitle chapter 15E, subchapter IV, "Seed Investor Tax Credit" and include sections 15E.25 through 15E.29.
+
+2. Correct internal references in the Code and in enacted legislation as necessary due to the enactment of this division of this Act.
+
+DIVISION VII
+ELIMINATION OF INVESTMENTS IN QUALIFYING BUSINESSES TAX CREDIT PROGRAM
+
+Sec. 66. REPEAL. Sections 15E.41, 15E.42, 15E.43, 15E.44, and 15E.46, Code 2025, are repealed.
+
+Sec. 67. TRANSITION PROVISIONS. A tax credit issued by the economic development authority to a taxpayer before June 30, 2026, for an investment in a qualifying business pursuant to chapter 15E, subchapter V, Code 2025, shall remain valid per the terms under which the tax credit was issued by the economic development authority, and the provisions of chapter 15E, subchapter V, Code 2025.
+
+DIVISION VIII
+INVESTMENTS IN QUALIFYING BUSINESS TAX CREDIT PROGRAM ——
+CONFORMING CHANGES
+
+Sec. 68. Section 2.48, subsection 3, paragraph d, subparagraph (1), Code 2025, is amended by striking the subparagraph.
+
+Sec. 69. Section 15E.52, subsection 4, Code 2025, is amended to read as follows:
+
+4. A taxpayer shall not claim a tax credit under this section if the taxpayer is a venture capital investment fund allocation manager for the Iowa fund of funds created in section 15E.65 or an investor that receives a tax credit for the same investment in a qualifying business as described in section [D>15E.44 or in a community-based seed capital fund as described in section 15E.45, Code 2015<D] [A>15E.28<A].
+
+Sec. 70. Section 422.11F, subsection 1, Code 2025, is amended to read as follows:
+
+1. The taxes imposed under this subchapter, less the credits allowed under section 422.12, shall be reduced by an investment tax credit authorized pursuant to section [D>15E.43<D] [A>15E.27<A] for an investment in a qualifying business.
+
+Sec. 71. Section 422.33, subsection 12, paragraph a, Code 2025, is amended to read as follows:
+
+a. The taxes imposed under this subchapter shall be reduced by an investment tax credit authorized pursuant to section [D>15E.43<D] [A>15E.27<A] for an investment in a qualifying business.
+
+Sec. 72. Section 422.60, subsection 5, paragraph a, Code 2025, is amended to read as follows:
+
+a. The taxes imposed under this subchapter shall be reduced by an investment tax credit authorized pursuant to section [D>15E.43<D] [A>15E.27<A] for an investment in a qualifying business.
+
+Sec. 73. Section 432.12C, subsection 1, Code 2025, is amended to read as follows:
+
+1. The tax imposed under this chapter shall be reduced by an investment tax credit authorized pursuant to section [D>15E.43<D] [A>15E.27<A] for an investment in a qualifying business.
+
+Sec. 74. Section 533.329, subsection 2, paragraph e, Code 2025, is amended to read as follows:
+
+e. The moneys and credits tax imposed under this section shall be reduced by an investment tax credit authorized pursuant to section [D>15E.43<D] [A>15E.27<A].
+
+Sec. 75. PRESERVATION OF EXISTING RIGHTS. The sections of this division of this Act amending sections 422.11F, 422.33, 422.60, 432.12C, and 533.329 shall not limit, modify, or otherwise adversely affect any amount of investment tax credit under section 15E.43, Code 2025, that was issued, awarded, or allowed before July 1, 2026, and shall not limit, modify, or otherwise adversely affect a taxpayer's right to claim or redeem an investment tax credit under section 15E.43, Code 2025, that was issued, awarded, or allowed before July 1, 2026, including but not limited to any tax credit carryforward amount.
+
+DIVISION IX
+IOWA FILM PRODUCTION INCENTIVE PROGRAM AND FUND
+
+Sec. 76. [A>NEW SECTION<A]. 15.517 Iowa film production incentive program.
+
+1. As used in this section:
+
+a. "Fund" means the Iowa film production incentive fund.
+
+b. "Program" means the Iowa film production incentive program.
+
+c. "Qualified expenditure" means an allowed expense, as determined by the authority by rule, that is incurred by a qualified production facility on or after July 1, 2025, but before July 1, 2027, for producing a qualified production.
+
+d. "Qualified production" means a feature film, television series, documentary, or unscripted series that is rated G, PG, PG-13, or R by the classification and ratings administration of the motion picture association of America or the TV parental guidelines monitoring board.
+
+e. "Qualified production facility" or "facility" means any of the following:
+
+(1) A dedicated studio located in this state at which qualified productions can be produced.
+
+(2) A studio located in this state at which all preproduction and film production take place for a qualified production filmed on location in this state.
+
+2. a. The authority shall establish and administer an Iowa film production incentive program for the purpose of providing rebates to qualified production facilities for qualified expenditures.
+
+b. The authority shall establish eligibility criteria for the program by rule.
+
+(1) The eligibility criteria for qualified production facilities must require that a facility have all of the following:
+
+(a) A soundstage with dimensions covering at least twelve thousand five hundred square feet of floor space.
+
+(b) A permanent grid system or an alternative rigging support structure rated for overhead suspension, or on-site resources for fly rigging.
+
+(c) Production and postproduction sound rooms that are sound treated to meet sound engineer-approved ambient noise level ratings.
+
+(d) Electric service from an electric utility, or sufficient electric service that does not require use of an electric generator.
+
+(e) An agreement between the authority and the facility that the phrase "filmed in Iowa" appears at the beginning of any credits in the qualified production.
+
+(2) The eligibility criteria for a qualified production must include:
+
+(a) A production budget of at least one million dollars and evidence the production budget is fully funded.
+
+(b) Availability to the public for viewing at a venue where admission is charged, or availability for purchase, for rental, or through a streaming service that requires a subscription.
+
+(3) The eligibility criteria for qualified expenditures must include the following:
+
+(a) The requirements for substantiation of and submission of expenses for industry standard activities including expenses for cast members, equipment, studio production facilities, hospitality services, certified public accountant services, per diem payments, payments to businesses located in this state, accommodations, and any other expenses allowed by the authority. Qualified expenditures shall not include expenses for entertainment, studio executive airfare, royalties, and publicity for the qualified production.
+
+(b) Written acknowledgment by the qualified production facility that no qualified expenses were incurred prior to approval of the application by the authority.
+
+3. An application for a rebate under the program shall be submitted by a qualified production facility to the authority for approval in the form and manner prescribed by the authority by rule.
+
+4. a. If a qualified production facility's application is approved by the authority, the maximum rebate paid to the facility under the program shall equal thirty percent of the facility's qualified expenditures excluding any sales, use, and hotel and motel taxes paid.
+
+b. Prior to disbursement of the rebate, a qualified production facility shall submit all of the following to the authority at the expense of the facility:
+
+(1) An examination of the qualified expenditures completed by a certified public accountant, as defined in section 542.3, in accordance with the currently effective statements on standards for attestation engagements established by the American institute of certified public accountants.
+
+(2) A statement of the final amount of qualified expenditures.
+
+(3) Any other information the authority deems necessary to ensure compliance with this section.
+
+5. a. An Iowa film production incentive fund is created in the state treasury under the control of the authority. The fund shall consist of moneys appropriated to the authority and any other moneys available to, obtained by, or accepted by the authority for placement in the fund. The fund shall be used to provide rebates under the program.
+
+b. The cumulative value of rebates claimed by qualified production facilities pursuant to this section shall not exceed ten million dollars.
+
+c. Notwithstanding section 8.33, moneys in the fund that remain unencumbered or unobligated at the close of the fiscal year shall not revert but shall remain available for expenditure for the purposes designated until the close of the succeeding fiscal year. Notwithstanding section 12C.7, interest or earnings on moneys in the fund shall be credited to the fund.
+
+6. The authority shall not use more than five percent of the moneys in the fund at the beginning of each fiscal year for purposes of administrative costs, technical assistance, and other program support.
+
+7. The authority shall adopt rules pursuant to chapter 17A to administer this section.
+
+8. This section is repealed July 1, 2027.
+
+Sec. 77. CODE EDITOR DIRECTIVE. The Code editor shall designate section 15.517, as enacted in this division of this Act, as part 34 of subchapter II.
+
+DIVISION X
+TARGETED JOBS WITHHOLDING CREDIT MODIFICATIONS AND REPEAL
+
+Sec. 78. Section 2.48, subsection 3, paragraph b, subparagraph (2), Code 2025, is amended to read as follows:
+
+(2) [A>(a)<A] The targeted jobs withholding credits available under section 403.19A.
+
+[A>(b) This subparagraph is repealed January 1, 2038.<A]
+
+Sec. 79. Section 403.19A, subsection 3, paragraphs a, b, and j, Code 2025, are amended to read as follows:
+
+a. A pilot project city may provide by resolution for the deposit into a designated withholding project fund of the targeted jobs withholding credit described in this section. The targeted jobs withholding credit shall be based upon the wages paid to employees pursuant to a withholding agreement. [A>An employer entering into a withholding agreement on or after the effective date of this division of this Act shall not be credited the payments made by the employer pursuant to section 422.16 after June 30, 2027.<A]
+
+b. [A>(1)<A] [D>An<D] [A>For an agreement entered into prior to the effective date of this division of this Act, an<A] amount equal to three percent of the gross wages paid by an employer to each employee under a withholding agreement shall be credited from the payment made by the employer pursuant to section 422.16. If the amount of the withholding by the employer is less than three percent of the gross wages paid to the employees covered by the withholding agreement, the employer shall receive a credit against other withholding taxes due by the employer or may carry the credit forward for up to ten years or until depleted, whichever is the earlier. The employer shall remit the amount of the credit quarterly, in the same manner as withholding payments are reported to the department of revenue, to the pilot project city to be allocated to and when collected paid into a designated withholding project fund for the project. All amounts so deposited shall be used or pledged by the pilot project city for a project related to the employer pursuant to the withholding agreement.
+
+[A>(2) For an agreement entered into on or after the effective date of this division of this Act, an amount equal to one and one-half percent of the gross wages paid by an employer to each employee under a withholding agreement shall be credited from the payment made by the employer pursuant to section 422.16. The employer shall remit the amount of the credit quarterly, in the same manner as withholding payments are reported to the department of revenue, to the pilot project city to be allocated to and when collected paid into a designated withholding project fund for the project. All amounts so deposited shall be used or pledged by the pilot project city for a project related to the employer pursuant to the withholding agreement.<A]
+
+j. [A>(1)<A] An employer may participate in a new jobs credit from withholding under section 260E.5, or a supplemental new jobs credit from withholding under section 15E.197, Code 2014, or under section 15.331, Code 2005, at the same time as the employer is participating in the withholding credit under this section. Notwithstanding any other provision in this section, the new jobs credit from withholding under section 260E.5, and the supplemental new jobs credit from withholding under section 15E.197, Code 2014, or under section 15.331, Code 2005, shall be collected and disbursed prior to the withholding credit under this section.
+
+[A>(2) An employer shall not be eligible to participate in the MEGA program in chapter 15, subchapter II, part 32.<A]
+
+Sec. 80. Section 403.19A, Code 2025, is amended by adding the following new subsection:
+
+[A>NEW SUBSECTION<A]. 4. This section is repealed January 1, 2038.
+
+Sec. 81. EFFECTIVE DATE. This division of this Act, being deemed of immediate importance, takes effect upon enactment.
+
+DIVISION XI
+EMPLOYER CHILD CARE TAX CREDIT REPEAL
+
+Sec. 82. Section 237A.31, subsection 1, Code 2025, is amended to read as follows:
+
+1. The taxes imposed under chapter 422, subchapter II or III, the franchise tax imposed under chapter 422, subchapter V, the gross premiums tax under chapter 432, or the moneys and credits tax imposed under section 533.329 shall be reduced by an employer child care tax credit [A>through the tax year beginning on or after January 1, 2025, but before January 1, 2026,<A] equal to the proportion of the federal employer-provided child care tax credit provided in section 45F of the Internal Revenue Code the taxpayer was eligible for in the same tax year attributable to expenditures made in this state.
+
+Sec. 83. Section 237A.31, Code 2025, is amended by adding the following new subsection:
+
+[A>NEW SUBSECTION<A]. 5. This section is repealed January 1, 2031.
+
+Sec. 84. Section 422.12O, Code 2025, is amended by adding the following new subsection:
+
+[A>NEW SUBSECTION<A]. 3. This section is repealed January 1, 2031.
+
+Sec. 85. Section 422.33, subsection 32, Code 2025, is amended to read as follows:
+
+32. [A>a.<A] The taxes imposed under this subchapter shall be reduced by an employer child care tax credit allowed pursuant to section 237A.31.
+
+[A>b. This subsection is repealed January 1, 2031.<A]
+
+Sec. 86. Section 422.60, subsection 15, Code 2025, is amended to read as follows:
+
+15. [A>a.<A] The taxes imposed under this subchapter shall be reduced by an employer child care tax credit allowed pursuant to section 237A.31.
+
+[A>b. This subsection is repealed January 1, 2031.<A]
+
+Sec. 87. Section 432.12O, Code 2025, is amended to read as follows:
+
+432.12O Employer child care tax credit.
+
+[A>1.<A] The taxes imposed under this chapter shall be reduced by an employer child care tax credit allowed pursuant to section 237A.31.
+
+[A>2. This section is repealed January 1, 2031.<A]
+
+Sec. 88. Section 533.329, subsection 2, paragraph m, Code 2025, is amended to read as follows:
+
+m. [A>(1)<A] The moneys and credits tax imposed under this section shall be reduced by an employer child care tax credit allowed pursuant to section 237A.31.
+
+[A>(2) This paragraph is repealed January 1, 2031.<A]
+
+DIVISION XII
+ASSISTIVE DEVICE TAX CREDIT REPEAL
+
+Sec. 89. Section 2.48, subsection 3, paragraph e, subparagraph (5), Code 2025, is amended to read as follows:
+
+(5) [A>(a)<A] The assistive device corporate tax credit under section 422.33.
+
+[A>(b) This subparagraph is repealed January 1, 2031.<A]
+
+Sec. 90. Section 422.33, subsection 9, paragraph a, subparagraph (1), Code 2025, is amended to read as follows:
+
+(1) The taxes imposed under this subchapter shall be reduced by an assistive device tax credit [A>through the tax year beginning on or after January 1, 2024, but before January 1, 2025<A]. A small business purchasing, renting, or modifying an assistive device or making workplace modifications for an individual with a disability who is employed or will be employed by the small business is eligible, subject to availability of credits, to receive this assistive device tax credit which is equal to fifty percent of the first five thousand dollars paid during the tax year for the purchase, rental, or modification of the assistive device or for making the workplace modifications. The following percentage of any credit in excess of the tax liability shall be refunded with interest in accordance with section 421.60, subsection 2, paragraph "e", as follows:
+
+(a) For the tax year beginning on or after January 1, 2023, but before January 1, 2024, ninety-five percent.
+
+(b) For the tax year beginning on or after January 1, 2024, but before January 1, 2025, ninety percent.
+
+[D>(c) For the tax year beginning on or after January 1, 2025, but before January 1, 2026, eighty-five percent.<D]
+
+[D>(d) For the tax year beginning on or after January 1, 2026, but before January 1, 2027, eighty percent.<D]
+
+[D>(e) For tax years beginning on or after January 1, 2027, seventy-five percent.<D]
+
+Sec. 91. Section 422.33, subsection 9, Code 2025, is amended by adding the following new paragraph:
+
+[A>NEW PARAGRAPH<A]. d. This subsection is repealed January 1, 2031.
+
+Sec. 92. RETROACTIVE APPLICABILITY. This division of this Act applies retroactively to January 1, 2025, for tax years beginning on or after that date.
+
+DIVISION XIII
+ENDOW IOWA TAX CREDIT REPEAL
+
+Sec. 93. Section 2.48, subsection 3, paragraph c, subparagraph (2), Code 2025, is amended to read as follows:
+
+(2) [A>(a)<A] The endow Iowa tax credits authorized under section 15E.305.
+
+[A>(b) This subparagraph is repealed January 1, 2031.<A]
+
+Sec. 94. Section 15E.303, Code 2025, is amended to read as follows:
+
+15E.303 Definitions.
+
+[A>1.<A] As used in this subchapter, unless the context otherwise requires:
+
+[D>1.<D] [A>a.<A] "Board" means the governing board of the lead philanthropic entity identified by the authority pursuant to section 15E.304[A>, Code 2025<A].
+
+[D>2.<D] [A>b.<A] "Business" means a business operating within the state and includes individuals operating a sole proprietorship or having rental, royalty, or farm income in this state and includes a consortium of businesses.
+
+[D>3.<D] [A>c.<A] "Community affiliate organization" means a group of five or more community leaders or advocates organized for the purpose of increasing philanthropic activity in an identified community or geographic area in this state with the intention of establishing a community affiliate endowment fund.
+
+[D>4.<D] [A>d.<A] "Endow Iowa qualified community foundation" means a community foundation organized or operating in this state that attains the national standards established by the national council on foundations as determined by the authority in collaboration with the Iowa council of foundations.
+
+[D>5.<D] [A>e.<A] "Endowment gift" means an irrevocable contribution to a permanent endowment held by an endow Iowa qualified community foundation.
+
+[D>6.<D] [A>f.<A] "Lead philanthropic entity" means the entity identified by the authority pursuant to section 15E.304[A>, Code 2025<A].
+
+[A>2. This section is repealed January 1, 2031.<A]
+
+Sec. 95. Section 15E.305, subsection 1, Code 2025, is amended to read as follows:
+
+1. For tax years beginning on or after January 1, 2003, [A>but before January 1, 2026,<A] a tax credit shall be allowed against the taxes imposed in chapter 422, subchapters II, III, and V, and in chapter 432, and against the moneys and credits tax imposed in section 533.329 equal to twenty-five percent of a taxpayer's endowment gift to an endow Iowa qualified community foundation. An individual may claim a tax credit under this section of a partnership, limited liability company, S corporation, estate, or trust electing to have income taxed directly to the individual. The amount claimed by the individual shall be based upon the pro rata share of the individual's earnings from the partnership, limited liability company, S corporation, estate, or trust. A tax credit shall be allowed only for an endowment gift made to an endow Iowa qualified community foundation for a permanent endowment fund established to benefit a charitable cause in this state [A>for gifts made prior to July 1, 2025<A]. The amount of the endowment gift for which the tax credit is claimed shall not be deductible in determining taxable income for state income tax purposes. Any tax credit in excess of the taxpayer's tax liability for the tax year may be credited to the tax liability for the following five years or until depleted, whichever occurs first. A tax credit shall not be carried back to a tax year prior to the tax year in which the taxpayer claims the tax credit.
+
+Sec. 96. Section 15E.305, Code 2025, is amended by adding the following new subsection:
+
+[A>NEW SUBSECTION<A]. 5. This section is repealed January 1, 2031.
+
+Sec. 97. Section 15E.311, subsection 4, paragraph c, Code 2025, is amended to read as follows:
+
+c. "Eligible county recipient" means an [D>endow<D] Iowa qualified community foundation or community affiliate organization[D>, as defined in section 15E.303,<D] that is selected[D>, in accordance with the procedures described in section 15E.304,<D] to receive moneys from an account created in this section for a particular county. To be selected as an eligible county recipient, a community affiliate organization shall establish a county affiliate fund to receive moneys as provided by this section.
+
+Sec. 98. Section 15E.311, subsection 4, Code 2025, is amended by adding the following new paragraphs:
+
+[A>NEW PARAGRAPH<A]. 0c. "Community affiliate organization" means a group of five or more community leaders or advocates organized for the purpose of increasing philanthropic activity in an identified community or geographic area in this state with the intention of establishing a community affiliate endowment fund.
+
+[A>NEW PARAGRAPH<A]. d. "Iowa qualified community foundation" means a community foundation organized or operating in this state that attains the national standards established by the national council on foundations as determined by the authority in collaboration with the Iowa council of foundations.
+
+Sec. 99. Section 15E.311, subsection 6, Code 2025, is amended by striking the subsection.
+
+Sec. 100. Section 422.11H, Code 2025, is amended to read as follows:
+
+422.11H Endow Iowa tax credit.
+
+[A>1.<A] The tax imposed under this subchapter, less the credits allowed under section 422.12, shall be reduced by an endow Iowa tax credit authorized pursuant to section 15E.305.
+
+[A>2. This section is repealed January 1, 2031.<A]
+
+Sec. 101. Section 422.33, subsection 14, Code 2025, is amended to read as follows:
+
+14. [A>a.<A] The taxes imposed under this subchapter shall be reduced by an endow Iowa tax credit authorized pursuant to section 15E.305.
+
+[A>b. This subsection is repealed January 1, 2031.<A]
+
+Sec. 102. Section 422.60, subsection 6, Code 2025, is amended to read as follows:
+
+6. [A>a.<A] The taxes imposed under this subchapter shall be reduced by an endow Iowa tax credit authorized pursuant to section 15E.305.
+
+[A>b. This subsection is repealed January 1, 2031.<A]
+
+Sec. 103. Section 432.12D, Code 2025, is amended to read as follows:
+
+432.12D Endow Iowa tax credit.
+
+[A>1.<A] The tax imposed under this chapter shall be reduced by an endow Iowa tax credit authorized pursuant to section 15E.305.
+
+[A>2. This section is repealed January 1, 2031.<A]
+
+Sec. 104. Section 533.329, subsection 2, paragraph g, Code 2025, is amended to read as follows:
+
+g. [A>(1)<A] The moneys and credits tax imposed under this section shall be reduced by an endow Iowa tax credit authorized pursuant to section 15E.305.
+
+[A>(2) This paragraph is repealed January 1, 2031.<A]
+
+Sec. 105. REPEAL. Sections 15E.301, 15E.302, and 15E.304, Code 2025, are repealed.
+
+DIVISION XIV
+RESEARCH ACTIVITIES TAX CREDIT REPEAL
+
+Sec. 106. Section 422.10, subsection 1, unnumbered paragraph 1, Code 2025, is amended to read as follows:
+
+The taxes imposed under this subchapter shall be reduced by a state tax credit for increasing research activities in this state [A>through the tax year beginning on or after January 1, 2025, but before January 1, 2026<A].
+
+Sec. 107. Section 422.10, subsection 1, paragraph b, subparagraph (3), subparagraph division (d), subparagraph subdivision (iv), Code 2025, is amended by striking the subparagraph subdivision.
+
+Sec. 108. Section 422.10, subsection 1, paragraph b, subparagraph (3), subparagraph division (e), Code 2025, is amended to read as follows:
+
+(e) For tax years beginning on or after January 1, [D>2027<D] [A>2026<A], amounts paid for supplies as defined in section 41(b)(2)(C) of the Internal Revenue Code shall not be qualified research expenses in this state.
+
+Sec. 109. Section 422.10, Code 2025, is amended by adding the following new subsection:
+
+[A>NEW SUBSECTION<A]. 7. This section is repealed January 1, 2027.
+
+Sec. 110. Section 422.33, subsection 5, paragraph a, unnumbered paragraph 1, Code 2025, is amended to read as follows:
+
+The taxes imposed under this subchapter shall be reduced by a state tax credit [A>through the tax year beginning on or after January 1, 2025, but before January 1, 2026,<A] for increasing research activities in this state equal to the sum of the following:
+
+Sec. 111. Section 422.33, subsection 5, paragraph b, subparagraph (2), subparagraph division (d), subparagraph subdivision (iv), Code 2025, is amended by striking the subparagraph subdivision.
+
+Sec. 112. Section 422.33, subsection 5, paragraph b, subparagraph (2), subparagraph division (e), Code 2025, is amended to read as follows:
+
+(e) For tax years beginning on or after January 1, [D>2027<D] [A>2026<A], amounts paid for supplies as defined in section 41(b)(2)(C) of the Internal Revenue Code shall not be qualified research expenses in this state.
+
+Sec. 113. Section 422.33, subsection 5, Code 2025, is amended by adding the following new paragraph:
+
+[A>NEW PARAGRAPH<A]. j. This subsection is repealed January 1, 2027.
+
+DIVISION XV
+RESEARCH AND DEVELOPMENT TAX CREDIT PROGRAM
+
+Sec. 114. [A>NEW SECTION<A]. 15.520 Short title.
+
+This part shall be known and may be cited as the "Research and Development Tax Credit Program".
+
+Sec. 115. [A>NEW SECTION<A]. 15.521 Definitions.
+
+As used in this part, unless the context otherwise requires:
+
+1. "Eligible expenditures" means qualified research expenses under section 41 of the Internal Revenue Code, to the extent the expenditures occurred in this state.
+
+2. "Qualified business" means a business certified by the authority as eligible to claim the research and development tax credit.
+
+3. "Qualified research and development" means a systematic activity that combines basic and applied research in an attempt to discover solutions to new or existing problems, or to create or update goods and services. "Qualified research and development" includes a set of innovative activities undertaken by an eligible business in developing new services or products, and in improving existing ones.
+
+Sec. 116. [A>NEW SECTION<A]. 15.522 Eligible businesses and sectors.
+
+1. The tax credit available pursuant to this part shall be available only to a business primarily engaged in any of the following:
+
+a. Advanced manufacturing.
+
+b. Bioscience.
+
+c. Insurance and finance.
+
+d. Technology and innovation.
+
+2. For a business described in subsection 1, the sectors available for the credit may include the following:
+
+a. Second-generation food innovation.
+
+b. Food ingredients and supplements.
+
+c. Crop protection.
+
+d. Hybrid seed technologies.
+
+e. Diagnostic analytics and immunotherapies.
+
+f. Chip technologies and microelectronics.
+
+g. Medical equipment and supplies.
+
+h. Software and technology.
+
+i. Aerospace.
+
+j. Pharmaceuticals.
+
+k. Consumer products.
+
+l. Any additional sectors included by the authority by rule.
+
+Sec. 117. [A>NEW SECTION<A]. 15.523 Application, certification, and agreement.
+
+1. A business shall submit a preapplication to the authority to determine whether the business is primarily engaged in an eligible sector identified in section 15.522 and is actively engaged in qualified research and development. The determination made by the authority shall be based on factors including but not limited to the North American industry classification code and sources of revenue. The authority may request any additional documentation or conduct site visits to verify the requirements of the program are met upon the submission of the preapplication.
+
+2. The authority must certify a business as a qualified business for the business to claim a research and development tax credit. A qualified business may remain certified for up to five years. A business may reapply for certification in additional five-year increments.
+
+3. An eligible business must enter into an agreement with the authority for successful completion of all requirements of the program.
+
+4. Each year after certification as a qualified business, the qualified business shall submit an application to the authority for a tax credit based on the amount of eligible expenditures that were made during the previous tax year. Eligible expenditures must be reviewed by agreed upon procedures prescribed by the authority by rule. The qualified business shall engage an independent certified public accountant authorized to practice in this state to conduct the review. A business shall submit the application to the authority by January 31 of each year the business is determined to be a qualified business for research and development conducted in the state in the most recently ended tax year of the business.
+
+Sec. 118. [A>NEW SECTION<A]. 15.524 Research and development tax credit.
+
+1. For tax years beginning on or after January 1, 2026, a research and development tax credit is available to a qualified business that is approved for the tax credit by the authority.
+
+2. Upon review of the application pursuant to section 15.523, subsection 4, and approval by the authority to receive the tax credit, the authority shall issue a tax credit certificate to a qualified business indicating the amount available to be claimed. The authority may approve a tax credit in an amount up to three and one-half percent of the amount of the qualified business's eligible expenditures. The tax credit shall be claimed for the tax year during which the eligible expenditures were incurred.
+
+3. To claim a tax credit under this section, a taxpayer shall include one or more tax credit certificates with the taxpayer's tax return. The tax credit certificate must contain the taxpayer's name, address, tax identification number, the amount of the credit, the name of the qualified business, and any other information required by the department of revenue. The tax credit certificate, unless rescinded by the authority, shall be accepted by the department of revenue as payment for taxes imposed pursuant to chapter 422, subchapters II and III, subject to any conditions or restrictions placed by the authority upon the face of the tax credit certificate and subject to the limitations of the program.
+
+4. Any tax credit in excess of the business's tax liability is refundable. In lieu of claiming a refund, the taxpayer may elect to have the overpayment shown on the taxpayer's final, completed return credited to the tax liability for the following tax year.
+
+5. Tax credit certificates issued pursuant to this section are not transferable.
+
+6. If the business is a partnership, S corporation, limited liability company, estate, or trust electing to have the income taxed directly to the individual, an individual may claim the tax credit allowed. The amount claimed by the individual shall be based upon the pro rata share of the individual's earnings of the partnership, S corporation, limited liability company, or estate or trust.
+
+7. The maximum amount of tax credits the authority may issue under this section each fiscal year shall not exceed the amount specified in section 15.119.
+
+8. If requests for tax credits exceed the amount available pursuant to section 15.119, the authority shall award tax credits based upon factors including but not limited to the total amount of tax credits requested, the percentage of the research and development of the business that occurs in this state compared to research and development conducted in other states and countries, and the economic impact of the research and development conducted in this state.
+
+Sec. 119. [A>NEW SECTION<A]. 15.525 Reporting requirements.
+
+1. A qualified business shall report annually to the authority all of the following:
+
+a. The total amount of investment made in research and development.
+
+b. The location in this state where the research and development occurred.
+
+c. The number of jobs created, wages paid, and employee residence locations.
+
+2. The authority shall include as part of the annual report under section 15.107B an annual report of the activities conducted pursuant to this part.
+
+3. The authority shall report all information in an aggregate form to prevent, as much as possible, information being attributable to any particular qualified business.
+
+Sec. 120. [A>NEW SECTION<A]. 15.526 Confidentiality.
+
+1. Except as provided in subsection 2, all information or records in the possession of the authority with respect to this part shall be presumed by the authority to be a trade secret protected under chapter 550 or common law, and shall be kept confidential by the authority unless otherwise ordered by the court.
+
+2. The identity of a tax credit recipient and the amount of the tax credit shall be considered public information under chapter 22.
+
+Sec. 121. [A>NEW SECTION<A]. 422.12Q Research and development tax credit.
+
+The taxes imposed under this subchapter, less the credits allowed under section 422.12, shall be reduced by a research and development tax credit allowed pursuant to section 15.524.
+
+Sec. 122. Section 422.33, Code 2025, is amended by adding the following new subsection:
+
+[A>NEW SUBSECTION<A]. 17. The taxes imposed under this subchapter shall be reduced by the research and development tax credit allowed pursuant to section 15.524.
+
+Sec. 123. CODE EDITOR DIRECTIVE. The Code editor shall designate sections 15.520 through 15.526, as enacted in this division of this Act, as part 35 of subchapter II.
+
+Sec. 124. EFFECTIVE DATE. This division of this Act, being deemed of immediate importance, takes effect upon enactment.
+
+DIVISION XVI
+SUSTAINABLE AVIATION FUEL PRODUCTION TAX CREDIT
+
+Sec. 125. [A>NEW SECTION<A]. 15.530 Short title.
+
+This part shall be known and may be cited as the "Sustainable Aviation Fuel Production Tax Credit Program".
+
+Sec. 126. [A>NEW SECTION<A]. 15.531 Definitions.
+
+As used in this part, unless the context otherwise requires:
+
+1. "Aviation gasoline" means the same as defined in section 452A.2.
+
+2. "Eligible taxpayer" means a business engaged in manufacturing sustainable aviation fuel from feedstock.
+
+3. "Feedstock" means any organic matter processed or refined in the state suitable for sustainable aviation fuel production without further enhancement. "Feedstock" includes ethanol, corn oil, soybean oil, animal fats used in cooking oil, and algae oil.
+
+4. "Jet fuel" means blends of hydrocarbons derived from crude petroleum, natural gasoline, and synthetic hydrocarbons, intended for use in aviation turbine engines, and that meet the specifications in ASTM (American society for testing and materials) specification D1655-12.
+
+5. "Sustainable aviation fuel" means a liquid fuel derived from feedstock not including palm fatty acid distillates and that achieves at least a fifty percent life cycle greenhouse gas emissions reduction in comparison with petroleum-based aviation gasoline, aviation turbine fuel, and jet fuel as determined by a test that shows any of the following:
+
+a. The fuel production pathway achieves at least a fifty percent life cycle greenhouse gas emissions reduction in comparison with petroleum-based aviation gasoline, aviation turbine fuel, and jet fuel utilizing the most recent version of the GREET (Argonne national laboratory's greenhouse gases, regulated emissions, and energy use in technologies) model that accounts for reduced emissions throughout the fuel production process.
+
+b. The fuel production pathway achieves at least a fifty percent reduction of the aggregate attributional core life cycle emissions and the positive induced land use change values under the CORSIA (carbon offsetting and reduction scheme for international aviation) life cycle methodology for sustainable aviation fuels adopted by the international civil aviation organization with the agreement of the United States.
+
+Sec. 127. [A>NEW SECTION<A]. 15.532 Eligible business application and agreement.
+
+1. a. An eligible business that produces a sustainable aviation fuel in this state from feedstock during a calendar year may apply to the authority for the sustainable aviation fuel tax credit provided in section 15.533.
+
+b. The application must be made to the authority in the manner prescribed by the authority.
+
+c. The application must be made during the calendar year following the calendar year in which the sustainable aviation fuel is produced.
+
+d. The authority may accept applications on a continuous basis or may establish, by rule, an annual application deadline.
+
+e. The application must include all of the following information:
+
+(1) The amount of sustainable aviation fuel produced in the state from feedstock by the eligible business during the calendar year, measured in gallons.
+
+(2) The types and sources of feedstock used to produce sustainable aviation fuel, documented in sufficient detail to allow the authority to verify that such feedstock was processed or refined in the state.
+
+(3) Any other information reasonably required by the authority in order to establish and verify eligibility under the program.
+
+f. The authority shall review and score all complete applications submitted by eligible businesses on a competitive basis pursuant to rules adopted by the authority.
+
+2. a. Before being issued a tax credit under section 15.533, an eligible business must enter into an agreement with the authority for the successful completion of all requirements of the program. As part of the agreement, the eligible business shall agree to collect and provide any information reasonably required by the authority in order to allow the board to fulfill its reporting obligation under section 15.534.
+
+b. An eligible business shall fulfill all the requirements of the program and the agreement before the authority issues the business a tax credit certificate or enters into a subsequent agreement with the business under this section. The authority may decline to enter into a subsequent agreement with the business under this section if a prior agreement is not successfully fulfilled.
+
+c. Upon establishing that all requirements of the program and the agreement have been fulfilled, the authority shall issue a tax credit certificate to the eligible business stating the amount of sustainable fuel tax credit the eligible business may claim.
+
+3. The failure in fulfilling any requirement of the program by the eligible business or any of the terms and obligations of an agreement entered into pursuant to this section may result in the rescission of the tax credits issued under section 15.533, and in addition to any other penalties provided by law, may subject the tax credits to repayment of all or a portion of tax credit issued by the authority, and may subject the tax credits to recapture by the authority or the department of revenue.
+
+4. a. Except as provided in paragraph "b", any information or record in the possession of the authority with respect to the program shall be presumed by the authority to be a trade secret protected under chapter 550 or common law and shall be kept confidential by the authority unless otherwise ordered by a court.
+
+b. The identity of a tax credit recipient and the amount of the tax credit shall be considered public information under chapter 22.
+
+Sec. 128. [A>NEW SECTION<A]. 15.533 Sustainable aviation fuel tax credit.
+
+1. An eligible business that has entered into an agreement pursuant to section 15.532 may claim a tax credit in an amount equal to the product of twenty-five cents multiplied by the number of gallons of sustainable aviation fuel produced in this state from feedstock. The sustainable aviation fuel tax credit shall not be available for any sustainable aviation fuel produced before the 2026 calendar year or after the 2035 calendar year.
+
+2. The tax credit shall be allowed against taxes imposed under chapter 422, subchapter II or III.
+
+3. The tax credit shall be claimed for the tax year during which the eligible business was issued the tax credit.
+
+4. An individual may claim a tax credit under this section of a partnership, limited liability company, S corporation, cooperative organized under chapter 501 and filing as a partnership for federal tax purposes, estate, or trust electing to have income taxed directly to the individual. The amount claimed by the individual shall be based upon the pro rata share of the individual's earnings from the partnership, limited liability company, S corporation, cooperative, estate, or trust.
+
+5. Any tax credit in excess of the tax liability is refundable. In lieu of claiming a refund, the taxpayer may elect to have the overpayment shown on the taxpayer's final, completed return credited to the tax liability for the following tax year.
+
+6. a. To claim a tax credit under this section, a taxpayer shall include one or more tax credit certificates with the taxpayer's tax return.
+
+b. The tax credit certificate shall contain the taxpayer's name, address, tax identification number, the amount of the credit, the name of the eligible business, and any other information required by the department of revenue.
+
+c. The tax credit certificate, unless rescinded by the authority, shall be accepted by the department of revenue as payment for taxes imposed pursuant to chapter 422, subchapters II and III, subject to any conditions or restrictions placed by the authority upon the face of the tax credit certificate and subject to the limitations of the program.
+
+d. Tax credit certificates issued pursuant to this section are not transferable.
+
+7. a. The maximum amount of tax credits the authority may issue each fiscal year pursuant to this section shall be as provided in section 15.119.
+
+b. (1) The maximum amount of tax credits that the authority may issue to an eligible business for the production of sustainable aviation fuel in a calendar year shall not exceed one million dollars.
+
+(2) The authority shall not issue more than five tax credit certificates to an eligible business for the production of aviation fuel under the program.
+
+Sec. 129. [A>NEW SECTION<A]. 15.534 Reports to general assembly.
+
+1. For purposes of this section, "successful tax credit applicant" includes, with respect to each calendar year, an eligible business that was issued a tax credit certificate for production of sustainable aviation fuel during that calendar year.
+
+2. The annual report under section 15.107B shall include a report describing the activities of the program for the previous calendar year. The report shall, at a minimum, include all of the following information:
+
+a. The aggregate number of gallons of sustainable aviation fuel produced for which successful tax credit applicants received a tax credit in the previous calendar year.
+
+b. For each eligible business issued a sustainable aviation fuel tax credit during each calendar year:
+
+(1) The identity of the eligible business.
+
+(2) The amount of the tax credit.
+
+c. The total amount of all sustainable aviation fuel tax credits claimed during each calendar year, and the portion of the claims issued as a refund.
+
+3. To protect the presumption of confidentiality established, the board shall report all information in an aggregate form to prevent, as much as possible, information being attributable to any particular eligible business, except as provided in subsection 2, paragraph "e".
+
+Sec. 130. [A>NEW SECTION<A]. 15.535 Future repeal.
+
+Sections 15.530, 15.531, 15.532, 15.533, 15.534, and this section are repealed January 1, 2037.
+
+Sec. 131. [A>NEW SECTION<A]. 422.10C Sustainable aviation fuel tax credit.
+
+The taxes imposed under this subchapter, less the credits allowed under section 422.12, shall be reduced by a sustainable aviation fuel tax credit allowed under section 15.533. This section is repealed January 1, 2037.
+
+Sec. 132. Section 422.33, Code 2025, is amended by adding the following new subsection:
+
+[A>NEW SUBSECTION<A]. 23. The taxes imposed under this subchapter shall be reduced by a sustainable aviation fuel tax credit allowed under section 15.533. This subsection is repealed January 1, 2037.
+
+Sec. 133. TAX CREDIT CLAIMS. Sustainable aviation fuel tax credits issued pursuant to the sustainable aviation tax credit program enacted in this division of this Act shall not be issued by the economic development authority prior to July 1, 2026, and shall not be claimed by a taxpayer prior to September 1, 2026.
+
+Sec. 134. CODE EDITOR DIRECTIVE. The Code editor shall designate sections 15.530 through 15.535, as enacted in this division of this Act, as part 36 of subchapter II.
+
+Sec. 135. EFFECTIVE DATE. This division of this Act, being deemed of immediate importance, takes effect upon enactment.
+
+Sec. 136. RETROACTIVE APPLICABILITY. This division of this Act applies retroactively to January 1, 2025, for tax years beginning on or after that date.
+
+DIVISION XVII
+MAJOR ECONOMIC GROWTH ATTRACTION PROGRAM
+
+Sec. 137. Section 15.494, subsection 1, paragraph b, Code 2025, is amended to read as follows:
+
+b. If the eligible business fails to comply with any requirements of the program or the agreement [A>as determined by the authority<A], the eligible business may be required to repay any tax incentives the authority issued to the eligible business. [D>A<D] [A>The authority shall notify the department of revenue of any<A] required repayment of a tax incentive [D>shall<D][A>. Any repayment shall<A] be considered a tax payment due and payable to the department of revenue by any taxpayer that claimed the tax incentive, and the failure to make the repayment may be treated by the department of revenue in the same manner as a failure to pay the tax shown due, or required to be shown due, with the filing of a return or deposit form. [A>In addition, the county shall have the authority to take action to recover the value of property taxes not collected as a result of the exemption provided to the business under this part.<A]
+
+Sec. 138. Section 15.495, subsection 2, Code 2025, is amended to read as follows:
+
+2. To receive the sales and use tax refund, the eligible business shall file a claim with the department of revenue as follows:
+
+a. The contractor or subcontractor shall state under oath, on forms provided by the department of revenue, the amount of the sales of tangible personal property or services rendered, furnished, or performed including water, sewer, gas, and electric utility services upon which sales or use tax has been paid [D>prior to contract completion<D] [A>during the period for which the refund is claimed<A], and shall submit the forms to the eligible business before contract completion.
+
+b. [D>The eligible business shall inform the department of revenue in writing of contract completion.<D] The eligible business shall, [D>after contract completion<D] [A>no more frequently than quarterly<A], submit an application to the department of revenue for a refund of the amount of the sales and use taxes paid pursuant to chapter 423 upon any tangible personal property, or services rendered, furnished, or performed, including water, sewer, gas, and electric utility services. The application shall be submitted in the form and manner prescribed by the department of revenue. The department of revenue shall audit the application and, if approved, issue a warrant or warrants to the eligible business in the amount of the sales or use tax which has been paid to the state of Iowa under subsection 1. The eligible business's application must be submitted to the department of revenue within one year after the project completion date. [D>An application filed by the eligible business in accordance with this section shall not be denied by reason of a limitation set forth in chapter 421 or 423.<D]
+
+c. The refund shall be remitted by the department of revenue to the eligible business [D>equally over five tax years<D] [A>on a quarterly basis<A]. Interest shall not accrue on any part of the refund that has not yet been remitted by the department of revenue to the eligible business.
+
+EXPLANATION
+
+The inclusion of this explanation does not constitute agreement with the explanation's substance by the members of the general assembly.
+
+This bill relates to matters under the purview of the Iowa economic development authority (authority), including tax credit limits, targeted jobs tax credits, and the major economic growth attraction program; creation of the business incentives for growth program, the seed investor tax credit program, the Iowa film production incentive program, the research and development tax credit program, and the sustainable aviation fuel production tax credit program; elimination of the high quality jobs program, the investments in qualifying businesses tax credit, employer child care tax credits, assistive device tax credits, endow Iowa tax credits, and research activities tax credits; and makes conforming changes.
+
+DIVISION I —— ECONOMIC DEVELOPMENT PROGRAMS —— TAX CREDIT LIMITS. Under the bill, the authority shall not authorize for any one fiscal year an aggregate amount of tax credits for business development programs in excess of $110 million for allocation among the business programs as follows: (1) for tax credits for investments in an innovation fund and the seed investor tax credit the authority shall allocate a total of $10 million; (2) for the renewable chemical production tax credit and the sustainable aviation fuel production tax credit the authority shall allocate a total of $10 million; (3) for the research and development tax credit the authority shall allocate $40 million; and (4) for the business incentives for growth program for the fiscal year beginning July 1, 2026, and for each fiscal year thereafter, the authority shall not allocate more than $50 million.
+
+DIVISION II —— ECONOMIC DEVELOPMENT PROGRAMS —— TAX CREDIT LIMITS —— CONFORMING CHANGES. The bill makes conforming changes to Code sections 15.293A(6), 15.293B(6), 15.318(3)(e), 15.354(4), and 15.354(6)(d).
+
+DIVISION III —— BUSINESS INCENTIVES FOR GROWTH PROGRAM. The bill creates a business incentives for growth program (BIG program), effective January 1, 2026, to provide tax incentives to eligible businesses. The qualifications for an eligible business are provided in the bill. Applications for the BIG program shall be submitted to the authority. For a proposed project that will result in elevated water consumption by the business, the application must be accompanied by a water conservation and waste reduction plan.
+
+The terms of, and aggregate value of, a tax incentive may be negotiated between an eligible business and the authority, but the aggregate value of the tax incentives that any one eligible business may receive shall not exceed 5 percent of the eligible business's qualifying investment. The board may authorize any combination of tax incentives available for an eligible business.
+
+An eligible business that is approved by the authority to participate in the BIG program shall enter into an agreement with the authority specifying the criteria for successful completion of the program requirements. The requirements for the program agreement are detailed in the bill.
+
+An eligible business issued a tax incentive under the BIG program shall be entitled to a refund of certain sales and use taxes, after filing a claim with the department of revenue as detailed in the bill. A contractor or subcontractor that willfully makes a false report of taxes paid is guilty of an aggravated misdemeanor, and shall be liable for payment of the tax and any applicable penalty and interest.
+
+An eligible business may not receive a tax credit certificate until the eligible business's project, or a portion of the project, has been placed in service. The department of revenue shall remit the tax credit to the eligible business over five tax years. If within five years of the date the authority issues an eligible business a tax credit, the eligible business sells, disposes of, razes, or otherwise renders unusable all or a part of the land, buildings, or other structures for which the tax credit was claimed, the tax liability of the eligible business for that year shall be increased by the amounts detailed in the bill.
+
+An eligible business may apply for and be eligible to receive other tax incentives; however, the authority may prohibit an eligible business that has been issued tax incentives under the BIG program from receiving any additional tax incentive, tax credit, grant, loan, or other financial assistance under any program administered by the authority.
+
+A community in which an eligible business's project is located may grant the eligible business a property tax exemption for a portion of the actual value added by improvements to real property through the project for a period not to exceed 10 years beginning the year that the improvements to real property are first assessed for taxation.
+
+The bill authorizes the establishment of one or more funds within the state treasury, under the control of the authority, to be used for assistance for certain programs and projects as detailed in the bill.
+
+This division of the bill takes effect upon enactment.
+
+DIVISION IV —— ELIMINATION OF THE HIGH QUALITY JOBS PROGRAM. The bill repeals the high quality jobs program on June 30, 2026, and provides for fulfillment of agreements entered into under the program on or before December 1, 2025.
+
+The sections of the bill creating the business incentives for growth program take effect on December 31, 2025.
+
+DIVISION V —— HIGH QUALITY JOBS PROGRAM —— CONFORMING CHANGES. The bill makes conforming changes to Code sections 2.48(3)(a)(1), 2.48(3)(a)(2), 8G.3(8), 15.106B(5)(b), 15.293B(3), 15.317(5), 15.318(2)(b), 15.318(4), 15.354(1)(b)(2), 15.354(1)(c), 15.354(3)(b), 15.354(5), 15.499(1), 15E.351(1), 15E.362(1)(c), 15H.5, 159A.6B(2), 266.19, 422.10(5), 422.11F(2), 422.33(5)(h), 422.33(12)(b), 422.33(19), 422.60(5)(b), 422.60(8), 427B.17(8)(b), 432.12C(2), 455B.104(2), and 533.329(2)(c) and (d).
+
+The bill repeals Code sections 15E.231, 15E.232, 15E.233, 422.11U, and 432.12H.
+
+This division of the bill takes effect December 31, 2025.
+
+DIVISION VI —— SEED INVESTOR TAX CREDIT PROGRAM. The bill creates the seed investor tax credit program (seed program) for the purpose of stimulating job growth, creating wealth, and accelerating the creation of new ventures.
+
+The bill allows a tax credit for a portion of a taxpayer's equity investment in a qualifying business as provided in the bill. The amount of the tax credit shall equal 20 percent of the taxpayer's equity investment if the qualifying business is located in an urban area, or 35 percent if the qualifying business is located in a rural area. The maximum amount of a tax credit that may be issued per calendar year to a person and the person's spouse or dependent shall not exceed $100,000 combined. The maximum amount of a tax credit that may be issued per calendar year for equity investments in any one qualifying business shall not exceed $500,000. The department of revenue shall adopt rules for the administration of the seed program.
+
+For an equity investment to qualify for a tax credit, the business in which the investment is made must be a qualified business as described in the bill.
+
+All information or records in the possession of the authority with respect to the seed program shall be a trade secret and kept confidential by the authority unless otherwise ordered by a court, or unless considered public information.
+
+The authority shall submit the annual report to the governor and the general assembly on the activities conducted pursuant to the seed program including a listing of eligible qualifying businesses and the number of tax credit certificates and the amount of tax credits issued by the authority.
+
+The bill requires that, as part of the innovation fund investment tax credit program, an innovation fund submit an application for certification to the board. The board shall approve the application and certify the innovation fund if, in addition to the criteria under current law, the fund proposes to obtain at least $3 million in binding investment commitments and to invest a minimum of $3 million in companies that have a principal place of business in the state.
+
+DIVISION VII —— ELIMINATION OF INVESTMENTS IN QUALIFYING BUSINESS TAX CREDIT PROGRAM. The bill repeals the investments in qualifying businesses tax credit program on June 30, 2026, and provides for the validity of tax credits issued under the program before June 30, 2025.
+
+DIVISION VIII —— INVESTMENTS IN QUALIFYING BUSINESS TAX CREDIT PROGRAM —— CONFORMING CHANGES. The bill makes conforming changes to Code sections 2.48(3)(d)(1), 15E.52(4), 422.11F(1), 422.33(12)(a), 422.60(5)(a), 432.12C(1), and 533.329(2).
+
+DIVISION IX —— IOWA FILM PRODUCTION INCENTIVE PROGRAM AND FUND. The bill establishes the Iowa film production incentive program and fund within the authority.
+
+The bill requires the authority to administer the Iowa film production incentive program (film program) for the purpose of providing rebates to qualified production facilities for qualified expenditures incurred to produce a qualified production. "Qualified production" and "qualified production facility" are defined in the bill.
+
+The bill requires the authority to establish eligibility criteria by rule.
+
+The criteria for qualified production facilities must require that a facility have a soundstage with dimensions covering at least 12,500 square feet, a permanent grid system or an alternative rigging support structure rated for overhead suspension, production and postproduction sound rooms, sufficient electric service that does not require use of an electric generator, and an agreement between the authority and the facility that the phrase "filmed in Iowa" appears at the beginning of any credits.
+
+The criteria for a qualified production must include a fully funded production budget of at least $1 million, and the qualified production must be made available to the public for purchase.
+
+The criteria for qualified expenditures must include expenses for industry standard activities for cast members, equipment, studio production facilities, hospitality services, certified public accountant services, per diem payments, payments to businesses located in this state, accommodations, and any other expenses allowed by the authority. Qualified expenditures do not include expenses for entertainment, studio executive airfare, royalties, and publicity for the qualified production. The criteria for qualified expenditures must include a written acknowledgment by the facility that no qualified expenses were incurred prior to approval of the application by the authority.
+
+Prior to disbursement of the rebate, the facility must comply with additional requirements as detailed in the bill.
+
+The bill provides that the rebate amount shall equal 30 percent of the gross amount of qualified expenditures incurred to produce a qualified production excluding any sales, use, and hotel and motel taxes paid.
+
+The bill creates an Iowa film production incentive fund in the state treasury under the control of the authority.
+
+The cumulative value of rebates claimed pursuant to the bill shall not exceed $10 million per fiscal year.
+
+The bill applies to qualified expenditures incurred between July 1, 2025 and July 1, 2027. The program is repealed on July 1, 2027.
+
+DIVISION X —— TARGETED JOBS WITHHOLDING CREDIT MODIFICATIONS AND REPEAL. The targeted jobs withholding credit is provided to certain employers in pilot project cities equal to 3 percent of the gross wages paid by the employer to each employee pursuant to a withholding agreement entered into on or prior to June 30, 2027.
+
+For withholding agreements entered into on or after the effective date of this division, the bill reduces the withholding credit provided to an employer from 3 percent of gross wages paid to employees to 1.5 percent of gross wages paid to employees.
+
+An employer entering into a withholding agreement prior to, on, or after the effective date of the division, shall not receive the targeted jobs withholding credit for wages paid to employees after June 30, 2027, coinciding with the date new withholding agreements are no longer permitted pursuant to Code section 403.19A(3)(c)(2).
+
+The bill repeals the targeted jobs withholding credit from the Code on January 1, 2038, due to the employer's ability to carry forward the credit for up to 10 years.
+
+The division takes effect upon enactment.
+
+DIVISION XI —— EMPLOYER CHILD CARE TAX CREDIT REPEAL. The bill repeals the employer child care tax credit commencing with tax years beginning on or after January 1, 2026. The credit is equal to the employer-provided child care tax credit provided in section 45F of the Internal Revenue Code, and is available against the individual and corporate income taxes, the franchise tax, the insurance premiums tax, and the moneys and credits tax.
+
+The bill repeals the tax credit from the Code on January 1, 2031, due to the taxpayer's ability to carry forward the credit for up to five years.
+
+DIVISION XII —— ASSISTIVE DEVICE TAX CREDIT REPEAL. The bill repeals the assistive device refundable tax credit available against the corporate income tax commencing with tax years beginning on or after January 1, 2025. The tax credit was equal to 50 percent of the first $5,000 used to purchase an assistive device.
+
+The bill repeals the tax credit from the Code on January 1, 2027, due to the ability of the taxpayer to credit any overpayment in tax liability in the following tax year.
+
+DIVISION XIII —— ENDOW IOWA TAX CREDIT REPEAL. The bill repeals the endow Iowa tax credit commencing with tax years beginning on or after January 1, 2026, but the bill repeals the program beginning July 1, 2025. The tax credit is equal to 25 percent of the taxpayer's endowment gift to an endow Iowa qualified community foundation. However, the bill specifies the tax credit shall only be allowed for endowment gifts made prior to July 1, 2025. The tax credit is available against the individual and corporate income taxes, the franchise tax, the insurance premiums tax, and the moneys and credits tax. The tax credit is currently capped at $6 million annually.
+
+The bill repeals the tax credit from the Code on January 1, 2031, due to the taxpayer's ability to carry forward the credit for up to five years.
+
+DIVISION XIV —— RESEARCH ACTIVITIES TAX CREDIT REPEAL. The bill repeals the research activities tax credit commencing with tax years beginning on or after January 1, 2026. The bill creates a new research and development tax credit in another division of the bill. The research activities tax credit is a refundable tax credit for qualifying taxpayers conducting research for manufacturing, life sciences, agriscience, software engineering, or aviation and aerospace industry. The tax credit is available against the individual and corporate income taxes.
+
+The bill repeals the tax credit from the Code on January 1, 2027, due to the ability of the taxpayer to credit any overpayment in tax liability in the following tax year.
+
+DIVISION XV —— RESEARCH AND DEVELOPMENT TAX CREDIT PROGRAM. The bill creates a research and development tax credit program to be administered by the authority. The bill provides a tax credit to eligible businesses that incur qualified research expenses as defined under section 41 of the Internal Revenue Code to the extent such expenses were incurred in the state.
+
+The tax credit is available against the individual and corporate income taxes for tax years beginning on or after January 1, 2026.
+
+The bill makes the credit available to businesses primarily engaged in advanced manufacturing, bioscience, insurance and finance, and technology innovation. The bill further limits the credit to the following sectors of those businesses: second-generation food innovation, food ingredients and supplements, crop protection, hybrid seed technologies, diagnostic analytics and immunotherapies, chip technologies and microelectronics, medical equipment and supplies, software technology, aerospace, pharmaceuticals, consumer products, and any additional sectors included by the authority by rule.
+
+A business is required to submit a preapplication for the credit to the authority to determine whether the business is primarily engaged in an eligible sector described in the bill and is actively engaged in qualified research and development. The determination by the authority shall be based on factors including but not limited to the North American industry classification code and sources of revenue, and may include site visits by the authority.
+
+A business must be certified by the authority to be eligible for the credit. A business becomes a qualified business if it has been certified by the authority, and a qualified business may remain certified for up to five years. A qualified business may reapply for certification in additional five-year increments.
+
+Each year after becoming a qualified business during the five-year period, the bill requires the qualified business to submit an application to the authority for the tax credit based on the amount of eligible expenditures that were made during the previous tax year. Eligible expenditures must be reviewed by agreed upon procedures prescribed by the authority by rule. The bill requires the eligible expenditures review to be conducted by a certified public accountant authorized to practice in this state. A business shall submit the application to the authority by January 31 of each year the business is certified to be a qualified business.
+
+The authority may approve a tax credit in the form of a tax credit certificate issued to the qualified business up to an amount equal to 3.5 percent of the amount of the qualified business's eligible expenditures. The tax credit must be claimed for the tax year during which the eligible expenditures were incurred.
+
+Any tax credit in excess of the qualified business's tax liability is refundable. In lieu of claiming a refund, the taxpayer may elect to have the overpayment shown on the taxpayer's final, completed return credited to the tax liability for the following tax year.
+
+The research and development tax credit certificates issued pursuant to this division are not transferable.
+
+The maximum amount of research and development tax credits the authority may issue each fiscal year shall not exceed $40 million.
+
+The bill requires a qualified business claiming the credit to annually report to the authority the following: the total amount of investment made in research and development; the location in this state where the research and development occurred; and the number of jobs created, wages paid, and employee residence locations.
+
+DIVISION XVI —— SUSTAINABLE AVIATION FUEL PRODUCTION TAX CREDIT. The bill creates a sustainable aviation fuel tax credit program.
+
+The bill defines "sustainable aviation fuel" (SAF) to mean a liquid fuel derived from feedstock not including palm fatty acid distillates and that achieves at least a 50 percent life cycle greenhouse gas emissions reduction in comparison with petroleum-based aviation gasoline, aviation turbine fuel, and jet fuel as determined by other tests further defined in the bill.
+
+The bill defines "feedstock" to mean any organic matter processed or refined in the state suitable for sustainable aviation fuel production without further enhancement. "Feedstock" includes but is not limited to ethanol, corn oil, soybean oil, animal fats used in cooking oil, and algae oil.
+
+The bill defines "eligible business" to mean a business engaged in the manufacturing of SAF from feedstock.
+
+An eligible business that produces SAF in this state during a calendar year may apply to the authority for the tax credit for the SAF produced during the 2026 calendar year through the 2035 calendar year.
+
+The bill requires an eligible business that produces SAF to apply to the authority for the credit in the manner prescribed by the authority, and in the calendar year following the calendar year in which the SAF is produced. The bill requires the application to include the amount of SAF produced in the state from feedstock by the eligible business during the calendar year, measured in gallons, the types and sources of feedstock used to produce sustainable aviation fuel, and any other information required by the authority. Each application shall be reviewed and scored on a competitive basis by the authority pursuant to rules adopted by the authority.
+
+Before being issued a tax credit, the bill requires an eligible business to enter into an agreement with the authority for the successful completion of all requirements of the program. As part of the agreement, the eligible business must agree to collect and provide any information reasonably required by the authority in order to allow the economic development authority board to fulfill its reporting obligation under new Code section 15.514.
+
+If all of the requirements of the program and the agreement have been fulfilled, the bill requires the authority to issue a tax credit certificate to the eligible business in an amount equal to the product of 25 cents multiplied by the number of gallons of SAF produced in this state.
+
+The SAF tax credit is refundable. In lieu of claiming a refund, the eligible business may elect to have the overpayment shown on the taxpayer's final, completed return credited to the tax liability for the following tax year.
+
+The SAF tax credit certificates issued pursuant to this division are not transferable.
+
+The maximum amount of SAF tax credits combined with the chemical production tax credit shall not exceed $10 million in a fiscal year. The bill specifies the maximum amount of tax credits issued to an eligible business shall not exceed $1 million in a calendar year. An eligible business also shall not be issued more than five tax credit certificates under the program.
+
+The bill requires the economic development board and the department of revenue to annually submit to the general assembly and to the governor, or provide to the authority for inclusion in the authority's annual report under Code section 15.511, a report describing the activities of the program for the most recent calendar year for which the tax credit application period has ended.
+
+The division takes effect upon enactment and applies retroactively to tax years beginning on or after January 1, 2025.
+
+The SAF production tax credit is repealed January 1, 2037.
+
+DIVISION XVII —— MAJOR ECONOMIC GROWTH ATTRACTION PROGRAM. The bill permits an eligible business that is entitled to a sales and use tax refund pursuant to the major economic growth attraction program to receive the sales and tax refund on a quarterly basis rather than annually over a five-year period. The bill also specifies that if an eligible business does not comply with the requirements of the program, a county may take action to recover the value of the property taxes not collected as a result of the exemption provided to the eligible business.

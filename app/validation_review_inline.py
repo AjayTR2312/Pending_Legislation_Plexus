@@ -21,12 +21,33 @@ import base64
 import io
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Optional
 
 import streamlit as st
 import streamlit.components.v1 as components
 import openpyxl
+
+# Optional import of IN decorative-header detector — used by the
+# retroactive verdict normalization in :func:`_load_excel` to promote
+# stale ``tag_dropped`` rows that are actually expected IN tag-drops
+# (bill title / decorative rule / committee name / etc.) per the IN
+# clean-prompt.  See :func:`_is_in_decorative_header` in
+# ``Opus4.6/pymupdf_compare.py``.  The import is wrapped so missing
+# sibling files (e.g. when the audit module isn't installed in the
+# current Python path) don't break the validation-review UI.
+try:
+    _opus_dir = (Path(__file__).resolve().parent.parent / "Opus4.6").resolve()
+    if _opus_dir.is_dir() and str(_opus_dir) not in sys.path:
+        sys.path.insert(0, str(_opus_dir))
+    from pymupdf_compare import (  # type: ignore
+        _is_in_decorative_header as _in_is_decorative_header,
+        _committee_headers_from_clean_text as _in_committee_headers,
+    )
+except Exception:  # pragma: no cover — defensive
+    _in_is_decorative_header = None  # type: ignore
+    _in_committee_headers = None  # type: ignore
 
 # Bidirectional HTML component — enables JS-to-Python communication for clickable table rows
 try:
@@ -223,6 +244,109 @@ def _load_excel(xlsx_path: Path) -> tuple[list[dict], list[dict], dict]:
                     d[h] = row[i] if i < len(row) else ""
                 findings.append(d)
 
+    # ── Retroactive verdict normalization ───────────────────────────
+    # PyMuPDF false-positive classifications used to resolve to
+    # "⚠️ warning"; the audit policy now treats them as "✅ pass" because
+    # the LLM correctly stripped the false positive (the cleaned output
+    # is right, nothing for the user to fix).  Promote any legacy rows
+    # in older Excel files so the user sees the same verdicts everywhere
+    # without having to re-run the audit.
+    _LEGACY_FALSE_POSITIVE_TO_PASS = {
+        "other_false_positive",
+        "table_false_positive",
+    }
+    for r in checklist:
+        cls = str(r.get("Classification", "") or "").strip().lower()
+        verd = str(r.get("Verdict", "") or "")
+        if cls in _LEGACY_FALSE_POSITIVE_TO_PASS and verd.startswith("⚠"):
+            r["Verdict"] = "✅ pass"
+            existing_notes = str(r.get("Notes", "") or "").strip()
+            promotion_tag = "[Auto-promoted to pass: LLM correctly stripped a PyMuPDF false positive.]"
+            if promotion_tag not in existing_notes:
+                r["Notes"] = (
+                    f"{existing_notes}  {promotion_tag}".strip()
+                    if existing_notes else promotion_tag
+                )
+
+    # ── Retroactive: IN decorative-header tag drops are EXPECTED ────
+    # The IN clean-prompt instructs the LLM to STRIP [A>...<A] tags
+    # from decorative headers (bill title, version label, A BILL FOR AN
+    # ACT, digest heading, decorative rules, section labels, committee
+    # names) while preserving the inner text.  Older Excel audits
+    # classified these as ``tag_dropped`` (❌ error) — the new pipeline
+    # classifies them as ``decorative_header_dropped`` (✅ pass).  This
+    # retroactive pass promotes the stale rows so the user sees the
+    # corrected verdicts without re-running the audit.
+    #
+    # State detection: the bill PDF / audit Excel both live in a
+    # session folder named after the filename schema
+    # ``YYYY_YYYY_<state>_N_N_NNNNNN_...`` where ``<state>`` is the
+    # numeric state code.  IN = 14.
+    if _in_is_decorative_header is not None:
+        state_num: str = ""
+        name_parts = xlsx_path.name.split("_")
+        if len(name_parts) >= 4:
+            state_num = name_parts[2]
+        if state_num == "14":   # Indiana
+            # Try to load the sibling cleaned text for committee-name
+            # cross-validation.  The audit Excel is named
+            # ``<stem>_clean_audit.xlsx`` and the cleaned text is
+            # ``<stem>_clean.txt`` in the same folder.
+            committee_names: set = set()
+            try:
+                cleaned_path = Path(
+                    str(xlsx_path).replace("_clean_audit.xlsx", "_clean.txt")
+                )
+                if cleaned_path.is_file() and _in_committee_headers is not None:
+                    cleaned_text = cleaned_path.read_text(
+                        encoding="utf-8", errors="ignore"
+                    )
+                    committee_names = _in_committee_headers(cleaned_text)
+            except Exception:  # pragma: no cover — defensive
+                committee_names = set()
+
+            n_promoted = 0
+            for r in checklist:
+                cls = str(r.get("Classification", "") or "").strip().lower()
+                verd = str(r.get("Verdict", "") or "")
+                if cls != "tag_dropped" or not verd.startswith("❌"):
+                    continue
+                tag_type = str(r.get("Tag Type", "") or "").strip().lower()
+                if tag_type and tag_type != "addition":
+                    continue   # decorative styling never produces strikethroughs
+                pymupdf_text = str(r.get("PyMuPDF Text", "") or "")
+                if not pymupdf_text:
+                    continue
+                try:
+                    if _in_is_decorative_header(
+                        pymupdf_text, committee_names=committee_names
+                    ):
+                        r["Verdict"] = "✅ pass"
+                        r["Classification"] = "decorative_header_dropped"
+                        existing_notes = str(r.get("Notes", "") or "").strip()
+                        promotion_tag = (
+                            "[Auto-promoted to pass: IN decorative header "
+                            "— bold/underlined styling is decorative "
+                            "typography, NOT legislative markup; the IN "
+                            "clean-prompt instructs the LLM to strip the "
+                            "[A>...<A] tag while preserving the text.]"
+                        )
+                        if promotion_tag not in existing_notes:
+                            r["Notes"] = (
+                                f"{existing_notes}  {promotion_tag}".strip()
+                                if existing_notes else promotion_tag
+                            )
+                        n_promoted += 1
+                except Exception:  # pragma: no cover — defensive
+                    pass
+            if n_promoted:
+                import logging as _log
+                _log.info(
+                    "🏛️  IN audit: retroactively promoted %d tag_dropped "
+                    "row(s) to ✅ pass (decorative header per IN prompt)",
+                    n_promoted,
+                )
+
     n_pass = sum(1 for r in checklist if str(r.get("Verdict", "")).startswith("✅"))
     n_warn = sum(1 for r in checklist if str(r.get("Verdict", "")).startswith("⚠"))
     n_err  = sum(1 for r in checklist if str(r.get("Verdict", "")).startswith("❌"))
@@ -249,6 +373,29 @@ def _html_escape(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+# ─── Backward-compatible column readers ────────────────────────────
+# The PyMuPDF Clean Audit (pymupdf_compare.py) renamed two columns to
+# better reflect what they hold:
+#     "Claude Text"   →  "Clean Text"        (the PyMuPDF Clean output tag)
+#     "In Claude?"    →  "In Clean Output?"  (was the tag preserved?)
+# Older audits (and gpt_compare.py) still use the legacy names, so these
+# helpers try the new name first and fall back to the old one.
+def _row_clean_text(row: dict) -> str:
+    """Return the tag from the cleaned output (was 'Claude Text')."""
+    val = row.get("Clean Text", "")
+    if val:
+        return str(val)
+    return str(row.get("Claude Text", "") or "")
+
+
+def _row_in_clean(row: dict) -> str:
+    """Return the in-clean status (was 'In Claude?')."""
+    val = row.get("In Clean Output?", "")
+    if val:
+        return str(val)
+    return str(row.get("In Claude?", "") or "")
+
+
 def _render_text_html(text: str, checklist: list[dict],
                       selected_id: int | None = None,
                       filter_mode: str = "all",
@@ -265,7 +412,7 @@ def _render_text_html(text: str, checklist: list[dict],
             continue
 
         pymupdf_text = str(row.get("PyMuPDF Text", "")).strip()
-        claude_text = str(row.get("Claude Text", "")).strip()
+        claude_text = _row_clean_text(row).strip()
 
         if cid in fixed_ids:
             css = "vr-span-highlight-pass"
@@ -496,7 +643,7 @@ def _find_affected_items(checklist: list[dict], fixed_ids: set[int],
         verdict = str(row.get("Verdict", ""))
         if not verdict.startswith("❌"):
             continue
-        ct = str(row.get("Claude Text", "") or "").strip()
+        ct = _row_clean_text(row).strip()
         if not ct or len(ct) < 10:
             continue  # skip very short text — too many false positives
         # Only consider items on the same page
@@ -809,16 +956,20 @@ def _render_accuracy_expander(accuracy_report: dict | None,
     if not accuracy_report:
         return
     acc = accuracy_report["accuracy"]
+    raw_acc = accuracy_report.get("raw_accuracy", acc)
     n_diffs = accuracy_report["real_diff_count"]
     n_repos = accuracy_report["repositioned_count"]
     n_trans = accuracy_report.get("transposed_count", 0)
     n_punct = accuracy_report.get("punctuation_count", 0)
     n_spacing = accuracy_report.get("spacing_count", 0)
     n_word  = accuracy_report.get("word_diff_count", n_diffs)
+    n_allowed = accuracy_report.get("allowed_diff_count", 0)
+    allowed_diffs = accuracy_report.get("allowed_diffs", [])
+    allowed_cats = accuracy_report.get("allowed_categories", {})
     status = accuracy_report["status"]
 
     # If identical, no expander needed
-    if status == "IDENTICAL" and n_diffs == 0 and n_repos == 0 and n_spacing == 0:
+    if status == "IDENTICAL" and n_diffs == 0 and n_repos == 0 and n_spacing == 0 and n_allowed == 0:
         return
 
     # Build breakdown chips for the label
@@ -829,10 +980,17 @@ def _render_accuracy_expander(accuracy_report: dict | None,
     if n_spacing: _chips.append(f"{n_spacing} spacing (ignored)")
     _chip_str = ", ".join(_chips) if _chips else f"{n_diffs} difference{'s' if n_diffs != 1 else ''}"
 
+    # Show "raw accuracy → adjusted accuracy" delta when the allowlist
+    # actually rescued some false positives.
+    _acc_label = f"{acc:.1f}%"
+    if n_allowed and raw_acc < acc:
+        _acc_label = f"{acc:.1f}% (raw {raw_acc:.1f}%)"
+
     label = (
-        f"📊 Text Accuracy Report — {acc:.1f}% "
+        f"📊 Text Accuracy Report — {_acc_label} "
         f"({_chip_str}"
-        f"{f', {n_repos} repositioned' if n_repos else ''})"
+        f"{f', {n_repos} repositioned' if n_repos else ''}"
+        f"{f', {n_allowed} allowed' if n_allowed else ''})"
     )
 
     # Auto-expand if accuracy is below 98%
@@ -846,7 +1004,7 @@ def _render_accuracy_expander(accuracy_report: dict | None,
         c3.metric("Matching", f"{accuracy_report['matching_words']:,}")
 
         # Sub-type breakdown pills
-        if n_diffs > 0 or n_spacing > 0:
+        if n_diffs > 0 or n_spacing > 0 or n_allowed > 0:
             _pill = ('display:inline-block; padding:3px 10px; border-radius:12px; '
                      'font-size:0.78rem; font-weight:600; margin:2px 4px;')
             _pills_html = ""
@@ -865,13 +1023,112 @@ def _render_accuracy_expander(accuracy_report: dict | None,
             if n_repos:
                 _pills_html += (f'<span style="{_pill} background:#f0fdf4; color:#166534;">'
                                 f'↔️ {n_repos} Repositioned</span>')
+            if n_allowed:
+                _pills_html += (f'<span style="{_pill} background:#ecfeff; color:#155e75;">'
+                                f'🛡️ {n_allowed} Allowed Removal{"s" if n_allowed != 1 else ""}</span>')
             st.markdown(f'<div style="margin:8px 0 12px;">{_pills_html}</div>',
                         unsafe_allow_html=True)
+
+        # ── Allowed-removals panel ──────────────────────────────────────
+        # These are diffs that classify as known artifact categories (line
+        # numbers, headers, footers, page markers, decorative fill).  They
+        # are EXCLUDED from the accuracy score because the cleaning prompt
+        # explicitly tells the LLM to remove them.  Surfaced here so users
+        # can audit *what* was filtered and confirm no real content slipped
+        # into the allowlist.
+        if n_allowed:
+            with st.container():
+                _cat_chip = ('display:inline-block; padding:2px 10px; border-radius:10px; '
+                             'font-size:0.75rem; font-weight:600; margin:2px 4px; '
+                             'background:#ecfeff; color:#155e75; border:1px solid #a5f3fc;')
+                _cat_pills = "".join(
+                    f'<span style="{_cat_chip}">{n} {k.replace("_", " ")}</span>'
+                    for k, n in sorted(allowed_cats.items(), key=lambda kv: -kv[1])
+                )
+                _delta = (
+                    f' Without the allowlist, accuracy would have been '
+                    f'<b>{raw_acc:.1f}%</b> — the {n_allowed} intentional '
+                    f'removal{"s" if n_allowed != 1 else ""} below '
+                    f'rescued <b>{acc - raw_acc:+.1f} percentage points</b>.'
+                ) if raw_acc < acc else ""
+                st.markdown(
+                    f'<div style="background:#ecfeff; border:1px solid #a5f3fc; '
+                    f'border-radius:10px; padding:12px 16px; margin:8px 0 12px;">'
+                    f'<div style="font-weight:700; color:#155e75; margin-bottom:6px;">'
+                    f'🛡️ {n_allowed} intentional cleanup removal{"s" if n_allowed != 1 else ""} '
+                    f'(not counted against accuracy)</div>'
+                    f'<div style="margin-bottom:6px;">{_cat_pills}</div>'
+                    f'<div style="font-size:0.82rem; color:#0c4a6e;">{_delta}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+                with st.expander(f"View all {n_allowed} allowed removal{'s' if n_allowed != 1 else ''}", expanded=False):
+                    # Show the first 200 to keep the page snappy
+                    _limit = 200
+                    for idx, d in enumerate(allowed_diffs[:_limit], 1):
+                        _txt = (
+                            d.get("missing_text")
+                            or d.get("extra_text")
+                            or d.get("pymupdf_text")
+                            or d.get("converted_text")
+                            or ""
+                        )
+                        _cat = d.get("allowed_category", "?")
+                        _rule = d.get("allowed_rule", "")
+                        _txt_disp = _txt if len(_txt) <= 200 else _txt[:197] + "..."
+                        # Mark LLM auto-demoted entries with a robot icon so the
+                        # reviewer can distinguish regex-classified vs LLM-classified
+                        # allowed removals at a glance.
+                        _icon = "🤖" if d.get("auto_demoted") else "🛡️"
+                        st.markdown(
+                            f"`{idx:>3}` {_icon} **[{_cat}]** {_txt_disp}  \n"
+                            f"&nbsp;&nbsp;&nbsp;&nbsp;<span style='color:#64748b; font-size:0.78rem;'>"
+                            f"_Rule: {_rule}_</span>",
+                            unsafe_allow_html=True,
+                        )
+                    if len(allowed_diffs) > _limit:
+                        st.caption(f"... and {len(allowed_diffs) - _limit} more (full list in the removals.json report)")
 
         if status == "CONTENT_MATCH":
             st.success(
                 f"✅ All content present in both files. "
                 f"{n_repos} block(s) repositioned but no missing content."
+            )
+
+        # ── LLM-verifier summary banner (when applied) ───────────
+        # When the user enabled "LLM-verify residual text diffs" in the
+        # sidebar, llm_diff_verifier.apply_llm_verifications_to_report()
+        # stamps these fields onto the accuracy report.  Surface them so
+        # the reviewer knows the second-opinion layer ran.
+        if accuracy_report.get("llm_verification_applied"):
+            _llm_demoted = accuracy_report.get("llm_auto_demoted_count", 0)
+            _llm_review  = accuracy_report.get("llm_review_aid_count", 0)
+            _llm_total   = accuracy_report.get("llm_verified_count", 0)
+            _llm_cats    = accuracy_report.get("llm_categories", {})
+            _cat_chip = ('display:inline-block; padding:1px 8px; border-radius:8px; '
+                         'font-size:0.72rem; font-weight:600; margin:1px 3px; '
+                         'background:#f1f5f9; color:#334155; border:1px solid #cbd5e1;')
+            _cat_pills = "".join(
+                f'<span style="{_cat_chip}">{n} {k.replace("_", " ")}</span>'
+                for k, n in sorted(_llm_cats.items(), key=lambda kv: -kv[1])
+            ) or '<span style="color:#64748b; font-size:0.78rem;">no diffs to verify</span>'
+            _llm_msg = (
+                f'🤖 <b>LLM diff verifier:</b> classified {_llm_total} residual '
+                f'real_diff{"s" if _llm_total != 1 else ""} — '
+                f'<b>{_llm_demoted}</b> auto-demoted to allowed '
+                f'(silent, all four safety guards passed), '
+                f'<b>{_llm_review}</b> kept as real_diff with review-aid suggestion '
+                f'(LLM thinks they’re artifacts but at least one guard failed: '
+                f'medium/low confidence, non-whitelist category, or &gt;15 words).'
+            )
+            st.markdown(
+                f'<div style="background:#f0f9ff; border:1px solid #bae6fd; '
+                f'border-radius:10px; padding:12px 16px; margin:10px 0 14px;">'
+                f'<div style="margin-bottom:6px;">{_llm_msg}</div>'
+                f'<div>{_cat_pills}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
             )
 
         # Real differences — show all types
@@ -930,6 +1187,38 @@ def _render_accuracy_expander(accuracy_report: dict | None,
                     lines = f"**#{idx} {dtype}**\n\n- {d}"
 
                 st.markdown(lines)
+
+                # ── LLM review-aid suggestion (when present) ────────────
+                # The diff stayed as ``real_diff`` because at least one
+                # of the four auto-demote safety guards failed.  We surface
+                # the LLM's hypothesis so the reviewer has context for the
+                # one-click "mark as allowed" decision.
+                _llm_v = d.get("llm_verdict")
+                _llm_s = d.get("llm_suggestion")
+                if _llm_s or (_llm_v and _llm_v != "real_content"):
+                    _conf = d.get("llm_confidence", "low")
+                    _cat  = d.get("llm_category", "unclear")
+                    _why  = d.get("llm_reasoning", "")
+                    _conf_color = {"high": "#16a34a", "medium": "#d97706", "low": "#64748b"}.get(_conf, "#64748b")
+                    _verdict_label = "likely artifact" if _llm_v == "artifact" else _llm_v
+                    st.markdown(
+                        f'<div style="background:#fef9c3; border-left:3px solid #eab308; '
+                        f'border-radius:6px; padding:8px 12px; margin:6px 0 4px; font-size:0.85rem;">'
+                        f'<b>🤖 LLM second opinion:</b> '
+                        f'<span style="color:{_conf_color}; font-weight:600;">{_verdict_label}</span> '
+                        f'— category <code>{_cat}</code>, confidence <code>{_conf}</code>.<br>'
+                        f'<span style="color:#713f12; font-size:0.82rem;">{_why}</span>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+                elif _llm_v == "real_content":
+                    # LLM independently confirmed this is real content — reinforce
+                    # the existing verdict so the reviewer trusts it.
+                    st.caption(
+                        f"🤖 LLM second opinion: confirmed real content — "
+                        f"{d.get('llm_reasoning', 'no reasoning provided')}"
+                    )
+
                 if idx < len(real_diffs):
                     st.divider()
 
@@ -968,12 +1257,6 @@ def _render_twocol_view(
 
         # ──────── LEFT: PDF Page (reference) ────────────────────────
         with col_left:
-            st.markdown(
-                '<p style="font-size:0.92rem;font-weight:700;margin:0 0 6px;">'
-                '📄 PDF Pages — Original Reference</p>',
-                unsafe_allow_html=True,
-            )
-
             if total_pages > 0:
                 cur = st.session_state.vri_current_page
                 cur = max(1, min(cur, total_pages))
@@ -1315,56 +1598,8 @@ def render_inline_validation_review(
             st.warning("⚠️ No audit data or accuracy report available for this file.")
 
         # ── Additional findings section removed (duplicates checklist) ────
-
-        # ── Still show the side-by-side PDF ↔ Claude text view ──────
-        page_images = _get_page_images(highlighted_dir)
-        total_pages = len(page_images)
-        text = ""
-        if converted_txt_path.exists():
-            text = converted_txt_path.read_text(encoding="utf-8")
-
-        if page_images or text:
-            if "vri_current_page" not in st.session_state:
-                st.session_state.vri_current_page = 1
-            st.markdown("---")
-            if gpt_audit_failed:
-                st.markdown("### 📝 Manual Review — Original PDF vs Converted Text")
-                st.caption("Compare the highlighted PDF pages on the left with the Claude converted text on the right. "
-                           "You can edit the converted text directly.")
-            else:
-                st.markdown("### 📑 Side-by-Side Comparison")
-            _render_twocol_view(
-                page_images=page_images,
-                total_pages=total_pages,
-                text=text,
-                checklist=[],
-                selected_id=None,
-                filter_mode="all",
-                fixed_ids=set(),
-                ignored_ids=set(),
-                all_errors_resolved=True,
-                converted_txt_path=converted_txt_path,
-            )
-
-        # ── Download button — show when no checklist items ─────────────
-        if converted_txt_path.exists():
-            try:
-                _dl_bytes = converted_txt_path.read_bytes()
-                _dl_name = converted_txt_path.name
-                _dl_b64 = base64.b64encode(_dl_bytes).decode()
-                _dl_size = len(_dl_bytes)
-                _dl_label = f"{_dl_size / 1024:.1f} KB" if _dl_size < 1024 * 1024 else f"{_dl_size / (1024*1024):.1f} MB"
-                st.markdown(
-                    f'<div style="text-align:center; margin:12px 0 4px;">'
-                    f'<a href="data:text/plain;base64,{_dl_b64}" download="{_dl_name}" '
-                    f'style="display:inline-block; font-size:0.84rem; '
-                    f'color:#1e40af; text-decoration:none; background:#eff6ff; '
-                    f'padding:8px 20px; border-radius:8px; border:1px solid #bfdbfe;">'
-                    f'📥 Download converted text ({_dl_label})</a></div>',
-                    unsafe_allow_html=True,
-                )
-            except Exception:
-                pass
+        # ── Side-by-side PDF ↔ Converted text view removed per user request ─
+        # ── Download button removed per user request ──────────────────────
 
         return
 
@@ -1608,8 +1843,8 @@ def render_inline_validation_review(
             tbl += f'<tr class="{rc}" data-cid="{cid_int}">'
             _pymupdf_full = _html_escape(str(row.get("PyMuPDF Text", "")))
             _pymupdf_disp = _html_escape(_trunc(row.get("PyMuPDF Text", "")))
-            _claude_full = _html_escape(str(row.get("Claude Text", "")))
-            _claude_disp = _html_escape(_trunc(row.get("Claude Text", "")))
+            _claude_full = _html_escape(_row_clean_text(row))
+            _claude_disp = _html_escape(_trunc(_row_clean_text(row)))
             _notes_full = _html_escape(str(row.get("Notes", "")))
             _notes_disp = _html_escape(_trunc(row.get("Notes", ""), 100))
 
@@ -1620,7 +1855,7 @@ def render_inline_validation_review(
             tbl += f'<td>{_line_val if _line_val else ("—" if not _has_line_numbers else "")}</td>'
             tbl += f'<td>{_html_escape(str(row.get("Tag Type", "")))}</td>'
             tbl += f'<td title="{_pymupdf_full}">{_pymupdf_disp}</td>'
-            tbl += f'<td>{_html_escape(str(row.get("In Claude?", "")))}</td>'
+            tbl += f'<td>{_html_escape(_row_in_clean(row))}</td>'
             tbl += f'<td title="{_claude_full}">{_claude_disp}</td>'
             tbl += f'<td>{_html_escape(str(row.get("Classification", "")))}</td>'
             tbl += f'<td title="{_notes_full}">{_notes_disp}</td>'
@@ -1740,7 +1975,7 @@ def render_inline_validation_review(
             st.success(f"✅ Item #{cid} has been fixed! The text file is updated.")
 
             # Show content details (same as Apply Fix / warning views)
-            claude_text = str(selected_row.get("Claude Text", "") or "")
+            claude_text = _row_clean_text(selected_row)
             pymupdf_text = str(selected_row.get("PyMuPDF Text", "") or "")
             notes = str(selected_row.get("Notes", "") or "")
             fix = str(selected_row.get("Suggested Fix", "") or "")
@@ -1787,7 +2022,7 @@ def render_inline_validation_review(
                 f"🔇 Item #{cid} has been **ignored** (marked as false positive). "
                 "It no longer counts as an error."
             )
-            claude_text = str(selected_row.get("Claude Text", "") or "")
+            claude_text = _row_clean_text(selected_row)
             notes = str(selected_row.get("Notes", "") or "")
             fix = str(selected_row.get("Suggested Fix", "") or "")
 
@@ -1823,7 +2058,7 @@ def render_inline_validation_review(
                     unsafe_allow_html=True
                 )
 
-            claude_text = str(selected_row.get("Claude Text", "") or "")
+            claude_text = _row_clean_text(selected_row)
             pymupdf_text = str(selected_row.get("PyMuPDF Text", ""))
             tag_type = str(selected_row.get("Tag Type", "addition"))
             suggested_fix = str(selected_row.get("Suggested Fix", ""))
@@ -2274,8 +2509,8 @@ def render_inline_validation_review(
             is_warning = str(selected_row.get("Verdict", "")).startswith("⚠")
             is_ignored = cid in ignored_ids
 
-            st.markdown("**Claude Text:**")
-            st.code(str(selected_row.get("Claude Text", "")), language=None)
+            st.markdown("**Clean Output Text:**")
+            st.code(_row_clean_text(selected_row), language=None)
             notes = str(selected_row.get("Notes", ""))
             fix = str(selected_row.get("Suggested Fix", ""))
             if notes:

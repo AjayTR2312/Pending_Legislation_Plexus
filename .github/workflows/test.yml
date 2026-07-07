@@ -1,0 +1,66 @@
+# Continuous-integration workflow for the Pending Legislation extractor.
+#
+# Runs on every push and pull request.  Two jobs:
+#   * `test`       — pytest on Python 3.11 (matches the production runtime)
+#   * `lint-quick` — a syntax-only sanity check that imports the main
+#                    modules so missing-import bugs surface in CI rather
+#                    than in production.
+#
+# We do NOT call clean_extracted_text() in CI because that requires an
+# Anthropic API key.  All deterministic post-processors and the new
+# extraction_validator are exercised end-to-end via the snapshot tests.
+
+name: Tests
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  # Allow manual triggering for ad-hoc verification.
+  workflow_dispatch:
+
+# Cancel any in-progress runs for the same ref when a new commit lands —
+# saves CI minutes during rapid iteration.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: pytest (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11"]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          # Cache pip downloads between runs.  Key on the requirements
+          # files so a changed dependency invalidates the cache.
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install runtime + dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # The extractor only needs PyMuPDF for the snapshot tests; install
+          # the rest of requirements.txt anyway so any future test additions
+          # (e.g. pandas-based assertions) work without CI changes.
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Show installed package versions (debug)
+        run: pip freeze
+
+      - name: Run pytest
+        run: pytest -ra

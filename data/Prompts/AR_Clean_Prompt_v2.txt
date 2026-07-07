@@ -32,6 +32,14 @@ c) Page numbers / footers: "Page 1 of 5", standalone numbers at page bottoms
 d) Repeated headers on pages 2+: bill number, state name, assembly/session lines, committee info
 e) Excessive blank lines: collapse to max 1 blank line between paragraphs
 f) Artificial line breaks mid-sentence: join into continuous flowing text
+g) AR scan/print artifacts (all pages):
+   • Barcode lines: `*HAR003*`, `*HSR12*`, `*SAR123*`
+   • Timestamp footers: `01/27/2025 11:03:27 AM HAR003`
+   • Page-N + timestamp running headers: `2 01/27/2025 11:03:27 AM HAR003`
+   • Bare bill-ID running headers when ALONE on a line: `HB1249`, `SB85`, `HJR12`
+   ⚠️ KEEP "Act # of the Regular Session" — it's a legitimate post-passage stamp.
+   ⚠️ KEEP "HOUSE BILL 1249" / "SENATE BILL 85" on page 1 — those are official
+      bill identifiers; only the compact `HB1249`/`SB85` form alone on a line is stripped.
 
 ═══════════════════════════════════════════════
 RULE 3 — PRESERVE EVERYTHING ELSE (zero-loss policy)
@@ -54,6 +62,90 @@ RULE 4 — OUTPUT FORMATTING
 • Between paragraphs/sections: single blank line
 • Each numbered/lettered subsection starts on its own line
 • Maintain hierarchy: SECTION → (a) → (1) → (A)
+
+═══════════════════════════════════════════════
+RULE 5 — APPROPRIATION TABLES: STRIP DECORATIVE [A>...<A] WRAPPERS
+═══════════════════════════════════════════════
+
+In AR appropriation bills, salary/budget tables use underline as
+typographic emphasis (NOT as a legislative-addition marker). The
+extractor wraps these decorative underlines with [A>...<A] tags
+incorrectly. STRIP the wrapper (keep the inside text) when the tag
+matches one of these three patterns on a table row:
+
+A) Column-header row (No., Title, Employees, year columns):
+   ❌ `[A> No.     Title     Employees     2025-2026<A]`
+   ✅ ` No.     Title     Employees     2025-2026`
+
+   ❌ `[A> NO.                                       2025-2026<A]`
+   ✅ ` NO.                                       2025-2026`
+
+B) All-caps category heading row (no lowercase letters):
+   ❌ `[A>TWELVE MONTH EDUCATIONAL AND GENERAL ADMINISTRATIVE POSITIONS<A]`
+   ✅ `TWELVE MONTH EDUCATIONAL AND GENERAL ADMINISTRATIVE POSITIONS`
+
+   Also: "NINE MONTH EDUCATIONAL AND GENERAL ACADEMIC POSITIONS",
+   "TWELVE MONTH AUXILIARY ENTERPRISES POSITIONS", etc.
+
+C) Bare dollar amount in an appropriation schedule row (tag wraps
+   ONLY a number/dollar value, no surrounding prose):
+   ❌ `(05) CONTINGENCY                          [A>      573,644<A]`
+   ✅ `(05) CONTINGENCY                                573,644`
+
+   ❌ `      TOTAL AMOUNT APPROPRIATED            [A> $12,046,523<A]`
+   ✅ `      TOTAL AMOUNT APPROPRIATED              $12,046,523`
+
+   ❌ `(05) DEBT SERVICE                         [A>    2,200,000<A]`
+   ✅ `(05) DEBT SERVICE                              2,200,000`
+
+KEEP THE [A>...<A] WRAPPER UNTOUCHED in these cases (REAL changes):
+✅ `SECTION 1. Arkansas Code Title 5 is [A>amended to add an additional section to read<A] as follows:`
+   (tag wraps a verb phrase — real legislative addition)
+✅ `[A>15-4-221.  Report concerning contracts awarded to businesses.<A]`
+   (tag wraps a brand-new code section being inserted)
+✅ Any tag that wraps prose / a phrase / words mixed with content.
+
+🔑 RULE OF THUMB: Strip the wrapper ONLY when the line is clearly a
+   row of a salary/appropriation table (or its column/category header)
+   AND the tag wraps ONLY column-title text, all-caps category text,
+   or a bare numeric/dollar value. Otherwise KEEP the tag untouched.
+
+═══════════════════════════════════════════════
+RULE 6 — PAGE 1 HEADER CANONICAL ORDER
+═══════════════════════════════════════════════
+
+AR PDFs render the page-1 header in a multi-column visual layout.
+In the cleaned output, render these elements VERTICALLY, each on its
+own line, in this exact order:
+
+  1. Stricken language would be deleted from and underlined…    (always first)
+  2. Act # of the Regular Session                                (if present)
+  3. HOUSE BILL XXXX  /  SENATE BILL XXXX  /  HOUSE JOINT RESOLUTION XXX  etc.
+  4. A Bill   (or "An Act")
+  5. State of Arkansas
+  6. ##th General Assembly
+  7. Regular Session, YYYY    (or "First Extraordinary Session, YYYY", "Fiscal Session, YYYY")
+
+NEVER concatenate two of these elements on a single line with whitespace.
+
+❌ WRONG:
+   State of Arkansas
+   95th General Assembly                              A Bill
+   Regular Session, 2025                        HOUSE BILL 1249
+
+✅ RIGHT:
+   Act 42 of the Regular Session
+
+   HOUSE BILL 1249
+   A Bill
+
+   State of Arkansas
+   95th General Assembly
+   Regular Session, 2025
+
+Treat any long horizontal whitespace run (≥ 8 spaces) inside a header
+line as a column break: split it, then place each element in the
+canonical order above.
 
 ═══════════════════════════════════════════════
 FEW-SHOT EXAMPLE
@@ -147,7 +239,19 @@ SELF-VALIDATION (run mentally before returning)
 3. Verify all 10 Page 1 elements (listed above) are present.
 4. Verify every SECTION number from the input appears in your output.
 5. Confirm NO line numbers, page markers, or repeated headers remain.
-6. Confirm output contains ZERO added commentary or explanation.
+6. Confirm NO AR scan artifacts remain: barcode lines (`*HAR003*`),
+   timestamp footers (`MM/DD/YYYY HH:MM:SS AM HAR###`), bare bill-ID
+   running headers (`HB1249` alone on a line). "Act # of the Regular
+   Session" must be KEPT.
+7. Confirm decorative [A>...<A] wrappers are stripped from appropriation
+   table column headers, all-caps category headings, and bare dollar
+   amounts in appropriation schedules (RULE 5 above). Tags around prose
+   must be KEPT.
+8. Confirm page-1 header elements (Act # / BILL ID / A Bill / State of
+   Arkansas / ##th General Assembly / Regular Session, YYYY) are each on
+   their own line in the canonical order (RULE 6 above). No element is
+   concatenated with another via a long whitespace run.
+9. Confirm output contains ZERO added commentary or explanation.
 
 IF ANY CHECK FAILS → fix before returning.
 IF IN DOUBT whether something is content or artifact → KEEP IT.

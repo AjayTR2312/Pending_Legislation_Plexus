@@ -16,11 +16,16 @@ The input text may begin with a metadata block delimited by:
 
 USE THIS METADATA to understand the document structure:
 - **Tables**: The metadata shows table rows and columns extracted from the PDF.
-  Render each table row on a SINGLE line with large spacing between columns.
-  Example: "Section 1          October 1, 2025          5-192f(d)"
-  Do NOT split table rows across multiple lines.
-- **Table tags**: Strip any [A>...<A] or [D>...<D] tags that appear on table
-  cell content — table borders are NOT underlines. They are false positives.
+  Render each table row in COLUMN-ALIGNED MULTI-LINE format (see
+  "FLORIDA TABLE LAYOUT — COLUMN-ALIGNED FORMAT" section below for
+  exact column positions and worked examples).
+- **Table tags**: PRESERVE all [A>...<A] and [D>...<D] tags that appear on
+  table cell content — they are real underlines / strikethroughs marking
+  legislative changes (additions and deletions).  When a tagged cell wraps
+  across multiple visual lines, emit a SEPARATE tag pair on each visual
+  line (e.g. ``[D>...elude<D]`` on line 1, ``[D>law enforcement
+  officer.<D]`` on line 2).  Do NOT collapse multi-line tagged cells onto
+  a single line.
 - **Do NOT** include the metadata block itself in your output.
 
 HIERARCHY OF PRIORITIES (STRICT ORDER):
@@ -78,7 +83,14 @@ Line numbers MUST be removed:
 
 Bill headers MUST be removed from ALL pages (including page 1):
 - Pattern: "HB XXX" or "SB XXX" followed by spaces and page number or year
+- Pattern: "CS for SB XXX" or "CS for HB XXX" (Committee Substitute headers)
+- Pattern: "CS for CS for SB XXX" (nested Committee Substitutes — any depth of "CS for" nesting)
+- Pattern: "CS/CS/SB XXX", "CS/HB XXX", etc. (multiple Committee Substitute prefixes)
+- Pattern: "HB XXXe" or "SB XXXe" with trailing lowercase letter (engrossed variants)
+- Pattern: Any bill header with ", 1st Engrossed", ", 2nd Engrossed", etc. suffix
 - Example: "HB 385         2025" or "SB 1234         2026" appearing at TOP of page 1
+- Example: "CS for SB 1332" appearing at TOP of page 1
+- Example: "CS for CS for SB 1028, 1st Engrossed" appearing at TOP of page 1
 - Example: "HB 385         2" appearing at TOP of page 2, 3, 4, etc.
 - REMOVE from ALL pages including page 1 — these are document headers, not legislative content
 - The bill number is NOT part of the legislative text body
@@ -90,11 +102,13 @@ Florida-specific headers MUST be removed from ALL pages (including page 1):
 - "FLORIDA HOUSE OF REPRESENTATIVES"
 - "Florida Senate - YYYY" (e.g., "Florida Senate - 2025") — chamber + session header
 - Year markers as headers: Any 4-digit year (e.g., "2024", "2025", "2026") appearing alone at page top
+- Session/status markers: "ENROLLED", "2026 Legislature", "HB XXXe, Engrossed 1" appearing at page top
 - REMOVE from ALL pages including page 1 — these are document headers, not legislative content
 
 Florida internal reference numbers MUST be removed:
 - LRB/bill draft numbers: patterns like "40-00657B-25", "25-01234A-22"
 - Internal bill identifiers: patterns like "2025470__", "20251234__"
+- Document reference codes: patterns like "20261028er", "20257031er" (YYYY + bill number + "er")
 - These are internal tracking codes, NOT legislative content
 
 Florida-specific footers MUST be removed:
@@ -259,6 +273,118 @@ FLORIDA LEGISLATIVE FORMATTING RULES (CRITICAL):
    - Enacting clause: BLANK LINE before "Be It Enacted"
 
 ===================================================================
+FLORIDA TABLE LAYOUT — COLUMN-ALIGNED FORMAT (CRITICAL)
+===================================================================
+
+Florida bills include the **OFFENSE SEVERITY RANKING CHART** under
+section 921.0022, F.S., and similar statute reference tables.  These
+tables MUST be rendered in column-aligned multi-line format that mirrors
+the original PDF page layout — NOT collapsed onto a single line.
+
+EXACT COLUMN POSITIONS (use space characters, never tabs):
+
+  Column 1 — Florida Statute      starts at column  0   (width 36)
+  Column 2 — Felony Degree        starts at column 36   (width 30)
+  Column 3 — Description          starts at column 66   (continues to end)
+
+LAYOUT RULES:
+
+1. **Header row** — emit the column titles split across TWO lines so that
+   "Florida" sits above "Statute" and "Felony" sits above "Degree":
+
+   ```
+   Florida                             Felony                        Description
+   Statute                             Degree
+   ```
+
+   Insert ONE blank line before this header and ONE blank line after.
+
+2. **Data rows** — every row begins with the statute reference at column
+   0, the felony degree at column 36, and the description at column 66.
+   Pad with spaces so each column starts at its exact position.
+
+3. **Description wrapping** — when the description text wraps to a
+   second (or third, fourth…) line, indent each continuation line to
+   column 66 with spaces.  Each continuation line begins on its own
+   physical line.
+
+4. **Statute reference wrapping** — when the statute reference itself
+   wraps (e.g. ``322.212`` then ``  (1)(a)-(c)`` on the next line), the
+   continuation indents 2 spaces from column 0:
+
+   ```
+   322.212                             3rd                           Possession of forged, stolen,
+     (1)(a)-(c)                                                      counterfeit, or unlawfully
+                                                                     issued driver license;
+                                                                     possession of simulated
+                                                                     identification.
+   ```
+
+5. **Blank line between rows** — insert ONE blank line BETWEEN data
+   rows so each row visually separates from the next.
+
+6. **Tagged cells** — when a deletion tag covers a multi-line cell, emit
+   a SEPARATE tag pair on EACH visual line.  Do NOT span the tag across
+   the line break.  Example (deleted statute reference):
+
+   ```
+   [D>316.1935(1)                      3rd                           Fleeing or attempting to elude<D]
+                                                                     [D>law enforcement officer.<D]
+   ```
+
+   The same rule applies to ``[A>...<A]`` additions covering wrapped cells.
+
+7. **Section-letter sub-headers** — sub-headers like ``(a) LEVEL 1``,
+   ``(b) LEVEL 2``, ``(c) LEVEL 3``…  appear on their OWN line with one
+   blank line before and one blank line after (NOT inside the table grid).
+
+WORKED EXAMPLE (verbatim from a real Florida bill — match this exact
+column geometry; the example text has NO leading indent on the table
+lines themselves, so your output should also have NO leading indent):
+
+```
+(3) OFFENSE SEVERITY RANKING CHART
+
+(a) LEVEL 1
+
+Florida                             Felony                        Description
+Statute                             Degree
+
+24.118(3)(a)                        3rd                           Counterfeit or altered state
+                                                                  lottery ticket.
+
+104.0616(2)                         3rd                           Unlawfully distributing,
+                                                                  ordering, requesting,
+                                                                  collecting, delivering, or
+                                                                  possessing vote-by-mail
+                                                                  ballots.
+
+212.054(2)(b)                       3rd                           Discretionary sales surtax;
+                                                                  limitations, administration,
+                                                                  and collection.
+
+[D>316.1935(1)                      3rd                           Fleeing or attempting to elude<D]
+                                                                  [D>law enforcement officer.<D]
+
+319.30(5)                           3rd                           Sell, exchange, give away
+                                                                  certificate of title or
+                                                                  identification number plate.
+```
+
+WRONG (single-line collapsed — NEVER do this):
+
+```
+Florida Statute          Felony Degree          Description
+24.118(3)(a)          3rd          Counterfeit or altered state lottery ticket.
+104.0616(2)          3rd          Unlawfully distributing, ordering, requesting...
+[D>316.1935(1)          3rd          Fleeing or attempting to elude law enforcement officer.<D]
+```
+
+  ✗ This collapses every row onto a single line, loses column alignment,
+    merges multi-line wrapped cells, and welds separate visual deletion
+    tags into one giant tag.
+
+===================================================================
 SPECIAL INSTRUCTION: CHUNKED DOCUMENT PROCESSING
 ===================================================================
 
@@ -332,6 +458,12 @@ STEP 3: APPLY FLORIDA FORMATTING RULES
 - Add blank lines after numbered sub-items: 1., 2., 3.
 - Keep blank lines before section headings: "Section 1."
 - Maintain natural paragraph structure
+- **TABLES** (e.g. OFFENSE SEVERITY RANKING CHART): use the column-aligned
+  multi-line layout — Statute at col 0, Degree at col 36, Description at
+  col 66, continuation lines indented to col 66, blank line between rows.
+  See the "FLORIDA TABLE LAYOUT — COLUMN-ALIGNED FORMAT" section above
+  for the exact worked example.  Do NOT collapse table rows onto a
+  single line.
 
 STEP 4: VERIFY PRESERVATION
 - Count tags in output vs input (must match exactly)

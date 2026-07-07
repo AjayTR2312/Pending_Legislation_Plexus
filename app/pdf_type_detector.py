@@ -349,6 +349,21 @@ def detect_pdf_type(pdf_path, min_text_threshold=50):
                 # Has large images but low text extraction = scanned
                 pdf_type = "scanned"
                 logging.info(f"Scanned detection (large images + low text): large_images={total_large_images}, avg_chars={avg_chars:.1f}")
+            elif (avg_text_quality >= 80
+                  and avg_fonts_per_page > 0
+                  and image_ratio < 0.3):
+                # Few large images on an otherwise text-heavy digital
+                # PDF (e.g. a decorative letterhead/seal on the cover
+                # page).  All native text extracts cleanly and there's
+                # real font diversity, so this is a digital PDF — no
+                # OCR needed.
+                pdf_type = "digital"
+                logging.info(
+                    f"Digital detection (text + decorative large images): "
+                    f"large_images={total_large_images}, image_ratio={image_ratio:.1%}, "
+                    f"quality={avg_text_quality:.1f}, fonts={avg_fonts_per_page:.1f}, "
+                    f"avg_chars={avg_chars:.1f}"
+                )
             else:
                 # Has large images and decent text = hybrid
                 pdf_type = "hybrid"
@@ -361,6 +376,22 @@ def detect_pdf_type(pdf_path, min_text_threshold=50):
                 # Low text extraction with high DPI images = scanned
                 pdf_type = "scanned"
                 logging.info(f"Scanned detection (high DPI + low text): high_dpi={total_high_dpi_images}, avg_chars={avg_chars:.1f}")
+            elif (avg_text_quality >= 80
+                  and avg_fonts_per_page > 0
+                  and image_ratio < 0.3):
+                # High-DPI image on an otherwise text-heavy digital PDF.
+                # Real OCR-derived text layers always have zero embedded
+                # fonts (text comes from an invisible CID-mapped layer);
+                # if we see real font diversity AND high text quality
+                # AND most pages are pure text, the image is decorative
+                # (e.g. an embedded letterhead/seal raster).
+                pdf_type = "digital"
+                logging.info(
+                    f"Digital detection (text + decorative high-DPI image): "
+                    f"high_dpi={total_high_dpi_images}, image_ratio={image_ratio:.1%}, "
+                    f"quality={avg_text_quality:.1f}, fonts={avg_fonts_per_page:.1f}, "
+                    f"avg_chars={avg_chars:.1f}"
+                )
             else:
                 # High DPI images with good text = hybrid (scanned with good OCR)
                 pdf_type = "hybrid"
@@ -380,9 +411,38 @@ def detect_pdf_type(pdf_path, min_text_threshold=50):
         
         # PRIORITY 5: Check for hybrid document (has text but also signatures/stamps)
         elif text_ratio >= 0.8 and total_small_images >= 3:
-            # Document has text but contains multiple small images (likely signatures)
-            pdf_type = "hybrid"
-            logging.info(f"Hybrid detection (text + signatures): text_ratio={text_ratio:.1%}, small_images={total_small_images}")
+            # Document has text and several small images.  Two scenarios:
+            #
+            #   (a) Decorative-only — text is fully extractable natively
+            #       and the small images are signatures, logos, social-
+            #       media handles (@DCSBOE), inline icons, etc.  This is
+            #       a normal digital PDF and must NOT be flagged as
+            #       hybrid.  Hallmark: high avg_text_quality, zero
+            #       large_images, zero high_dpi_images, and at least one
+            #       embedded font (real digital text).
+            #
+            #   (b) Real hybrid — some content lives only inside images
+            #       (mixed scanned + native text).  This is the case the
+            #       'hybrid' label was originally meant for.
+            #
+            # We treat case (a) as 'digital' so the standard PyMuPDF
+            # extract + clean pipeline runs cleanly, with no special
+            # OCR-aware path or misleading log line.
+            if (avg_text_quality >= 80
+                    and total_large_images == 0
+                    and total_high_dpi_images == 0
+                    and avg_fonts_per_page > 0):
+                pdf_type = "digital"
+                logging.info(
+                    f"Digital detection (text + decorative small images): "
+                    f"text_ratio={text_ratio:.1%}, quality={avg_text_quality:.1f}, "
+                    f"avg_chars={avg_chars:.1f}, fonts={avg_fonts_per_page:.1f}, "
+                    f"small_images={total_small_images} "
+                    f"(treated as signatures/logos — no OCR needed)"
+                )
+            else:
+                pdf_type = "hybrid"
+                logging.info(f"Hybrid detection (text + signatures): text_ratio={text_ratio:.1%}, small_images={total_small_images}")
         
         # PRIORITY 5b: Zero fonts = scanned PDF with OCR text layer
         # Real digital PDFs ALWAYS have embedded fonts in /Resources/Font.

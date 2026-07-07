@@ -150,11 +150,46 @@ Process artifacts in this exact order. For EACH removal, run the
 │ ARTIFACT 3: EXCESSIVE LEADING WHITESPACE                         │
 ├───────────────────────────────────────────────────────────────────┤
 │ What: 10+ leading spaces on a line (PDF column artifacts).       │
-│ Action: Left-align to column 0, with TWO exceptions:             │
+│ Action: Left-align to column 0, with THREE exceptions:           │
 │   • Sub-items (a., b., c.) under numbered items → keep 1-2 spc  │
 │   • Additional SPONSOR names → keep ~9 spc alignment             │
+│   • TABULAR COLUMN GAPS (see ARTIFACT 3b below) → preserve      │
 │ Left-align these: Section X., § XXXX., (a)/(b)/(c), (1)/(2),    │
 │   BE IT ENACTED, AN ACT TO AMEND, continuation text.             │
+└───────────────────────────────────────────────────────────────────┘
+
+┌───────────────────────────────────────────────────────────────────┐
+│ ARTIFACT 3b: TABULAR COLUMN GAPS — PRESERVE THEM                 │
+├───────────────────────────────────────────────────────────────────┤
+│ What: Multi-space gaps (6+ spaces) between columns in tabular    │
+│   appropriation / grants sections (Account Code, Organization,   │
+│   Amount columns).                                               │
+│ Action: PRESERVE these multi-space gaps exactly as they appear.  │
+│   They represent column boundaries in tables like:               │
+│     Account Code          Organization/Description          Amt  │
+│     (25-01-01)            Office of the Secretary                │
+│                           County Seat Package          $ 3,880   │
+│                                                                   │
+│ ⚠ Do NOT collapse multi-space gaps to single spaces.            │
+│ ⚠ Do NOT join tabular rows into prose sentences.                │
+│ ⚠ Do NOT reflow tabular lines — each row stays on its own line. │
+│ ⚠ Do NOT merge consecutive same-type tag rows onto one line.    │
+│   WRONG: [D>Label1<D] [D>$ 40,000 Label2<D] [D>$ 750,000<D]    │
+│   RIGHT: [D>Label1<D]      [D>$ 40,000<D]                       │
+│          [D>Label2<D]      [D>$ 750,000<D]                       │
+│   Each tagged entity + its dollar amount is ONE row.  Never      │
+│   merge the closing <D] or <A] of one row with the [D> or [A>   │
+│   of the next row.                                               │
+│ ⚠ Tags may appear split across columns:                         │
+│   [A>TOTAL - Office<A]      [A>$ 3,880,543<A]                   │
+│   Keep them as TWO separate tags — do NOT merge them.            │
+│                                                                   │
+│ How to detect tabular sections:                                   │
+│   • Lines with "Account Code" / "Organization" / "Amount" header │
+│   • Lines starting with parenthesised codes like (25-01-01)      │
+│   • Lines with "TOTAL -" followed by a dollar amount             │
+│   • Lines with dollar amounts ($ NNN,NNN) right-aligned          │
+│   • Fire company listing sections with location + dollar amounts │
 └───────────────────────────────────────────────────────────────────┘
 
 ┌───────────────────────────────────────────────────────────────────┐
@@ -179,6 +214,12 @@ Process artifacts in this exact order. For EACH removal, run the
 │ Action: Join into single flowing sentences.                      │
 │ Keep: Natural paragraph breaks (blank lines between sections,    │
 │   after WHEREAS clauses, between numbered/lettered items).       │
+│                                                                   │
+│ ⚠ EXCEPTION: Do NOT join lines in TABULAR SECTIONS.             │
+│   Each tabular row (appropriation line, fire company line, grant │
+│   line, senior center line) must stay on its OWN line.           │
+│   Tabular rows have multi-space gaps (6+ spaces) between         │
+│   the description and the dollar amount — preserve them.         │
 │                                                                   │
 │ Remove breaks:             Keep breaks:                           │
 │   mid-sentence               blank line between sections          │
