@@ -45,9 +45,24 @@ load_dotenv()
 
 # ── Paths ──────────────────────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).resolve().parent.parent  # app/ -> project root
-DOWNLOADS_DIR = Path(os.environ.get("DOWNLOAD_DEST_DIR", PROJECT_ROOT / "tmp" / "pending_downloads"))
-PROCESSING_DIR = PROJECT_ROOT / "tmp" / "pending_processing"
-PROCESSED_LOG = PROJECT_ROOT / "tmp" / "pending_processing" / ".processed_files.json"
+
+def _get_tmp_root() -> Path:
+    """Writable temp root: APP_TMP_DIR env > PROJECT_ROOT/tmp > /tmp/pending_legislation."""
+    if os.environ.get("APP_TMP_DIR"):
+        return Path(os.environ["APP_TMP_DIR"])
+    candidate = PROJECT_ROOT / "tmp"
+    try:
+        candidate.mkdir(parents=True, exist_ok=True)
+        return candidate
+    except OSError:
+        fallback = Path("/tmp/pending_legislation")
+        fallback.mkdir(parents=True, exist_ok=True)
+        return fallback
+
+TMP_ROOT = _get_tmp_root()
+DOWNLOADS_DIR = Path(os.environ.get("DOWNLOAD_DEST_DIR", TMP_ROOT / "pending_downloads"))
+PROCESSING_DIR = TMP_ROOT / "pending_processing"
+PROCESSED_LOG = TMP_ROOT / "pending_processing" / ".processed_files.json"
 
 
 def get_today_folder() -> Path:

@@ -21,7 +21,20 @@ REMOTE_DIR = "/apps/Codes/MP2/LandingStrips/LCPR/ftp/out"
 
 # Local directory to save downloaded files
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent  # app/ -> project root
-LOCAL_DIR = os.environ.get("DOWNLOAD_DEST_DIR", str(_PROJECT_ROOT / "tmp" / "pending_downloads"))
+
+def _get_tmp_root() -> Path:
+    if os.environ.get("APP_TMP_DIR"):
+        return Path(os.environ["APP_TMP_DIR"])
+    candidate = _PROJECT_ROOT / "tmp"
+    try:
+        candidate.mkdir(parents=True, exist_ok=True)
+        return candidate
+    except OSError:
+        fallback = Path("/tmp/pending_legislation")
+        fallback.mkdir(parents=True, exist_ok=True)
+        return fallback
+
+LOCAL_DIR = os.environ.get("DOWNLOAD_DEST_DIR", str(_get_tmp_root() / "pending_downloads"))
 
 
 def connect_sftp(username: str, password: str) -> tuple[paramiko.Transport, paramiko.SFTPClient]:
