@@ -29,6 +29,9 @@ openpyxl>=3.1.5
 # SFTP/SSH
 paramiko>=3.5.0
 
+# Environment
+python-dotenv>=1.0.0
+
 # HTTP/API
 requests>=2.32.5
 urllib3>=2.5.0
