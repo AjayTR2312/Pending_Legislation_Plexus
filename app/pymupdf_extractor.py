@@ -1967,22 +1967,25 @@ def _extract_page_tagged_text(
                     "DC: recovered chairman line via OCR — %r", chairman_line
                 )
 
-        # Recover Mayor sign-off ("Muriel Bowser" / "Mayor") from the
+        # Recover Mayor sign-off (name + "Mayor") from the raster
         # signature image below "Sincerely," on transmittal letters.
-        # Guard: only attempt if "Sincerely" is present but the name
-        # "Bowser" does NOT appear anywhere after it in the text.
+        # The name is read from the native-text letterhead at the top
+        # of the page, making this fully dynamic for any DC Mayor.
         low = result_text.lower()
         sinc_idx = low.find("sincerely")
         if sinc_idx >= 0:
-            after_sincerely = low[sinc_idx:]
-            if "bowser" not in after_sincerely:
-                signoff = _recover_dc_mayor_signoff_from_image(page)
-                if signoff:
+            signoff = _recover_dc_mayor_signoff_from_image(page)
+            if signoff:
+                # Guard: only insert if the name isn't already present
+                # after "Sincerely," (prevents duplication)
+                after_sincerely = low[sinc_idx:]
+                name_key = signoff[0].lower().split()[-1]  # last name
+                if name_key not in after_sincerely:
                     result_text = _splice_dc_mayor_signoff(
                         result_text, signoff[0], signoff[1]
                     )
                     logger.debug(
-                        "DC: recovered Mayor sign-off via OCR — %r / %r",
+                        "DC: recovered Mayor sign-off from header — %r / %r",
                         signoff[0], signoff[1],
                     )
 
@@ -3111,11 +3114,20 @@ def _splice_dc_chairman_line(text: str, chairman_line: str) -> str:
 # ---------------------------------------------------------------------------
 # DC Mayor transmittal letters end with "Sincerely," followed by a raster
 # IMAGE block containing the Mayor's handwritten signature, printed name
-# ("Muriel Bowser"), and title ("Mayor").  PyMuPDF can only extract
+# (e.g. "Muriel Bowser"), and title ("Mayor").  PyMuPDF can only extract
 # "Sincerely," as native text; the printed name + title are baked into
-# the image and lost.  This recovery mirrors the chairman-signature
-# approach: OCR the image, fuzzy-match the Mayor's name/title, and
-# splice the canonical lines into the output.
+# the image and lost.
+#
+# Strategy — fully DYNAMIC (no hardcoded names):
+#   1. Find "Sincerely," on the page.
+#   2. Confirm there is an image block directly below it (signature).
+#   3. Read the Mayor's name from the NATIVE TEXT at the TOP of the page
+#      (DC Mayor letters always begin with e.g. "MURIEL BOWSER" / "MAYOR"
+#      as the letterhead — this is reliably extractable text).
+#   4. Convert the uppercase header name to title-case for the sign-off.
+#
+# This works for ANY DC Mayor — past, present, or future — because the
+# name comes from the letterhead, not from OCR of the garbled signature.
 
 _RE_DC_SINCERELY = re.compile(
     r"^[ \t]*Sincerely,?[ \t]*$",
@@ -3126,74 +3138,90 @@ _RE_DC_SINCERELY = re.compile(
 def _recover_dc_mayor_signoff_from_image(
     page: "fitz.Page",
 ) -> Optional[Tuple[str, str]]:
-    """Recover the Mayor\'s sign-off from a raster image below ``Sincerely,``.
+    """Recover the Mayor's sign-off from a raster image below ``Sincerely,``.
+
+    Instead of relying on OCR of the garbled signature image, reads the
+    Mayor's name from the **native text letterhead** at the top of the
+    page (e.g. ``"MURIEL BOWSER"`` / ``"MAYOR"``).
 
     Returns a tuple ``(name, title)`` — e.g. ``("Muriel Bowser", "Mayor")``
-    — on success, or ``None`` if no qualifying layout / OCR match is found.
+    — on success, or ``None`` if no qualifying layout is found.
     """
-    from difflib import SequenceMatcher
-
     # 1. Find "Sincerely" anchor text on the page
     sincerely_hits = page.search_for("Sincerely")
     if not sincerely_hits:
         return None
     sincerely_y_bottom = max(r.y1 for r in sincerely_hits)
 
-    # 2. Find image blocks below "Sincerely," that could be a signature
+    # 2. Confirm there is an image block below "Sincerely," (the signature)
     raw = page.get_text("rawdict")
-    candidates: List[Tuple[float, float, float, float]] = []
+    has_sig_image = False
     for blk in raw.get("blocks", []):
         if blk.get("type") != 1:              # 1 = image block
             continue
-        bbox = tuple(blk.get("bbox", (0, 0, 0, 0)))
+        bbox = blk.get("bbox", (0, 0, 0, 0))
         x0, y0, x1, y1 = bbox
         width  = x1 - x0
         height = y1 - y0
         if width < 50 or height < 20:
             continue
         # Image must be below (or touching) "Sincerely," line
-        if y0 < sincerely_y_bottom - 5:       # allow 5pt above
+        if y0 < sincerely_y_bottom - 5:
             continue
-        # Must be reasonably close (within 80pt)
-        if (y0 - sincerely_y_bottom) > 80:
+        # Must be reasonably close (within 120pt)
+        if (y0 - sincerely_y_bottom) > 120:
             continue
-        candidates.append(bbox)
+        has_sig_image = True
+        break
 
-    if not candidates:
+    if not has_sig_image:
         return None
 
-    # Largest candidate first
-    candidates.sort(
-        key=lambda b: (b[2] - b[0]) * (b[3] - b[1]),
-        reverse=True,
-    )
-    sig_bbox = candidates[0]
+    # 3. Read the Mayor's name from the NATIVE TEXT at the top of the page.
+    #    DC Mayor letters start with the name in uppercase (y < 200pt)
+    #    followed by "MAYOR" on the next line.
+    words = page.get_text("words")
+    # Collect words in the top region (y < 200), grouped by y-band
+    top_words: Dict[int, List[Tuple[float, str]]] = {}
+    for w in words:
+        x0, y0, x1, y1, text = w[0], w[1], w[2], w[3], w[4]
+        if y0 > 200:
+            break  # words are sorted top-to-bottom
+        key = int(round(y0 / 8.0) * 8)  # 8pt y-band grouping
+        top_words.setdefault(key, []).append((x0, text))
 
-    # 3. OCR the image
-    lines = _ocr_words_inside_bbox(page, sig_bbox, dpi=300)
-    if not lines:
+    # Reconstruct lines from top_words, sorted top-to-bottom
+    top_lines: List[str] = []
+    for y_key in sorted(top_words.keys()):
+        line_words = [w for _, w in sorted(top_words[y_key])]
+        top_lines.append(" ".join(line_words))
+
+    if len(top_lines) < 2:
         return None
 
-    # 4. Fuzzy-match known patterns using SequenceMatcher
-    def _fuzzy(word: str, target: str, threshold: float = 0.55) -> bool:
-        return SequenceMatcher(
-            None, word.lower(), target.lower()
-        ).ratio() >= threshold
+    # 4. Find the "MAYOR" line and use the line(s) above it as the name.
+    mayor_idx = -1
+    for i, line in enumerate(top_lines):
+        if line.strip().upper() == "MAYOR":
+            mayor_idx = i
+            break
 
-    found_bowser = False
-    found_mayor  = False
-    for raw_line in lines:
-        words = raw_line.strip().split()
-        for w in words:
-            if _fuzzy(w, "Bowser") or _fuzzy(w, "Muriel"):
-                found_bowser = True
-            if _fuzzy(w, "Mayor"):
-                found_mayor = True
+    if mayor_idx < 1:
+        return None
 
-    if found_bowser or found_mayor:
-        return ("Muriel Bowser", "Mayor")
+    # Name is on the line(s) immediately before "MAYOR"
+    raw_name = top_lines[mayor_idx - 1].strip()
 
-    return None
+    # Validate: should be 2-4 words, all uppercase letters
+    name_words = raw_name.split()
+    if len(name_words) < 1 or len(name_words) > 5:
+        return None
+    if not all(w.replace(".", "").replace("-", "").replace("'", "").isalpha() for w in name_words):
+        return None
+
+    # Convert to title case for the sign-off
+    name_title_case = raw_name.title()
+    return (name_title_case, "Mayor")
 
 
 def _splice_dc_mayor_signoff(text: str, name: str, title: str) -> str:

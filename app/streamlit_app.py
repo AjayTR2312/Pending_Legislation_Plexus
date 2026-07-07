@@ -2067,6 +2067,21 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
             if converted_text != _before_strip:
                 add_log(f"🛡️ Stripped tags from protected clauses for {detected_state}")
 
+        # ── Step 4d: Merge paragraphs split at page breaks ──────────────────────
+        # Claude's visual conversion sometimes splits a paragraph into two
+        # when text wraps across a page boundary (e.g. a sentence that starts
+        # at the bottom of page 3 and continues at the top of page 4 ends up
+        # as two separate paragraphs).  The hybrid pipeline already handles
+        # this via _merge_page_break_paragraph_splits(); apply the same fix
+        # to the visual-mode output so CO (and any future vision-only state)
+        # gets consistent paragraph joining.
+        _before_merge = converted_text
+        converted_text = opus._merge_page_break_paragraph_splits(
+            converted_text, state_code=detected_state
+        )
+        if converted_text != _before_merge:
+            add_log("🔗 Merged paragraphs split at page breaks")
+
         # ── Step 5: Save output ──────────────────────────────────────────────────
         st.session_state.current_step = 4
         st.session_state.step_status[4] = "🔄"
