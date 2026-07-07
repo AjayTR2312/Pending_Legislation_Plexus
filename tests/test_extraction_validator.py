@@ -214,6 +214,7 @@ def test_vote_fraction_split_clean() -> None:
 # ── split_numbered_item_paragraph_welds ──────────────────────────────
 
 from app.pymupdf_extractor import split_numbered_item_paragraph_welds
+from app.pymupdf_extractor import _split_in_section_heading_welds
 from app.pymupdf_extractor import _split_in_merged_table_rows
 from app.pymupdf_extractor import _ensure_in_item_spacing
 from app.pymupdf_extractor import _split_in_midline_items
@@ -298,6 +299,134 @@ def test_split_numbered_item_weld_semicolon_lettered() -> None:
     assert len(lines) == 2, f"Expected 2 non-blank lines, got {len(lines)}"
     assert lines[0] == "[A>(C) specific location;<A]"
     assert lines[1].startswith("[A>of a grease trap")
+
+
+# ── _split_in_section_heading_welds ──────────────────────────────────
+
+
+def test_split_section_heading_weld_chapter_sec() -> None:
+    """Chapter heading welded to Sec. N. should be split."""
+    welded = (
+        '[A>Chapter 16. Hoosier Homesteads Sec. 1. As used in this '
+        'chapter, "farm" means an area of real property that:<A]'
+    )
+    result = _split_in_section_heading_welds(welded)
+    lines = [l for l in result.split('\n') if l.strip()]
+    assert len(lines) == 2, f"Expected 2 non-blank lines, got {len(lines)}"
+    assert lines[0] == '[A>Chapter 16. Hoosier Homesteads<A]'
+    assert lines[1].startswith('[A>Sec. 1.')
+
+
+def test_split_section_heading_weld_multi_sec() -> None:
+    """Multiple Sec. definitions welded together should all be split."""
+    welded = (
+        '[A>Sec. 5. As used in this chapter, "program" means the Hoosier '
+        'homestead program established by this chapter. '
+        'Sec. 6. As used in this chapter, "registry" means the Hoosier '
+        'homestead registry established under this chapter. '
+        'Sec. 7. (a) The Hoosier homestead program is established for '
+        'the following purposes:<A]'
+    )
+    result = _split_in_section_heading_welds(welded)
+    lines = [l for l in result.split('\n') if l.strip()]
+    assert len(lines) == 3, f"Expected 3 non-blank lines, got {len(lines)}: {lines}"
+    assert lines[0].startswith('[A>Sec. 5.')
+    assert lines[0].endswith('this chapter.<A]')
+    assert lines[1].startswith('[A>Sec. 6.')
+    assert lines[1].endswith('this chapter.<A]')
+    assert lines[2].startswith('[A>Sec. 7.')
+
+
+def test_split_section_heading_weld_subsection_then_sec() -> None:
+    """Subsection welded to next Sec. should be split."""
+    welded = (
+        '[A>(b) The department shall administer the program. '
+        'Sec. 8. (a) Any portion of a farm may be eligible for a '
+        'Hoosier homestead designation, if the property meets the '
+        'following requirements:<A]'
+    )
+    result = _split_in_section_heading_welds(welded)
+    lines = [l for l in result.split('\n') if l.strip()]
+    assert len(lines) == 2, f"Expected 2 non-blank lines, got {len(lines)}"
+    assert lines[0].endswith('the program.<A]')
+    assert lines[1].startswith('[A>Sec. 8.')
+
+
+def test_split_section_heading_weld_no_split_cross_ref() -> None:
+    """Cross-references like 'under Sec. 13.4' must NOT be split."""
+    ref = (
+        '[A>The committee shall consider the factors described in '
+        'Sec. 13.4 of this chapter when evaluating candidates for '
+        'judicial appointment to the court.<A]'
+    )
+    result = _split_in_section_heading_welds(ref)
+    assert result == ref, "Cross-reference 'in Sec.' should not be split"
+
+
+def test_split_section_heading_weld_starts_with_sec() -> None:
+    """Tags that start with Sec. must NOT be split (nothing before)."""
+    starts = '[A>Sec. 1. As used in this chapter, "farm" means an area of real property that:<A]'
+    result = _split_in_section_heading_welds(starts)
+    assert result == starts, "Tag starting with Sec. should not be split"
+
+
+def test_split_numbered_item_weld_semicolon_short_continuation() -> None:
+    """Semicolon-delimited items with shorter continuations should still split."""
+    # (4) food solids; from high volume wastewater...
+    welded = (
+        "[A>(4) food solids; from high volume wastewater flows before "
+        "the wastewater is discharged into a sewer system.<A]"
+    )
+    result = split_numbered_item_paragraph_welds(welded)
+    lines = [l for l in result.split('\n') if l.strip()]
+    assert len(lines) == 2, f"Expected 2 non-blank lines, got {len(lines)}"
+    assert lines[0] == "[A>(4) food solids;<A]"
+    assert lines[1].startswith("[A>from high volume")
+
+    # (3) retain or remove; fats, oils, and grease...
+    welded2 = (
+        "[A>(3) retain or remove; fats, oils, and grease from wastewater "
+        "before the wastewater is discharged into a sewer system.<A]"
+    )
+    result2 = split_numbered_item_paragraph_welds(welded2)
+    lines2 = [l for l in result2.split('\n') if l.strip()]
+    assert len(lines2) == 2, f"Expected 2 non-blank lines, got {len(lines2)}"
+    assert lines2[0] == "[A>(3) retain or remove;<A]"
+    assert lines2[1].startswith("[A>fats, oils")
+
+
+def test_split_numbered_item_weld_semicolon_conjunction_no_split() -> None:
+    """Semicolon + conjunction continuation must NOT be split."""
+    nosplit = (
+        "[A>(2) review the submitted applications for completeness "
+        "and qualification; and the committee shall promptly schedule "
+        "a hearing to interview qualified candidates for the vacancy.<A]"
+    )
+    result = split_numbered_item_paragraph_welds(nosplit)
+    assert result == nosplit, "Semicolon + 'and' continuation should not be split"
+
+
+def test_split_numbered_item_weld_no_split_subsection_letter() -> None:
+    """Single lowercase letter markers (a)-(z) are subsection identifiers — never split."""
+    # (h) subsection from IN HB 1033 — two sentences in one provision
+    subsec_h = (
+        "[A>(h) The committee shall provide notice to the clerk of each "
+        "decision made under subsection (f) or (g). If a judge has not been "
+        "found suitable for retention under this section, the clerk shall not "
+        "include the question of the judge's retention on the ballot.<A]"
+    )
+    result = split_numbered_item_paragraph_welds(subsec_h)
+    assert result == subsec_h, "Subsection (h) must not be split"
+
+    # (e) subsection — also two sentences, same provision
+    subsec_e = (
+        "[A>(e) A judge is presumed suitable to continue to hold judicial "
+        "office. The affirmative votes of at least nine (9) committee members "
+        "are required to find that a judge is not suitable to continue to hold "
+        "judicial office.<A]"
+    )
+    result = split_numbered_item_paragraph_welds(subsec_e)
+    assert result == subsec_e, "Subsection (e) must not be split"
 
 
 def test_split_numbered_item_weld_trailing_punctuation() -> None:
@@ -485,6 +614,25 @@ def test_split_midline_items_tagged_add() -> None:
     assert lines[0].endswith("; and<A]")
     assert lines[1].startswith("[A>(2)")
     assert lines[2].startswith("[A>(3)")
+
+
+def test_split_midline_items_no_false_positive_colon_list() -> None:
+    """Colon-introduced inline enumerations must NOT be split.
+
+    Synopsis text like 'entitled to: (1) testify ...; and (2) compensation'
+    is a flowing inline list — not separate paragraphs.
+    """
+    synopsis = (
+        "Synopsis: Provides with certain exceptions, that if a county, "
+        "city, town, or school corporation (unit) exercises eminent domain "
+        "to take a fee simple interest in a Hoosier homestead, the property "
+        "owner is entitled to: (1) testify at a public meeting of the "
+        "condemning unit's legislative body; and (2) compensation that is "
+        "the greater of: (A) 200% of the fair market value of the parcel; "
+        "or (2) 200% of the value of the land."
+    )
+    result = _split_in_midline_items(synopsis)
+    assert result == synopsis, "Colon-introduced inline list should not be split"
 
 
 def test_split_midline_items_no_false_positive() -> None:

@@ -83,7 +83,14 @@ Line numbers MUST be removed:
 
 Bill headers MUST be removed from ALL pages (including page 1):
 - Pattern: "HB XXX" or "SB XXX" followed by spaces and page number or year
+- Pattern: "CS for SB XXX" or "CS for HB XXX" (Committee Substitute headers)
+- Pattern: "CS for CS for SB XXX" (nested Committee Substitutes — any depth of "CS for" nesting)
+- Pattern: "CS/CS/SB XXX", "CS/HB XXX", etc. (multiple Committee Substitute prefixes)
+- Pattern: "HB XXXe" or "SB XXXe" with trailing lowercase letter (engrossed variants)
+- Pattern: Any bill header with ", 1st Engrossed", ", 2nd Engrossed", etc. suffix
 - Example: "HB 385         2025" or "SB 1234         2026" appearing at TOP of page 1
+- Example: "CS for SB 1332" appearing at TOP of page 1
+- Example: "CS for CS for SB 1028, 1st Engrossed" appearing at TOP of page 1
 - Example: "HB 385         2" appearing at TOP of page 2, 3, 4, etc.
 - REMOVE from ALL pages including page 1 — these are document headers, not legislative content
 - The bill number is NOT part of the legislative text body
@@ -95,11 +102,13 @@ Florida-specific headers MUST be removed from ALL pages (including page 1):
 - "FLORIDA HOUSE OF REPRESENTATIVES"
 - "Florida Senate - YYYY" (e.g., "Florida Senate - 2025") — chamber + session header
 - Year markers as headers: Any 4-digit year (e.g., "2024", "2025", "2026") appearing alone at page top
+- Session/status markers: "ENROLLED", "2026 Legislature", "HB XXXe, Engrossed 1" appearing at page top
 - REMOVE from ALL pages including page 1 — these are document headers, not legislative content
 
 Florida internal reference numbers MUST be removed:
 - LRB/bill draft numbers: patterns like "40-00657B-25", "25-01234A-22"
 - Internal bill identifiers: patterns like "2025470__", "20251234__"
+- Document reference codes: patterns like "20261028er", "20257031er" (YYYY + bill number + "er")
 - These are internal tracking codes, NOT legislative content
 
 Florida-specific footers MUST be removed:

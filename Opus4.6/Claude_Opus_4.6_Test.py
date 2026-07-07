@@ -82,9 +82,11 @@ try:
         _strip_false_subsection_d_tags, _restructure_ct_header,
         _strip_in_artifacts, _strip_in_header_tags, _strip_in_leading_indent,
         _split_in_merged_table_rows, _ensure_in_item_spacing,
-        _split_in_midline_items,
+        _split_in_midline_items, _split_in_section_heading_welds,
         _strip_ks_header_tags, _strip_ks_signature_block_tags,
         _inject_ks_signature_lines,
+        _strip_fl_repeated_headers,
+        pre_merge_paragraph_tags,
         remove_nested_tags, merge_split_tags, split_tagged_subsections,
         split_renumber_paragraph_breaks, split_numbered_item_paragraph_welds,
         rejoin_amendment_intro_breaks,
@@ -1377,6 +1379,17 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         # if state_code and state_code.upper() == "CT":
         #     raw_text = _strip_ct_raw_footer_line_tags(raw_text)
 
+        # ── Pre-merge per-line tags into paragraph-level tags (FL only) ─
+        # Uses the PDF’s own \n vs \n\n signals as ground truth:
+        #   \n  = same paragraph (wrapped continuation) → merge tags
+        #   \n\n = paragraph boundary → keep separate
+        # This gives the LLM correct paragraph-level tags from the start,
+        # eliminating most post-LLM merge/split heuristics and their
+        # associated edge cases.  FL-only – other states work fine as-is.
+        if state_code and state_code.upper() == "FL":
+            raw_text = pre_merge_paragraph_tags(raw_text)
+            logging.info(f"   ✅ Pre-merged FL to paragraph-level tags: {len(raw_text):,} chars")
+
         # ── Step 2: Split into chunks ────────────────────────────────
         chunks = _split_text_into_chunks(raw_text, max_chars=40000, overlap_chars=2000)
         total_chunks = len(chunks)
@@ -1558,6 +1571,13 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
             except Exception as _sig_err:
                 logging.warning("KS signature line re-injection failed: %s", _sig_err)
 
+        # FL-specific: deterministically strip repeated page headers/footers.
+        # Catches ALL bill-header variations (CS, CS for CS, engrossed,
+        # enrolled, doc-ref codes like 20261028er, etc.) via regex so
+        # the LLM prompt never needs to be updated for new header styles.
+        if state_code and state_code.upper() == "FL":
+            merged = _strip_fl_repeated_headers(merged)
+
         # ── Normalise malformed close-tags BEFORE structural passes ──────
         # The chunk-level LLM occasionally emits `<A>` or `<D>` (mirrored
         # opening bracket) instead of the correct `<A]` / `<D]` closer.
@@ -1572,7 +1592,15 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         merged = _fix_malformed_close_tags(merged)
         merged = _merge_page_break_paragraph_splits(merged, state_code=state_code)
 
-        merged = consolidate_adjacent_tags(merged)
+        # ── Post-merge dedup ─────────────────────────────────────────────
+        # The earlier dedup (inside _merge_cleaned_chunks) runs on the
+        # raw per-line tagged text.  After _merge_page_break_paragraph_splits
+        # collapses those lines into full paragraphs, duplicate overlap
+        # content that was spread across many raw lines is now visible as
+        # adjacent duplicate paragraphs.  Run dedup again to catch them.
+        merged = _dedupe_consecutive_duplicate_blocks(merged)
+
+        merged = consolidate_adjacent_tags(merged, state_code=state_code)
         merged = remove_nested_tags(merged)
         merged = merge_split_tags(merged)
         if state_code and state_code.upper() == "IA":
@@ -1601,6 +1629,7 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         # states are never affected.
         if state_code and state_code.upper() == "IN":
             merged = _split_in_merged_table_rows(merged)
+            merged = _split_in_section_heading_welds(merged)
             merged = split_numbered_item_paragraph_welds(merged)
         # KS-specific: re-join LLM-inserted false paragraph breaks between
         # a "K.S.A. <num> ... amended to read as follows:" intro and the
@@ -1913,13 +1942,17 @@ def _merge_page_break_paragraph_splits(text, state_code=None):
         (``. ! ? : ;``) or a section-header delimiter (em/en dash).
         Merge regardless of B's case (uppercase continuations like
         ``…Technology<A]  [A>AI Risk Management…`` are common in FL).
+        Sets the ``_p1a_active`` flag for the current paragraph.
 
-      * **1b — same-subsection sentence boundary**: A ends with terminal
-        punctuation *and* A's tag-stripped content is ≥ 40 chars (not a
-        section heading) *and* B does not start with a subsection/section
-        marker.  Handles the case where the LLM left per-line tags
-        unmerged and consecutive sentences within the same subsection got
-        separate tags (``…violations.<A]  [A>The department may…``).
+      * **1b — terminal punct, raw-format continuation**: A ends with
+        terminal punctuation BUT ``_p1a_active`` is True — meaning
+        Pattern 1a has been actively merging per-line tags from raw PDF
+        extraction into this paragraph.  Terminal punct at a per-line
+        boundary is just where the PDF line happened to end on a
+        sentence boundary, *not* a real paragraph break.  Only fires
+        when ``_p1a_active`` is True; when False the paragraph was
+        already a complete LLM-cleaned unit and the following tag is
+        genuinely separate (avoids SB 1028 / SB 1332 regressions).
 
     **Pattern 2 — missing re-open tag** (new):
       A ends ``<TAG]`` but B does *not* start with any tag.  The LLM
@@ -1947,10 +1980,10 @@ def _merge_page_break_paragraph_splits(text, state_code=None):
     _SUBSEC_OR_SECTION = re.compile(
         r'^\(\d+\)'            # (1)
         r'|\([a-zA-Z]{1,4}\)'  # (a), (A), (iv)
-        r'|\d+\.\s'            # 1.
-        r'|[a-z]\.\s'          # a.
-        r'|Sec\.\s'            # Sec.
-        r'|SECTION\s'          # SECTION
+        r'|\d+\.[\s<]'         # 1.  (incl. standalone [D>1.<D] tags)
+        r'|[a-z]\.[\s<]'       # a.  (incl. standalone [A>a.<A] tags)
+        r'|Sec\.[\s<]'         # Sec. (incl. standalone tags)
+        r'|SECTION[\s<]'       # SECTION (incl. standalone tags)
         r'|\d{2,}\.\d'         # 501.9986 (statute numbers)
         r'|"'                  # "Definition..." start
     )
@@ -1964,6 +1997,7 @@ def _merge_page_break_paragraph_splits(text, state_code=None):
     merge_count = 0
     while i < len(paras):
         curr = paras[i]
+        _p1a_active = False   # True once Pattern 1a merges in this run
         # Try to merge with one or more subsequent paragraphs whose
         # tag was split at a page break.
         while i + 1 < len(paras):
@@ -1982,8 +2016,28 @@ def _merge_page_break_paragraph_splits(text, state_code=None):
                     text_before = curr_s[:-len(close_tag)].rstrip()
                     if not inner or not text_before:
                         continue
-                    # Guard: subsection / section marker → new paragraph
-                    if _SUBSEC_OR_SECTION.match(inner):
+                    # Guard: subsection / section marker → new paragraph.
+                    # FL-specific exceptions prevent false blocking:
+                    #
+                    # (a) Tag A ends with a section word/abbreviation
+                    #     ("Section", " s.", " S.", " sec.", " Sec.")
+                    #     and tag B starts with a statute number.  E.g.
+                    #     "established in s." → "627.351(6)(c)5.c.,…"
+                    #     "the corporation. Section" → "627.351(6)…"
+                    #
+                    # (b) Tag A ends with a preposition and tag B starts
+                    #     with "s. <digits>" (section reference split at
+                    #     the page break).  E.g.
+                    #     "punishable as provided in" → "s. 775.082,…"
+                    _skip_subsec_guard = False
+                    if _is_fl and _SUBSEC_OR_SECTION.match(inner):
+                        _skip_subsec_guard = bool(
+                            re.search(r'\b[sS]\.$|\b[sS]ec\.$|\bSection$', text_before)
+                        ) or bool(
+                            re.search(r'\b(?:in|under|of|per|to|see)\s*$', text_before, re.IGNORECASE)
+                            and re.match(r'[sS]\.\s+\d', inner)
+                        )
+                    if _SUBSEC_OR_SECTION.match(inner) and not _skip_subsec_guard:
                         continue
                     # Guard: section-header delimiter (em/en dash)
                     if text_before[-1] in '\u2014\u2013':
@@ -1998,11 +2052,18 @@ def _merge_page_break_paragraph_splits(text, state_code=None):
                             i += 1
                             merge_count += 1
                             did_merge = True
+                            _p1a_active = True
                             break
-                        # 1b — sentence boundary within same subsection:
-                        # terminal punct present, merge if the prior
-                        # content is substantial (≥ 40 chars)
-                        if len(_TAG_STRIP.sub('', text_before).strip()) >= 40:
+                        # 1b — terminal punct, raw-format continuation.
+                        # Only fires when Pattern 1a already merged
+                        # per-line tags into curr (_p1a_active=True),
+                        # meaning the text is raw PDF extraction where
+                        # terminal punct at a line break is NOT a real
+                        # paragraph boundary.  When _p1a_active is
+                        # False the paragraph came from the LLM as a
+                        # complete unit and the next tag is genuinely
+                        # separate (SB 1028 / SB 1332 regression guard).
+                        if _p1a_active:
                             curr = text_before + ' ' + nxt_s[len(open_tag):]
                             i += 1
                             merge_count += 1
@@ -2501,12 +2562,67 @@ def _stitch_two_chunks(merged, next_chunk, *, chunk_index, window=4000):
             return merged[:global_tail_end].rstrip() + '\n\n' + next_chunk[cut_offset_in_head:].lstrip('\n')
 
     # ── Strategy 4: concatenate with separator (last resort) ────────────
+    # When no overlap is found, the LLM likely truncated content at the
+    # chunk boundary.  Both chunks may have corrupt tails/heads:
+    #   merged tail:     "...courts of thi"       (mid-word)
+    #   next_chunk head: "he safety of persons..." (mid-word)
+    #
+    # Fix: strip the last paragraph from merged and the first paragraph
+    # from next_chunk if they look truncated (no terminal punctuation at
+    # the end, or start mid-word without an opening tag).  This loses a
+    # small amount of text at the boundary but avoids corrupt merges and
+    # duplicate content.
     logging.warning(
         f"   ⚠️  Chunk {chunk_index}: no overlap found "
-        f"(tail/head {search_len:,} chars each), concatenating with separator. "
-        f"The post-merge dedup pass will catch any duplicate paragraph runs."
+        f"(tail/head {search_len:,} chars each), concatenating with "
+        f"truncation cleanup."
     )
-    return merged.rstrip() + '\n\n' + next_chunk.lstrip()
+    # Strip truncated tail of merged: if the last non-blank paragraph
+    # does NOT end with sentence-terminal punctuation followed by a
+    # close tag, it's likely truncated.
+    _merged_stripped = merged.rstrip()
+    _tail_paras = _merged_stripped.rsplit('\n\n', 1)
+    if len(_tail_paras) == 2:
+        _last_para = _tail_paras[1].rstrip()
+        # Truncated if: doesn't end with <A] or <D] after terminal punct
+        _ends_clean = bool(re.search(r'[.!?:;]\s*<[AD]\]\s*$', _last_para))
+        _ends_section = bool(re.search(r'^Section\s+\d', _last_para))
+        if not _ends_clean and not _ends_section:
+            logging.info(
+                f"   ✂️  Chunk {chunk_index}: trimming truncated tail paragraph "
+                f"({len(_last_para)} chars): ...{_last_para[-60:]}"
+            )
+            _merged_stripped = _tail_paras[0].rstrip()
+
+    # Strip truncated head of next_chunk: if the first non-blank paragraph
+    # does NOT start with an open tag [A> or [D>, or starts mid-word,
+    # it's the tail of a sentence that was cut at the chunk split.
+    _head_stripped = next_chunk.lstrip()
+    _head_paras = _head_stripped.split('\n\n', 1)
+    if len(_head_paras) == 2:
+        _first_para = _head_paras[0].strip()
+        _starts_clean = (
+            _first_para.startswith('[A>') or _first_para.startswith('[D>')
+            or _first_para.startswith('Section ')
+            or _first_para.startswith('(')
+            or (len(_first_para) > 0 and _first_para[0].isupper())
+        )
+        # Extra guard: a tag like [A>he safety... still looks truncated —
+        # the inner text starts with a lowercase non-subsection character,
+        # meaning the original word was split mid-word (e.g. "the" → "he").
+        if _starts_clean and re.match(r'\[[AD]>', _first_para):
+            _inner = _first_para[3:]          # strip [A> or [D>
+            if (_inner and _inner[0].islower()
+                    and not re.match(r'^[a-z]\.\s', _inner)):
+                _starts_clean = False
+        if not _starts_clean:
+            logging.info(
+                f"   ✂️  Chunk {chunk_index}: trimming truncated head paragraph "
+                f"({len(_first_para)} chars): {_first_para[:60]}..."
+            )
+            _head_stripped = _head_paras[1].lstrip()
+
+    return _merged_stripped.rstrip() + '\n\n' + _head_stripped.lstrip()
 
 
 def _dedupe_consecutive_duplicate_blocks(text, *, min_run_chars=200):
@@ -2558,7 +2674,13 @@ def _dedupe_consecutive_duplicate_blocks(text, *, min_run_chars=200):
     # is treated as equivalent.  This catches overlap duplicates that
     # survived _stitch_two_chunks due to tag formatting differences.
     _tag_strip_re = re.compile(r'\[([AD])>|<([AD])\]')
-    norms = [' '.join(_tag_strip_re.sub('', p).lower().split()) for p in paras]
+    # Also normalise hyphen-space (PDF line breaks inside hyphenated
+    # words produce "calendar- day" vs "calendar-day").
+    def _norm(p):
+        t = _tag_strip_re.sub('', p)
+        t = re.sub(r'-\s+', '-', t)   # "calendar- day" → "calendar-day"
+        return ' '.join(t.lower().split())
+    norms = [_norm(p) for p in paras]
     keep = [True] * n
 
     max_run = min(50, n // 2)
@@ -2581,7 +2703,51 @@ def _dedupe_consecutive_duplicate_blocks(text, *, min_run_chars=200):
             else:
                 i += 1
 
-    return '\n\n'.join(p for p, k in zip(paras, keep) if k)
+    # ── Near-consecutive dedup (gap ≤ 2 paragraphs) ─────────────────
+    # When Strategy 4 concatenated chunks and the LLM truncated the
+    # overlap, a corrupt stitch paragraph (e.g. "(5)...section. he
+    # safety of persons...") sits between the first and second copy
+    # of the overlapping content.  The strict consecutive check above
+    # misses this because the gap breaks the run.  This pass allows a
+    # gap of 1-2 paragraphs and removes both the gap and the second
+    # copy of the run.
+    for run_len in range(min(20, n // 3), 0, -1):
+        i = 0
+        while i + run_len < n:
+            if not all(keep[j] for j in range(i, i + run_len)):
+                i += 1
+                continue
+            run1 = norms[i : i + run_len]
+            total_chars = sum(len(p) for p in run1)
+            if total_chars < min_run_chars:
+                i += 1
+                continue
+            # Try gaps of 1 and 2 paragraphs after run1
+            for gap in (1, 2):
+                j = i + run_len + gap
+                if j + run_len > n:
+                    continue
+                if not all(keep[k] for k in range(j, j + run_len)):
+                    continue
+                run2 = norms[j : j + run_len]
+                if run1 == run2:
+                    # Drop the gap paragraphs and the second run
+                    for k in range(i + run_len, j + run_len):
+                        keep[k] = False
+                    logging.info(
+                        f"   🧹 Near-consecutive dedup: removed {run_len} "
+                        f"duplicate paragraphs + {gap} gap paragraph(s) "
+                        f"at positions {i+run_len}-{j+run_len-1}"
+                    )
+                    i = j + run_len
+                    break
+            else:
+                i += 1
+
+    # Also strip any stitch sentinels that may survive from older runs
+    result_paras = [p for p, k in zip(paras, keep) if k]
+    result_paras = [p for p in result_paras if p.strip() not in ('--- Chunk Stitch ---', '')]
+    return '\n\n'.join(result_paras)
 
 
 # ────────────────────────────────────────────────────────────────────────────

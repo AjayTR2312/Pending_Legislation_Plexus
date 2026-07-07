@@ -3285,8 +3285,11 @@ def _split_in_midline_items(text: str) -> str:
     must NOT be split.  Standalone ``(N)`` references (like
     ``subsection (b)``) are ignored because they lack the leading ``;``.
     """
-    # Detects inline list markers: "; (N)" where N is a number/letter
-    _RE_EARLIER_SEMICOLON_ITEM = re.compile(r';\s+\([a-zA-Z0-9]{1,3}\)')
+    # Detects inline list markers: "; (N)" or ": (N)" where N is a
+    # number/letter.  A colon-introduced marker (e.g. "entitled to:
+    # (1) testify ...; and (2) compensation") is just as strong a
+    # signal of an inline enumeration as a semicolon separator.
+    _RE_EARLIER_ENUM_ITEM = re.compile(r'[;:]\s+\([a-zA-Z0-9]{1,3}\)')
 
     def _tag_aware_replace(m: re.Match) -> str:
         full = m.group(0)
@@ -3303,7 +3306,7 @@ def _split_in_midline_items(text: str) -> str:
         # inline list items from references like "subsection (b)".
         line_start = text.rfind('\n', 0, pos)
         line_before = text[line_start + 1 : pos]
-        if _RE_EARLIER_SEMICOLON_ITEM.search(line_before):
+        if _RE_EARLIER_ENUM_ITEM.search(line_before):
             return full   # leave the inline enumeration intact
 
         # Look backwards for an unclosed [A> or [D> tag
@@ -3410,6 +3413,224 @@ def _strip_in_leading_indent(text: str) -> str:
     if changed:
         logger.debug("Stripped leading indentation from IN output lines")
         return '\n'.join(lines)
+    return text
+
+
+# ---------------------------------------------------------------------------
+# Pre-LLM paragraph-aware tag merge  (all states)
+# ---------------------------------------------------------------------------
+# The PyMuPDF extraction produces per-LINE tags because tags are closed at
+# every line boundary and re-opened on the next line.  The extraction code
+# already knows the paragraph structure from the PDF layout:
+#
+#   \n   = same paragraph, wrapped continuation line
+#   \n\n = paragraph boundary (new block, or indented first line)
+#
+# This function merges per-line tags within the SAME paragraph into a
+# single paragraph-level tag BEFORE the text goes to the LLM.  This means:
+#   - The LLM receives correct paragraph-level tags
+#   - No post-LLM merge/split regex heuristics are needed
+#   - Paragraph boundaries are 100% PDF-derived, not guessed
+#
+# Example input  (per-line tags, same paragraph — single \n):
+#   [A>line one of paragraph<A]
+#   [A>line two of paragraph<A]
+#   [A>line three ends here.<A]
+#
+# Example output (paragraph-level tag):
+#   [A>line one of paragraph line two of paragraph line three ends here.<A]
+#
+# Paragraph breaks (\n\n) are NEVER crossed:
+#   [A>end of paragraph one.<A]
+#
+#   [A>start of paragraph two.<A]
+#   → stays as two separate tags
+
+def pre_merge_paragraph_tags(text: str) -> str:
+    """Merge per-line same-type tags within paragraphs using PDF structure.
+
+    Uses the extraction-time ``\\n`` vs ``\\n\\n`` signals as ground truth:
+    - ``\\n`` between tags = same paragraph → merge
+    - ``\\n\\n`` between tags = paragraph boundary → keep separate
+
+    This runs PRE-LLM so the LLM receives paragraph-level tags with
+    correct boundaries.  Eliminates the need for most post-LLM merge
+    heuristics (``consolidate_adjacent_tags`` Phase 2, ``merge_split_tags``
+    cross-line).
+
+    Safe for all states because the merge decision is structural (PDF
+    layout), not text-based (regex patterns).
+    """
+    import re as _re
+
+    # Process each paragraph (split on \n\n) independently
+    paragraphs = text.split('\n\n')
+    result_paragraphs = []
+
+    for para in paragraphs:
+        # Within a paragraph, merge same-type tags across single \n
+        # Phase 1: merge [A>...<A]\n[A>... → [A>... ...<A]
+        # Phase 2: merge [D>...<D]\n[D>... → [D>... ...<D]
+        for tag_type in ('A', 'D'):
+            close = f'<{tag_type}]'
+            opn   = f'[{tag_type}>'
+            # Pattern: close-tag, optional trailing whitespace, exactly
+            # one newline, optional leading whitespace, open-tag
+            pat = _re.compile(
+                _re.escape(close) + r'[ \t]*\n[ \t]*' + _re.escape(opn)
+            )
+            # Replace with a space (joining the two lines)
+            while pat.search(para):
+                para = pat.sub(' ', para)
+
+        # Also merge same-line adjacent tags (space-separated)
+        for tag_type in ('A', 'D'):
+            close = f'<{tag_type}]'
+            opn   = f'[{tag_type}>'
+            pat = _re.compile(
+                _re.escape(close) + r'[ \t]+' + _re.escape(opn)
+            )
+            while pat.search(para):
+                para = pat.sub(' ', para)
+
+        result_paragraphs.append(para)
+
+    merged = '\n\n'.join(result_paragraphs)
+    logger.debug("Pre-merged per-line tags into paragraph-level tags")
+    return merged
+
+
+# ---------------------------------------------------------------------------
+# Florida (FL) deterministic post-processing — repeated header/footer strip
+# ---------------------------------------------------------------------------
+# FL bill PDFs repeat the same header/footer/reference-code lines on every
+# page.  The LLM prompt instructs removal, but header formats vary across
+# bill types (CS, CS for CS, enrolled, engrossed, etc.).  This deterministic
+# pass catches ALL variations via broad regex so the prompt never needs to
+# be updated for new header styles.
+#
+# Patterns are anchored to standalone lines (^ ... $) so they can never
+# accidentally match bill numbers or years embedded in legislative prose.
+
+# 1. Bill-number header: any depth of "CS for" or "CS/" nesting + HB/SB + number
+#    Optional trailing suffixes: page number, year, ", 1st Engrossed", etc.
+#    Examples:  "HB 385         2025"
+#               "CS for SB 1332"
+#               "CS for CS for SB 1028, 1st Engrossed"
+#               "CS/CS/SB 7031"
+#               "SB 2-D"
+_RE_FL_BILL_HEADER = re.compile(
+    r"^\s*(?:(?:CS\s+for\s+|CS/)*)"          # any nesting of CS for / CS/
+    r"[HS]B\s+\d+(?:-[A-Z])?"                # HB 385, SB 1028, SB 2-D
+    r"(?:\s*[a-z])?"                          # optional engrossed letter: "HB 385e"
+    r"(?:,?\s*\d+(?:st|nd|rd|th)\s+Engrossed)?"  # ", 1st Engrossed"
+    r"(?:\s+\d{1,4})?"                        # trailing page number or year
+    r"\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# 2. Document reference code: "20261028er", "20257031er" (8-10 digits + "er")
+_RE_FL_DOC_REF = re.compile(
+    r"^\s*\d{6,10}er\s*$",
+    re.MULTILINE,
+)
+
+# 3. ENROLLED standalone
+_RE_FL_ENROLLED = re.compile(
+    r"^\s*ENROLLED\s*$",
+    re.MULTILINE,
+)
+
+# 4. Session marker: "2026 Legislature", "2025 Legislature"
+#    Also matches when bill header shares the same line (FL puts session
+#    on left, bill ID on right):
+#      "2026 Legislature                CS for CS for SB 1028, 1st Engrossed"
+_RE_FL_SESSION = re.compile(
+    r"^\s*\d{4}\s+Legislature"
+    r"(?:\s+(?:(?:CS\s+for\s+|CS/)*)[HS]B\s+\d+.*)?"  # optional bill ID on same line
+    r"\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# 5. Spaced-out chamber header: "F L O R I D A   H O U S E   O F ..."
+_RE_FL_SPACED_CHAMBER = re.compile(
+    r"^\s*F\s+L\s+O\s+R\s+I\s+D\s+A\s+H\s+O\s+U\s+S\s+E"
+    r"\s+O\s+F\s+R\s+E\s+P\s+R\s+E\s+S\s+E\s+N\s+T\s+A\s+T\s+I\s+V\s+E\s+S\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# 6. Normal chamber header: "FLORIDA HOUSE OF REPRESENTATIVES"
+_RE_FL_CHAMBER = re.compile(
+    r"^\s*FLORIDA\s+HOUSE\s+OF\s+REPRESENTATIVES\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# 7. Senate header: "Florida Senate - 2025"
+_RE_FL_SENATE = re.compile(
+    r"^\s*Florida\s+Senate\s*[-–—]\s*\d{4}\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# 8. Internal identifiers: "2025470__", "20251234__"
+_RE_FL_INTERNAL_ID = re.compile(
+    r"^\s*\d{7,}__\s*$",
+    re.MULTILINE,
+)
+
+# 9. LRB/bill draft numbers: "40-00657B-25"
+_RE_FL_DRAFT_NUM = re.compile(
+    r"^\s*\d{2}-\d{5}[A-Z]-\d{2}\s*$",
+    re.MULTILINE,
+)
+
+# 10. CODING footer: "CODING: Words stricken are deletions..."
+_RE_FL_CODING_FOOTER = re.compile(
+    r"^\s*CODING:\s+Words\s+(?:stricken|underlined).*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# 11. Standalone 4-digit year as page header (e.g., "2025", "2026")
+_RE_FL_YEAR_HEADER = re.compile(
+    r"^\s*(20\d{2})\s*$",
+    re.MULTILINE,
+)
+
+# Bundle all patterns for a single pass
+_FL_HEADER_PATTERNS = [
+    _RE_FL_BILL_HEADER,
+    _RE_FL_DOC_REF,
+    _RE_FL_ENROLLED,
+    _RE_FL_SESSION,
+    _RE_FL_SPACED_CHAMBER,
+    _RE_FL_CHAMBER,
+    _RE_FL_SENATE,
+    _RE_FL_INTERNAL_ID,
+    _RE_FL_DRAFT_NUM,
+    _RE_FL_CODING_FOOTER,
+    _RE_FL_YEAR_HEADER,
+]
+
+
+def _strip_fl_repeated_headers(text: str) -> str:
+    """Deterministically strip FL bill page headers, footers, and reference codes.
+
+    Runs post-LLM to catch any repeated header/footer lines the LLM missed.
+    Uses broad regex patterns anchored to standalone lines so new formatting
+    variants are caught automatically — no prompt updates needed.
+
+    Safe because every pattern is ``^…$`` anchored: bill numbers, years, and
+    reference codes that appear inside legislative prose sentences are never
+    matched.
+    """
+    original = text
+    for pat in _FL_HEADER_PATTERNS:
+        text = pat.sub("", text)
+
+    if text != original:
+        # Clean up excess blank lines left behind by removals
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        logger.debug("Stripped FL repeated headers/footers/reference codes")
+
     return text
 
 
@@ -4671,6 +4892,7 @@ def clean_extracted_text(
         cleaned = _split_tabular_tag_at_dollar(cleaned)
     if state_code and state_code.upper() == "IN":
         cleaned = _split_in_merged_table_rows(cleaned)
+        cleaned = _split_in_section_heading_welds(cleaned)
         cleaned = split_numbered_item_paragraph_welds(cleaned)
     # ── KS-specific: re-join LLM-inserted paragraph breaks between a
     #    "K.S.A. <num> is hereby amended to read as follows:" intro and
@@ -4766,7 +4988,7 @@ def clean_extracted_text(
     return cleaned
 
 
-def consolidate_adjacent_tags(text: str) -> str:
+def consolidate_adjacent_tags(text: str, state_code: str = None) -> str:
     """
     Merge adjacent ``[A>…<A]`` (and ``[D>…<D]``) tags that are separated
     only by whitespace.  This handles the common case where PyMuPDF creates
@@ -4793,12 +5015,25 @@ def consolidate_adjacent_tags(text: str) -> str:
     - parenthesized: ``(a) ``, ``(1) ``, ``(iv) ``
     - section header: ``Sec.``, ``SECTION``
     - statute number: ``72-3404.`` (digit-dash-digit pattern)
+
+    Args:
+        text: The text to process.
+        state_code: Two-letter state code (e.g. "FL").  When ``"FL"``,
+            an additional terminal-punctuation guard prevents cross-line
+            merging when the prior tag ends with ``.``, ``!``, ``?``,
+            ``:``, or ``;``.  FL bills have long continuous underlined
+            paragraphs where the LLM collapses blank lines between
+            separate paragraphs to single newlines; without this guard
+            those paragraphs get welded into one giant tag.
     """
     import re as _re
     # All markers (for cross-line protection)
     # Sec\. has no trailing \s so it also blocks [A>Sec.<A] (end-of-tag)
     # \d+-\d+ matches statute numbers like "72-3404." that follow "read as follows:"
-    _NO_MERGE = r'(?![a-cA-C1-9]\.\s|\([a-zA-Z0-9]{1,4}\)\s|Sec\.|SECTION\s|\d+-\d)'
+    # [\s<] instead of \s so standalone items in their own tag
+    # (e.g. [D>2.<D], [A>(a)<A]) are also recognised — the close-tag
+    # opener '<' immediately follows the marker in those cases.
+    _NO_MERGE = r'(?![a-cA-C1-9]\.[\s<]|\([a-zA-Z0-9]{1,4}\)[\s<]|Sec\.|SECTION\s|\d+-\d)'
     # Strong section starters only (for same-line protection)
     _NO_MERGE_INLINE = r'(?!Sec\.|SECTION\s)'
 
@@ -4856,17 +5091,28 @@ def consolidate_adjacent_tags(text: str) -> str:
     # 66-space indent exceeds the {0,15} bound so the cross-line regex
     # does NOT match, leaving each visual line with its OWN tag pair.
     # Normal paragraph wrapping (≤ 8 spaces) still merges as before.
-    _adj_a_cross = _re.compile(r'<A\][ \t]*\n[ \t]{0,15}\[A>' + _NO_MERGE)
+    #
+    # FL-specific terminal-punctuation guard: a 1-char lookbehind
+    # (?<![.!?:;]) prevents merging when the prior tag closes
+    # immediately after a sentence terminator.  FL bills have long
+    # continuous underlined paragraphs where the LLM collapses blank
+    # lines to single newlines; without this guard those separate
+    # paragraphs get welded into one giant tag.  Only applied for FL
+    # because other states rely on cross-line merging at sentence
+    # boundaries (the LLM wraps mid-sentence for them).
+    _is_fl = state_code and state_code.upper() == "FL"
+    _no_term = r'(?<![.!?:;])' if _is_fl else ''
+    _adj_a_cross = _re.compile(_no_term + r'<A\][ \t]*\n[ \t]{0,15}\[A>' + _NO_MERGE)
     while _adj_a_cross.search(text):
         text = _adj_a_cross.sub(' ', text)
-    _adj_d_cross = _re.compile(r'<D\][ \t]*\n[ \t]{0,15}\[D>' + _NO_MERGE)
+    _adj_d_cross = _re.compile(_no_term + r'<D\][ \t]*\n[ \t]{0,15}\[D>' + _NO_MERGE)
     while _adj_d_cross.search(text):
         text = _adj_d_cross.sub(' ', text)
 
     # ── Phase 3: ensure blank line before subsection boundaries ───────
     # After merging, adjacent tags separated by a single \n that start
     # with a marker should have a blank line (\n\n) for readability.
-    _MARKER = r'(\([a-zA-Z0-9]{1,4}\)\s|[a-cA-C1-9]\.\s|Sec\.\s|SECTION\s|\d+-\d)'
+    _MARKER = r'(\([a-zA-Z0-9]{1,4}\)[\s<]|[a-cA-C1-9]\.[\s<]|Sec\.\s|SECTION\s|\d+-\d)'
     _gap_a = _re.compile(r'(<A\])\n(\[A>' + _MARKER + r')')
     text = _gap_a.sub(r'\1\n\n\2', text)
     _gap_d = _re.compile(r'(<D\])\n(\[D>' + _MARKER + r')')
@@ -4938,8 +5184,8 @@ def merge_split_tags(text: str) -> str:
             r'(?!\s*\(\d+\))'
             r'(?!\s*\([A-Z]+\))'
             r'(?!\s*\([a-z]+\))'
-            r'(?!\s*[a-z]\.\d*\.?\s)'
-            r'(?!\s*\d+\.\s)'
+            r'(?!\s*[a-z]\.\d*\.?[\s<])'
+            r'(?!\s*\d+\.[\s<])'
         )
         # 0) Inline joins: <T][T>text on same line — merge unless prior
         #    closed at a sentence boundary.
@@ -5584,6 +5830,118 @@ def _split_in_merged_table_rows(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# _split_in_section_heading_welds
+# ---------------------------------------------------------------------------
+
+def _split_in_section_heading_welds(text: str) -> str:
+    """Split tagged blocks at every ``Sec. N.`` boundary in IN text.
+
+    The LLM sometimes merges multiple section definitions into a
+    **single** ``[A>…<A]`` tag::
+
+        [A>Sec. 5. … program. Sec. 6. … chapter. Sec. 7. (a) …<A]
+
+    Or a chapter heading welded to the first section::
+
+        [A>Chapter 16. Hoosier Homesteads Sec. 1. As used in …<A]
+
+    The correct output keeps each ``Sec.`` as its own tagged paragraph.
+
+    **Detection criteria** for each split point (ALL must hold):
+
+    1. The tagged content contains ``Sec. N.`` (where N is one or more
+       digits, optionally followed by a letter like ``13a``).
+    2. There is meaningful text **before** ``Sec.`` (≥ 5 chars) — so
+       the very first ``Sec.`` at the start of a tag is left alone.
+    3. There is meaningful text **after** ``Sec.`` (≥ 20 chars).
+    4. ``Sec.`` is **not** preceded by a cross-reference word like
+       ``under``, ``in``, ``of``, ``by``, ``see``, ``per``, ``to``,
+       ``from``, ``described``, ``provided``, ``pursuant``, ``section``,
+       ``subsection`` — those indicate an inline reference, not a new
+       section definition.
+
+    The function splits at **all** valid ``Sec.`` boundaries within a
+    single tag, not just the first one.
+
+    Scoped to IN only by callers.
+    """
+    _REF_WORDS = re.compile(
+        r'\b(?:under|in|of|by|see|per|to|from|and|or|described|provided|'
+        r'amended|established|specified|mentioned|referenced|pursuant|'
+        r'subsection|subdivision|section|chapter)\s*$',
+        re.IGNORECASE,
+    )
+    _SEC_PATTERN = re.compile(r'Sec\.\s+\d+[a-zA-Z]?\.\s')
+
+    lines = text.split('\n')
+    new_lines: list[str] = []
+
+    for line in lines:
+        m_tag = re.match(r'^\[([AD])>', line)
+        if not m_tag or 'Sec.' not in line:
+            new_lines.append(line)
+            continue
+
+        tag_type = m_tag.group(1)
+        tag_open = f'[{tag_type}>'
+        tag_close = f'<{tag_type}]'
+
+        close_idx = line.rfind(tag_close)
+        if close_idx < 0:
+            new_lines.append(line)
+            continue
+
+        trailing = line[close_idx + len(tag_close):]
+        content = line[len(tag_open):close_idx]
+
+        # Collect ALL valid split positions
+        split_positions: list[int] = []
+        for m in _SEC_PATTERN.finditer(content):
+            before = content[:m.start()].rstrip()
+            after = content[m.start():].strip()
+
+            if len(before) < 5 or len(after) < 20:
+                continue
+            if _REF_WORDS.search(before):
+                continue
+
+            split_positions.append(m.start())
+
+        if not split_positions:
+            new_lines.append(line)
+            continue
+
+        # Split content into pieces at each valid Sec. boundary
+        pieces: list[str] = []
+        prev = 0
+        for pos in split_positions:
+            piece = content[prev:pos].rstrip()
+            if piece:
+                pieces.append(piece)
+            prev = pos
+        # Last piece: from last split to end
+        last = content[prev:].strip()
+        if last:
+            pieces.append(last)
+
+        # Emit each piece as its own tagged paragraph
+        for i, piece in enumerate(pieces):
+            if i > 0:
+                new_lines.append('')  # blank line separator
+            if i == len(pieces) - 1:
+                new_lines.append(f"{tag_open}{piece}{tag_close}{trailing}")
+            else:
+                new_lines.append(f"{tag_open}{piece}{tag_close}")
+
+        logger.debug(
+            "Split section-heading weld into %d pieces at Sec. markers",
+            len(pieces),
+        )
+
+    return '\n'.join(new_lines)
+
+
+# ---------------------------------------------------------------------------
 # split_numbered_item_paragraph_welds
 # ---------------------------------------------------------------------------
 
@@ -5622,9 +5980,14 @@ def split_numbered_item_paragraph_welds(text: str) -> str:
     3. The text *before* the split (the numbered item) is short
        (≤ 120 characters).
     4. The text *after* the split (the following paragraph) is long
-       (≥ 100 characters).
-    5. The total tagged content exceeds 200 characters — so trivially
-       short multi-sentence items are never touched.
+       enough — **≥ 100 chars** for period splits, **≥ 40 chars** for
+       semicolon splits (semicolons are much stronger list-item
+       delimiters in legal text).
+    5. The total tagged content exceeds **200 chars** for period splits
+       or **80 chars** for semicolon splits.
+    6. For semicolon splits, the continuation must NOT start with a
+       conjunction (and/or/but/nor) — that signals a clause
+       continuation, not a new paragraph.
 
     These guards prevent false splits on:
 
@@ -5657,7 +6020,18 @@ def split_numbered_item_paragraph_welds(text: str) -> str:
     for line in lines:
         # Quick check: must start with a tag opener + parenthesised marker
         m_tag = re.match(r'^\[([AD])>\(([a-zA-Z0-9]{1,4})\)\s+', line)
-        if not m_tag or len(line) < 200:
+        if not m_tag or len(line) < 80:
+            new_lines.append(line)
+            continue
+
+        # Guard: single lowercase letter markers — (a), (b), … (z) — are
+        # *subsection* identifiers in IN legal formatting, not list items.
+        # Their content is a complete multi-sentence provision and must
+        # never be split at sentence boundaries.  Numbered markers (1),
+        # (2), … and uppercase letters (A), (B), … are genuine list items
+        # and remain eligible for splitting.
+        marker = m_tag.group(2)
+        if re.match(r'^[a-z]$', marker):
             new_lines.append(line)
             continue
 
@@ -5681,7 +6055,23 @@ def split_numbered_item_paragraph_welds(text: str) -> str:
             item_part = content[: sp.start() + 1]    # up to and including the . or ;
             para_part = content[sp.start() + 1 :].lstrip()  # skip whitespace
 
-            if len(item_part) <= 120 and len(para_part) >= 100:
+            # Semicolons are strong list-item delimiters in legal text,
+            # so use relaxed thresholds.  Periods need stricter guards
+            # because they appear in citations and abbreviations.
+            is_semicolon = content[sp.start()] == ';'
+            if is_semicolon:
+                min_para = 40
+                # Guard: if continuation starts with a conjunction, it's
+                # a clause continuation, not a new paragraph.
+                if re.match(r'(?:and|or|but|nor)\s', para_part, re.IGNORECASE):
+                    continue
+            else:
+                min_para = 100
+                # Period splits require longer total content
+                if len(line) < 200:
+                    continue
+
+            if len(item_part) <= 120 and len(para_part) >= min_para:
                 new_lines.append(f"{tag_open}{item_part}{tag_close}")
                 new_lines.append("")                  # blank-line separator
                 new_lines.append(f"{tag_open}{para_part}{tag_close}{trailing}")
