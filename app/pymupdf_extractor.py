@@ -241,6 +241,15 @@ _RE_SMALLCAPS_FONT = re.compile(
     re.IGNORECASE,
 )
 
+# Hidden OCR text fonts — these are invisible text layers baked into
+# scanned PDFs by OCR tools.  The text is not visible on the rendered
+# page but PyMuPDF extracts it, producing garbage characters (e.g. "~")
+# from signature scribble recognition.  Skip spans with these fonts.
+_RE_HIDDEN_OCR_FONT = re.compile(
+    r"HiddenHorzOCR|HiddenVertOCR|Invisible|GlyphLessFont",
+    re.IGNORECASE,
+)
+
 # ---------------------------------------------------------------------------
 # Logo / letterhead exclusion
 # ---------------------------------------------------------------------------
@@ -1382,6 +1391,55 @@ def _merge_overlapping_blocks(text_dict: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Per-page line-number detection (DC rule: underline only on main text)
+# ---------------------------------------------------------------------------
+# DC bills have introductory / signature pages with NO margin line numbers
+# and bill-body pages WITH sequential margin line numbers (1, 2, 3 …).
+# Underline [A>…<A] tags should only be applied on pages that carry
+# line numbers, because those are the "main text" of the legislation.
+
+# Minimum count of bare-number narrow-margin lines to qualify as a
+# line-numbered page.  A threshold of 5 avoids false positives from
+# stray digits (e.g. an address "20004") on non-body pages.
+_LINE_NUMBER_PAGE_MIN_COUNT = 5
+_LINE_NUMBER_MAX_X          = 80.0   # left-margin cutoff (pt)
+_LINE_NUMBER_MAX_WIDTH      = 30.0   # max bbox width (pt)
+
+
+def _page_has_margin_line_numbers(page: fitz.Page) -> bool:
+    """Return True if *page* has sequential margin line numbers.
+
+    Scans text blocks for narrow, left-margin, bare-number lines
+    ("1", "37", "108" etc.).  If at least ``_LINE_NUMBER_PAGE_MIN_COUNT``
+    such lines are found, the page is considered to carry line numbers
+    and is therefore part of the bill body.
+    """
+    td = page.get_text("rawdict", flags=fitz.TEXT_PRESERVE_WHITESPACE)
+    count = 0
+    for blk in td.get("blocks", []):
+        if blk.get("type") != 0:
+            continue
+        for ln in blk.get("lines", []):
+            lb = ln.get("bbox", (0, 0, 0, 0))
+            lw = lb[2] - lb[0]
+            if lw >= _LINE_NUMBER_MAX_WIDTH or lb[0] >= _LINE_NUMBER_MAX_X:
+                continue
+            # Collect text
+            txt = ""
+            for sp in ln.get("spans", []):
+                chars = sp.get("chars", [])
+                if chars:
+                    txt += "".join(c.get("c", "") for c in chars)
+                else:
+                    txt += sp.get("text", "")
+            if _RE_BARE_LINE_NUMBER.match(txt.strip()):
+                count += 1
+                if count >= _LINE_NUMBER_PAGE_MIN_COUNT:
+                    return True
+    return False
+
+
+# ---------------------------------------------------------------------------
 # Page-level extraction  (character-level precision)
 # ---------------------------------------------------------------------------
 
@@ -1483,6 +1541,17 @@ def _extract_page_tagged_text(
     # (SAME_ROW_Y_TOL_PT) and column-gap padding correctly place the
     # org names next to their amounts.
     text_dict = _merge_overlapping_blocks(text_dict)
+
+    # -- 2c. Sort blocks by y-coordinate for correct reading order --
+    # PyMuPDF returns blocks in PDF *drawing* order, which may NOT
+    # match visual top-to-bottom reading order.  Example: DC Council
+    # letterhead blocks (author name / committee columns) are drawn
+    # after the body-text blocks despite sitting near the page top.
+    # Without this sort the author block ends up after the bullet-
+    # point paragraphs instead of between the address and the title.
+    _blks = text_dict.get("blocks", [])
+    _blks.sort(key=lambda b: b.get("bbox", (0, 0, 0, 0))[1])
+    text_dict["blocks"] = _blks
 
     output: List[str] = []
     in_add = False
@@ -1743,6 +1812,12 @@ def _extract_page_tagged_text(
                 font_name  = span.get("font", "")
                 span_text  = span.get("text", "")
 
+                # --- Skip hidden OCR text (e.g. HiddenHorzOCR) ---
+                # Scanned PDFs embed invisible OCR layers whose text
+                # is garbage ("~", "/", etc.) from signature images.
+                if _RE_HIDDEN_OCR_FONT.search(font_name):
+                    continue
+
                 # --- Detect italic (bit 1) and bold (bit 4) from span flags ---
                 span_flags = span.get("flags", 0)
                 span_is_italic = bool(span_flags & 2)
@@ -1881,12 +1956,16 @@ def _extract_page_tagged_text(
     # no matching layout is found) and splices the recovered line into
     # the output just above the anchor text.
     if state_code and state_code.upper() == "DC":
-        chairman_line = _recover_dc_chairman_from_image(page)
-        if chairman_line:
-            result_text = _splice_dc_chairman_line(result_text, chairman_line)
-            logger.debug(
-                "DC: recovered chairman line via OCR — %r", chairman_line
-            )
+        # Only attempt OCR recovery if the chairman line is NOT already
+        # present in the extracted text (avoids duplication when the PDF
+        # has "Chairman Phil Mendelson" as native text AND as an image).
+        if "chairman" not in result_text.lower() or "mendelson" not in result_text.lower():
+            chairman_line = _recover_dc_chairman_from_image(page)
+            if chairman_line:
+                result_text = _splice_dc_chairman_line(result_text, chairman_line)
+                logger.debug(
+                    "DC: recovered chairman line via OCR — %r", chairman_line
+                )
 
     return result_text
 
@@ -1924,6 +2003,13 @@ def _extract_page_spans(page: fitz.Page, state_code: Optional[str] = None) -> Li
         hlines = _filter_ar_leader_lines(hlines, page)
 
     text_dict = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)
+
+    # Sort text blocks by top-y so spans reflect visual reading order
+    # (see matching sort in _extract_page_tagged_text).
+    _blks = text_dict.get("blocks", [])
+    _blks.sort(key=lambda b: b.get("bbox", (0, 0, 0, 0))[1])
+    text_dict["blocks"] = _blks
+
     spans: List[TextSpan] = []
     block_idx = 0
 
@@ -2697,6 +2783,75 @@ _RE_DC_LINK_TAG = re.compile(
 )
 
 
+# ---------------------------------------------------------------------------
+# DC Wilson Building footer / letterhead stripping
+# ---------------------------------------------------------------------------
+# Many DC bills (Mayor transmittal letters, legal sufficiency memos) have
+# repeated letterhead or footer blocks that are document metadata, not
+# legislative text.  Two variants:
+#
+# Variant 1 — Footer (bottom of page, with underline separator):
+#   _____________________________
+#   The John A. Wilson Building  •  1350 Pennsylvania Avenue, NW  •  Suite 300  •  Washington, D.C. 20004  •  Office (202) 724-7681
+#
+# Variant 2 — Header (top of bio/resume pages):
+#   Executive Office of the Mayor – Mayor's Office of Talent and Appointments
+#   John A. Wilson Building | 1350 Pennsylvania Avenue, Suite 600 | Washington, DC 20004
+_RE_DC_WILSON_FOOTER = re.compile(
+    r"_{5,}\s*\n"
+    r"[ \t]*The\s+John\s+A\.?\s+Wilson\s+Building[^\n]*",
+    re.IGNORECASE,
+)
+
+_RE_DC_EXEC_OFFICE_HEADER = re.compile(
+    r"^[ \t]*Executive\s+Office\s+of\s+the\s+Mayor\s*[\u2013\u2014\-]\s*Mayor['\u2019]?s\s+Office\s+of\s+Talent\s+and\s+Appointments[ \t]*\n"
+    r"[ \t]*(?:The\s+)?John\s+A\.?\s+Wilson\s+Building[^\n]*",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# Variant 3 — Generic 1350 Pennsylvania Avenue footer (standalone address
+# line at page bottom, various Suite numbers / phone / email combos):
+#   1350 Pennsylvania Avenue, N.W., Suite 409, Washington, D.C. 20004 Phone: (202) 724-5524 Email: adele.el-khouri@dc.gov
+_RE_DC_PENN_AVE_FOOTER = re.compile(
+    r"^[ \t]*1350\s+Pennsylvania\s+Avenue[^\n]*(?:Washington|D\.?C\.?)[^\n]*(?:Phone|Email|Office|\(202\))[^\n]*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _strip_dc_wilson_building_footer(text: str) -> str:
+    """Remove DC Wilson Building footer and letterhead blocks.
+
+    Strips two variants of repeated DC document metadata:
+    1. Footer with underline separator + 'The John A. Wilson Building ...'
+    2. Header 'Executive Office of the Mayor – Mayor's Office of Talent
+       and Appointments' + 'John A. Wilson Building | ...'
+
+    Safe to apply globally since the regexes anchor on very specific
+    DC government building / office names.
+    """
+    changed = False
+    new_text = _RE_DC_WILSON_FOOTER.sub("", text)
+    if new_text != text:
+        changed = True
+        text = new_text
+
+    new_text = _RE_DC_EXEC_OFFICE_HEADER.sub("", text)
+    if new_text != text:
+        changed = True
+        text = new_text
+
+    new_text = _RE_DC_PENN_AVE_FOOTER.sub("", text)
+    if new_text != text:
+        changed = True
+        text = new_text
+
+    if changed:
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        text = text.strip("\n") + "\n" if text.strip() else text
+        logger.debug("Stripped DC Wilson Building footer/letterhead block")
+    return text
+
+
 def _strip_dc_link_underline_tags(text: str) -> str:
     """Strip ``[A>…<A]`` tags whose content is an email address or URL.
 
@@ -2755,9 +2910,11 @@ _DC_TESSERACT_DIR = r"C:\Users\C302602\AppData\Local\Programs\Tesseract-OCR"
 _DC_OCR_TESSERACT_CONFIGURED = False
 
 # Anchor for splice — matches the "at the request of the State Board of
-# Education" line at the start of a line (allowing leading whitespace).
+# Education" (SBOE bills) or "at the request of the Mayor" (Mayor bills)
+# at the start of a line (allowing leading whitespace and optional line
+# numbers like "4   at the request...").
 _RE_DC_REQUEST_LINE = re.compile(
-    r"^([ \t]*)at\s+the\s+request\s+of\s+the\s+State\s+Board\s+of\s+Education",
+    r"^([ \t]*(?:\d{1,3}\s+)?)at\s+the\s+request\s+of\s+the\s+(?:State\s+Board\s+of\s+Education|Mayor)",
     re.MULTILINE | re.IGNORECASE,
 )
 
@@ -2842,16 +2999,20 @@ def _ocr_words_inside_bbox(
 
 
 def _recover_dc_chairman_from_image(page: "fitz.Page") -> Optional[str]:
-    """Recover the chairman-signature line from a DC SBOE raster image.
+    """Recover the chairman-signature line from a DC raster image.
 
     Returns the cleaned chairman line (e.g. ``"Chairman Phil Mendelson"``)
     on success, or ``None`` if no matching pattern is found / OCR fails.
 
-    The page must contain the literal text "at the request of the State
-    Board of Education" AND a wide image block directly above that line;
-    otherwise this function is a no-op.
+    Works for both DC SBOE bills ("at the request of the State Board of
+    Education") and Mayor bills ("at the request of the Mayor").
+    The page must contain one of those anchor phrases AND a wide image
+    block directly above that line; otherwise this function is a no-op.
     """
+    # Try both anchor phrases
     request_hits = page.search_for("at the request of the State Board of Education")
+    if not request_hits:
+        request_hits = page.search_for("at the request of the Mayor")
     if not request_hits:
         return None
     request_y_top = min(r.y0 for r in request_hits)
@@ -2869,9 +3030,12 @@ def _recover_dc_chairman_from_image(page: "fitz.Page") -> Optional[str]:
         height = y1 - y0
         if width < 80 or height < 20:
             continue
-        if y1 > request_y_top:                 # must sit above the line
+        # Image must sit above (or slightly overlapping) the request line.
+        # Allow a small overlap tolerance because in tight layouts the
+        # signature image bottom can extend a few points into the text.
+        if y1 > request_y_top + 10:            # allow ≤10pt overlap
             continue
-        if (request_y_top - y1) > 80:          # must be near it (≤ 80 pt)
+        if (request_y_top - y0) > 120:         # must be near it (≤ 120 pt)
             continue
         candidates.append(bbox)
 
@@ -2891,11 +3055,19 @@ def _recover_dc_chairman_from_image(page: "fitz.Page") -> Optional[str]:
 
     # Look for a line starting with "Chairman" or "airman" (Ch clipped by
     # the overlapping handwritten signature).  Normalise to "Chairman".
+    # Fallback: if OCR garbles the first word (e.g. "4Ltd" instead of
+    # "Chairman") but "Phil Mendelson" is recognisable, reconstruct.
     for raw_line in lines:
         line = raw_line.strip()
-        if not _RE_DC_AIRMAN_PREFIX.match(line):
-            continue
-        return _RE_DC_AIRMAN_PREFIX.sub("Chairman", line, count=1)
+        if _RE_DC_AIRMAN_PREFIX.match(line):
+            return _RE_DC_AIRMAN_PREFIX.sub("Chairman", line, count=1)
+
+    # Fallback: look for "Phil Mendelson" anywhere in the OCR output
+    # and reconstruct the full chairman line.
+    for raw_line in lines:
+        line = raw_line.strip()
+        if re.search(r"Phil\s+Mendelson", line, re.IGNORECASE):
+            return "Chairman Phil Mendelson"
 
     return None
 
@@ -4307,9 +4479,23 @@ def extract_pdf_with_pymupdf(
         page = doc[idx]
         logger.info("Processing page %d / %d …", idx + 1, len(doc))
 
+        # -- DC rule: underline tags only on "main text" pages -----------
+        # DC bills have introductory / signature pages (no line numbers)
+        # and bill-body pages (with sequential margin line numbers).
+        # Underline [A>…<A] tags are only meaningful on the bill body,
+        # so disable mark_underline on pages without line numbers.
+        page_mark_underline = mark_underline
+        if mark_underline and state_code and state_code.upper() == "DC":
+            if not _page_has_margin_line_numbers(page):
+                page_mark_underline = False
+                logger.debug(
+                    "DC page %d has no margin line numbers — "
+                    "disabling underline tagging", idx + 1,
+                )
+
         raw_text = _extract_page_tagged_text(
             page,
-            mark_underline=mark_underline,
+            mark_underline=page_mark_underline,
             mark_strikethrough=mark_strikethrough,
             mark_italic=mark_italic,
             mark_bold=mark_bold,
@@ -4320,6 +4506,11 @@ def extract_pdf_with_pymupdf(
         # NOTE: _tag_brackets() is NOT called here.  It runs AFTER the
         # LLM clean step (in clean_extracted_text) so the LLM never sees
         # confusing nested [D>[…]<D] structures.
+
+        # DC-only: strip Wilson Building footer from each page early so
+        # it doesn't appear in the raw output or confuse the LLM.
+        if state_code and state_code.upper() == "DC":
+            clean = _strip_dc_wilson_building_footer(clean)
 
         # KS-only: inject underscore text for vector-drawn signature lines
         # on pages that contain the certification/signing block.
@@ -4872,6 +5063,7 @@ def clean_extracted_text(
     if state_code and state_code.upper() == "DC":
         cleaned = _strip_dc_letterhead_footer(cleaned)
         cleaned = _strip_dc_link_underline_tags(cleaned)
+        cleaned = _strip_dc_wilson_building_footer(cleaned)
 
     # ── strip IN-specific artifacts (footers, barcodes, false headers) ─
     if state_code and state_code.upper() == "IN":
@@ -6020,8 +6212,13 @@ def split_numbered_item_paragraph_welds(text: str) -> str:
        - **Semicolon** followed by spaces + any letter ``[a-zA-Z]``
          (semicolons don't appear in citation numbers, so lowercase
          continuation is safe to match — e.g. ``; since``, ``; of``).
-    3. The text *before* the split (the numbered item) is short
-       (≤ 120 characters).
+    3. The text *before* the split (the numbered item) is short —
+       **≤ 55 chars** for period splits, **≤ 120 chars** for semicolon
+       splits.  Period splits use a stricter limit because IN
+       subsection items often contain multiple sentences that are all
+       part of the same item (e.g. ``(1) First sentence of provision.
+       Second sentence still in (1).``).  A true welded item is
+       typically ≤ 50 chars.
     4. The text *after* the split (the following paragraph) is long
        enough — **≥ 100 chars** for period splits, **≥ 40 chars** for
        semicolon splits (semicolons are much stronger list-item
@@ -6035,7 +6232,8 @@ def split_numbered_item_paragraph_welds(text: str) -> str:
     These guards prevent false splits on:
 
     * Multi-sentence numbered items where the second sentence is still
-      part of the same item (total length < 200, or item part > 120).
+      part of the same item (total length < 200, or item part too long
+      for split type — > 55 for periods, > 120 for semicolons).
     * Citation periods like ``IC 35-43-5-3.8`` — the character after
       the dot is a digit, not ``[A-Z][a-z]``.
     * Semicolons between list sub-items like ``; (1)`` or ``; and`` —
@@ -6104,17 +6302,32 @@ def split_numbered_item_paragraph_welds(text: str) -> str:
             is_semicolon = content[sp.start()] == ';'
             if is_semicolon:
                 min_para = 40
+                max_item = 120
                 # Guard: if continuation starts with a conjunction, it's
                 # a clause continuation, not a new paragraph.
                 if re.match(r'(?:and|or|but|nor)\s', para_part, re.IGNORECASE):
                     continue
             else:
                 min_para = 100
-                # Period splits require longer total content
+                # Period splits: much stricter item-length limit.
+                # IN subsection items routinely contain 2-3 sentences
+                # that are ALL part of the same item.  A true welded
+                # item (short clause glued to the next paragraph) is
+                # typically ≤ 50 chars.  55 prevents false splits on
+                # genuine multi-sentence items.
+                #
+                # Exception: if the continuation starts with "Sec. N."
+                # it is unambiguously a new section welded to the item,
+                # so use the relaxed 120-char limit.
+                if re.match(r'Sec\.\s+\d', para_part):
+                    max_item = 120
+                else:
+                    max_item = 55
+                # Period splits also require longer total content
                 if len(line) < 200:
                     continue
 
-            if len(item_part) <= 120 and len(para_part) >= min_para:
+            if len(item_part) <= max_item and len(para_part) >= min_para:
                 new_lines.append(f"{tag_open}{item_part}{tag_close}")
                 new_lines.append("")                  # blank-line separator
                 new_lines.append(f"{tag_open}{para_part}{tag_close}{trailing}")

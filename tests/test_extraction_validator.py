@@ -429,6 +429,37 @@ def test_split_numbered_item_weld_no_split_subsection_letter() -> None:
     assert result == subsec_e, "Subsection (e) must not be split"
 
 
+def test_split_numbered_item_weld_no_split_multi_sentence_subsection() -> None:
+    """Multi-sentence numbered items must NOT be split at sentence boundaries.
+
+    IN subsections like (1) often contain 2-3 sentences that are all
+    part of the same item.  The period-split item_part threshold (55)
+    prevents false splits on these — only genuinely short welded items
+    (≤ 55 chars) are eligible for period-based splitting.
+    """
+    # Case 1: (1) long first sentence + two more sentences (item_part=112 chars)
+    text_long = (
+        "[A>(1) The property has been under the continuous ownership of the same "
+        "family for at least one hundred (100) years. The line of ownership from "
+        "the first family member that owned the property to the current owner may "
+        "only be through spouses, children, siblings, nephews, nieces, aunts, "
+        "uncles, or cousins. Legally adopted family members are recognized equally "
+        "with blood relatives.<A]"
+    )
+    result = split_numbered_item_paragraph_welds(text_long)
+    assert result == text_long, "Multi-sentence subsection (1) must not be split"
+
+    # Case 2: (1) shorter first sentence + continuation (item_part=60 chars)
+    text_short = (
+        "[A>(1) A Hoosier homestead designation may expire or be revoked. "
+        "The department and the department's online registry can provide "
+        "information regarding the current status of the Hoosier homestead "
+        "designation.<A]"
+    )
+    result = split_numbered_item_paragraph_welds(text_short)
+    assert result == text_short, "Multi-sentence subsection (1) with 60-char item must not be split"
+
+
 def test_split_numbered_item_weld_trailing_punctuation() -> None:
     """Lines with trailing punctuation after <A] (committee report quotes) should still split."""
     welded = (

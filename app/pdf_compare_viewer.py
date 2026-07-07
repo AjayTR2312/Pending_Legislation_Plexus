@@ -421,6 +421,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,san
   <label style="font-size:12px;color:var(--text2);display:flex;align-items:center;gap:4px;margin-left:4px;cursor:pointer">
     <input type="checkbox" id="collapseCb" onchange="toggleCollapse(this.checked)"> Collapse unchanged
   </label>
+  <button class="btn" id="syncBtn" onclick="toggleSyncScroll()" title="Sync scroll between PDF and Text panels">⇔ Sync</button>
   <span class="stat" id="statBar">Ready</span>
   <button class="btn" id="dlBtn" onclick="downloadText()">⬇️ Download</button>
 </div>
@@ -508,6 +509,7 @@ S=_renderScale;
       // All pages rendered — build overlays
       syncTextLayers();
       rebuildPdfOverlays();
+      _buildLinePdfPos();
     });
   }).catch(function(err){
     document.getElementById('statBar').textContent='\u26a0\ufe0f PDF render failed: '+err.message;
@@ -547,11 +549,19 @@ function refreshChangeMeta(){
 }
 refreshChangeMeta();
 
+// Pause sync scroll for a duration (prevents sync from fighting with
+// programmatic scrolls like highlight-to-PDF, diff nav, page nav, etc.)
+var _syncPauseTimer=null;
+function pauseSyncScroll(ms){
+  _syncScrolling=true;
+  if(_syncPauseTimer)clearTimeout(_syncPauseTimer);
+  _syncPauseTimer=setTimeout(function(){_syncScrolling=false;},ms||600);
+}
+
 // Safe scroll — only scrolls the given panel, not the parent iframe or sibling panels.
-// scrollIntoView() scrolls ALL scrollable ancestors which causes the PDF panel to
-// jump when we intend to scroll only the text panel (and vice-versa).
 function scrollElIntoPanel(el, panel, block){
   if(!el||!panel) return;
+  pauseSyncScroll(800);
   var elRect=el.getBoundingClientRect();
   var panelRect=panel.getBoundingClientRect();
   var offset;
@@ -603,6 +613,126 @@ function navPage(dir){
   var next=Math.max(0,Math.min(totalPages-1,cur+dir));
   scrollElIntoPanel(containers[next], document.getElementById('pdfPanel'), 'start');
 }
+
+// ── Bidirectional sync scroll ───────────────────────────────────────
+var syncScrollEnabled=false;
+var _syncScrolling=false; // guard to prevent feedback loop
+function toggleSyncScroll(){
+  syncScrollEnabled=!syncScrollEnabled;
+  var btn=document.getElementById('syncBtn');
+  btn.classList.toggle('on',syncScrollEnabled);
+  // Rebuild position map when enabling (in case it wasn't built yet)
+  if(syncScrollEnabled && Object.keys(_linePdfPos).length===0) _buildLinePdfPos();
+  var n=Object.keys(_linePdfPos).length;
+  document.getElementById('statBar').textContent=
+    syncScrollEnabled?'⇔ Sync scroll ON ('+n+' lines mapped)':'⇔ Sync scroll OFF';
+}
+
+// Build line→page/y lookup for sync: for each text line that has a
+// wordMap entry, record its PDF page and average y position.
+var _linePdfPos={};  // li → {page, y}
+function _buildLinePdfPos(){
+  _linePdfPos={};
+  Object.keys(lg).forEach(function(li){
+    var ws=lg[li];
+    if(!ws||!ws.length)return;
+    var sumY=0;
+    ws.forEach(function(w){sumY+=w.y0;});
+    _linePdfPos[li]={page:ws[0].page, y:sumY/ws.length};
+  });
+}
+
+// Given a scroll fraction (0..1) of one panel, find the corresponding
+// line index using the wordMap data.
+function _pdfScrollToLine(){
+  // Which page is visible at the top of the PDF panel?
+  var pp=document.getElementById('pdfPanel');
+  var scrollTop=pp.scrollTop;
+  var bestPage=0;
+  containers.forEach(function(c,i){if(c.offsetTop-60<=scrollTop)bestPage=i;});
+  // How far into that page?
+  var ctr=containers[bestPage];
+  var cv=ctr?ctr.querySelector('canvas'):null;
+  if(!cv||!cv.width)return -1;
+  var ds=cv.clientWidth/cv.width;
+  var yInPage=(scrollTop-ctr.offsetTop-(cv?cv.offsetTop:0))/(ds*S);
+  if(yInPage<0)yInPage=0;
+  // Find closest line on this page
+  var bestLi=-1,bestDist=1e9;
+  Object.keys(_linePdfPos).forEach(function(li){
+    var lp=_linePdfPos[li];
+    if(lp.page===bestPage){
+      var d=Math.abs(lp.y-yInPage);
+      if(d<bestDist){bestDist=d;bestLi=parseInt(li);}
+    }
+  });
+  return bestLi;
+}
+
+function _lineToTextScrollTop(li){
+  var tl=document.querySelector('.tl[data-li="'+li+'"]');
+  if(!tl)return -1;
+  var tp=document.getElementById('textPanel');
+  // Use getBoundingClientRect for accurate offset regardless of nesting
+  var tlRect=tl.getBoundingClientRect();
+  var tpRect=tp.getBoundingClientRect();
+  return tlRect.top - tpRect.top + tp.scrollTop;
+}
+
+function _lineToPdfScrollTop(li){
+  var lp=_linePdfPos[li];
+  if(!lp)return -1;
+  var ctr=containers[lp.page];
+  if(!ctr)return -1;
+  var cv=ctr.querySelector('canvas');
+  if(!cv||!cv.width)return -1;
+  var ds=cv.clientWidth/cv.width;
+  return ctr.offsetTop+cv.offsetTop+lp.y*S*ds;
+}
+
+function _textScrollToLine(){
+  var tp=document.getElementById('textPanel');
+  var tpRect=tp.getBoundingClientRect();
+  var tls=tp.querySelectorAll('.tl');
+  var bestLi=-1;
+  for(var i=0;i<tls.length;i++){
+    var r=tls[i].getBoundingClientRect();
+    // Find the last line whose top is at or above the panel's top edge + small offset
+    if(r.top <= tpRect.top+50) bestLi=parseInt(tls[i].dataset.li);
+    else break;
+  }
+  return bestLi;
+}
+
+// Attach listeners
+var _syncDebounceP=null,_syncDebounceT=null;
+document.getElementById('pdfPanel').addEventListener('scroll',function(){
+  if(!syncScrollEnabled||_syncScrolling)return;
+  if(_syncDebounceP)clearTimeout(_syncDebounceP);
+  _syncDebounceP=setTimeout(function(){
+    var li=_pdfScrollToLine();
+    if(li<0)return;
+    var top=_lineToTextScrollTop(li);
+    if(top<0)return;
+    _syncScrolling=true;
+    document.getElementById('textPanel').scrollTo({top:Math.max(0,top),behavior:'auto'});
+    requestAnimationFrame(function(){setTimeout(function(){_syncScrolling=false;},60);});
+  },16);
+},{passive:true});
+
+document.getElementById('textPanel').addEventListener('scroll',function(){
+  if(!syncScrollEnabled||_syncScrolling)return;
+  if(_syncDebounceT)clearTimeout(_syncDebounceT);
+  _syncDebounceT=setTimeout(function(){
+    var li=_textScrollToLine();
+    if(li<0)return;
+    var top=_lineToPdfScrollTop(li);
+    if(top<0)return;
+    _syncScrolling=true;
+    document.getElementById('pdfPanel').scrollTo({top:Math.max(0,top-40),behavior:'auto'});
+    requestAnimationFrame(function(){setTimeout(function(){_syncScrolling=false;},60);});
+  },16);
+},{passive:true});
 
 // Zoom
 var zoomLevel=0; // 0=fit, else percentage steps
@@ -765,6 +895,7 @@ function flushHL(){
 }
 function scrollPdf(wd){
   var ctr=containers[wd.page],cv=ctr.querySelector('canvas');if(!cv)return;
+  pauseSyncScroll(800);
   var ds=cv.clientWidth/cv.width;
   var targetY=ctr.offsetTop+wd.y0*S*ds+cv.offsetTop;
   var pdfPanel=document.getElementById('pdfPanel');
@@ -774,6 +905,7 @@ function scrollPdf(wd){
 
 // Clear highlights when clicking empty area
 document.getElementById('pdfPanel').addEventListener('mousedown',function(e){
+  pauseSyncScroll(1000);
   if(!e.target.closest('.cz') && !e.target.closest('.pdf-text-layer'))clearHL();
 });
 
@@ -873,6 +1005,9 @@ function _findClosestLine(sp,pgIdx){
 }
 
 // Native text selection → PDF highlight
+document.getElementById('textWrap').addEventListener('mousedown',function(){
+  pauseSyncScroll(1000);
+});
 document.getElementById('textWrap').addEventListener('mouseup',function(){
   setTimeout(function(){ highlightFromSelection(); },10);
 });

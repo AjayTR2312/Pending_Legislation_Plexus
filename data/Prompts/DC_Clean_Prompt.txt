@@ -80,11 +80,15 @@ Repeated bill headers on pages 2+ MUST be removed:
 - Pattern: "B 123" or similar bill number appearing at TOP of page after <<<PAGE_2_START>>> or higher
 - Pattern: "COUNCIL OF THE DISTRICT OF COLUMBIA" appearing on pages 2+ as header
 - Pattern: "IN THE COUNCIL OF THE DISTRICT OF COLUMBIA" on pages 2+
+- Pattern: "The John A. Wilson Building" / "1350 Pennsylvania Avenue" on pages 2+
 - Page numbers that repeat with bill number (e.g., "2", "3" at top of pages 2+)
 - CRITICAL: ONLY remove if it appears ALONE on a line at page top on page 2 or higher
 - 🚫 NEVER REMOVE FROM PAGE 1: Council member info, "A BILL", committee info MUST stay on page 1
 - 🚫 NEVER REMOVE FROM PAGE 1: "IN THE COUNCIL OF THE DISTRICT OF COLUMBIA" MUST stay on page 1
+- 🚫 NEVER REMOVE FROM PAGE 1: "The John A. Wilson Building", "1350 Pennsylvania Avenue, NW",
+  and "Washington, D.C. 20004" — this is the document letterhead, MUST stay on page 1
 - ⚠️ CHECK PAGE MARKERS: Only remove these headers if they appear AFTER <<<PAGE_1_END>>>
+  or after the first --- Page 2 --- marker
 - ⚠️ IF NO PAGE MARKERS: Assume first occurrence is page 1 and KEEP IT
 - NEVER remove bill identifiers/headers on PAGE 1 (between <<<PAGE_1_START>>> and <<<PAGE_1_END>>>)
 - When in doubt → KEEP IT
@@ -93,7 +97,41 @@ DC-specific footers MUST be removed:
 - Page numbers at bottom of pages (e.g., "2", "3")
 - Coding instructions: "Codification District of Columbia Official Code, 2001 Edition"
 - Footer text explaining formatting conventions
+- 1350 Pennsylvania Avenue address footers on PAGES 2+:
+    These appear as repeated footers/headers at the bottom or top of
+    transmittal letters, legal sufficiency memos, and bio pages:
+    • "The John A. Wilson Building • 1350 Pennsylvania Avenue, NW • Suite 300 • Washington, D.C. 20004 • Office (202) 724-7681"
+    • "1350 Pennsylvania Avenue, N.W., Suite 409, Washington, D.C. 20004 Phone: (202) 724-5524 Email: adele.el-khouri@dc.gov"
+    • "John A. Wilson Building | 1350 Pennsylvania Avenue, Suite 600 | Washington, DC 20004"
+    • Any line starting with "1350 Pennsylvania Avenue" that includes phone/email/office info
+  ⚠️ PAGE 1 EXCEPTION: On page 1 (before the first --- Page 2 --- marker),
+  the Wilson Building address block is the document LETTERHEAD and MUST be
+  KEPT.  It identifies the originating institution.  Only remove these
+  address lines when they appear as repeated headers/footers on page 2 or
+  later, OR when they include phone/email/office contact info (which marks
+  them as footer metadata even on page 1).
+- "Executive Office of the Mayor – Mayor's Office of Talent and Appointments"
+  followed by a Wilson Building address line — this is letterhead, ALWAYS REMOVE
+  (this is a sub-agency identifier, not the council letterhead).
 - When in doubt → KEEP IT
+
+DC Chairman signature recovery (CRITICAL):
+- DC Mayor transmittal letters and resolutions have the text
+  "at the request of the Mayor" (or "at the request of the State Board of
+  Education") near the top of the bill page. Just above this line, the PDF
+  has a signature IMAGE of "Chairman Phil Mendelson" — but since it is an
+  image, it may be missing from the extracted text.
+- If you see "at the request of the Mayor" but NO "Chairman Phil Mendelson"
+  line immediately before it, INSERT the line "Chairman Phil Mendelson"
+  on its own line immediately before "at the request of the Mayor".
+- Example:
+  WRONG (missing Chairman):
+    Muriel Bowser
+    at the request of the Mayor
+  CORRECT:
+    Muriel Bowser
+    Chairman Phil Mendelson
+    at the request of the Mayor
 
 Whitespace normalization (safe to do):
 - Multiple consecutive spaces → single space
