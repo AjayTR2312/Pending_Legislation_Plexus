@@ -7,7 +7,11 @@ import os
 import stat
 import getpass
 from pathlib import Path
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 import paramiko
 

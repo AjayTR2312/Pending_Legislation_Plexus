@@ -106,8 +106,11 @@ def _submit_to_keyed_sftp(file_path: str, edited_text: str = None):
 
     If edited_text is provided, the file is updated in-place before uploading.
     """
-    from dotenv import load_dotenv as _ld
-    _ld()
+    try:
+        from dotenv import load_dotenv as _ld
+        _ld()
+    except ImportError:
+        pass
     import paramiko
 
     src = Path(file_path)
