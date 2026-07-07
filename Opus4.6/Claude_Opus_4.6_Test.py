@@ -1968,6 +1968,7 @@ def _merge_page_break_paragraph_splits(text, state_code=None):
     so the structural tag passes see the corrected paragraph topology.
     """
     _is_fl = state_code and state_code.upper() == "FL"
+    _is_ct = state_code and state_code.upper() == "CT"
 
     _BARE_SUBSEC = re.compile(r'^[a-z]\.\s')
     _TAG_STRIP   = re.compile(r'\[([AD])>|<([AD])\]')
@@ -2077,7 +2078,16 @@ def _merge_page_break_paragraph_splits(text, state_code=None):
                         if not inner[0].islower():
                             continue
                         if has_terminal:
-                            continue
+                            # CT-specific: semicolon + list continuation.
+                            # When A ends with ";" and B starts with a
+                            # conjunction + parenthesised marker like
+                            # "and (2)" or "or (B)", the semicolon is a
+                            # list-item separator, not a paragraph
+                            # boundary.  Allow the merge.
+                            if not (_is_ct
+                                    and text_before[-1] == ';'
+                                    and re.match(r'(?:and|or)\s+\(', inner)):
+                                continue
                         curr = text_before + ' ' + nxt_s[len(open_tag):]
                         i += 1
                         merge_count += 1

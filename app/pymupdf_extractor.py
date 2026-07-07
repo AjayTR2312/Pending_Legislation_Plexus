@@ -1560,7 +1560,49 @@ def _extract_page_tagged_text(
         prev_line_y_mid: Optional[float] = None
         prev_line_x1:    Optional[float] = None
         prev_row_had_column_gap = False  # tabular-row tracker
-        for line in block_lines:
+
+        # ── Pre-scan: identify bare-number lines that sit on the same
+        # physical row as a non-numeric neighbor (e.g. vote tallies
+        # "Yea  41  Nay  0").  These are INLINE numbers, not margin
+        # line-number markers, and must NOT be skipped.
+        _inline_number_indices: set = set()
+        for _i, _ln in enumerate(block_lines):
+            _lbb = _ln.get("bbox", (0, 0, 0, 0))
+            _lw = _lbb[2] - _lbb[0]
+            if _lw >= LINE_NUMBER_MAX_WIDTH_PT:
+                continue
+            _ltxt = ""
+            for _s in _ln.get("spans", []):
+                _cd = _s.get("chars", [])
+                if _cd:
+                    _ltxt += "".join(c.get("c", "") for c in _cd)
+                else:
+                    _ltxt += _s.get("text", "")
+            if not _RE_BARE_LINE_NUMBER.match(_ltxt):
+                continue
+            # This is a narrow bare-number line — check if any other
+            # line on the same physical row is NOT a bare number
+            _ym = (_lbb[1] + _lbb[3]) / 2
+            for _j, _ln2 in enumerate(block_lines):
+                if _j == _i:
+                    continue
+                _lbb2 = _ln2.get("bbox", (0, 0, 0, 0))
+                _ym2 = (_lbb2[1] + _lbb2[3]) / 2
+                if abs(_ym - _ym2) > SAME_ROW_Y_TOL_PT:
+                    continue
+                # Same row — check if neighbor is non-numeric
+                _ltxt2 = ""
+                for _s2 in _ln2.get("spans", []):
+                    _cd2 = _s2.get("chars", [])
+                    if _cd2:
+                        _ltxt2 += "".join(c.get("c", "") for c in _cd2)
+                    else:
+                        _ltxt2 += _s2.get("text", "")
+                if not _RE_BARE_LINE_NUMBER.match(_ltxt2):
+                    _inline_number_indices.add(_i)
+                    break
+
+        for _line_idx, line in enumerate(block_lines):
             lbbox_full = line.get("bbox", (0, 0, 0, 0))
             line_x0 = lbbox_full[0]
             line_x1 = lbbox_full[2]
@@ -1583,7 +1625,8 @@ def _extract_page_tagged_text(
                     line_raw_text += "".join(c.get("c", "") for c in _cd)
                 else:
                     line_raw_text += _sp.get("text", "")
-            if (line_width < LINE_NUMBER_MAX_WIDTH_PT
+            if (_line_idx not in _inline_number_indices
+                    and line_width < LINE_NUMBER_MAX_WIDTH_PT
                     and (_RE_CA_LINE_MARKER.match(line_raw_text)
                          or (_RE_BARE_LINE_NUMBER.match(line_raw_text)
                              and continuation_x is not None
