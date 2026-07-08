@@ -747,22 +747,11 @@ function navDiff(dir){
       if(wd){hlWord(wd,t.dataset.li);if(!firstWd)firstWd=wd;}
     });
     flushHL();
-    // Explicitly scroll PDF to the correct page
+    // Scroll PDF to the matched word position
     if(firstWd){
-      var nc=containers[firstWd.page];
-      ensurePageLoaded(firstWd.page,function(){
-        var ni=nc.querySelector('img');
-        if(ni&&ni.naturalWidth){
-          var nds=ni.clientWidth/ni.naturalWidth;
-          pdfPanel.scrollTo({top:nc.offsetTop+firstWd.y0*S*nds-120,behavior:'smooth'});
-        } else {
-          pdfPanel.scrollTo({top:nc.offsetTop-60,behavior:'smooth'});
-        }
-        setTimeout(function(){syncLock=false;},600);
-      });
-    } else {
-      setTimeout(function(){syncLock=false;},600);
+      scrollPdf(firstWd);
     }
+    setTimeout(function(){syncLock=false;},600);
   }
   document.getElementById('statBar').textContent='Diff '+(currentDiffIdx+1)+' / '+changeLines.length+' (Line '+(li+1)+')';
 }
@@ -778,46 +767,12 @@ pdfPanel.addEventListener('scroll',function(){
   var best=0;
   containers.forEach(function(c,i){if(c.offsetTop-60<=scrollTop)best=i;});
   document.getElementById('pageLbl').textContent=(best+1)+' / '+totalPages;
-  // PDF→Text sync: scroll text panel to first line of current page
-  if(syncLock)return;
-  clearTimeout(pdfScrollTmr);
-  pdfScrollTmr=setTimeout(function(){
-    var li=pageFirstLine[best];
-    if(li===undefined)return;
-    var tl=document.querySelector('.tl[data-li="'+li+'"]');
-    if(!tl)return;
-    syncLock=true;
-    document.getElementById('textPanel').scrollTop=tl.offsetTop-80;
-    setTimeout(function(){syncLock=false;},350);
-  },80);
+  // Sync scroll is handled by the more accurate handler below
+  // (using _pdfScrollToLine which is Y-position aware, not page-only)
 },{passive:true});
 
-// Text→PDF sync: binary-search the line-offset index (O(log n))
-document.getElementById('textPanel').addEventListener('scroll',function(){
-  if(syncLock)return;
-  clearTimeout(textScrollTmr);
-  textScrollTmr=setTimeout(function(){
-    var scrollTop=document.getElementById('textPanel').scrollTop;
-    var li=firstVisibleLine(scrollTop);
-    var wd=null;
-    for(var la=0;la<8&&!wd;la++){if(lineFirstWord[li+la])wd=lineFirstWord[li+la];}
-    if(!wd)return;
-    var ctr=containers[wd.page];
-    ensurePageLoaded(wd.page,function(){
-      var img=ctr.querySelector('img');
-      if(!img||!img.naturalWidth){
-        syncLock=true;
-        pdfPanel.scrollTop=ctr.offsetTop-60;
-        setTimeout(function(){syncLock=false;},350);
-        return;
-      }
-      var ds=img.clientWidth/img.naturalWidth;
-      syncLock=true;
-      pdfPanel.scrollTop=ctr.offsetTop+wd.y0*S*ds-80;
-      setTimeout(function(){syncLock=false;},350);
-    });
-  },80);
-},{passive:true});
+// Text→PDF sync is handled by the more accurate handler further below
+// (using _textScrollToLine / _lineToPdfScrollTop — Y-position aware).
 function navPage(dir){
   var cur=parseInt(document.getElementById('pageLbl').textContent.split('/')[0].trim())-1;
   var next=Math.max(0,Math.min(totalPages-1,cur+dir));
@@ -1252,7 +1207,6 @@ function flushHL(){
     ctr.appendChild(el);hlEls.push(el);
   });
   hlQueue=[];
-  pagesToLoad.forEach(function(pg){ensurePageLoaded(pg,drawAfterLoad);});
 }
 function scrollPdf(wd){
   var ctr=containers[wd.page],cv=ctr.querySelector('canvas');if(!cv)return;
