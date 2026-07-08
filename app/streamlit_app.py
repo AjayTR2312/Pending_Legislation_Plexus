@@ -2666,7 +2666,7 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
 
         # Tagged text
         pymupdf_text = extract_pdf_with_pymupdf(pdf_path, join_pages=True, state_code=detected_state, **_mark_flags)
-        pymupdf_txt_path = output_path.replace("_clean.txt", ".txt")
+        pymupdf_txt_path = output_path.replace(".txt", "_pymupdf.txt")
         with open(pymupdf_txt_path, "w", encoding="utf-8") as tf:
             tf.write(pymupdf_text)
         add_log(f"✅ PyMuPDF tagged text: {len(pymupdf_text):,} chars")
@@ -3166,7 +3166,7 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
         # Save LLM diff report for hybrid mode
         _diff_report = getattr(opus.convert_pdf_hybrid_text, '_last_diff_report', None)
         if _diff_report:
-            diff_path = output_path.replace("_hybrid.txt", "_clean_diff.txt")
+            diff_path = output_path.replace(".txt", "_clean_diff.txt")
             with open(diff_path, "w", encoding="utf-8") as df:
                 df.write(_diff_report)
             add_log(f"📋 LLM diff report saved: {diff_path}")
@@ -3174,7 +3174,7 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
         # Save per-chunk breakdown (raw input → cleaned output for each chunk)
         _chunks_report = getattr(opus.convert_pdf_hybrid_text, '_last_chunks_report', None)
         if _chunks_report:
-            chunks_path = output_path.replace("_hybrid.txt", "_hybrid_chunks.txt")
+            chunks_path = output_path.replace(".txt", "_hybrid_chunks.txt")
             with open(chunks_path, "w", encoding="utf-8") as cf:
                 cf.write(_chunks_report)
             add_log(f"📦 Chunks breakdown saved: {chunks_path}")
