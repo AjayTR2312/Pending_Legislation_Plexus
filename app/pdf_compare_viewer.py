@@ -767,52 +767,12 @@ pdfPanel.addEventListener('scroll',function(){
   var best=0;
   containers.forEach(function(c,i){if(c.offsetTop-60<=scrollTop)best=i;});
   document.getElementById('pageLbl').textContent=(best+1)+' / '+totalPages;
-  // PDF→Text sync: scroll text panel to first line of current page
-  if(syncLock)return;
-  clearTimeout(pdfScrollTmr);
-  pdfScrollTmr=setTimeout(function(){
-    var li=pageFirstLine[best];
-    if(li===undefined)return;
-    var tl=document.querySelector('.tl[data-li="'+li+'"]');
-    if(!tl)return;
-    syncLock=true;
-    document.getElementById('textPanel').scrollTop=tl.offsetTop-80;
-    setTimeout(function(){syncLock=false;},350);
-  },80);
+  // Sync scroll is handled by the more accurate handler below
+  // (using _pdfScrollToLine which is Y-position aware, not page-only)
 },{passive:true});
 
-// Text→PDF sync: find first visible line and scroll PDF to match
-document.getElementById('textPanel').addEventListener('scroll',function(){
-  if(syncLock)return;
-  clearTimeout(textScrollTmr);
-  textScrollTmr=setTimeout(function(){
-    var tp=document.getElementById('textPanel');
-    var tpRect=tp.getBoundingClientRect();
-    var tls=tp.querySelectorAll('.tl');
-    var bestLi=-1;
-    for(var i=0;i<tls.length;i++){
-      var r=tls[i].getBoundingClientRect();
-      if(r.top<=tpRect.top+50) bestLi=parseInt(tls[i].dataset.li);
-      else break;
-    }
-    if(bestLi<0)return;
-    var wd=null;
-    for(var la=0;la<8&&!wd;la++){if(lineFirstWord[bestLi+la])wd=lineFirstWord[bestLi+la];}
-    if(!wd)return;
-    var ctr=containers[wd.page];
-    var cv=ctr.querySelector('canvas');
-    if(!cv||!cv.width){
-      syncLock=true;
-      pdfPanel.scrollTop=ctr.offsetTop-60;
-      setTimeout(function(){syncLock=false;},350);
-      return;
-    }
-    var ds=cv.clientWidth/cv.width;
-    syncLock=true;
-    pdfPanel.scrollTop=ctr.offsetTop+wd.y0*S*ds-80;
-    setTimeout(function(){syncLock=false;},350);
-  },80);
-},{passive:true});
+// Text→PDF sync is handled by the more accurate handler further below
+// (using _textScrollToLine / _lineToPdfScrollTop — Y-position aware).
 function navPage(dir){
   var cur=parseInt(document.getElementById('pageLbl').textContent.split('/')[0].trim())-1;
   var next=Math.max(0,Math.min(totalPages-1,cur+dir));
