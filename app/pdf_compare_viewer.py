@@ -547,17 +547,17 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,san
 <div class="top-bar">
   <span class="logo">📄 PDF ↔ Text Comparator</span>
   <span class="sep"></span>
-  <button class="btn" onclick="navDiff(-1)" title="Previous diff (markup tags)">◀</button>
-  <button class="btn" onclick="navDiff(1)" title="Next diff (markup tags)">▶</button>
+  <button type="button" class="btn" onclick="navDiff(-1)" title="Previous diff (markup tags)">◀</button>
+  <button type="button" class="btn" onclick="navDiff(1)" title="Next diff (markup tags)">▶</button>
   <label style="font-size:12px;color:var(--text2);display:flex;align-items:center;gap:4px;margin-left:8px;cursor:pointer">
     <input type="checkbox" id="focusCb" onchange="toggleFocus(this.checked)"> Focus on changes
   </label>
   <label style="font-size:12px;color:var(--text2);display:flex;align-items:center;gap:4px;margin-left:4px;cursor:pointer">
     <input type="checkbox" id="collapseCb" onchange="toggleCollapse(this.checked)"> Collapse unchanged
   </label>
-  <button class="btn" id="syncBtn" onclick="toggleSyncScroll()" title="Sync scroll between PDF and Text panels">⇔ Sync</button>
+  <button type="button" class="btn" id="syncBtn" onclick="toggleSyncScroll()" title="Sync scroll between PDF and Text panels">⇔ Sync</button>
   <span class="stat" id="statBar">Ready</span>
-  <button class="btn" id="dlBtn" onclick="downloadText()">⬇️ Download</button>
+  <button type="button" class="btn" id="dlBtn" onclick="downloadText()">⬇️ Download</button>
 </div>
 <!-- Deviation summary strip (shown when dev mode is on) -->
 <div class="dev-strip" id="devStrip">
@@ -567,21 +567,21 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,san
   <span class="dev-pill del" id="devDel">— PDF words missing</span>
   <span class="dev-pill ok" id="devOk">— matched</span>
   <span style="margin-left:auto;font-size:11px;color:#664d00" id="devAccuracy"></span>
-  <button class="btn" style="font-size:11px;padding:2px 8px" onclick="navDevDiff(-1)">◀ prev</button>
-  <button class="btn" style="font-size:11px;padding:2px 8px" onclick="navDevDiff(1)">next ▶</button>
+  <button type="button" class="btn" style="font-size:11px;padding:2px 8px" onclick="navDevDiff(-1)">◀ prev</button>
+  <button type="button" class="btn" style="font-size:11px;padding:2px 8px" onclick="navDevDiff(1)">next ▶</button>
 </div>
 
 <div class="panels">
   <div class="panel panel-pdf" id="pdfPanel">
     <div class="pdf-controls">
-      <button class="zbtn" onclick="zoomPdf(-1)">−</button>
+      <button type="button" class="zbtn" onclick="zoomPdf(-1)">−</button>
       <span class="zlbl" id="zoomLbl">Fit</span>
-      <button class="zbtn" onclick="zoomPdf(1)">+</button>
-      <button class="zbtn" onclick="zoomPdf(0)" title="Fit to width">Fit</button>
+      <button type="button" class="zbtn" onclick="zoomPdf(1)">+</button>
+      <button type="button" class="zbtn" onclick="zoomPdf(0)" title="Fit to width">Fit</button>
       <div class="page-nav">
-        <button class="zbtn" onclick="navPage(-1)">◀</button>
+        <button type="button" class="zbtn" onclick="navPage(-1)">◀</button>
         <span class="plbl" id="pageLbl">1 / --</span>
-        <button class="zbtn" onclick="navPage(1)">▶</button>
+        <button type="button" class="zbtn" onclick="navPage(1)">▶</button>
       </div>
     </div>
     <div class="pdf-wrap" id="pdfWrap"></div>
@@ -589,17 +589,28 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,san
   <div class="panel panel-text" id="textPanel">
     <div class="ph"><span>CONVERTED TEXT</span></div>
     <div class="text-toolbar">
-      <button class="tbtn tag-a" onclick="wrapTag('a')" title="Wrap selected text with [A>...<A] tag">[A&gt;</button>
-      <button class="tbtn tag-d" onclick="wrapTag('d')" title="Wrap selected text with [D>...<D] tag">[D&gt;</button>
+      <button type="button" class="tbtn tag-a" onclick="wrapTag('a')" title="Wrap selected text with [A>...<A] tag">[A&gt;</button>
+      <button type="button" class="tbtn tag-d" onclick="wrapTag('d')" title="Wrap selected text with [D>...<D] tag">[D&gt;</button>
       <span class="tsep"></span>
-      <button class="tbtn" onclick="splitAtCursor()" title="Split line at cursor position">✂ Split</button>
-      <button class="tbtn" onclick="mergeWithPrevious()" title="Merge current line with the line above">⊕ Merge ↑</button>
+      <button type="button" class="tbtn" onclick="splitAtCursor()" title="Split line at cursor position">✂ Split</button>
+      <button type="button" class="tbtn" onclick="mergeWithPrevious()" title="Merge current line with the line above">⊕ Merge ↑</button>
     </div>
     <div class="text-wrap" id="textWrap">__TEXT_BLOCK__</div>
   </div>
 </div>
 
 <script>
+// Prevent ALL button clicks from triggering scroll/jump in parent or iframe
+document.addEventListener('click',function(e){
+  var btn=e.target.closest('button');
+  if(btn){e.preventDefault();}
+},true);
+// Prevent focus-scroll on mousedown (browsers scroll to show focused element)
+document.addEventListener('mousedown',function(e){
+  var btn=e.target.closest('button');
+  if(btn){e.preventDefault();}
+},true);
+
 var wordMap=__WORDMAP_JS__;
 var S=1; // will be set after PDF.js renders
 var originalLines=__LINES_JS__;
