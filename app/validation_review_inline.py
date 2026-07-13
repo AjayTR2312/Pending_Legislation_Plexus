@@ -1552,7 +1552,7 @@ def render_inline_validation_review(
 
     # ── Load data ───────────────────────────────────────────────────
     checklist, findings, summary = [], [], {}
-    if excel_path.exists():
+    if str(excel_path) and excel_path.exists() and excel_path.is_file():
         try:
             checklist, findings, summary = _load_excel(excel_path)
         except Exception as _xl_err:

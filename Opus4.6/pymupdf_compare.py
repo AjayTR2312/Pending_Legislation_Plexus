@@ -672,8 +672,11 @@ def _precheck_clean_text(
             # Item fits inside clean tag → merged parent.
             # Guard: don't absorb tiny items into huge tags
             # (e.g. "(1)" absorbed by a 500-char span).
+            # Exception: if the item text starts the clean tag, it's
+            # clearly a merge (e.g. "If" → "[A>If the ballot cannot...")
             if len(itxt) <= 5 and len(ntxt) > len(itxt) * 4:
-                return None
+                if not ntxt.startswith(itxt):
+                    return None
             return ("merged", False)      # shareable: don't consume
         if ntxt in itxt:
             # Tiny clean tag inside a much longer item is NOT a real
@@ -1688,9 +1691,14 @@ def pymupdf_compare_tags(
         # If the item's text IS a protected clause, the LLM is supposed
         # to drop the tag.  Two sub-cases:
         #   (a) tag IS gone (in_clean=protected) → ✅ pass
-        #   (b) tag STILL there (in_clean in yes/merged/partial/wrong_type)
+        #   (b) tag STILL there (in_clean in yes/partial/wrong_type)
         #       → ❌ error: the LLM forgot to strip it.
-        if is_protected_item and in_clean in ("yes", "merged", "partial",
+        #   (c) tag is "merged" — the span was absorbed into a LARGER
+        #       parent tag.  The parent tag wraps more than just the
+        #       protected text, so this is a legitimate merge, NOT a
+        #       protected-clause violation.  Let it fall through to the
+        #       normal merged_into_parent logic below.
+        if is_protected_item and in_clean in ("yes", "partial",
                                               "wrong_type"):
             cr["classification"] = "protected_clause_tagged"
             cr["verdict"] = "❌ error"

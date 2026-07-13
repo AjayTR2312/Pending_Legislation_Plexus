@@ -5524,7 +5524,8 @@ def clean_extracted_text(
     if state_code and state_code.upper() == "IN":
         cleaned = _strip_in_leading_indent(cleaned)
 
-    # Store the diff report for the caller to retrieve and save
+    # Store the pre-cleaned text and diff report for the caller to retrieve and save
+    clean_extracted_text._last_pre_cleaned = pre_cleaned
     clean_extracted_text._last_diff_report = diff_report
 
     # ── Passive watchdog: scan the final cleaned text for known
