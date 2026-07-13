@@ -1699,6 +1699,7 @@ def _run_text_accuracy_check(
     *,
     save_removals_to: str | None = None,
     save_accuracy_to: str | None = None,
+    llm_removed_lines: list[str] | None = None,
 ):
     """Run compare_texts() with state-aware artifact allowlist + emit log.
 
@@ -1736,7 +1737,7 @@ def _run_text_accuracy_check(
     if not (raw_text and clean_text and compare_texts):
         return None
     try:
-        accuracy_report = compare_texts(raw_text, clean_text, state_code=state_code)
+        accuracy_report = compare_texts(raw_text, clean_text, state_code=state_code, llm_removed_lines=llm_removed_lines)
         st.session_state.content_accuracy_report = accuracy_report
 
         _acc       = accuracy_report['accuracy']
@@ -2740,7 +2741,7 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
         # Save LLM diff report (what did the LLM remove/change?)
         _diff_report = getattr(clean_extracted_text, '_last_diff_report', None)
         if _diff_report:
-            diff_path = pymupdf_json_path.replace("_pymupdf_report.json", "_clean_diff.txt")
+            diff_path = pymupdf_json_path.replace("_report.json", "_clean_diff.txt")
             with open(diff_path, "w", encoding="utf-8") as df:
                 df.write(_diff_report)
             add_log(f"📋 LLM diff report saved")
@@ -2750,7 +2751,7 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
         _anomalies = getattr(clean_extracted_text, '_last_anomalies', None) or []
         if _anomalies:
             anomalies_path = pymupdf_json_path.replace(
-                "_pymupdf_report.json", "_extraction_anomalies.json"
+                "_report.json", "_extraction_anomalies.json"
             )
             try:
                 with open(anomalies_path, "w", encoding="utf-8") as af:
@@ -2804,16 +2805,26 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
         update_progress()
 
         # ── Content Accuracy Check ─────────────────────────────────────
+        # Use pre-cleaned text as ground truth and pass LLM-removed lines
+        # so any content the LLM intentionally removed is not penalized.
         st.session_state.content_accuracy_report = None
         _removals_json = output_path.replace(".txt", "_removals.json")
         _accuracy_json = output_path.replace(".txt", "_accuracy.json")
+        _accuracy_raw = _pre_cleaned if _pre_cleaned else pymupdf_text
+        # Extract lines removed by LLM (in pre-cleaned but not in final output)
+        _llm_removed = None
+        if _pre_cleaned:
+            _pre_lines = set(_pre_cleaned.splitlines())
+            _clean_lines = set(pymupdf_clean_text.splitlines())
+            _llm_removed = [l for l in _pre_lines - _clean_lines if l.strip()]
         _run_text_accuracy_check(
-            raw_text=pymupdf_text,
+            raw_text=_accuracy_raw,
             clean_text=pymupdf_clean_text,
             state_code=detected_state,
             add_log=add_log,
             save_removals_to=_removals_json,
             save_accuracy_to=_accuracy_json,
+            llm_removed_lines=_llm_removed,
         )
 
         # ── Step 6: Tag Validation (PyMuPDF report → clean text) ────────────
