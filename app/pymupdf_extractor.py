@@ -260,7 +260,8 @@ LOGO_EXCLUSION_ZONE = (0, 0, 350, 110)  # (x0, y0, x1, y1)
 
 # Regex fallback: remove known logo letterhead text that may slip through
 _RE_LOGO_TEXT = re.compile(
-    r"(?:Legislative\s+Council,?\s*\n?\s*General\s+Assembly\s*\n?\s*State\s+of\s+Delaware)",
+    r"(?:Legislative\s+Council,?\s*\n?\s*General\s+Assembly\s*\n?\s*State\s+of\s+Delaware)"
+    r"|(?:STATE\s+OF\s+CALIFORNIA\s*\n?\s*AUTHENTICATED\s*\n?\s*ELECTRONIC\s+LEGAL\s+MATERIAL)",
     re.IGNORECASE,
 )
 
@@ -3564,6 +3565,104 @@ def _strip_ks_signature_block_tags(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# California (CA) signature-block tag stripping
+# ---------------------------------------------------------------------------
+# Enrolled California bills end with a signing / attestation block that
+# includes lines like "Speaker of the Assembly", "President pro Tempore of
+# the Senate", "Governor of California", "Secretary of State", "APPROVED",
+# etc.  The PDF often renders these in italic or bold, causing the
+# formatting detector to wrap them with [A>…<A] tags.  These are document
+# boilerplate, not added legislative language.
+#
+# Strategy mirrors KS: only operate on the **tail** (last ~25 lines).
+
+_CA_SIGNATURE_PATTERNS = re.compile(
+    r"^\[A>"
+    r"("
+    # Known officer titles (explicit)
+    r"Speaker\s+of\s+the\s+Assembly"
+    r"|President\s+pro\s+Tempore\s+of\s+the\s+Senate"
+    r"|President\s+of\s+the\s+Senate"
+    r"|Secretary\s+of\s+the\s+Senate"
+    r"|Secretary\s+of\s+State"
+    r"|Chief\s+Clerk\s+of\s+the\s+Assembly"
+    r"|Private\s+Secretary\s+of\s+the\s+Governor"
+    r"|Deputy\s+Secretary\s+of\s+State"
+    r"|"
+    # Governor approval
+    r"APPROVED"
+    r"|Governor(?:\s+of\s+California)?"
+    r"|Approved\s+[_,\s\d]+"
+    r"|"
+    # Attestation / certification
+    r"I\s+hereby\s+certify\s+that\s+the\s+above\b.*"
+    r"|Attest:?"
+    r")"
+    r"\.?\s*<A\]$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# Broad fallback: any [A>…<A] that is the ENTIRE line, contains only
+# title-like characters (letters, spaces, periods, commas, apostrophes,
+# hyphens — NO digits, NO parentheses, NO section/statute refs), and is
+# 3–80 characters long.  Used ONLY within the CA attestation context
+# (near "Passed the Assembly/Senate", "Attest:", "received by the Governor")
+# to future-proof against unknown officer titles.
+_CA_TITLE_LINE_FALLBACK = re.compile(
+    r"^\[A>([A-Za-z][A-Za-z\s.,'\-]{2,78})<A\]$"
+)
+# Context markers that indicate we're on an attestation page
+_CA_ATTESTATION_CONTEXT = re.compile(
+    r"Passed\s+the\s+(?:Assembly|Senate)"
+    r"|Adopted\s+in\s+(?:Assembly|Senate)"
+    r"|received\s+by\s+the\s+(?:Governor|Secretary\s+of\s+State)"
+    r"|Attest:"
+    r"|Assembly\s+(?:Bill|Joint\s+Resolution|Concurrent\s+Resolution)\s+No\."
+    r"|Senate\s+(?:Bill|Joint\s+Resolution|Concurrent\s+Resolution)\s+No\.",
+    re.IGNORECASE,
+)
+
+
+def _strip_ca_signature_block_tags(text: str) -> str:
+    """Remove ``[A>…<A]`` tags from the CA attestation / signing block.
+
+    Enrolled California bills have an attestation page (typically at the
+    beginning) with officer titles rendered in italic, causing false
+    ``[A>…<A]`` tags.  These are document boilerplate, not added
+    legislative language.
+
+    Two-pass approach:
+      1. Strip lines matching known officer-title patterns (anywhere).
+      2. Fallback: if the text contains CA attestation context markers,
+         strip any remaining title-like ``[A>…<A]`` lines (short, all
+         letters/spaces, no digits or legal references).  This catches
+         unknown future titles without risking false positives in body text.
+    """
+    lines = text.split("\n")
+    changed = False
+
+    # Pass 1: known patterns
+    for i in range(len(lines)):
+        new_line = _CA_SIGNATURE_PATTERNS.sub(r"\1", lines[i])
+        if new_line != lines[i]:
+            lines[i] = new_line
+            changed = True
+
+    # Pass 2: fallback for unknown titles — only if attestation context present
+    if _CA_ATTESTATION_CONTEXT.search(text):
+        for i in range(len(lines)):
+            m = _CA_TITLE_LINE_FALLBACK.match(lines[i])
+            if m:
+                lines[i] = m.group(1)
+                changed = True
+
+    if changed:
+        logger.debug("Stripped [A>…<A] tags from CA signature/attestation block")
+        return "\n".join(lines)
+    return text
+
+
+# ---------------------------------------------------------------------------
 # Indiana (IN) deterministic post-processing
 # ---------------------------------------------------------------------------
 
@@ -5332,6 +5431,15 @@ def clean_extracted_text(
         # These are document boilerplate and must never be tagged.
         # Only scans the last ~25 lines to avoid touching body text.
         cleaned = _strip_ks_signature_block_tags(cleaned)
+
+    # ── strip CA-specific false signature-block tags ───────────────
+    if state_code and state_code.upper() == "CA":
+        # Strip false [A>…<A] tags from the attestation / signing block
+        # at the end of enrolled CA bills ("Speaker of the Assembly",
+        # "President pro Tempore of the Senate", "Governor", etc.).
+        # These are document boilerplate and must never be tagged.
+        # Only scans the last ~25 lines to avoid touching body text.
+        cleaned = _strip_ca_signature_block_tags(cleaned)
 
     # ── consolidate, clean, and split tagged blocks ───────────────────
     cleaned = consolidate_adjacent_tags(cleaned)

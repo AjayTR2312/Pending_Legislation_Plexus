@@ -85,6 +85,7 @@ try:
         _split_in_midline_items, _split_in_section_heading_welds,
         _strip_ks_header_tags, _strip_ks_signature_block_tags,
         _inject_ks_signature_lines,
+        _strip_ca_signature_block_tags,
         _strip_fl_repeated_headers,
         pre_merge_paragraph_tags,
         remove_nested_tags, merge_split_tags, split_tagged_subsections,
@@ -1572,6 +1573,10 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
                 _doc.close()
             except Exception as _sig_err:
                 logging.warning("KS signature line re-injection failed: %s", _sig_err)
+
+        # CA-specific: strip false [A>…<A] tags from signature block
+        if state_code and state_code.upper() == "CA":
+            merged = _strip_ca_signature_block_tags(merged)
 
         # FL-specific: deterministically strip repeated page headers/footers.
         # Catches ALL bill-header variations (CS, CS for CS, engrossed,

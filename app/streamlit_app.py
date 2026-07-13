@@ -5137,6 +5137,32 @@ def show_results_section():
                 # iframe content area, the user can still scroll inside
                 # the iframe to reach the bottom.
                 st.components.v1.html(_viewer_html, height=1400, scrolling=True)
+
+                # ── Save button: reads edited text from iframe via bridge component ──
+                _save_cmp_col, _spacer_col = st.columns([1, 4])
+                with _save_cmp_col:
+                    if st.button("💾 Save Changes", key="pdf_compare_save_btn", type="primary", use_container_width=True):
+                        st.session_state['_trigger_compare_save'] = True
+                        st.rerun()
+
+                if st.session_state.pop('_trigger_compare_save', False):
+                    # Render the bridge component which reads from localStorage
+                    _save_component_dir = Path(__file__).parent / "pdf_save_component"
+                    _pdf_save_comp = st.components.v1.declare_component("pdf_save_bridge", path=str(_save_component_dir))
+                    _saved_text = _pdf_save_comp(key="pdf_save_bridge_instance", default=None)
+                    if _saved_text and _saved_text != '__NO_SAVE__':
+                        st.session_state['processed_file_data'] = _saved_text.encode('utf-8')
+                        with open(_txt_path, 'w', encoding='utf-8') as _wf:
+                            _wf.write(_saved_text)
+                        st.session_state['_compare_already_saved'] = True
+                        st.toast("✅ Changes saved successfully!", icon="💾")
+                        st.success("✅ Changes saved! Your edits will be included when you Submit to Keyed.")
+                    elif _saved_text == '__NO_SAVE__':
+                        if st.session_state.get('_compare_already_saved'):
+                            st.info("ℹ️ No new changes to save. Your previous edits are already saved.")
+                        else:
+                            st.warning("⚠️ No edits detected. Click **💾 Save** inside the viewer first, then click **Save Changes**.")
+
             except Exception as _cmp_err:
                 st.error(f"❌ Could not render PDF ↔ Text Compare viewer: {_cmp_err}")
                 logging.error(f"PDF Compare viewer error: {_cmp_err}", exc_info=True)
