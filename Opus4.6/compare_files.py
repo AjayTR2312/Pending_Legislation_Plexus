@@ -245,6 +245,22 @@ def _classify_replace(pymupdf_words: list[str], converted_words: list[str]) -> d
     if p_trimmed != pymupdf_words and p_trimmed == converted_words:
         return {"sub_type": "LINE_NUMBER_HYPHENATION"}
 
+    # ── 1d. FILL_UNDERSCORE: word + trailing fill underscores (± line number)
+    # Pattern: PyMuPDF has ["the______________________________", "2"] → clean has ["the"]
+    # The underscores are decorative fill lines in the PDF, not content.
+    _RE_FILL = re.compile(r"^(.+?)_{3,}$")
+    p_stripped_fill = []
+    for w in pymupdf_words:
+        m = _RE_FILL.match(w)
+        if m:
+            p_stripped_fill.append(m.group(1))
+        elif _RE_BARE_NUM.match(w):
+            continue  # skip trailing line numbers
+        else:
+            p_stripped_fill.append(w)
+    if p_stripped_fill == list(converted_words):
+        return {"sub_type": "LINE_NUMBER_HYPHENATION"}
+
     # ── 2. SPACING-only: joined text is identical (e.g. "Therelease" vs "The release")
     if ''.join(pymupdf_words) == ''.join(converted_words):
         return {"sub_type": "SPACING"}
