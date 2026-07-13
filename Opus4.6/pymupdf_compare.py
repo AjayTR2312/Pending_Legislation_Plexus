@@ -295,7 +295,7 @@ _RE_UNIVERSAL_DECORATIVE = re.compile(
     r"(?:Session\s+of\s+\d{4}|\d{4}\s+(?:Regular|Special)\s+Session)"
     r"|"
     # Committee amendment headers: {As Amended by ... Committee ...}
-    r"\{[Aa]s\s+(?:Amended|Reported|Recommended)\s+by\s+.+\}"
+    r"\{?[Aa]s\s+(?:Amended|Reported|Recommended)\s+by\s+.+\}?"
     r"|"
     # Standalone version/engrossment labels
     r"(?:Introduced|Engrossed|Enrolled|Reprinted|Substitute|Amended)"
