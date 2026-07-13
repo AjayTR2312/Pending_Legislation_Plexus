@@ -329,7 +329,11 @@ STATE_PATTERNS: dict[str, dict[str, list[re.Pattern]]] = {
             re.compile(r"^\s*CALIFORNIA\s+LEGISLATURE", re.IGNORECASE),
             re.compile(r"^\s*\d{4}-\d{2}\s+REGULAR\s+SESSION", re.IGNORECASE),
             re.compile(r"^\s*(?:ASSEMBLY|SENATE)\s+BILL\s+No\.\s*\d+", re.IGNORECASE),
-            re.compile(r"^\s*AB\s*\d+", re.IGNORECASE),
+            # Match CA page headers like "AB 223       — 2 —" but NOT
+            # digest captions like "AB 223, Pacheco. Jury selection: ..."
+            # Require the line to be ONLY the bill ref (optionally with
+            # dash-page-dash suffix) — no comma or prose after.
+            re.compile(r"^\s*AB\s*\d+\s*(?:[\u2014\u2013\-]\s*\d+\s*[\u2014\u2013\-])?\s*$", re.IGNORECASE),
         ],
         CAT_FOOTER: [
             re.compile(r"^\s*\d+\s*$"),  # bare page numbers
