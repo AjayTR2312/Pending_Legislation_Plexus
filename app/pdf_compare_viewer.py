@@ -557,6 +557,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,san
   </label>
   <button type="button" class="btn" id="syncBtn" onclick="toggleSyncScroll()" title="Sync scroll between PDF and Text panels">⇔ Sync</button>
   <span class="stat" id="statBar">Ready</span>
+  <button type="button" class="btn" id="saveBtn" onclick="saveTextToParent()" title="Save edits back to session">💾 Save</button>
   <button type="button" class="btn" id="dlBtn" onclick="downloadText()">⬇️ Download</button>
 </div>
 <!-- Deviation summary strip (shown when dev mode is on) -->
@@ -1663,6 +1664,19 @@ function downloadText(){
   document.body.appendChild(a);a.click();document.body.removeChild(a);
   URL.revokeObjectURL(a.href);
   document.getElementById('statBar').textContent='Downloaded';
+}
+function saveTextToParent(){
+  refreshText();
+  var text=originalLines.join('\n');
+  try{
+    localStorage.setItem('_pdfCompareEditedText',text);
+    localStorage.setItem('_pdfCompareSaveTs', Date.now().toString());
+  }catch(e){
+    try{ window.parent._pdfCompareEditedText=text; }catch(e2){}
+  }
+  document.getElementById('statBar').textContent='✅ Ready to save — click Save Changes below';
+  document.getElementById('saveBtn').style.background='#bbf7d0';
+  setTimeout(function(){document.getElementById('saveBtn').style.background='';},2000);
 }
 
 // ── Wrap Selected Text in Tags ────────────────────────────────
