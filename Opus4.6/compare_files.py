@@ -208,6 +208,43 @@ def _classify_replace(pymupdf_words: list[str], converted_words: list[str]) -> d
             moved.append({"position": idx, "expected": exp, "got": got})
         return {"sub_type": "TRANSPOSED", "moved_words": moved}
 
+    # ── 1b. LINE_NUMBER_HYPHENATION: line numbers embedded in hyphenated words
+    # Pattern: PyMuPDF has ["word-", "29", "companion"] → clean has ["word-companion"]
+    # or ["20-", "3", "670"] → clean has ["20-670"]
+    # A bare number immediately following a hyphen-ending token is a line number.
+    _RE_BARE_NUM = re.compile(r"^\d{1,4}$")
+    p_filtered = []
+    skip_next_num = False
+    for i, w in enumerate(pymupdf_words):
+        # If previous token ends with '-' and current is bare number, skip ONE number
+        if skip_next_num and _RE_BARE_NUM.match(w):
+            skip_next_num = False
+            continue
+        skip_next_num = w.endswith("-")
+        p_filtered.append(w)
+    if p_filtered != pymupdf_words:  # at least one number was removed
+        # Join tokens: if a token ends with '-', concatenate directly with next
+        joined = ""
+        for w in p_filtered:
+            if joined.endswith("-"):
+                joined += w
+            else:
+                joined += (" " if joined else "") + w
+        c_joined = " ".join(converted_words)
+        if joined == c_joined:
+            return {"sub_type": "LINE_NUMBER_HYPHENATION"}
+
+    # ── 1c. LINE_NUMBER_EDGE: bare line numbers at start/end of phrase
+    # Pattern: PyMuPDF has ["19", "days", ..., "than", "20"] → clean has ["days", ..., "than"]
+    # Strip leading and trailing bare numbers (1-4 digits) from PyMuPDF side.
+    p_trimmed = list(pymupdf_words)
+    while p_trimmed and _RE_BARE_NUM.match(p_trimmed[0]):
+        p_trimmed.pop(0)
+    while p_trimmed and _RE_BARE_NUM.match(p_trimmed[-1]):
+        p_trimmed.pop()
+    if p_trimmed != pymupdf_words and p_trimmed == converted_words:
+        return {"sub_type": "LINE_NUMBER_HYPHENATION"}
+
     # ── 2. SPACING-only: joined text is identical (e.g. "Therelease" vs "The release")
     if ''.join(pymupdf_words) == ''.join(converted_words):
         return {"sub_type": "SPACING"}
@@ -363,6 +400,7 @@ def compare_texts(
     pymupdf_clean_text: str,
     converted_text: str,
     state_code: str | None = None,
+    llm_removed_lines: list[str] | None = None,
 ) -> dict:
     """Compare two text strings and return a structured accuracy report.
 
@@ -379,6 +417,12 @@ def compare_texts(
         etc.) — is moved to the ``allowed_diffs`` bucket and counted as a
         matching word rather than a real-content drop.  Eliminates false
         positives caused by one side stripping an artifact the other kept.
+    llm_removed_lines : list[str], optional
+        Lines the LLM intentionally removed during cleaning.  Any
+        MISSING_IN_CONVERTED diff whose text is fully contained within these
+        removed lines is classified as an allowed removal (category
+        "llm_intentional").  This provides a universal fallback for
+        state-specific artifacts not covered by regex patterns.
 
     Returns
     -------
@@ -626,6 +670,27 @@ def compare_texts(
     converted_words = [w for w in extract_words(converted_for_compare)
                        if not _is_underscore_fill([w])]
 
+    # ── Strip inline line numbers from PyMuPDF words before diffing ──
+    # Line numbers (bare 1-4 digit tokens) interspersed in the text
+    # disrupt SequenceMatcher alignment, causing huge false-positive
+    # MISSING blocks.  Remove them from the PyMuPDF side and count as
+    # allowed removals — the LLM is expected to strip them.
+    _RE_INLINE_LINE_NUM = re.compile(r"^\d{1,4}$")
+    _stripped_line_nums = 0
+    if state_code:
+        _conv_word_set = set(converted_words)
+        _filtered_pymupdf = []
+        for w in pymupdf_words:
+            if _RE_INLINE_LINE_NUM.match(w) and w not in _conv_word_set:
+                _stripped_line_nums += 1
+            else:
+                _filtered_pymupdf.append(w)
+        if _stripped_line_nums:
+            pymupdf_words = _filtered_pymupdf
+            line_allowed_categories["line_number"] = (
+                line_allowed_categories.get("line_number", 0) + _stripped_line_nums
+            )
+
     matcher = difflib.SequenceMatcher(None, pymupdf_words, converted_words)
     matching_words = sum(
         i2 - i1
@@ -711,6 +776,42 @@ def compare_texts(
 
     status = "CONTENT_MATCH" if not real_diffs else "DIFFERENT"
 
+    # ── Post-pass: filter spurious repositioned blocks ──────────────────
+    # Single bare numbers (1-3 digits) that appear as "repositioned" are
+    # almost always line numbers that were stripped from the raw side but
+    # coincidentally match a digit elsewhere in the clean text (e.g. "1"
+    # matches "Section 1", "(1)", etc.).  Move them to allowed_diffs so
+    # they don't clutter the report.
+    _RE_BARE_NUMBER = re.compile(r"^\d{1,3}$")
+    if state_code and repositioned:
+        _kept_repos = []
+        for r in repositioned:
+            text = r.get("pymupdf_text") or r.get("converted_text") or ""
+            if _RE_BARE_NUMBER.match(text.strip()):
+                # Treat as an allowed line-number removal
+                line_allowed_diffs.append({
+                    "type": "MISSING_IN_CONVERTED" if r.get("pymupdf_text") else "EXTRA_IN_CONVERTED",
+                    "missing_text": text.strip() if r.get("pymupdf_text") else "",
+                    "extra_text": text.strip() if r.get("converted_text") else "",
+                    "allowed_category": "line_number",
+                    "allowed_rule": "Line numbers at start of line",
+                })
+                line_allowed_categories["line_number"] = line_allowed_categories.get("line_number", 0) + 1
+            else:
+                _kept_repos.append(r)
+        repositioned = _kept_repos
+
+    # ── Repositioned blocks don't reduce accuracy — content IS present ──
+    if repositioned:
+        repo_bonus = 0
+        for r in repositioned:
+            text = r.get("pymupdf_text") or r.get("converted_text") or ""
+            repo_bonus += len(text.split())
+        matching_words += repo_bonus
+        accuracy = (matching_words / max_words * 100) if max_words > 0 else 100.0
+        base["accuracy"] = round(accuracy, 2)
+        base["matching_words"] = matching_words
+
     # ── Post-pass: detect transpositions across adjacent delete+insert ──
     # SequenceMatcher may split "A B C" → "C B A" into separate delete/insert
     # opcodes rather than a single REPLACE.  Merge nearby delete+insert pairs
@@ -725,6 +826,11 @@ def compare_texts(
     # Separate spacing-only diffs — these are not real content differences
     spacing_diffs = [d for d in real_diffs if d.get("sub_type") == "SPACING"]
     real_diffs = [d for d in real_diffs if d.get("sub_type") != "SPACING"]
+
+    # Separate line-number-in-hyphenation diffs — move to allowed later
+    ln_hyph_diffs = [d for d in real_diffs if d.get("sub_type") == "LINE_NUMBER_HYPHENATION"]
+    if ln_hyph_diffs:
+        real_diffs = [d for d in real_diffs if d.get("sub_type") != "LINE_NUMBER_HYPHENATION"]
 
     # Recalculate accuracy excluding spacing-only diffs.
     # For each spacing diff, the words on both sides are the same content
@@ -757,6 +863,16 @@ def compare_texts(
     allowed_categories: dict[str, int] = {}
     raw_accuracy = base["accuracy"]  # preserve pre-allowlist accuracy
 
+    # Add line-number-in-hyphenation diffs to allowed
+    if ln_hyph_diffs:
+        for d in ln_hyph_diffs:
+            d_copy = dict(d)
+            d_copy["allowed_category"] = "line_number"
+            d_copy["allowed_rule"] = "Line number embedded in hyphenated word across line break"
+            d_copy["_ln_hyph"] = True  # mark to avoid double-counting
+            allowed_diffs.append(d_copy)
+            allowed_categories["line_number"] = allowed_categories.get("line_number", 0) + 1
+
     if state_code and classify_removed_text is not None and real_diffs:
         _kept: list[dict] = []
         for d in real_diffs:
@@ -779,33 +895,77 @@ def compare_texts(
                 _kept.append(d)
         real_diffs = _kept
 
-        if allowed_diffs:
-            # Each allowed diff's words count back as matching (the larger
-            # side wins — mirrors the spacing-bonus rule above).
-            allowed_word_bonus = 0
-            for d in allowed_diffs:
-                if d.get("type") == "REPLACE":
-                    allowed_word_bonus += max(
-                        len((d.get("pymupdf_text") or "").split()),
-                        len((d.get("converted_text") or "").split()),
-                    )
-                elif d.get("type") == "MISSING_IN_CONVERTED":
-                    allowed_word_bonus += len((d.get("missing_text") or "").split())
-                elif d.get("type") == "EXTRA_IN_CONVERTED":
-                    allowed_word_bonus += len((d.get("extra_text") or "").split())
-            new_matching = base["matching_words"] + allowed_word_bonus
-            new_accuracy = (new_matching / max_words * 100) if max_words > 0 else 100.0
-            base["matching_words"] = new_matching
-            base["accuracy"] = round(new_accuracy, 2)
+    # ── LLM-removed-lines fallback: if a diff's text appears in lines the
+    # LLM intentionally removed, classify as allowed (universal, no regex needed)
+    if llm_removed_lines and real_diffs:
+        # Normalize dashes (em/en dash → hyphen) for consistent matching
+        def _norm_dash(s: str) -> str:
+            return s.replace("\u2014", "-").replace("\u2013", "-").replace("\ufffd", "-")
 
-            # Recount real-diff sub-types after allowlist filter
-            n_transposed  = sum(1 for d in real_diffs if d.get("sub_type") == "TRANSPOSED")
-            n_punctuation = sum(1 for d in real_diffs if d.get("sub_type") == "PUNCTUATION")
-            n_word_diffs  = len(real_diffs) - n_transposed - n_punctuation
+        _removed_normed = [_norm_dash(l.strip()) for l in llm_removed_lines]
+        _removed_blob = " ".join(_removed_normed)
+        _kept2: list[dict] = []
+        for d in real_diffs:
+            text = (
+                d.get("missing_text")
+                or d.get("extra_text")
+                or d.get("pymupdf_text")
+                or d.get("converted_text")
+                or ""
+            ).strip()
+            text_normed = _norm_dash(text)
+            # Check if the entire diff text appears as a substring in removed lines
+            # (handles multi-word phrases that span across removed line boundaries)
+            if text_normed and (text_normed in _removed_blob or all(
+                any(w in removed_line for removed_line in _removed_normed)
+                for w in text_normed.split()
+            )):
+                d_copy = dict(d)
+                d_copy["allowed_category"] = "llm_intentional"
+                d_copy["allowed_rule"] = "Content intentionally removed by LLM during cleaning"
+                allowed_diffs.append(d_copy)
+                allowed_categories["llm_intentional"] = allowed_categories.get("llm_intentional", 0) + 1
+            else:
+                _kept2.append(d)
+        real_diffs = _kept2
 
-            # Re-evaluate status
-            if not real_diffs:
-                status = "CONTENT_MATCH"
+    if allowed_diffs:
+        # Each allowed diff's words count back as matching.
+        # For LINE_NUMBER_HYPHENATION diffs, only count converted side and
+        # reduce max_words by the artifact line-number words.
+        allowed_word_bonus = 0
+        ln_artifact_reduction = 0
+        for d in allowed_diffs:
+            if d.get("_ln_hyph"):
+                # Only count converted (correct) side; artifact words shrink max
+                c_wc = len((d.get("converted_text") or "").split())
+                p_wc = len((d.get("pymupdf_text") or "").split())
+                allowed_word_bonus += c_wc
+                ln_artifact_reduction += (p_wc - c_wc)
+            elif d.get("type") == "REPLACE":
+                allowed_word_bonus += max(
+                    len((d.get("pymupdf_text") or "").split()),
+                    len((d.get("converted_text") or "").split()),
+                )
+            elif d.get("type") == "MISSING_IN_CONVERTED":
+                allowed_word_bonus += len((d.get("missing_text") or "").split())
+            elif d.get("type") == "EXTRA_IN_CONVERTED":
+                allowed_word_bonus += len((d.get("extra_text") or "").split())
+        max_words -= ln_artifact_reduction
+        new_matching = base["matching_words"] + allowed_word_bonus
+        new_accuracy = (new_matching / max_words * 100) if max_words > 0 else 100.0
+        new_accuracy = min(new_accuracy, 100.0)  # cap at 100%
+        base["matching_words"] = new_matching
+        base["accuracy"] = round(new_accuracy, 2)
+
+        # Recount real-diff sub-types after allowlist filter
+        n_transposed  = sum(1 for d in real_diffs if d.get("sub_type") == "TRANSPOSED")
+        n_punctuation = sum(1 for d in real_diffs if d.get("sub_type") == "PUNCTUATION")
+        n_word_diffs  = len(real_diffs) - n_transposed - n_punctuation
+
+        # Re-evaluate status
+        if not real_diffs:
+            status = "CONTENT_MATCH"
 
     # ── Merge in the line-level allowlist (pre-filtered above) ───────────
     # These are full lines that were stripped before the word-level diff
@@ -816,6 +976,12 @@ def compare_texts(
         allowed_diffs = line_allowed_diffs + allowed_diffs
         for cat, n in line_allowed_categories.items():
             allowed_categories[cat] = allowed_categories.get(cat, 0) + n
+
+    # If no real differences remain, accuracy is 100% — repositioned blocks
+    # are content that IS present (just moved, e.g. table cells), not errors.
+    if not real_diffs:
+        status = "CONTENT_MATCH"
+        base["accuracy"] = 100.0
 
     base.update(
         status=status,
