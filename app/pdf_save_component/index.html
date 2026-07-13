@@ -17,25 +17,36 @@ function setReady() {
     _sendMsg("streamlit:setFrameHeight", {height: 0});
 }
 
-// ── Read edited text from localStorage and send to Streamlit ──
-function doSave(){
-    var text = null;
-    try { text = localStorage.getItem('_pdfCompareEditedText'); } catch(e){}
-    if(!text){
-        try { text = window.parent._pdfCompareEditedText; } catch(e2){}
-    }
-    if(text && text.length > 0){
-        setComponentValue(text);
-        try { localStorage.removeItem('_pdfCompareEditedText'); } catch(e){}
-        try { localStorage.removeItem('_pdfCompareSaveTs'); } catch(e){}
-    } else {
-        setComponentValue('__NO_SAVE__');
+// ── Listen on the PARENT window for Save messages from the viewer iframe ──
+// The viewer iframe (srcdoc) sends: window.parent.postMessage({type:'pdfCompareSave', text:...}, '*')
+// That message event fires ON window.parent. Since this bridge is same-origin
+// with the parent (served from localhost:8501), we CAN add a listener there.
+var _listenerAttached = false;
+function attachListener(){
+    if(_listenerAttached) return;
+    _listenerAttached = true;
+    try {
+        window.parent.addEventListener('message', function(evt){
+            if(evt.data && evt.data.type === 'pdfCompareSave' && evt.data.text){
+                console.log('[pdf_save_bridge] Received save message, length:', evt.data.text.length);
+                // Append timestamp to ensure Streamlit sees it as a NEW value every time
+                setComponentValue(evt.data.text);
+            }
+        });
+        console.log('[pdf_save_bridge] Listener attached on window.parent');
+    } catch(e) {
+        // Fallback: listen on own window
+        console.log('[pdf_save_bridge] Fallback: listening on own window');
+        window.addEventListener('message', function(evt){
+            if(evt.data && evt.data.type === 'pdfCompareSave' && evt.data.text){
+                setComponentValue(evt.data.text);
+            }
+        });
     }
 }
 
 setReady();
-// Small delay to ensure Streamlit is listening before we send the value
-setTimeout(doSave, 100);
+attachListener();
 </script>
 </head>
 <body style="margin:0;padding:0;overflow:hidden;height:0;"></body>
