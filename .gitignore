@@ -26,6 +26,7 @@ app/FL_analysis
 app/LLM as Judge
 ace_pipeline/
 docs/
+
 # IDE
 .vscode/
 .idea/
