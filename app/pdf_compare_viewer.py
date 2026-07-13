@@ -1666,17 +1666,23 @@ function downloadText(){
   document.getElementById('statBar').textContent='Downloaded';
 }
 function saveTextToParent(){
-  refreshText();
+  // Sync DOM edits into originalLines before saving
+  var tw=document.getElementById('textWrap');
+  var lines=[];
+  tw.querySelectorAll('.tl').forEach(function(tl){
+    var lc=tl.querySelector('.lc');
+    lines.push(lc?lc.textContent:'');
+  });
+  originalLines=lines;
   var text=originalLines.join('\n');
-  try{
-    localStorage.setItem('_pdfCompareEditedText',text);
-    localStorage.setItem('_pdfCompareSaveTs', Date.now().toString());
-  }catch(e){
-    try{ window.parent._pdfCompareEditedText=text; }catch(e2){}
-  }
-  document.getElementById('statBar').textContent='✅ Ready to save — click Save Changes below';
+  // postMessage to parent always works regardless of iframe sandbox
+  window.parent.postMessage({type:'pdfCompareSave',text:text},'*');
+  document.getElementById('statBar').textContent='✅ Saving…';
   document.getElementById('saveBtn').style.background='#bbf7d0';
-  setTimeout(function(){document.getElementById('saveBtn').style.background='';},2000);
+  setTimeout(function(){
+    document.getElementById('saveBtn').style.background='';
+    document.getElementById('statBar').textContent='✅ Changes saved!';
+  },500);
 }
 
 // ── Wrap Selected Text in Tags ────────────────────────────────
