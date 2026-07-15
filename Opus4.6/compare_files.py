@@ -244,6 +244,9 @@ def _classify_replace(pymupdf_words: list[str], converted_words: list[str]) -> d
         p_trimmed.pop()
     if p_trimmed != pymupdf_words and p_trimmed == converted_words:
         return {"sub_type": "LINE_NUMBER_HYPHENATION"}
+    # Also check if trimmed words match after joining (spacing difference)
+    if p_trimmed != pymupdf_words and p_trimmed and ''.join(p_trimmed) == ''.join(converted_words):
+        return {"sub_type": "LINE_NUMBER_HYPHENATION"}
 
     # ── 1d. FILL_UNDERSCORE: word + trailing fill underscores (± line number)
     # Pattern: PyMuPDF has ["the______________________________", "2"] → clean has ["the"]

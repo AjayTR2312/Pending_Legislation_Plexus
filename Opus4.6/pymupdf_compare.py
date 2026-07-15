@@ -286,6 +286,8 @@ def _is_protected_text(text: str, protected: List[str]) -> bool:
 _RE_UNIVERSAL_DECORATIVE = re.compile(
     r"^(?:"
     # Bill numbers: SENATE BILL No. 44, HOUSE BILL 1234, HB 123, SB 44
+    # Also: "House Substitute for SENATE BILL No. 126" (KS pattern)
+    r"(?:(?:House|Senate|Committee)\s+(?:Substitute|Amendment)\s+for\s+)?"
     r"(?:ENGROSSED\s+|ENROLLED\s+|INTRODUCED\s+|REPRINTED\s+|SUBSTITUTE\s+|AMENDED\s+)?"
     r"(?:HOUSE|SENATE)\s+"
     r"(?:BILL|RESOLUTION|JOINT\s+RESOLUTION|CONCURRENT\s+RESOLUTION)"
@@ -904,6 +906,22 @@ def _precheck_clean_text(
         itxt = _norm(item["text"])
         ityp = item["tag_type"]
         if len(itxt) < 2:
+            continue
+        # Before checking wrong-type, verify the text isn't inside a
+        # same-type tag (which would be a merged case, not wrong_type).
+        _found_same_type = False
+        for j2, ct2 in enumerate(clean_tags):
+            if ct2["type"] != ityp:
+                continue
+            nc2 = _norm(ct2["text"])
+            if nc2 and itxt in nc2:
+                _found_same_type = True
+                if j2 not in used:
+                    results[iid] = {"in_clean": "merged", "clean_text": ct2["full"]}
+                else:
+                    results[iid] = {"in_clean": "merged", "clean_text": ct2["full"]}
+                break
+        if _found_same_type:
             continue
         for j, ct in enumerate(clean_tags):
             if j in used or ct["type"] == ityp:
@@ -1620,7 +1638,12 @@ def pymupdf_compare_tags(
             if cr.get("classification") == "merged_into_parent":
                 _mw = (cr.get("pymupdf_text") or "").strip().lower()
                 if _mw:
-                    _merged_word_set.add(_mw)
+                    # Split phrase into individual words so coverage
+                    # check can match word-by-word against extra tags.
+                    for _w in _mw.split():
+                        _w_clean = _w.strip(".,;:()")
+                        if _w_clean and len(_w_clean) > 1:
+                            _merged_word_set.add(_w_clean)
 
         for i, et in enumerate(extra_clean_tags, start=max_cid + 1):
             tag_label = "[A>...<A]" if et["type"] == "addition" else "[D>...<D]"
