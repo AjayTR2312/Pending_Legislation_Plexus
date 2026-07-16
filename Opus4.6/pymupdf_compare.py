@@ -185,12 +185,21 @@ def _is_doc_id_footer(text: str) -> bool:
 # ── PRINTING CODE / formatting legend detection ──────────────────
 # IN bills include a "PRINTING CODE" section that demonstrates
 # formatting conventions with example text like "this style type".
-# These are not real legislative content and should not be tagged.
-_PRINTING_CODE_TEXTS = {"this", "style", "type", "type.", "this style type"}
+# FL bills include a "CODING" footer legend with "stricken" and
+# "underlined" as demo formatting.  These are not real legislative
+# content and should not be tagged.
+_PRINTING_CODE_TEXTS = {
+    # IN PRINTING CODE
+    "this", "style", "type", "type.", "this style type",
+    # FL CODING legend
+    "stricken", "underlined",
+    # Generic formatting legend terms
+    "bold", "italics", "italic",
+}
 
 
 def _is_printing_code_demo(text: str) -> bool:
-    """True when *text* is part of the PRINTING CODE formatting legend."""
+    """True when *text* is part of a formatting legend (IN/FL/etc.)."""
     t = (text or "").strip().lower().rstrip(".,;:")
     return t in _PRINTING_CODE_TEXTS or t == "this style type"
 
@@ -1672,7 +1681,7 @@ def pymupdf_compare_tags(
                 continue
 
             # PRINTING CODE formatting legend — not real content
-            if state_code and state_code.upper() == "IN" and _is_printing_code_demo(et["text"]):
+            if _is_printing_code_demo(et["text"]):
                 cr_row = {
                     "checklist_id": i,
                     "tag_type": et["type"],
@@ -2176,7 +2185,7 @@ def pymupdf_compare_tags(
                     cr["verdict"] = "✅ pass"
                     cr["notes"] = "Sponsor name; decorative header, correctly untagged"
                     cr["suggested_fix"] = ""
-                elif state_code and state_code.upper() == "IN" and _is_printing_code_demo(_this_txt):
+                elif _is_printing_code_demo(_this_txt):
                     cr["classification"] = "printing_code_demo"
                     cr["verdict"] = "✅ pass"
                     cr["notes"] = "PRINTING CODE formatting legend; not real legislative content"
@@ -2233,7 +2242,7 @@ def pymupdf_compare_tags(
                     f"Decorative bill title header, IN convention strips tag"
                 )
                 cr["suggested_fix"] = ""
-            elif state_code and state_code.upper() == "IN" and _is_printing_code_demo(pymupdf_txt):
+            elif _is_printing_code_demo(pymupdf_txt):
                 cr["classification"] = "printing_code_demo"
                 cr["verdict"] = "✅ pass"
                 cr["notes"] = "PRINTING CODE formatting legend; not real legislative content"
@@ -2294,7 +2303,7 @@ def pymupdf_compare_tags(
                 cr["verdict"] = "✅ pass"
                 cr["notes"] = "Decorative separator rule between committee reports — correctly dropped"
                 cr["suggested_fix"] = ""
-            elif state_code and state_code.upper() == "IN" and _is_printing_code_demo(pymupdf_txt_cd):
+            elif _is_printing_code_demo(pymupdf_txt_cd):
                 cr["classification"] = "printing_code_demo"
                 cr["verdict"] = "✅ pass"
                 cr["notes"] = "PRINTING CODE formatting legend; not real legislative content"
