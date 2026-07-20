@@ -204,6 +204,50 @@ def _is_printing_code_demo(text: str) -> bool:
     return t in _PRINTING_CODE_TEXTS or t == "this style type"
 
 
+# ---------------------------------------------------------------------------
+# AR table-rule amount detection
+# ---------------------------------------------------------------------------
+# Arkansas appropriation/fiscal bills use thin horizontal rules (leader
+# lines) as table-column underrules beneath subtotals and totals.  The
+# pymupdf extractor correctly filters these out via
+# _filter_ar_leader_lines so no [A>…<A] tag is emitted.  However the
+# vision-based audit sees the underline in the PDF image and flags the
+# amount as "tag_dropped".  We suppress that false positive here.
+_RE_AR_FISCAL_AMOUNT = re.compile(
+    r'^\s*\$?[\d,]+(?:\.\d{2})?\s*$'
+)
+
+# AR table section headers — ALL-CAPS text used as underlined category
+# headings in appropriation/fiscal tables (e.g. "TWELVE MONTH EDUCATIONAL
+# AND GENERAL", "ADMINISTRATIVE POSITIONS", "POSITIONS").  These are
+# decorative underlines for table structure, not legislative additions.
+_RE_AR_TABLE_HEADER = re.compile(
+    r'^[A-Z][A-Z\s\-/&,.()]+$'
+)
+
+
+def _is_ar_table_rule_amount(text: str, state_code: str | None) -> bool:
+    """True when *text* is a dollar/numeric amount OR an all-caps table
+    section header in an AR fiscal table.
+
+    These sit on rows with decorative underrules (subtotal / total lines,
+    category headers) that the extractor intentionally does NOT tag.  The
+    audit should treat them as correctly untagged.
+    """
+    if not state_code or state_code.upper() != "AR":
+        return False
+    t = (text or "").strip()
+    if not t:
+        return False
+    # Dollar / numeric amounts
+    if _RE_AR_FISCAL_AMOUNT.match(t):
+        return True
+    # ALL-CAPS table section headers (≥2 chars, all uppercase letters/spaces/punctuation)
+    if len(t) >= 2 and _RE_AR_TABLE_HEADER.match(t):
+        return True
+    return False
+
+
 def _is_protected_text(text: str, protected: List[str]) -> bool:
     """True when *text* is (mostly) a protected clause.
 
@@ -2190,6 +2234,14 @@ def pymupdf_compare_tags(
                     cr["verdict"] = "✅ pass"
                     cr["notes"] = "PRINTING CODE formatting legend; not real legislative content"
                     cr["suggested_fix"] = ""
+                elif _is_ar_table_rule_amount(_this_txt, state_code):
+                    cr["classification"] = "ar_table_rule"
+                    cr["verdict"] = "✅ pass"
+                    cr["notes"] = (
+                        "AR fiscal table amount; decorative underrule "
+                        "correctly filtered by extractor"
+                    )
+                    cr["suggested_fix"] = ""
                 else:
                     cr["classification"] = "tag_dropped"
                     cr["verdict"] = "❌ error"
@@ -2246,6 +2298,14 @@ def pymupdf_compare_tags(
                 cr["classification"] = "printing_code_demo"
                 cr["verdict"] = "✅ pass"
                 cr["notes"] = "PRINTING CODE formatting legend; not real legislative content"
+                cr["suggested_fix"] = ""
+            elif _is_ar_table_rule_amount(pymupdf_txt, state_code):
+                cr["classification"] = "ar_table_rule"
+                cr["verdict"] = "✅ pass"
+                cr["notes"] = (
+                    "AR fiscal table amount; decorative underrule "
+                    "correctly filtered by extractor"
+                )
                 cr["suggested_fix"] = ""
             else:
                 cr["classification"] = "tag_dropped"
@@ -2476,7 +2536,7 @@ def pymupdf_compare_tags(
     )
 
     return {
-        "total_checklist": len(checklist_items),
+        "total_checklist": len(checklist_results),
         "passes": n_pass,
         "warnings": n_warn,
         "errors": n_error,
@@ -2689,11 +2749,14 @@ def _write_excel(
     total_errors = (n_tag_drop + n_cont_drop + n_partial + n_wrong_typ
                     + n_extra + n_prot_tag + len(additional_findings))
 
-    # Tag-accuracy calculation: % of checklist items that ended up as ✅ pass.
-    # Phase-2 additional_findings are NOT in the checklist denominator, but
+    # Tag-accuracy calculation: % of checklist results that ended up as ✅ pass.
+    # We use len(checklist_results) as the denominator because extra items
+    # (extra_tag, linked_fragment, etc.) are appended during classification
+    # and contribute to both numerator and denominator.
+    # Phase-2 additional_findings are NOT in the denominator, but
     # we still treat their presence as a sign of inaccuracy when deciding
     # whether to show the "100% TAG ACCURACY" badge.
-    total_items = len(checklist_items) or 1   # guard divide-by-zero
+    total_items = len(checklist_results) or 1   # guard divide-by-zero
     accuracy_pct = (n_pass / total_items) * 100.0
     accuracy_str = f"{accuracy_pct:.1f}%"
     is_perfect = (n_error == 0
@@ -2704,7 +2767,7 @@ def _write_excel(
     summary_rows = [
         ("", ""),
         ("PHASE 1: CHECKLIST AUDIT", ""),
-        ("Total checklist items (PyMuPDF spans)", len(checklist_items)),
+        ("Total checklist items (PyMuPDF spans)", len(checklist_results)),
         ("", ""),
         ("✅ Pass — exact tag preserved", n_match),
         ("✅ Pass — span merged into larger neighbouring tag", n_merged),
