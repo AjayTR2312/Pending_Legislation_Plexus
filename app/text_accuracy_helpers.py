@@ -371,7 +371,20 @@ STATE_PATTERNS: dict[str, dict[str, list[re.Pattern]]] = {
             re.compile(r"^\s*(?:HF|SF)\s*\d+", re.IGNORECASE),
             re.compile(r"^\s*\d+(?:st|nd|rd|th)\s+General\s+Assembly", re.IGNORECASE),
         ],
-        CAT_FOOTER: [],
+        CAT_FOOTER: [
+            # Iowa bill footers (full line):
+            #   "TLSB 1895YH (4) da/ns H.F. 1"
+            #   "LSB 1895YH (4) -1- da/ns 1/15 H.F. 1"
+            re.compile(r"^\s*T?LSB\s+\w+\s*\(\d+\)", re.IGNORECASE),
+            # Footer fragments (word-level diff remnants):
+            #   "da/ns H.F. 1"   "-1- da/ns 1/15 H.F. 1"
+            #   "da/ns 1/15 H.F. 1"   "H.F. 1"   "S.F. 1"
+            re.compile(r"^\s*-?\d*-?\s*da/ns\b", re.IGNORECASE),
+            re.compile(r"^\s*\d+/\d+\s+[HS]\.F\.\s*\d+", re.IGNORECASE),    # "1/15 H.F. 1"
+            re.compile(r"^\s*[HS]\.F\.\s*\d+\s*$", re.IGNORECASE),           # "H.F. 1"
+            # Bare page refs like "House File 310, p. 2"
+            re.compile(r"^\s*(?:House|Senate)\s+File\s+\d+,\s*p\.\s*\d+", re.IGNORECASE),
+        ],
     },
     "CO": {
         CAT_HEADER: [
@@ -1486,6 +1499,116 @@ def strip_in_page_headers(
     return _RE_IN_PAGE_HEADER.sub("", text)
 
 
+# ─────────────────────────────────────────────────────────────────────
+# Repeating artifact detection from raw PyMuPDF text
+# ─────────────────────────────────────────────────────────────────────
+
+_RE_PAGE_SPLIT = re.compile(r"---\s*Page\s+\d+\s*---")
+
+# Number of lines from top/bottom of each page to scan for artifacts
+_ARTIFACT_SCAN_LINES = 5
+# Max words for a line to be considered a candidate artifact
+_ARTIFACT_MAX_WORDS = 15
+
+
+def _normalise_for_repeat(text: str) -> str:
+    """Normalise text for fuzzy matching of repeating artifacts.
+
+    Strips digits, punctuation, extra whitespace, and lowercases — so that
+    variant footers like these collapse to the same key:
+        "TLSB 1895YH (4) da/ns H.F. 1"   → "lsb yh dans hf"
+        "LSB 1895YH (4) -1- da/ns 1/15 H.F. 1" → "lsb yh dans hf"
+
+    Page 1 footers (TLSB vs LSB, no page number) and page 2+ footers
+    (with -N- page counter and N/M fraction) share enough skeleton
+    tokens to match once digits are removed.
+    """
+    # Strip tag wrappers
+    t = re.sub(r"\[[AD]>|<[AD]\]", "", text)
+    # Remove all digits
+    t = re.sub(r"\d+", "", t)
+    # Remove punctuation except letters and spaces
+    t = re.sub(r"[^a-zA-Z\s]", "", t)
+    # Collapse whitespace and lowercase
+    t = " ".join(t.lower().split())
+    # Normalise common prefix variants (TLSB→LSB, etc.)
+    t = re.sub(r"\btlsb\b", "lsb", t)
+    return t
+
+
+def _detect_repeating_artifacts(raw_text: str) -> list[dict[str, Any]]:
+    """Scan raw PyMuPDF text for short lines that repeat across pages.
+
+    Splits by ``--- Page N ---`` markers, takes the top/bottom N lines
+    of each page, and finds lines whose normalised form appears on ≥2
+    pages.  These are almost certainly headers/footers.
+
+    Returns a list of dicts with ``text`` (original), ``pages`` (list of
+    page numbers), and ``position`` ("top" or "bottom").
+    """
+    pages = _RE_PAGE_SPLIT.split(raw_text)
+    if len(pages) < 2:
+        return []
+
+    # Collect candidates: (normalised_key, original_text, page_idx, position)
+    candidates: list[tuple[str, str, int, str]] = []
+
+    for page_idx, page_text in enumerate(pages):
+        lines = [ln for ln in page_text.splitlines() if ln.strip()]
+        if not lines:
+            continue
+
+        # Top lines (headers)
+        top_lines = lines[:_ARTIFACT_SCAN_LINES]
+        # Bottom lines (footers)
+        bottom_lines = lines[-_ARTIFACT_SCAN_LINES:] if len(lines) > _ARTIFACT_SCAN_LINES else []
+
+        for ln in top_lines:
+            stripped = ln.strip()
+            if not stripped or len(stripped.split()) > _ARTIFACT_MAX_WORDS:
+                continue
+            key = _normalise_for_repeat(stripped)
+            if key and len(key) >= 3:  # skip trivially short keys
+                candidates.append((key, stripped, page_idx, "top"))
+
+        for ln in bottom_lines:
+            stripped = ln.strip()
+            if not stripped or len(stripped.split()) > _ARTIFACT_MAX_WORDS:
+                continue
+            key = _normalise_for_repeat(stripped)
+            if key and len(key) >= 3:
+                candidates.append((key, stripped, page_idx, "bottom"))
+
+    # Group by normalised key, count distinct pages
+    from collections import defaultdict
+    key_pages: dict[str, set[int]] = defaultdict(set)
+    key_texts: dict[str, list[str]] = defaultdict(list)
+    key_positions: dict[str, set[str]] = defaultdict(set)
+
+    for key, text, page_idx, position in candidates:
+        key_pages[key].add(page_idx)
+        if text not in key_texts[key]:
+            key_texts[key].append(text)
+        key_positions[key].add(position)
+
+    # Lines appearing on ≥2 pages = repeating artifacts
+    artifacts: list[dict[str, Any]] = []
+    seen_texts: set[str] = set()
+    for key, page_set in key_pages.items():
+        if len(page_set) >= 2:
+            for text in key_texts[key]:
+                if text not in seen_texts:
+                    seen_texts.add(text)
+                    artifacts.append({
+                        "text": text,
+                        "pages": sorted(page_set),
+                        "positions": sorted(key_positions[key]),
+                        "occurrences": len(page_set),
+                    })
+
+    return artifacts
+
+
 def build_removals_report(
     raw_text: str,
     clean_text: str,
@@ -1588,12 +1711,84 @@ def build_removals_report(
         for ln, t in added if t.strip()
     ]
 
+    # ── Detect repeating header/footer artifacts from RAW text ──────────
+    # Scan the PyMuPDF raw text (which always has the artifacts) to discover
+    # repeating short lines across page boundaries.  This catches unknown
+    # patterns that aren't in STATE_PATTERNS yet.
+    #
+    # Strategy:
+    #   1. Split raw text by page separators (--- Page N ---)
+    #   2. For each page, collect short lines (≤15 words) from the top/bottom
+    #   3. Lines that repeat across ≥2 pages (exact OR fuzzy) = artifacts
+    #   4. Check if those artifacts survived in the clean output → warning
+    _detected_artifacts = _detect_repeating_artifacts(raw_text)
+
+    # Flag additions that look like footers/headers/page numbers that should
+    # have been removed.  Checks state-specific, generic, AND repeated patterns.
+    _footer_warnings: list[dict[str, Any]] = []
+    _state_pats = STATE_PATTERNS.get((state_code or "").upper(), {})
+    _footer_pats = _state_pats.get(CAT_FOOTER, []) + _state_pats.get(CAT_HEADER, [])
+
+    # Generic patterns that indicate artifacts in ANY state
+    _generic_artifact_pats: list[tuple[re.Pattern, str]] = [
+        (_RE_PAGE_NUMBER,        "page_number"),
+        (_RE_PAGE_MARKER,        "page_marker"),
+        (_RE_LINE_NUMBER_ALONE,  "line_number"),
+        (_RE_DECORATIVE,         "decorative_rule"),
+        (_RE_DATE_STAMP,         "date_stamp"),
+    ]
+
+    # Build a set of normalised artifact strings for fast lookup
+    _artifact_normals = {_normalise_for_repeat(a["text"]) for a in _detected_artifacts}
+
+    for item in additions_out:
+        _txt = item["text"].strip()
+        if not _txt:
+            continue
+        _matched = False
+        # Check state-specific patterns first
+        for pat in _footer_pats:
+            if pat.search(_txt):
+                _footer_warnings.append({
+                    "line": item["line"],
+                    "text": item["text"],
+                    "warning": "footer_not_removed",
+                    "category": "header_footer",
+                })
+                _matched = True
+                break
+        if _matched:
+            continue
+        # Check generic artifact patterns
+        for pat, cat in _generic_artifact_pats:
+            if pat.match(_txt):
+                _footer_warnings.append({
+                    "line": item["line"],
+                    "text": item["text"],
+                    "warning": "artifact_not_removed",
+                    "category": cat,
+                })
+                _matched = True
+                break
+        if _matched:
+            continue
+        # Check against repeating artifacts detected from raw text
+        if _normalise_for_repeat(_txt) in _artifact_normals:
+            _footer_warnings.append({
+                "line": item["line"],
+                "text": item["text"],
+                "warning": "artifact_not_removed",
+                "category": "detected_repeating",
+            })
+
     return {
         "state":          (state_code or "").upper() or None,
         "raw_lines":      len(raw_lines),
         "clean_lines":    len(clean_lines),
         "removed_lines":  total,
         "added_lines":    len(additions_out),
+        "footer_warnings": _footer_warnings,
+        "detected_artifacts": _detected_artifacts,
         "summary": {
             "by_category":      by_category,
             "classified":       classified,

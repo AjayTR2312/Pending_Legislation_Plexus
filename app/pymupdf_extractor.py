@@ -7452,6 +7452,18 @@ def extract_pdf_json_report(
                 inner = bm.group(1)
                 if not inner.strip():
                     continue
+                # Strip embedded line numbers from multi-line bracket spans.
+                # CT (and similar) PDFs have margin line numbers that PyMuPDF
+                # includes in the extracted text (e.g. "twenty- 236 five" or
+                # "the third-party 1107 administrator").  Remove them so the
+                # checklist text can match the cleaned output.
+                inner_clean = re.sub(
+                    r'(?<=\S)\s+\d{1,4}\s+(?=\S)', ' ', inner
+                )
+                # Also strip line numbers at start of lines within the span
+                inner_clean = re.sub(r'\n\s*\d{1,4}\s+', '\n', inner_clean)
+                # Collapse whitespace / newlines into single spaces
+                inner_clean = ' '.join(inner_clean.split())
                 # Build context snippet
                 start, end = bm.start(), bm.end()
                 before = full_page_text[max(0, start - 50):start].strip()
@@ -7459,11 +7471,11 @@ def extract_pdf_json_report(
                 ctx = ""
                 if before:
                     ctx += f"…{before} "
-                ctx += f">>>[{inner}]<<<"
+                ctx += f">>>[{inner_clean}]<<<"
                 if after:
                     ctx += f" {after}…"
                 span_entry = {
-                    "text": f"[{inner}]",
+                    "text": f"[{inner_clean}]",
                     "format_types": ["brackets"],
                     "page": page_num,
                     "bill_line": None,
