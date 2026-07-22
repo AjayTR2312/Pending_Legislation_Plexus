@@ -94,6 +94,44 @@ except Exception:                                           # pragma: no cover
 
 log = logging.getLogger("pymupdf_compare")
 
+# ── Chunking configuration ──────────────────────────────────────────
+# Maximum number of checklist items to include in a single Claude API
+# call.  For large documents the checklist + images + clean text can
+# exceed context limits; we split into page-based chunks and merge.
+CHECKLIST_CHUNK_SIZE = 250  # items per chunk (tune as needed)
+# Maximum pages to include images for in a single chunk.
+MAX_PAGES_PER_CHUNK = 40
+# Anthropic max image dimension for multi-image requests.
+_MAX_IMAGE_DIM = 2000
+
+
+def _resize_image_b64(img_b64: str, max_dim: int = _MAX_IMAGE_DIM) -> str:
+    """Resize a base64 PNG so neither dimension exceeds *max_dim* pixels.
+
+    Returns the (possibly unchanged) base64 string.
+    """
+    import base64
+    import io
+    try:
+        from PIL import Image
+    except ImportError:
+        # If Pillow not available, return as-is and let the API error
+        return img_b64
+
+    raw = base64.b64decode(img_b64)
+    img = Image.open(io.BytesIO(raw))
+    w, h = img.size
+    if w <= max_dim and h <= max_dim:
+        return img_b64  # no resize needed
+
+    # Scale down preserving aspect ratio
+    scale = min(max_dim / w, max_dim / h)
+    new_w, new_h = int(w * scale), int(h * scale)
+    img = img.resize((new_w, new_h), Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode()
+
 
 def _protected_clauses_for(state_code: Optional[str]) -> List[str]:
     """Return the list of protected-clause phrases for *state_code* (or [])."""
@@ -1524,6 +1562,67 @@ _PASS_CLASSES = {
 }
 
 
+# ════════════════════════════════════════════════════════════════════
+# Chunking helpers for large documents
+# ════════════════════════════════════════════════════════════════════
+
+def _chunk_checklist_by_page(
+    checklist_items: List[Dict],
+    max_items: int = CHECKLIST_CHUNK_SIZE,
+    max_pages: int = MAX_PAGES_PER_CHUNK,
+) -> List[List[Dict]]:
+    """Split checklist items into page-aligned chunks.
+
+    Each chunk contains at most *max_items* items or spans at most
+    *max_pages* distinct page numbers (whichever limit is hit first).
+    Page boundaries are respected — we never split items from the same
+    page across chunks.
+    """
+    if not checklist_items:
+        return []
+    if len(checklist_items) <= max_items:
+        # Small enough — no chunking needed
+        # Still check page count
+        pages = {item.get("page") for item in checklist_items}
+        if len(pages) <= max_pages:
+            return [checklist_items]
+
+    # Group items by page
+    from collections import OrderedDict
+    page_groups: OrderedDict = OrderedDict()
+    for item in checklist_items:
+        pg = item.get("page", 0) or 0
+        page_groups.setdefault(pg, []).append(item)
+
+    chunks: List[List[Dict]] = []
+    current_chunk: List[Dict] = []
+    current_pages: set = set()
+
+    for pg, items in page_groups.items():
+        # Would adding this page's items exceed limits?
+        would_exceed_items = len(current_chunk) + len(items) > max_items
+        would_exceed_pages = (pg not in current_pages and
+                              len(current_pages) >= max_pages)
+
+        if current_chunk and (would_exceed_items or would_exceed_pages):
+            chunks.append(current_chunk)
+            current_chunk = []
+            current_pages = set()
+
+        current_chunk.extend(items)
+        current_pages.add(pg)
+
+    if current_chunk:
+        chunks.append(current_chunk)
+
+    return chunks
+
+
+def _pages_for_chunk(chunk_items: List[Dict]) -> set:
+    """Return the set of page numbers referenced by chunk items."""
+    return {item.get("page") for item in chunk_items if item.get("page") is not None}
+
+
 def pymupdf_compare_tags(
     highlighted_images_b64: List[str],
     pymupdf_report: Dict,
@@ -1582,81 +1681,146 @@ def pymupdf_compare_tags(
 
     checklist_str = _format_checklist(checklist_items, precheck)
 
-    # ── Build prompt ────────────────────────────────────────────────
-    prompt = _AUDIT_PROMPT.format(
-        state_code=state_code,
-        state_rules=state_rules or f"State: {state_code}",
-        n_images=len(highlighted_images_b64),
-        clean_text=pymupdf_clean_text,
-        n_checklist=len(checklist_items),
-        checklist=checklist_str,
-    )
-    log.debug("📝 FULL AUDIT PROMPT (%d chars):\n%s", len(prompt), prompt)
-    log.info("📝 PyMuPDF-clean audit prompt: %d chars", len(prompt))
+    # ── Chunk the checklist for large documents ─────────────────────
+    chunks = _chunk_checklist_by_page(checklist_items)
+    n_chunks = len(chunks)
+    log.info("📦 Checklist split into %d chunk(s) (%d total items)",
+             n_chunks, len(checklist_items))
 
-    # ── Build messages with images first ────────────────────────────
-    content_parts: List[Dict] = []
-    for i, img_b64 in enumerate(highlighted_images_b64):
-        content_parts.append({
-            "type": "text",
-            "text": f"[Highlighted page {i + 1} of {len(highlighted_images_b64)}]",
-        })
-        content_parts.append({
-            "type": "image",
-            "source": {
-                "type": "base64",
-                "media_type": "image/png",
-                "data": img_b64,
-            },
-        })
-    content_parts.append({"type": "text", "text": prompt})
-
-    # ── Call Claude Opus 4.7 ────────────────────────────────────────
-    log.info("🤖 Sending %d images + %d-item checklist to %s ...",
-             len(highlighted_images_b64), len(checklist_items), model)
     client = _get_anthropic_client()
 
-    raw_response = ""
-    with client.messages.stream(
-        model=model,
-        max_tokens=128000,
-        messages=[{"role": "user", "content": content_parts}],
-    ) as stream:
-        for text in stream.text_stream:
-            raw_response += text
-        final_msg = stream.get_final_message()
-    raw_response = raw_response.strip()
+    # ── Process each chunk ──────────────────────────────────────────
+    all_checklist_results: List[Dict] = []
+    all_additional_findings: List[Dict] = []
 
-    # ── Token tracking (best-effort — uses the main app's tracker) ──
-    try:
-        import sys as _sys
-        _main_mod = _sys.modules.get("__main__")
-        if _main_mod and hasattr(_main_mod, "_track_usage"):
-            _main_mod._track_usage("PyMuPDF Clean Audit", final_msg.usage, model)
+    for chunk_idx, chunk_items in enumerate(chunks, start=1):
+        chunk_pages = _pages_for_chunk(chunk_items)
+        # For single chunk, send all images; for multi-chunk, send only
+        # the pages referenced by this chunk (0-indexed).
+        if n_chunks == 1:
+            chunk_images = highlighted_images_b64
+            chunk_image_indices = list(range(len(highlighted_images_b64)))
         else:
-            raise AttributeError("no tracker")
-    except Exception:
-        if hasattr(final_msg, "usage") and final_msg.usage:
-            u = final_msg.usage
-            log.info("💰 [PyMuPDF Clean Audit] Tokens: %s in / %s out",
-                     getattr(u, "input_tokens", "?"),
-                     getattr(u, "output_tokens", "?"))
+            # Pages are 1-indexed; image list is 0-indexed
+            chunk_image_indices = sorted(
+                p - 1 for p in chunk_pages
+                if p is not None and 1 <= p <= len(highlighted_images_b64)
+            )
+            chunk_images = [highlighted_images_b64[i] for i in chunk_image_indices]
 
-    # ── Parse JSON (with repair fallback) ───────────────────────────
-    if raw_response.startswith("```"):
-        raw_response = "\n".join(
-            ln for ln in raw_response.split("\n") if not ln.strip().startswith("```")
+        chunk_checklist_str = _format_checklist(chunk_items, precheck)
+        n_chunk_items = len(chunk_items)
+
+        # Build the prompt for this chunk
+        chunk_header = ""
+        if n_chunks > 1:
+            chunk_header = (
+                f"\n⚠️ NOTE: This is chunk {chunk_idx} of {n_chunks}. "
+                f"You are auditing items {chunk_items[0]['id']}–{chunk_items[-1]['id']} "
+                f"(pages {min(p for p in chunk_pages if p)}–"
+                f"{max(p for p in chunk_pages if p)}) only.\n"
+            )
+
+        prompt = _AUDIT_PROMPT.format(
+            state_code=state_code,
+            state_rules=state_rules or f"State: {state_code}",
+            n_images=len(chunk_images),
+            clean_text=pymupdf_clean_text,
+            n_checklist=n_chunk_items,
+            checklist=chunk_checklist_str,
         )
-    try:
-        result = json.loads(raw_response)
-    except json.JSONDecodeError:
-        log.warning("JSON parse failed, attempting repair...")
-        raw_response = _repair_json(raw_response)
-        result = json.loads(raw_response)
+        if chunk_header:
+            prompt = chunk_header + prompt
 
-    checklist_results: List[Dict] = result.get("checklist_results", [])
-    additional_findings: List[Dict] = result.get("additional_findings", [])
-    log.info("✅ Audit returned %d checklist results, %d additional findings",
+        log.debug("📝 Chunk %d AUDIT PROMPT (%d chars)", chunk_idx, len(prompt))
+        log.info("📝 Chunk %d/%d: %d items, %d images, %d chars",
+                 chunk_idx, n_chunks, n_chunk_items, len(chunk_images), len(prompt))
+
+        # ── Build messages with images first (resize if needed) ───
+        content_parts: List[Dict] = []
+        for i, img_b64 in enumerate(chunk_images):
+            # Show the actual page number for clarity
+            actual_page = chunk_image_indices[i] + 1 if n_chunks > 1 else i + 1
+            content_parts.append({
+                "type": "text",
+                "text": f"[Highlighted page {actual_page} of {len(highlighted_images_b64)}]",
+            })
+            # Anthropic limits each image to 2000px per dimension for multi-image requests
+            resized_b64 = _resize_image_b64(img_b64)
+            content_parts.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": resized_b64,
+                },
+            })
+        content_parts.append({"type": "text", "text": prompt})
+
+        # ── Call Claude ─────────────────────────────────────────────
+        log.info("🤖 Chunk %d/%d: Sending %d images + %d-item checklist to %s ...",
+                 chunk_idx, n_chunks, len(chunk_images), n_chunk_items, model)
+
+        raw_response = ""
+        with client.messages.stream(
+            model=model,
+            max_tokens=128000,
+            messages=[{"role": "user", "content": content_parts}],
+        ) as stream:
+            for text in stream.text_stream:
+                raw_response += text
+            final_msg = stream.get_final_message()
+        raw_response = raw_response.strip()
+
+        # ── Token tracking ──────────────────────────────────────────
+        try:
+            import sys as _sys
+            _main_mod = _sys.modules.get("__main__")
+            if _main_mod and hasattr(_main_mod, "_track_usage"):
+                _main_mod._track_usage(
+                    f"PyMuPDF Clean Audit chunk {chunk_idx}/{n_chunks}",
+                    final_msg.usage, model,
+                )
+            else:
+                raise AttributeError("no tracker")
+        except Exception:
+            if hasattr(final_msg, "usage") and final_msg.usage:
+                u = final_msg.usage
+                log.info("💰 [Chunk %d/%d] Tokens: %s in / %s out",
+                         chunk_idx, n_chunks,
+                         getattr(u, "input_tokens", "?"),
+                         getattr(u, "output_tokens", "?"))
+
+        # ── Parse JSON ──────────────────────────────────────────────
+        if raw_response.startswith("```"):
+            raw_response = "\n".join(
+                ln for ln in raw_response.split("\n")
+                if not ln.strip().startswith("```")
+            )
+        try:
+            result = json.loads(raw_response)
+        except json.JSONDecodeError:
+            log.warning("Chunk %d JSON parse failed, attempting repair...",
+                        chunk_idx)
+            raw_response = _repair_json(raw_response)
+            result = json.loads(raw_response)
+
+        chunk_cr = result.get("checklist_results", [])
+        chunk_af = result.get("additional_findings", [])
+        log.info("✅ Chunk %d/%d: %d checklist results, %d additional findings",
+                 chunk_idx, n_chunks, len(chunk_cr), len(chunk_af))
+
+        all_checklist_results.extend(chunk_cr)
+        # Offset additional_findings IDs to avoid collisions across chunks
+        af_offset = len(all_additional_findings)
+        for af in chunk_af:
+            if "id" in af:
+                af["id"] = af["id"] + af_offset
+        all_additional_findings.extend(chunk_af)
+
+    checklist_results = all_checklist_results
+    additional_findings = all_additional_findings
+    log.info("✅ All chunks done: %d checklist results, %d additional findings",
              len(checklist_results), len(additional_findings))
 
     # ── Inject deterministic extra-tag findings as checklist rows ───
