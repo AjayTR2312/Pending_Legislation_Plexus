@@ -1546,17 +1546,19 @@ def _format_accuracy_text_report(
         for idx, d in enumerate(real_diffs, 1):
             dtype = d.get("type", "?")
             sub_t = d.get("sub_type", "")
+            page  = d.get("page")
             tag = f"{dtype}" + (f"/{sub_t}" if sub_t else "")
+            page_str = f"  [Page {page}]" if page else ""
             if dtype == "MISSING_IN_CONVERTED":
                 txt = d.get("missing_text") or d.get("pymupdf_text") or ""
-                lines.append(f"  {idx:>3}. [{tag}]  MISSING from clean output:")
+                lines.append(f"  {idx:>3}. [{tag}]{page_str}  MISSING from clean output:")
                 lines.append(f"        \"{txt}\"")
             elif dtype == "EXTRA_IN_CONVERTED":
                 txt = d.get("extra_text") or d.get("converted_text") or ""
-                lines.append(f"  {idx:>3}. [{tag}]  EXTRA in clean output:")
+                lines.append(f"  {idx:>3}. [{tag}]{page_str}  EXTRA in clean output:")
                 lines.append(f"        \"{txt}\"")
             elif dtype == "REPLACE":
-                lines.append(f"  {idx:>3}. [{tag}]  REPLACED:")
+                lines.append(f"  {idx:>3}. [{tag}]{page_str}  REPLACED:")
                 lines.append(f"        Expected: \"{d.get('pymupdf_text','')}\"")
                 lines.append(f"        Got:      \"{d.get('converted_text','')}\"")
                 if sub_t == "TRANSPOSED":
@@ -1767,6 +1769,20 @@ def _run_text_accuracy_check(
             f"({accuracy_report['matching_words']:,}/{_max_words:,} words — "
             f"{_brkdn}, {_repos} repositioned)"
         )
+
+        # Log page-level summary for missing content so users can navigate
+        _real_diffs = accuracy_report.get('real_diffs', []) or []
+        _missing_pages: dict[int, int] = {}
+        for _d in _real_diffs:
+            _pg = _d.get("page")
+            if _pg and _d.get("type") in ("MISSING_IN_CONVERTED", "REPLACE"):
+                _missing_pages[_pg] = _missing_pages.get(_pg, 0) + 1
+        if _missing_pages:
+            _pg_summary = ", ".join(
+                f"p{pg}({n})" for pg, n in sorted(_missing_pages.items())
+            )
+            add_log(f"📄 Content differences by page: {_pg_summary}")
+
         if _allowed and state_code:
             _cat = accuracy_report.get('allowed_categories', {})
             _cat_str = ", ".join(f"{n} {k}" for k, n in sorted(_cat.items(), key=lambda kv: -kv[1]))
@@ -3215,6 +3231,18 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
         st.session_state.audit_highlighted_dir = None
         st.session_state.gpt_audit_failed = False
         st.session_state.content_accuracy_report = None
+
+        # ── Content Accuracy Check ────────────────────────────────────────
+        _removals_json = output_path.replace(".txt", "_removals.json") if output_path else None
+        _accuracy_json = output_path.replace(".txt", "_accuracy.json") if output_path else None
+        _run_text_accuracy_check(
+            raw_text=pymupdf_text,
+            clean_text=converted_text,
+            state_code=detected_state,
+            add_log=add_log,
+            save_removals_to=_removals_json,
+            save_accuracy_to=_accuracy_json,
+        )
 
         # ── Step 6: Claude Opus 4.7 Audit (Validation Report) ─────────────
         st.session_state.current_step = 5
