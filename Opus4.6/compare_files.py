@@ -689,6 +689,29 @@ def compare_texts(
     converted_words = [w for w in extract_words(converted_for_compare)
                        if not _is_underscore_fill([w])]
 
+    # ── Build word-index → page-number map from raw text ────────────
+    # The raw PyMuPDF text contains ``--- PAGE N ---`` markers.  We map
+    # each word index in pymupdf_words back to its source page so diffs
+    # can report which page content was lost from.
+    _page_map: list[int] = []  # _page_map[word_idx] = page_number
+    _PAGE_RE = re.compile(r'---\s*PAGE\s+(\d+)\s*---', re.IGNORECASE)
+    _current_page = 1
+    _raw_lines = pymupdf_for_compare.splitlines()
+    _word_idx = 0
+    for _line in _raw_lines:
+        _pm = _PAGE_RE.match(_line.strip())
+        if _pm:
+            _current_page = int(_pm.group(1))
+            continue
+        _line_words = [w for w in extract_words(_line) if not _is_underscore_fill([w])]
+        for _ in _line_words:
+            if _word_idx < len(pymupdf_words):
+                _page_map.append(_current_page)
+                _word_idx += 1
+    # Pad if any words weren't covered
+    while len(_page_map) < len(pymupdf_words):
+        _page_map.append(_current_page)
+
     # ── Strip inline line numbers from PyMuPDF words before diffing ──
     # Line numbers (bare 1-4 digit tokens) interspersed in the text
     # disrupt SequenceMatcher alignment, causing huge false-positive
@@ -762,6 +785,7 @@ def compare_texts(
                 "converted_text": ' '.join(c_phrase),
                 "sentence_pymupdf": find_sentence('', i1, pymupdf_words),
                 "sentence_converted": find_sentence('', j1, converted_words),
+                "page": _page_map[i1] if i1 < len(_page_map) else None,
             }
             # Sub-classify as TRANSPOSED or PUNCTUATION when possible
             sub = _classify_replace(p_phrase, c_phrase)
@@ -778,6 +802,7 @@ def compare_texts(
                 "type": "MISSING_IN_CONVERTED",
                 "missing_text": ' '.join(phrase),
                 "sentence": find_sentence('', i1, pymupdf_words),
+                "page": _page_map[i1] if i1 < len(_page_map) else None,
             }
             real_diffs.append(diff)
 
@@ -790,6 +815,7 @@ def compare_texts(
                 "type": "EXTRA_IN_CONVERTED",
                 "extra_text": ' '.join(phrase),
                 "sentence": find_sentence('', j1, converted_words),
+                "page": None,  # extra text has no source page
             }
             real_diffs.append(diff)
 

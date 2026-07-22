@@ -98,9 +98,9 @@ log = logging.getLogger("pymupdf_compare")
 # Maximum number of checklist items to include in a single Claude API
 # call.  For large documents the checklist + images + clean text can
 # exceed context limits; we split into page-based chunks and merge.
-CHECKLIST_CHUNK_SIZE = 250  # items per chunk (tune as needed)
-# Maximum pages to include images for in a single chunk.
-MAX_PAGES_PER_CHUNK = 40
+CHECKLIST_CHUNK_SIZE = 250  # items per chunk
+# MAX_PAGES_PER_CHUNK is dynamically determined: each chunk includes
+# exactly the pages its checklist items span (no fixed cap).
 # Anthropic max image dimension for multi-image requests.
 _MAX_IMAGE_DIM = 2000
 
@@ -1569,23 +1569,18 @@ _PASS_CLASSES = {
 def _chunk_checklist_by_page(
     checklist_items: List[Dict],
     max_items: int = CHECKLIST_CHUNK_SIZE,
-    max_pages: int = MAX_PAGES_PER_CHUNK,
 ) -> List[List[Dict]]:
     """Split checklist items into page-aligned chunks.
 
-    Each chunk contains at most *max_items* items or spans at most
-    *max_pages* distinct page numbers (whichever limit is hit first).
-    Page boundaries are respected — we never split items from the same
-    page across chunks.
+    Each chunk contains at most *max_items* items.  The pages included
+    per chunk are determined dynamically — whatever pages those items
+    span, those images get sent.  Page boundaries are respected (items
+    from the same page are never split across chunks).
     """
     if not checklist_items:
         return []
     if len(checklist_items) <= max_items:
-        # Small enough — no chunking needed
-        # Still check page count
-        pages = {item.get("page") for item in checklist_items}
-        if len(pages) <= max_pages:
-            return [checklist_items]
+        return [checklist_items]
 
     # Group items by page
     from collections import OrderedDict
@@ -1596,21 +1591,14 @@ def _chunk_checklist_by_page(
 
     chunks: List[List[Dict]] = []
     current_chunk: List[Dict] = []
-    current_pages: set = set()
 
     for pg, items in page_groups.items():
-        # Would adding this page's items exceed limits?
-        would_exceed_items = len(current_chunk) + len(items) > max_items
-        would_exceed_pages = (pg not in current_pages and
-                              len(current_pages) >= max_pages)
-
-        if current_chunk and (would_exceed_items or would_exceed_pages):
+        # Would adding this page's items exceed the item limit?
+        if current_chunk and len(current_chunk) + len(items) > max_items:
             chunks.append(current_chunk)
             current_chunk = []
-            current_pages = set()
 
         current_chunk.extend(items)
-        current_pages.add(pg)
 
     if current_chunk:
         chunks.append(current_chunk)

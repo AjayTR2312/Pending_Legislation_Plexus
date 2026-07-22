@@ -1535,8 +1535,9 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
             ])
         convert_pdf_hybrid_text._last_chunks_report = "\n".join(_chunks_report_lines)
 
-        # Bracket tagging runs AFTER LLM to avoid confusing it with
-        # nested [D>[…]<D] structures.
+        # Bracket tagging runs AFTER LLM and AFTER CT-specific fixes to avoid
+        # confusing the LLM with nested [D>[…]<D] structures, and to ensure
+        # CT analysis-section tag-stripping doesn't remove bracket [D> tags.
         if flags.get("mark_brackets"):
             merged = _tag_brackets(merged)
 
@@ -1550,6 +1551,9 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
             merged = _strip_ct_analysis_section_tags(merged)
             merged = _strip_false_subsection_d_tags(merged)
             merged = _restructure_ct_header(merged)
+            # Re-run bracket tagging after analysis-section stripping
+            # removed [D> tags from legitimate bracket deletions
+            merged = _tag_brackets(merged)
 
         # IN-specific: strip false headers, footers, barcodes, year lines
         if state_code and state_code.upper() == "IN":
@@ -2287,6 +2291,26 @@ def _stitch_two_chunks(merged, next_chunk, *, chunk_index, window=4000):
             if label in head_anchor_first:
                 head_pos = head_anchor_first[label]
                 global_tail_pos = tail_offset + tail_pos
+
+                # ── Sanity check: verify the merge doesn't drop content ──
+                # The overlap region is ~2K chars.  If this anchor match
+                # would cut MORE than the overlap + a generous margin from
+                # the tail, it's a false match (e.g. an effectiveness table
+                # "Sec. 3" matching the actual Section 3 body).  Skip it
+                # and try the next anchor.
+                tail_chars_dropped = len(merged) - global_tail_pos
+                head_chars_skipped = head_pos
+                expected_overlap = 6000  # generous upper bound for real overlap
+                if tail_chars_dropped + head_chars_skipped > expected_overlap:
+                    logging.warning(
+                        f"   ⚠️  Chunk {chunk_index}: skipping section-anchor "
+                        f"'{label}' — would drop {tail_chars_dropped:,} tail + "
+                        f"{head_chars_skipped:,} head chars "
+                        f"(>{expected_overlap:,} expected overlap). "
+                        f"Likely a false match (e.g. effectiveness table)."
+                    )
+                    continue
+
                 logging.info(
                     f"   🔗 Chunk {chunk_index}: section-anchor merge at "
                     f"'{label}' (tail offset {global_tail_pos:,}, "
