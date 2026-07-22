@@ -688,6 +688,9 @@ def get_conversion_prompt(state_config=None):
         "CORRECT: [D>old-adj<D] [D>old-noun<D] [A>NEW-ADJ<A] [A>NEW-NOUN<A] "
         "(preserves the visual left-to-right order from the page). "
         "Output only the converted text with markup tags, nothing else. "
+        "IMPORTANT: Extract ALL text from EVERY page, including cover letters, "
+        "transmittal letters, certification pages, and signature blocks. "
+        "Do NOT skip or omit any pages — the cleaning step will handle removals. "
         "Combine all pages into one continuous document."
     )
  
@@ -2998,6 +3001,143 @@ def restore_special_symbols(claude_text, pymupdf_text):
     return claude_text
 
 
+def _reformat_ia_signature_block(text: str, state_code: str | None = None) -> str:
+    """Reformat Iowa signature block into proper two-column layout.
+
+    Iowa enrolled bills have a two-column signature block:
+        ______________________________      ______________________________
+        PAT GRASSLEY                        AMY SINCLAIR
+        Speaker of the House                President of the Senate
+
+        I hereby certify that this bill originated in the House and is known as
+        House File 472, Ninety-first General Assembly.
+
+                                            ______________________________
+                                            MEGHAN NELSON
+                                            Chief Clerk of the House
+
+        Approved _______________, 2025      ______________________________
+                                             KIM REYNOLDS
+                                             Governor
+
+    Claude often outputs this as single-column (no indentation). This function
+    detects and reformats it.
+    """
+    if not text:
+        return text
+    if state_code and state_code.upper() != "IA":
+        return text
+
+    # Column position for right-side elements
+    COL2 = 40
+
+    # Pattern: Speaker/President block on separate lines or same line without spacing
+    # Look for the signature block by finding "Speaker of the House"
+    lines = text.split('\n')
+    result_lines = []
+    i = 0
+
+    while i < len(lines):
+        line = lines[i]
+
+        # Detect signature line separator (______ ______) — already correct, pass through
+        # Detect: NAME1 (spaces) NAME2 on one line (Speaker/President names)
+        # e.g. "PAT GRASSLEY         AMY SINCLAIR"
+        if (i + 1 < len(lines)
+            and re.match(r'^[A-Z][A-Z .]+\s{2,}[A-Z][A-Z .]+\s*$', line)
+            and ('Speaker' in lines[i + 1] or 'President' in lines[i + 1])):
+            # Split into two names
+            parts = re.split(r'\s{2,}', line.strip())
+            if len(parts) == 2:
+                name1 = parts[0].strip()
+                name2 = parts[1].strip()
+                result_lines.append(f"{name1:<{COL2}}{name2}")
+                i += 1
+                # Next line: titles
+                if i < len(lines):
+                    title_parts = re.split(r'\s{2,}', lines[i].strip())
+                    if len(title_parts) == 2:
+                        result_lines.append(f"{title_parts[0]:<{COL2}}{title_parts[1]}")
+                    else:
+                        result_lines.append(lines[i])
+                    i += 1
+                continue
+            
+        # Detect: "Speaker of the House" followed by "President of the Senate"
+        # on separate lines (bad layout — should be on same line)
+        if (re.match(r'^\s*Speaker of the House\s*$', line)
+            and i + 1 < len(lines)
+            and re.match(r'^\s*President of the Senate\s*$', lines[i + 1])):
+            result_lines.append(f"{'Speaker of the House':<{COL2}}President of the Senate")
+            i += 2
+            # Also fix the names above if we haven't already
+            continue
+
+        # Detect: "MEGHAN NELSON" (or similar) at col 0 followed by "Chief Clerk"
+        if (re.match(r'^[A-Z][A-Z ]+$', line.strip())
+            and i + 1 < len(lines)
+            and 'Chief Clerk' in lines[i + 1]
+            and not line.startswith(' ' * 8)):
+            # Indent to right column
+            name = line.strip()
+            result_lines.append(f"{'':<{COL2}}{name}")
+            i += 1
+            # Chief Clerk line
+            result_lines.append(f"{'':<{COL2}}{lines[i].strip()}")
+            i += 1
+            # Add blank line after if not present
+            if i < len(lines) and lines[i].strip():
+                result_lines.append("")
+            continue
+
+        # Detect: underscore line before Chief Clerk (indent it)
+        if (re.match(r'^\s*_{10,}\s*$', line)
+            and i + 1 < len(lines)
+            and re.match(r'^\s*[A-Z][A-Z ]+$', lines[i + 1].strip())
+            and i + 2 < len(lines)
+            and 'Chief Clerk' in lines[i + 2]
+            and not line.startswith(' ' * 8)):
+            result_lines.append(f"{'':<{COL2}}{'_' * 30}")
+            i += 1
+            continue
+
+        # Detect: "KIM REYNOLDS" (or similar) at col 0 followed by "Governor"
+        if (re.match(r'^[A-Z][A-Z ]+$', line.strip())
+            and i + 1 < len(lines)
+            and re.match(r'^\s*Governor\s*$', lines[i + 1])
+            and not line.startswith(' ' * 8)):
+            # Check if preceded by "Approved" line
+            name = line.strip()
+            result_lines.append(f"{'':<{COL2}} {name}")
+            i += 1
+            result_lines.append(f"{'':<{COL2}} {lines[i].strip()}")
+            i += 1
+            continue
+
+        # Detect: "I hereby certify" without preceding blank line
+        if 'I hereby certify' in line:
+            # Ensure blank line before
+            if result_lines and result_lines[-1].strip():
+                result_lines.append("")
+            result_lines.append(line)
+            i += 1
+            # Consume the rest of the certification paragraph.
+            # Stop at blank line OR underscore line (next sig block element).
+            while i < len(lines) and lines[i].strip() and not re.match(r'^\s*_{10,}', lines[i]):
+                result_lines.append(lines[i])
+                i += 1
+            # Add blank separator
+            result_lines.append("")
+            if i < len(lines) and not lines[i].strip():
+                i += 1  # skip existing blank line
+            continue
+
+        result_lines.append(line)
+        i += 1
+
+    return '\n'.join(result_lines)
+
+
 def deterministic_cleanup(text, state_config=None, state_code=None):
     """
     Apply deterministic fixes for common Claude output inconsistencies.
@@ -3818,6 +3958,9 @@ def main():
     # Post-process: deterministic cleanup of common Claude inconsistencies
     print(f"🔧 Running deterministic cleanup...")
     converted_text = deterministic_cleanup(converted_text, state_config=state_config, state_code=state_code)
+
+    # Post-process: fix Iowa signature block layout
+    converted_text = _reformat_ia_signature_block(converted_text, state_code=state_code)
 
     # Post-process: strip tags from protected clauses (state-specific cleanup)
     if state_config:

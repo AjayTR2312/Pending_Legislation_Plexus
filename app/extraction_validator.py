@@ -303,6 +303,35 @@ _ANTI_PATTERNS: List[_AntiPattern] = [
             re.MULTILINE,
         ),
     ),
+
+    # ── 11b. Signature block layout problem ──────────────────────────
+    # Iowa (and similar states) have two-column signature blocks:
+    #   PAT GRASSLEY                        AMY SINCLAIR
+    #   Speaker of the House                President of the Senate
+    # If Speaker/President are on separate lines (not same line with gap),
+    # or Chief Clerk / Governor name is at col 0 instead of indented,
+    # the layout is broken.
+    _AntiPattern(
+        kind="signature_layout_problem",
+        severity="warning",
+        description=(
+            "Signature block layout problem detected. Two-column signature "
+            "elements (Speaker/President, Chief Clerk, Governor) appear "
+            "merged into single column instead of proper side-by-side layout."
+        ),
+        pattern=re.compile(
+            # Speaker and President on separate lines (should be same line)
+            r"^Speaker of the House\s*\n\s*President of the Senate"
+            r"|"
+            # Chief Clerk name at col 0 (should be indented to right column)
+            r"^[A-Z][A-Z ]+\nChief Clerk of the House"
+            r"|"
+            # Governor name at col 0 right after Approved line
+            r"^(?:Approved\b.+\n)[A-Z][A-Z ]+\nGovernor",
+            re.MULTILINE,
+        ),
+    ),
+
     # ── 12. Orphaned closer mid-line (no opener on same line) ─────────
     # A closing tag <A] or <D] appearing on a line that has NO opener.
     # Different from pattern 8 which only looks at start-of-line orphans.

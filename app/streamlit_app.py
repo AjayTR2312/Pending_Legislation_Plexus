@@ -1795,6 +1795,25 @@ def _run_text_accuracy_check(
                 with open(save_removals_to, "w", encoding="utf-8") as _rf:
                     _json.dump(_rm_report, _rf, indent=2, ensure_ascii=False)
                 add_log(f"📋 Removals report saved: {os.path.basename(save_removals_to)}")
+                # Warn if footers/headers/artifacts remain in the cleaned output
+                _fw = _rm_report.get("footer_warnings", [])
+                if _fw:
+                    for _w in _fw[:5]:
+                        _wcat = _w.get('category', 'artifact')
+                        _wtype = _w.get('warning', 'not_removed')
+                        add_log(f"⚠️ {_wcat} not removed (line {_w['line']}): {_w['text'][:80]}", "warning")
+                    if len(_fw) > 5:
+                        add_log(f"⚠️ ... and {len(_fw) - 5} more artifact(s) not removed", "warning")
+                # Log repeating artifacts detected in raw PyMuPDF text
+                _da = _rm_report.get("detected_artifacts", [])
+                if _da:
+                    add_log(f"🔍 Detected {len(_da)} repeating header/footer pattern(s) in raw PDF text")
+                    for _a in _da[:3]:
+                        _positions = ", ".join(_a.get("positions", []))
+                        add_log(
+                            f"   📌 {_positions} artifact ({_a['occurrences']} pages): "
+                            f"{_a['text'][:80]}"
+                        )
             except Exception as _rm_err:
                 logging.warning(f"Failed to save removals report: {_rm_err}")
 
@@ -2184,7 +2203,10 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
         # ``if pymupdf_clean_text``, etc., so leaving those unset here is
         # enough to make them all skip cleanly.
         _skip_validation_states = {"CO"}
-        _skip_audit = (detected_state or "").upper() in _skip_validation_states
+        _skip_audit = (
+            (detected_state or "").upper() in _skip_validation_states
+            or st.session_state.get('_pdf_is_scanned', False)
+        )
 
         # Default values that downstream steps will use if Step 6 is skipped
         pymupdf_text = None
@@ -2193,11 +2215,16 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
         highlight_dir = None
 
         if _skip_audit:
-            _state_lbl = US_STATE_NAMES.get(detected_state, detected_state)
-            add_log(
-                f"⏭️ Validation report skipped — {_state_lbl} ({detected_state}) "
-                f"uses Visual mode without audit"
-            )
+            if st.session_state.get('_pdf_is_scanned', False):
+                add_log(
+                    "⏭️ Validation report skipped — Scanned PDF requires human review"
+                )
+            else:
+                _state_lbl = US_STATE_NAMES.get(detected_state, detected_state)
+                add_log(
+                    f"⏭️ Validation report skipped — {_state_lbl} ({detected_state}) "
+                    f"uses Visual mode without audit"
+                )
             # Mark optional steps complete so the UI doesn't show "in progress"
             for _s_idx in (5, 6, 7):
                 if _s_idx in st.session_state.get('step_status', {}):
@@ -2370,6 +2397,17 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
                     except Exception as _aexc:
                         logging.warning(f"Could not save anomaly report: {_aexc}")
                     _render_extraction_anomaly_banner(_anomalies)
+                    # Store for Summary tab display
+                    st.session_state['_extraction_anomalies'] = [
+                        {
+                            "kind": a.kind,
+                            "severity": a.severity,
+                            "description": a.description,
+                            "snippet": a.snippet,
+                            "page_number": a.page_number,
+                        }
+                        for a in _anomalies
+                    ]
 
                 # Rebuild report context using cleaned text for better anchor matching
                 if pymupdf_report:
@@ -2795,6 +2833,17 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
             except Exception as _aexc:
                 logging.warning(f"Could not save anomaly report: {_aexc}")
             _render_extraction_anomaly_banner(_anomalies)
+            # Store for Summary tab display
+            st.session_state['_extraction_anomalies'] = [
+                {
+                    "kind": a.kind,
+                    "severity": a.severity,
+                    "description": a.description,
+                    "snippet": a.snippet,
+                    "page_number": a.page_number,
+                }
+                for a in _anomalies
+            ]
 
         # Rebuild report context using cleaned text for better anchor matching
         if pymupdf_report:
@@ -4566,17 +4615,12 @@ def show_simple_ui():
                         all_ok = False
                         continue
 
-                    # Scanned PDF gate
+                    # Scanned PDF detection (no longer blocks — routes to visual mode)
                     if detect_pdf_type is not None:
                         with st.spinner(f"🔍 Analyzing **{uf.name}** — detecting document type..."):
                             pdf_analysis = detect_pdf_type(temp_path)
                         if pdf_analysis and pdf_analysis['type'] == 'scanned':
-                            logging.info(f"Skipped scanned PDF: {uf.name}")
-                            try:
-                                os.remove(temp_path)
-                            except Exception:
-                                pass
-                            continue
+                            logging.info(f"Scanned PDF detected: {uf.name} — will use Visual mode")
 
                     # Page count gate
                     try:
@@ -4655,6 +4699,8 @@ def show_simple_ui():
                     st.session_state.audit_json_report = None
                     st.session_state.content_accuracy_report = None
                     st.session_state.gpt_audit_failed = False
+                    st.session_state.pop('_scanned_hitl_approved', None)
+                    st.session_state.pop('_pdf_is_scanned', None)
 
                     # Reset validation review state (fixed/ignored from previous file)
                     for _vri_key in ("vri_fixed_ids", "vri_ignored_ids", "vri_undo_history",
@@ -4693,11 +4739,12 @@ def show_simple_ui():
                                                  else _tp.capitalize())
                                     st.write(f"📊 **{_pg} pages** detected — Type: **{_tp_label}**")
                                 if pdf_analysis and pdf_analysis['type'] == 'scanned':
+                                    st.session_state['_pdf_is_scanned'] = True
                                     _upload_status.update(
-                                        label=f"⚠️ {uploaded_file.name} — Scanned PDF detected",
-                                        state="error", expanded=True)
-                                    _scanned_detected = True
+                                        label=f"📷 {uploaded_file.name} — Scanned PDF (will use Visual mode)",
+                                        state="complete", expanded=False)
                                 else:
+                                    st.session_state['_pdf_is_scanned'] = False
                                     _upload_status.update(
                                         label=f"✅ {uploaded_file.name} — Ready to process",
                                         state="complete", expanded=False)
@@ -4712,25 +4759,15 @@ def show_simple_ui():
                                 state="error")
                             st.error("❌ Failed to upload file - check logs for details")
 
-                    # Show scanned-PDF message outside the status container
-                    # so it remains clearly visible.
-                    if _scanned_detected:
+                    # Show scanned-PDF info banner (no longer blocks processing)
+                    if st.session_state.get('_pdf_is_scanned', False):
                         st.info(
-                            f"🛠️ **Scanned PDF Support — Coming Soon**\n\n"
-                            f"The uploaded file **{uploaded_file.name}** appears to be a "
+                            f"📷 **Scanned PDF Detected**\n\n"
+                            f"The uploaded file **{uploaded_file.name}** is a "
                             f"**scanned (image-based) PDF**.\n\n"
-                            f"Support for scanned PDFs (with OCR) is currently under "
-                            f"development and will be available in a future release. "
-                            f"For now, please upload a **digital (text-based) PDF** to "
-                            f"continue."
+                            f"It will be processed using the **Visual (Claude Opus)** "
+                            f"pipeline which converts page images to text."
                         )
-                        try:
-                            os.remove(temp_path)
-                        except Exception:
-                            pass
-                        st.session_state.temp_pdf_path = None
-                        st.session_state.last_uploaded_file_id = None
-                        st.stop()
 
                     if temp_path:
                         st.session_state.temp_pdf_path = temp_path
@@ -5092,11 +5129,13 @@ def show_results_section():
     # processed via Visual mode (claude_opus). Keep this in sync with the
     # _skip_validation_states set inside process_with_claude_opus.
     _state_skips_validation = _detected_state in {"CO"}
+    # Scanned PDFs skip validation — human review is required instead
+    _is_scanned_pdf = st.session_state.get('_pdf_is_scanned', False)
     # NOTE: pymupdf_clean_only and hybrid pipelines now run their own audit
     # (pymupdf_compare_tags) at step 6, so they DO have a Validation Review
     # tab to show. We only skip when the audit was explicitly skipped at the
-    # state level, OR when no audit data was produced.
-    _skip_validation = _state_skips_validation
+    # state level, OR when no audit data was produced, OR scanned PDF.
+    _skip_validation = _state_skips_validation or _is_scanned_pdf
     _show_pdf_compare = (
         compare_build_viewer_html is not None
         and st.session_state.get('temp_pdf_path')
@@ -5254,6 +5293,26 @@ def show_results_section():
             '</p></div>'
         )
         st.markdown(_summary_html, unsafe_allow_html=True)
+
+        # ── Extraction anomalies (if any) ─────────────────────────────────
+        _anomalies_data = st.session_state.get('_extraction_anomalies', [])
+        if _anomalies_data:
+            _n_anom = len(_anomalies_data)
+            st.warning(f"🚨 {_n_anom} extraction anomal{'ies' if _n_anom != 1 else 'y'} detected")
+            with st.expander("Show anomaly details", expanded=False):
+                for _idx_a, _a in enumerate(_anomalies_data):
+                    _pg = f" (page {_a['page_number']})" if _a.get('page_number') else ""
+                    _sev_icon = "🔴" if _a['severity'] == "error" else "🟡" if _a['severity'] == "warning" else "ℹ️"
+                    st.markdown(
+                        f"{_sev_icon} **{_a['kind']}**{_pg}\n\n"
+                        f"> {_a['description']}",
+                    )
+                    if _a.get('snippet'):
+                        # Unescape \n to real newlines and trim for readability
+                        _snip = _a['snippet'].replace('\\n', '\n')[:300]
+                        st.code(_snip, language=None)
+                    if _idx_a < len(_anomalies_data) - 1:
+                        st.divider()
 
         # ── Audit metrics (Total Items / Pass / Warnings / Errors) ────────
         if _has_audit:
@@ -6620,7 +6679,47 @@ def show_single_file_processing():
             if not _already_triggered:
                 # First time we see this file with no results → kick off
                 # the right pipeline.  State override beats page count.
-                if _early_state in _VISION_ONLY_STATES:
+                # Scanned PDFs must always use Visual mode (no extractable text).
+                _is_scanned = st.session_state.get('_pdf_is_scanned', False)
+
+                # ── HITL gate for scanned PDFs ────────────────────────────
+                # Require explicit user confirmation before processing scanned PDFs.
+                if _is_scanned and not st.session_state.get('_scanned_hitl_approved', False):
+                    st.warning(
+                        f"📷 **Scanned PDF — Human Review Required**\n\n"
+                        f"This file appears to be a **scanned (image-based) PDF** "
+                        f"with **{_pdf_pages} page(s)**.\n\n"
+                        f"Processing will use the **Visual (Claude Opus)** pipeline "
+                        f"which sends each page as an image to the LLM for text extraction.\n\n"
+                        f"⚠️ **Please confirm:**\n"
+                        f"- The file contains legislative text (not forms, maps, etc.)\n"
+                        f"- You accept the higher token cost for image-based conversion"
+                    )
+                    _col_approve, _col_skip = st.columns([1, 1])
+                    with _col_approve:
+                        if st.button("✅ Approve & Process", key="hitl_approve_scanned", type="primary", use_container_width=True):
+                            st.session_state['_scanned_hitl_approved'] = True
+                            st.rerun()
+                    with _col_skip:
+                        if st.button("❌ Skip this file", key="hitl_skip_scanned", use_container_width=True):
+                            # Clean up and reset
+                            try:
+                                os.remove(st.session_state.temp_pdf_path)
+                            except Exception:
+                                pass
+                            st.session_state.temp_pdf_path = None
+                            st.session_state.last_uploaded_file_id = None
+                            st.session_state['_pdf_is_scanned'] = False
+                            st.toast("⏭️ Scanned PDF skipped.")
+                            st.rerun()
+                    # Don't auto-start — wait for user action
+                    pass
+                elif _is_scanned:
+                    # User approved via HITL → proceed with visual mode
+                    st.session_state.process_method = "claude_opus"
+                    _msg = "📷 Scanned PDF (approved) — running **Process Document (Visual)** pipeline"
+                # ──────────────────────────────────────────────────────────
+                elif _early_state in _VISION_ONLY_STATES:
                     st.session_state.process_method = "claude_opus"
                     _state_label = US_STATE_NAMES.get(_early_state, _early_state)
                     _msg = (
@@ -6634,19 +6733,22 @@ def show_single_file_processing():
                     st.session_state.process_method = "pymupdf_clean_only"
                     _msg = "📄 Running **Extract + Clean** pipeline"
 
-                st.session_state.processing = True
-                st.session_state.current_step = 0
-                st.session_state.processing_time = None
-                st.session_state.chunk_stats = None
-                st.session_state.pop('_pymupdf_only_steps', None)
-                st.session_state._auto_started_file_id = _current_file_id
+                # Only trigger processing if we're not waiting for HITL approval
+                _waiting_for_hitl = (_is_scanned and not st.session_state.get('_scanned_hitl_approved', False))
+                if not _waiting_for_hitl and st.session_state.get('process_method'):
+                    st.session_state.processing = True
+                    st.session_state.current_step = 0
+                    st.session_state.processing_time = None
+                    st.session_state.chunk_stats = None
+                    st.session_state.pop('_pymupdf_only_steps', None)
+                    st.session_state._auto_started_file_id = _current_file_id
 
-                logging.info(
-                    f"Auto-triggered {st.session_state.process_method} "
-                    f"for {_pdf_pages}-page PDF (state={_early_state or 'unknown'})"
-                )
-                st.info(_msg)
-                st.rerun()
+                    logging.info(
+                        f"Auto-triggered {st.session_state.process_method} "
+                        f"for {_pdf_pages}-page PDF (state={_early_state or 'unknown'})"
+                    )
+                    st.info(_msg)
+                    st.rerun()
             else:
                 # We already attempted processing for this file but it
                 # didn't produce results.  Show a single recovery button.
