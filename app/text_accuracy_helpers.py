@@ -403,6 +403,75 @@ STATE_PATTERNS: dict[str, dict[str, list[re.Pattern]]] = {
 
 
 # ─────────────────────────────────────────────────────────────────────
+# PDF-metadata-based allowlist
+# ─────────────────────────────────────────────────────────────────────
+# When we have actual header/footer text extracted from the PDF via
+# PyMuPDF, we can use those exact strings as an allowlist — far more
+# accurate than regex patterns alone.
+
+_pdf_header_footer_texts: list[str] = []  # module-level cache
+
+
+def set_pdf_metadata_allowlist(metadata: dict | None) -> None:
+    """Populate the header/footer allowlist from PDF metadata.
+
+    Call this BEFORE running text accuracy checks.  The metadata dict
+    should come from ``paragraph_accuracy_checker.extract_full_metadata()``.
+
+    Parameters
+    ----------
+    metadata : dict or None
+        Dict with "headers" and "footers" keys (page→text mappings).
+        Pass None to clear the allowlist.
+    """
+    global _pdf_header_footer_texts
+    _pdf_header_footer_texts = []
+
+    if not metadata:
+        return
+
+    # Collect all unique header/footer text fragments
+    seen = set()
+    for zone_key in ("headers", "footers"):
+        zone = metadata.get(zone_key, {})
+        for _page, text in zone.items():
+            # Split multi-line zone text into individual lines
+            for line in text.splitlines():
+                stripped = line.strip()
+                if stripped and stripped not in seen and len(stripped) > 1:
+                    seen.add(stripped)
+                    _pdf_header_footer_texts.append(stripped)
+
+
+def _classify_against_pdf_metadata(text: str) -> dict | None:
+    """Check if text matches any header/footer extracted from the PDF."""
+    if not _pdf_header_footer_texts:
+        return None
+
+    stripped = text.strip()
+    if not stripped:
+        return None
+
+    # Normalize: remove tags, collapse whitespace
+    normalized = re.sub(r'\[([AD])>(.*?)<\1\]', r'\2', stripped, flags=re.DOTALL)
+    normalized = re.sub(r'\s+', ' ', normalized).strip().lower()
+
+    for hf_text in _pdf_header_footer_texts:
+        hf_norm = re.sub(r'\s+', ' ', hf_text).strip().lower()
+        # Exact match
+        if normalized == hf_norm:
+            return _hit(CAT_HEADER, f"pdf_metadata_exact: {hf_text[:40]}", "high")
+        # Substring match (the diff text is part of a header/footer)
+        if len(normalized) >= 3 and normalized in hf_norm:
+            return _hit(CAT_HEADER, f"pdf_metadata_substring: {hf_text[:40]}", "high")
+        # Reverse: header/footer text is part of the diff text
+        if len(hf_norm) >= 5 and hf_norm in normalized:
+            return _hit(CAT_FOOTER, f"pdf_metadata_contains: {hf_text[:40]}", "high")
+
+    return None
+
+
+# ─────────────────────────────────────────────────────────────────────
 # Public API
 # ─────────────────────────────────────────────────────────────────────
 
@@ -512,6 +581,14 @@ def _classify_one(text: str, state_code: str | None) -> dict[str, Any] | None:
             for pat in state_patterns.get(category, []):
                 if pat.search(text):
                     return _hit(category, pat.pattern, "high")
+
+    # ── 3. PDF-metadata-based header/footer allowlist ─────────────
+    # When actual header/footer text has been extracted from the PDF,
+    # match against those exact strings.  This catches state-specific
+    # headers/footers that don't have regex patterns defined.
+    pdf_verdict = _classify_against_pdf_metadata(text)
+    if pdf_verdict:
+        return pdf_verdict
 
     return None
 
@@ -667,6 +744,178 @@ def strip_trailing_line_numbers(
     out_lines = list(lines)
     for idx, _num, prefix, eol in candidates:
         out_lines[idx] = prefix + eol
+    return "".join(out_lines)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Leading line-number stripper (KS / NE / MO style)
+# ─────────────────────────────────────────────────────────────────────
+
+# Leading line number: 1-3 digits at start of line, followed by 1+ spaces,
+# then actual content.  Group 1 = number, Group 2 = content, Group 3 = EOL.
+_RE_LEADING_LINE_NUMBER = re.compile(
+    r"^[ \t]*(\d{1,3})[ \t]+(\S.+?)[ \t]*(\r?\n)?$"
+)
+
+
+def strip_leading_line_numbers(
+    text: str,
+    state_code: str | None = None,
+    *,
+    min_candidates: int = 5,
+    monotonic_ratio: float = 0.70,
+    max_starting_number: int = 20,
+) -> str:
+    """Remove left-margin line numbers that precede content on each line.
+
+    Kansas and several other states print line numbers in a left-margin
+    column.  PyMuPDF sometimes extracts them as leading digits on content
+    lines::
+
+        "1 AN ACT concerning education; relating to the Kansas promise"
+        "2 scholarship program; expanding the postsecondary educational"
+        "3 institutions eligible to participate in such program."
+
+    Detection uses the same monotonic-sequence validation as
+    :func:`strip_trailing_line_numbers` — numbers must form a mostly
+    increasing sequence across the document to be stripped.
+
+    Parameters
+    ----------
+    text
+        Input text (may contain tag markup).
+    state_code
+        Optional two-letter state code (reserved for future per-state
+        policy).
+    min_candidates
+        Minimum lines with leading numbers before stripping activates.
+    monotonic_ratio
+        Required fraction of consecutive pairs that are strictly
+        increasing.
+    max_starting_number
+        First detected number must be ≤ this value.
+
+    Returns
+    -------
+    str
+        Text with leading line numbers removed, or unchanged if safety
+        checks fail.
+    """
+    if not text:
+        return text
+
+    lines = text.splitlines(keepends=True)
+
+    candidates: list[tuple[int, int, str, str]] = []  # (idx, num, content, eol)
+    for idx, line in enumerate(lines):
+        m = _RE_LEADING_LINE_NUMBER.match(line)
+        if not m:
+            continue
+        num_s, content, eol = m.group(1), m.group(2), m.group(3) or ""
+        # Skip very short content — protects numbered list items like "1. "
+        if len(content.strip()) < 5:
+            continue
+        candidates.append((idx, int(num_s), content, eol))
+
+    if len(candidates) < min_candidates:
+        return text
+
+    nums = [c[1] for c in candidates]
+    if nums[0] > max_starting_number:
+        return text
+
+    pair_count = len(nums) - 1
+    increasing = sum(1 for a, b in zip(nums, nums[1:]) if b > a)
+    if pair_count == 0 or increasing / pair_count < monotonic_ratio:
+        return text
+
+    out_lines = list(lines)
+    for idx, _num, content, eol in candidates:
+        out_lines[idx] = content + eol
+    return "".join(out_lines)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Bare line-number block stripper (MA / CT page-boundary style)
+# ─────────────────────────────────────────────────────────────────────
+
+_RE_BARE_NUM_LINE = re.compile(r"^\s*(\d{1,3})\s*$")
+
+
+def strip_bare_line_number_blocks(
+    text: str,
+    state_code: str | None = None,
+    *,
+    min_consecutive: int = 3,
+) -> str:
+    """Remove blocks of bare line numbers (each on its own line).
+
+    Massachusetts and some Connecticut extractions produce a block of
+    sequential bare numbers at the end of each page::
+
+        "curettage of a chalazion, removal and biopsy of skin lesions without"
+        "known malignancy, laser capsulotomy, laser trabeculoplasty and laser"
+        ""
+        "1"
+        "2"
+        "3"
+        ...
+        "34"
+
+    This function detects runs of ≥ *min_consecutive* bare-number lines
+    that form a monotonic sequence and removes them.
+
+    Parameters
+    ----------
+    text
+        Input text.
+    state_code
+        Reserved for future per-state policy.
+    min_consecutive
+        Minimum length of a consecutive bare-number run to strip.
+        Default 3.
+
+    Returns
+    -------
+    str
+        Text with bare number blocks removed.
+    """
+    if not text:
+        return text
+
+    lines = text.splitlines(keepends=True)
+    remove_indices: set[int] = set()
+
+    # Scan for runs of consecutive bare-number lines
+    i = 0
+    while i < len(lines):
+        m = _RE_BARE_NUM_LINE.match(lines[i])
+        if not m:
+            i += 1
+            continue
+        # Start of a potential run
+        run_start = i
+        prev_num = int(m.group(1))
+        i += 1
+        while i < len(lines):
+            m2 = _RE_BARE_NUM_LINE.match(lines[i])
+            if not m2:
+                break
+            cur_num = int(m2.group(1))
+            # Allow non-decreasing (some pages restart at 1)
+            if cur_num <= prev_num and cur_num != 1:
+                break
+            prev_num = cur_num
+            i += 1
+        run_length = i - run_start
+        if run_length >= min_consecutive:
+            for idx in range(run_start, i):
+                remove_indices.add(idx)
+
+    if not remove_indices:
+        return text
+
+    out_lines = [line for idx, line in enumerate(lines) if idx not in remove_indices]
     return "".join(out_lines)
 
 
@@ -1820,6 +2069,8 @@ __all__ = [
     "classify_removed_text",
     "build_removals_report",
     "strip_trailing_line_numbers",
+    "strip_leading_line_numbers",
+    "strip_bare_line_number_blocks",
     "merge_wrapped_artifact_lines",
     "strip_table_row_markers",
     "normalise_ct_title_block",
@@ -1830,6 +2081,7 @@ __all__ = [
     "TRAILING_LINE_NUMBER_STATES",
     "STATE_PATTERNS",
     "RULE_LABELS",
+    "set_pdf_metadata_allowlist",
     # category constants (re-exported for callers building UI badges)
     "CAT_PAGE_MARKER",
     "CAT_LINE_NUMBER",

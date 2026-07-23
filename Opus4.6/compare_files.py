@@ -37,6 +37,8 @@ try:
     from text_accuracy_helpers import (  # type: ignore
         classify_removed_text,
         strip_trailing_line_numbers,
+        strip_leading_line_numbers,
+        strip_bare_line_number_blocks,
         merge_wrapped_artifact_lines,
         strip_table_row_markers,
         normalise_ct_title_block,
@@ -53,6 +55,8 @@ except ImportError:  # pragma: no cover
         from text_accuracy_helpers import (  # type: ignore
             classify_removed_text,
             strip_trailing_line_numbers,
+            strip_leading_line_numbers,
+            strip_bare_line_number_blocks,
             merge_wrapped_artifact_lines,
             strip_table_row_markers,
             normalise_ct_title_block,
@@ -64,6 +68,8 @@ except ImportError:  # pragma: no cover
     except ImportError:
         classify_removed_text = None  # type: ignore
         strip_trailing_line_numbers = None  # type: ignore
+        strip_leading_line_numbers = None  # type: ignore
+        strip_bare_line_number_blocks = None  # type: ignore
         merge_wrapped_artifact_lines = None  # type: ignore
         strip_table_row_markers = None  # type: ignore
         normalise_ct_title_block = None  # type: ignore
@@ -481,6 +487,30 @@ def compare_texts(
                 converted_text, state_code=state_code
             )
         except Exception:  # pragma: no cover — defensive
+            pass
+
+    # ── Pre-pre-filter (1a): strip leading line numbers (IA/KS style) ──────
+    if strip_leading_line_numbers is not None:
+        try:
+            pymupdf_clean_text = strip_leading_line_numbers(
+                pymupdf_clean_text, state_code=state_code
+            )
+            converted_text = strip_leading_line_numbers(
+                converted_text, state_code=state_code
+            )
+        except Exception:
+            pass
+
+    # ── Pre-pre-filter (1a2): strip bare line-number blocks (MA style) ────
+    if strip_bare_line_number_blocks is not None:
+        try:
+            pymupdf_clean_text = strip_bare_line_number_blocks(
+                pymupdf_clean_text, state_code=state_code
+            )
+            converted_text = strip_bare_line_number_blocks(
+                converted_text, state_code=state_code
+            )
+        except Exception:
             pass
 
     # ── Pre-pre-filter (1b): strip PyMuPDF ``T<n>`` table-row markers ─────

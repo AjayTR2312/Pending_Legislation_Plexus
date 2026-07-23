@@ -1702,6 +1702,7 @@ def _run_text_accuracy_check(
     save_removals_to: str | None = None,
     save_accuracy_to: str | None = None,
     llm_removed_lines: list[str] | None = None,
+    pdf_path: str | None = None,
 ):
     """Run compare_texts() with state-aware artifact allowlist + emit log.
 
@@ -1739,6 +1740,27 @@ def _run_text_accuracy_check(
     if not (raw_text and clean_text and compare_texts):
         return None
     try:
+        # ── Load PDF metadata for header/footer allowlist ─────────
+        if pdf_path:
+            try:
+                from paragraph_accuracy_checker import extract_full_metadata
+                from text_accuracy_helpers import set_pdf_metadata_allowlist
+                _meta = extract_full_metadata(pdf_path)
+                if _meta:
+                    set_pdf_metadata_allowlist(_meta)
+                    add_log("📋 PDF metadata loaded for header/footer allowlist")
+            except Exception as _meta_err:
+                logging.debug("Could not load PDF metadata for allowlist: %s", _meta_err)
+
+        # Diagnostic: log input sizes so truncation bugs are immediately visible
+        _raw_len = len(raw_text) if raw_text else 0
+        _clean_len = len(clean_text) if clean_text else 0
+        logging.info(
+            "🔍 Text accuracy inputs: raw=%s chars, clean=%s chars (ratio=%.1f%%)",
+            f"{_raw_len:,}", f"{_clean_len:,}",
+            (_clean_len / max(_raw_len, 1)) * 100,
+        )
+
         accuracy_report = compare_texts(raw_text, clean_text, state_code=state_code, llm_removed_lines=llm_removed_lines)
         st.session_state.content_accuracy_report = accuracy_report
 
@@ -2448,6 +2470,25 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
         st.session_state.content_accuracy_report = None
         _removals_json = output_path.replace(".txt", "_removals.json") if output_path else None
         _accuracy_json = output_path.replace(".txt", "_accuracy.json") if output_path else None
+        _para_json = output_path.replace(".txt", "_paragraph_accuracy.json") if output_path else None
+
+        from concurrent.futures import ThreadPoolExecutor
+
+        # Launch paragraph accuracy in background (PDF I/O, no st.session_state)
+        def _run_para_acc():
+            try:
+                from paragraph_accuracy_checker import check_paragraph_accuracy
+                return check_paragraph_accuracy(
+                    pdf_path, converted_text, state_code=detected_state,
+                )
+            except Exception as e:
+                logging.warning("Paragraph accuracy check failed: %s", e)
+                return None
+
+        _para_executor = ThreadPoolExecutor(max_workers=1)
+        _fut_para = _para_executor.submit(_run_para_acc)
+
+        # Text accuracy on main thread (uses st.session_state)
         _run_text_accuracy_check(
             raw_text=pymupdf_text,
             clean_text=converted_text,
@@ -2455,7 +2496,26 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
             add_log=add_log,
             save_removals_to=_removals_json,
             save_accuracy_to=_accuracy_json,
+            pdf_path=pdf_path,
         )
+
+        _para_report = _fut_para.result()
+        _para_executor.shutdown(wait=False)
+
+        if _para_report:
+            _para_acc = _para_report.get("accuracy_pct", 100.0)
+            _splits = len(_para_report.get("splits_needed", []))
+            _merges = len(_para_report.get("merges_needed", []))
+            _total = _para_report.get("total_boundaries", 0)
+            st.session_state.paragraph_accuracy_report = _para_report
+            if _splits or _merges:
+                add_log(f"📐 Paragraph accuracy: {_para_acc:.1f}% ({_total} boundaries — {_splits} splits, {_merges} merges needed)")
+            else:
+                add_log(f"📐 Paragraph accuracy: {_para_acc:.1f}% ({_total} boundaries — all correct)")
+            if _para_json:
+                import json as _json
+                with open(_para_json, "w", encoding="utf-8") as _pf:
+                    _json.dump(_para_report, _pf, indent=2, default=str)
 
         # ── Step 8: GPT Audit (comparison Excel) — DISABLED ────────────────────
         # Disabled to save cost/time; extraction_validator.py passive watchdog
@@ -2882,6 +2942,24 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
             _pre_lines = set(_pre_cleaned.splitlines())
             _clean_lines = set(pymupdf_clean_text.splitlines())
             _llm_removed = [l for l in _pre_lines - _clean_lines if l.strip()]
+        from concurrent.futures import ThreadPoolExecutor
+        _para_json = output_path.replace(".txt", "_paragraph_accuracy.json") if output_path else None
+
+        # Launch paragraph accuracy in background (PDF I/O, no st.session_state)
+        def _run_para_acc():
+            try:
+                from paragraph_accuracy_checker import check_paragraph_accuracy
+                return check_paragraph_accuracy(
+                    pdf_path, pymupdf_clean_text, state_code=detected_state,
+                )
+            except Exception as e:
+                logging.warning("Paragraph accuracy check failed: %s", e)
+                return None
+
+        _para_executor = ThreadPoolExecutor(max_workers=1)
+        _fut_para = _para_executor.submit(_run_para_acc)
+
+        # Text accuracy on main thread (uses st.session_state)
         _run_text_accuracy_check(
             raw_text=_accuracy_raw,
             clean_text=pymupdf_clean_text,
@@ -2890,7 +2968,26 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
             save_removals_to=_removals_json,
             save_accuracy_to=_accuracy_json,
             llm_removed_lines=_llm_removed,
+            pdf_path=pdf_path,
         )
+
+        _para_report = _fut_para.result()
+        _para_executor.shutdown(wait=False)
+
+        if _para_report:
+            _para_acc = _para_report.get("accuracy_pct", 100.0)
+            _splits = len(_para_report.get("splits_needed", []))
+            _merges = len(_para_report.get("merges_needed", []))
+            _total = _para_report.get("total_boundaries", 0)
+            st.session_state.paragraph_accuracy_report = _para_report
+            if _splits or _merges:
+                add_log(f"📐 Paragraph accuracy: {_para_acc:.1f}% ({_total} boundaries — {_splits} splits, {_merges} merges needed)")
+            else:
+                add_log(f"📐 Paragraph accuracy: {_para_acc:.1f}% ({_total} boundaries — all correct)")
+            if _para_json:
+                import json as _json
+                with open(_para_json, "w", encoding="utf-8") as _pf:
+                    _json.dump(_para_report, _pf, indent=2, default=str)
 
         # ── Step 6: Tag Validation (PyMuPDF report → clean text) ────────────
         # 1. Render highlighted PDF page images
@@ -3173,13 +3270,29 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
             _mark_flags["mark_strikethrough"] = del_cfg.get("strike_out", True)
             _mark_flags["mark_brackets"] = add_cfg.get("brackets", False) or del_cfg.get("brackets", False)
 
-        # JSON report
-        pymupdf_report = extract_pdf_json_report(pdf_path, state_code=detected_state, **_mark_flags)
+        # JSON report + Tagged text — run in parallel (each opens its own
+        # PDF handle so there's no contention; saves ~20-25s on large PDFs).
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import contextlib
+
+        def _extract_report():
+            return extract_pdf_json_report(pdf_path, state_code=detected_state, **_mark_flags)
+
+        def _extract_text():
+            return extract_pdf_with_pymupdf(pdf_path, join_pages=True, state_code=detected_state, **_mark_flags)
+
+        # Suppress PyMuPDF's noisy "find_tables: exception occurred" stderr
+        # output during parallel runs — the exceptions are already caught in
+        # Python code, but the C layer prints before Python can intercept.
+        with open(os.devnull, 'w') as _devnull, contextlib.redirect_stderr(_devnull):
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                fut_report = executor.submit(_extract_report)
+                fut_text = executor.submit(_extract_text)
+                pymupdf_report = fut_report.result()
+                pymupdf_text = fut_text.result()
+
         n_spans = len(pymupdf_report.get("formatted_spans", []))
         add_log(f"📊 PyMuPDF report: {n_spans} formatted spans detected")
-
-        # Tagged text (needed for hybrid conversion)
-        pymupdf_text = extract_pdf_with_pymupdf(pdf_path, join_pages=True, state_code=detected_state, **_mark_flags)
         add_log(f"✅ PyMuPDF tagged text: {len(pymupdf_text):,} chars")
 
         # Filter italic by section if needed
@@ -3201,8 +3314,28 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
         if status_placeholder:
             status_placeholder.info("🧹 Hybrid: splitting text into chunks and cleaning with LLM...")
 
+        # ── Launch highlight rendering in background (runs in parallel with LLM) ──
+        # Highlight images only depend on PDF + JSON report, not on LLM output.
+        from concurrent.futures import ThreadPoolExecutor
+        from pymupdf_extractor import highlight_pdf_formatting
+
+        _highlight_executor = ThreadPoolExecutor(max_workers=1)
+        _output_path_for_highlight = os.path.join(session_folders['output_folder'], Path(pdf_path).stem + ".txt")
+        _highlight_dir = Path(_output_path_for_highlight).parent / f"{Path(pdf_path).stem}_highlighted"
+
+        def _run_highlight():
+            return highlight_pdf_formatting(
+                pdf_path,
+                report=pymupdf_report,
+                output_dir=_highlight_dir,
+                **_mark_flags,
+            )
+
+        _highlight_future = _highlight_executor.submit(_run_highlight)
+
         # Use the Opus module's hybrid conversion function
-        converted_text = opus.convert_pdf_hybrid_text(client, pdf_path, state_config, detected_state)
+        # Pass pre-extracted text to avoid duplicate PyMuPDF extraction
+        converted_text = opus.convert_pdf_hybrid_text(client, pdf_path, state_config, detected_state, raw_text=pymupdf_text)
 
         if not converted_text:
             raise Exception("Hybrid conversion returned empty result")
@@ -3276,9 +3409,29 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
         st.session_state.gpt_audit_failed = False
         st.session_state.content_accuracy_report = None
 
-        # ── Content Accuracy Check ────────────────────────────────────────
+        # ── Content Accuracy + Paragraph Accuracy (parallel) ────────────
         _removals_json = output_path.replace(".txt", "_removals.json") if output_path else None
         _accuracy_json = output_path.replace(".txt", "_accuracy.json") if output_path else None
+        _para_json = output_path.replace(".txt", "_paragraph_accuracy.json") if output_path else None
+
+        from concurrent.futures import ThreadPoolExecutor
+
+        # Launch paragraph accuracy in background (PDF I/O, no st.session_state)
+        def _run_para_acc():
+            try:
+                from paragraph_accuracy_checker import check_paragraph_accuracy
+                return check_paragraph_accuracy(
+                    pdf_path, converted_text, state_code=detected_state,
+                )
+            except Exception as e:
+                logging.warning("Paragraph accuracy check failed: %s", e)
+                return None
+
+        _para_executor = ThreadPoolExecutor(max_workers=1)
+        _fut_para = _para_executor.submit(_run_para_acc)
+
+        # Text accuracy runs on main thread (uses st.session_state via add_log)
+        add_log(f"🔍 Accuracy check inputs: pymupdf_text={len(pymupdf_text):,} chars, converted_text={len(converted_text):,} chars")
         _run_text_accuracy_check(
             raw_text=pymupdf_text,
             clean_text=converted_text,
@@ -3286,7 +3439,35 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
             add_log=add_log,
             save_removals_to=_removals_json,
             save_accuracy_to=_accuracy_json,
+            pdf_path=pdf_path,
         )
+
+        # Collect paragraph accuracy result
+        _para_report = _fut_para.result()
+        _para_executor.shutdown(wait=False)
+
+        if _para_report:
+            _para_acc = _para_report.get("accuracy_pct", 100.0)
+            _splits = len(_para_report.get("splits_needed", []))
+            _merges = len(_para_report.get("merges_needed", []))
+            _total = _para_report.get("total_boundaries", 0)
+            st.session_state.paragraph_accuracy_report = _para_report
+
+            if _splits or _merges:
+                add_log(
+                    f"📐 Paragraph accuracy: {_para_acc:.1f}% "
+                    f"({_total} boundaries — {_splits} splits, {_merges} merges needed)"
+                )
+            else:
+                add_log(f"📐 Paragraph accuracy: {_para_acc:.1f}% ({_total} boundaries — all correct)")
+
+            if _para_json:
+                import json as _json
+                with open(_para_json, "w", encoding="utf-8") as _pf:
+                    _json.dump(_para_report, _pf, indent=2, default=str)
+                add_log(f"📐 Paragraph accuracy report saved: {Path(_para_json).name}")
+        else:
+            add_log("⚠️ Paragraph accuracy check skipped", "warning")
 
         # ── Step 6: Claude Opus 4.7 Audit (Validation Report) ─────────────
         st.session_state.current_step = 5
@@ -3299,13 +3480,10 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
         try:
             from pymupdf_extractor import highlight_pdf_formatting
 
-            highlight_dir = Path(output_path).parent / f"{Path(pdf_path).stem}_highlighted"
-            hi_imgs = highlight_pdf_formatting(
-                pdf_path,
-                report=pymupdf_report,
-                output_dir=highlight_dir,
-                **_mark_flags,
-            )
+            # Collect pre-rendered highlight images (launched in parallel with LLM)
+            highlight_dir = _highlight_dir
+            hi_imgs = _highlight_future.result()  # blocks only if not yet done
+            _highlight_executor.shutdown(wait=False)
             add_log(f"🖍️ {len(hi_imgs)} highlighted page images saved")
             st.session_state.audit_highlighted_dir = str(highlight_dir)
 
@@ -5270,6 +5448,34 @@ def show_results_section():
                 f'<span style="font-weight:800;">{_acc_val:.1f}%</span></div>'
             )
 
+        # Paragraph accuracy chip
+        _para_chip = ""
+        _para_rpt = st.session_state.get('paragraph_accuracy_report')
+        if _para_rpt:
+            _para_val = _para_rpt.get('accuracy_pct', 100.0)
+            _para_splits = len(_para_rpt.get('splits_needed', []))
+            _para_merges = len(_para_rpt.get('merges_needed', []))
+            _para_total = _para_rpt.get('total_boundaries', 0)
+            _para_correct = _para_rpt.get('correct_boundaries', 0)
+            if _para_val >= 99:
+                _p_bg, _p_fg, _p_bdr = '#f0fdf4', '#166534', '#bbf7d0'
+            elif _para_val >= 95:
+                _p_bg, _p_fg, _p_bdr = '#fefce8', '#854d0e', '#fde68a'
+            else:
+                _p_bg, _p_fg, _p_bdr = '#fef2f2', '#991b1b', '#fecaca'
+            _para_detail = f" ({_para_correct}/{_para_total}"
+            if _para_splits:
+                _para_detail += f", {_para_splits} split{'s' if _para_splits != 1 else ''}"
+            if _para_merges:
+                _para_detail += f", {_para_merges} merge{'s' if _para_merges != 1 else ''}"
+            _para_detail += ")"
+            _para_chip = (
+                f'<div style="{_chip} background:{_p_bg}; color:{_p_fg}; border:1px solid {_p_bdr};">'
+                f'<span style="font-size:1rem;">📐</span> Paragraph Accuracy '
+                f'<span style="font-weight:800;">{_para_val:.1f}%</span>'
+                f'<span style="font-size:0.75rem; font-weight:400; margin-left:4px;">{_para_detail}</span></div>'
+            )
+
         _summary_html = (
             '<div style="background:#ffffff; border-radius:14px; padding:24px 28px; margin:8px 0 20px;'
             ' border:1px solid #e2e8f0; box-shadow:0 2px 12px rgba(0,0,0,.05);">'
@@ -5279,7 +5485,7 @@ def show_results_section():
             f'{_state_pill}'
             '</div>'
             '<div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px;">'
-            f'{_conv_chip}{_val_chip}{_size_chip}{_acc_chip}'
+            f'{_conv_chip}{_val_chip}{_size_chip}{_acc_chip}{_para_chip}'
             '</div>'
             '<div style="background:#f8fafc; border-radius:8px; padding:8px 16px;'
             ' display:flex; align-items:center; justify-content:space-between;'
