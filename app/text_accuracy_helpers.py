@@ -374,12 +374,13 @@ STATE_PATTERNS: dict[str, dict[str, list[re.Pattern]]] = {
         CAT_FOOTER: [
             # Iowa bill footers (full line):
             #   "TLSB 1895YH (4) da/ns H.F. 1"
-            #   "LSB 1895YH (4) -1- da/ns 1/15 H.F. 1"
+            #   "LSB 1895YH (4) -1- lh/ko 1/32 H.F. 1"
             re.compile(r"^\s*T?LSB\s+\w+\s*\(\d+\)", re.IGNORECASE),
             # Footer fragments (word-level diff remnants):
-            #   "da/ns H.F. 1"   "-1- da/ns 1/15 H.F. 1"
-            #   "da/ns 1/15 H.F. 1"   "H.F. 1"   "S.F. 1"
-            re.compile(r"^\s*-?\d*-?\s*da/ns\b", re.IGNORECASE),
+            #   "da/ns H.F. 1"   "-1- lh/ko 1/32 1"   "lh/ko 1"
+            #   Drafter initials are 2-4 lowercase letters separated by /
+            #   e.g. da/ns, lh/ko, jm/jh, rn/md
+            re.compile(r"^\s*-?\d*-?\s*[a-z]{1,4}/[a-z]{1,4}\b", re.IGNORECASE),
             re.compile(r"^\s*\d+/\d+\s+[HS]\.F\.\s*\d+", re.IGNORECASE),    # "1/15 H.F. 1"
             re.compile(r"^\s*[HS]\.F\.\s*\d+\s*$", re.IGNORECASE),           # "H.F. 1"
             # Bare page refs like "House File 310, p. 2"
