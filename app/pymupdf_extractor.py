@@ -5291,6 +5291,7 @@ def clean_extracted_text(
     # ── Pre-clean raw text BEFORE sending to LLM ──────────────────
     # The raw _pymupdf.txt may contain:
     #   • Margin line numbers ("line 1", "line 2", …) for CA bills
+    #   • Trailing line numbers (FL/CT style: "...public 3\n")
     #   • Adjacent same-type tags split across line wraps:
     #       [A>SECTION 1.<A]\n line 2 [A>to read:<A]
     # The LLM is unreliable at merging these split tags — it sometimes
@@ -5306,6 +5307,55 @@ def clean_extracted_text(
     # separated by a single newline (within-paragraph), preserving
     # paragraph breaks (\n\n).
     pre_cleaned = _clean_tagged_text(raw_text, strip_line_numbers=True)
+
+    # ── Strip trailing line numbers (FL/CT style) before LLM ──────
+    # Florida/Connecticut bills have line numbers at the END of each line:
+    #   "A bill to be entitled 1"
+    #   "An act relating to public records; amending s. 2"
+    # These are stripped deterministically using sequence validation
+    # (only fires when trailing numbers form a monotonic sequence).
+    try:
+        from text_accuracy_helpers import strip_trailing_line_numbers
+        pre_cleaned_trailing = strip_trailing_line_numbers(pre_cleaned, state_code=state_code)
+        if pre_cleaned_trailing != pre_cleaned:
+            logger.info(
+                "🧹 Stripped trailing line numbers (FL/CT style): %d → %d chars",
+                len(pre_cleaned), len(pre_cleaned_trailing),
+            )
+            pre_cleaned = pre_cleaned_trailing
+    except ImportError:
+        pass
+
+    # ── Leading line numbers (KS/NE/MO style) ──────────────────────────
+    # "1 AN ACT concerning education; relating to the Kansas promise"
+    # Same monotonic-sequence validation as the trailing stripper.
+    try:
+        from text_accuracy_helpers import strip_leading_line_numbers
+        pre_cleaned_leading = strip_leading_line_numbers(pre_cleaned, state_code=state_code)
+        if pre_cleaned_leading != pre_cleaned:
+            logger.info(
+                "🧹 Stripped leading line numbers (KS style): %d → %d chars",
+                len(pre_cleaned), len(pre_cleaned_leading),
+            )
+            pre_cleaned = pre_cleaned_leading
+    except ImportError:
+        pass
+
+    # ── Bare line-number blocks (MA/CT page-boundary style) ─────────────
+    # Blocks of sequential bare numbers ("1\n2\n3\n...\n34") that appear
+    # at page boundaries when PyMuPDF extracts margin numbers as a group.
+    try:
+        from text_accuracy_helpers import strip_bare_line_number_blocks
+        pre_cleaned_bare = strip_bare_line_number_blocks(pre_cleaned, state_code=state_code)
+        if pre_cleaned_bare != pre_cleaned:
+            logger.info(
+                "🧹 Stripped bare line-number blocks (MA style): %d → %d chars",
+                len(pre_cleaned), len(pre_cleaned_bare),
+            )
+            pre_cleaned = pre_cleaned_bare
+    except ImportError:
+        pass
+
     if pre_cleaned != raw_text:
         logger.info(
             "🧹 Pre-cleaned raw text before LLM: %d → %d chars (line numbers stripped, split tags merged)",

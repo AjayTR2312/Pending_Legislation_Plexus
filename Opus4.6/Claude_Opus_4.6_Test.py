@@ -87,7 +87,7 @@ try:
         _inject_ks_signature_lines,
         _strip_ca_signature_block_tags,
         _strip_fl_repeated_headers,
-        pre_merge_paragraph_tags,
+        pre_merge_paragraph_tags, _clean_tagged_text,
         remove_nested_tags, merge_split_tags, split_tagged_subsections,
         split_renumber_paragraph_breaks, split_numbered_item_paragraph_welds,
         rejoin_amendment_intro_breaks,
@@ -1326,7 +1326,7 @@ def _split_text_into_chunks(text, max_chars=40000, overlap_chars=2000):
     return chunks
 
 
-def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None):
+def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None, raw_text=None):
     """
     Hybrid conversion: PyMuPDF text extraction + LLM cleaning in chunks.
     
@@ -1343,6 +1343,8 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         pdf_path (str): Path to PDF file
         state_config (dict): State config from template, or None
         state_code (str): Two-letter state code, or None
+        raw_text (str): Pre-extracted PyMuPDF text.  When provided, skips
+            the internal extraction step (avoids duplicate processing).
     
     Returns:
         str: Converted and cleaned text, or None if failed
@@ -1364,7 +1366,10 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         active = [k.replace("mark_", "") for k, v in flags.items() if v and k.startswith("mark_")]
         logging.info(f"   Detecting formats: {', '.join(active) if active else 'none'}")
 
-        raw_text = extract_pdf_with_pymupdf(pdf_path, join_pages=True, state_code=state_code, **flags)
+        if raw_text:
+            logging.info(f"   ⏩ Using pre-extracted PyMuPDF text ({len(raw_text):,} chars) — skipping re-extraction")
+        else:
+            raw_text = extract_pdf_with_pymupdf(pdf_path, join_pages=True, state_code=state_code, **flags)
         if not raw_text or len(raw_text.strip()) < 50:
             logging.error("❌ PyMuPDF extraction returned empty/minimal text")
             return None
@@ -1395,6 +1400,34 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         if state_code and state_code.upper() == "FL":
             raw_text = pre_merge_paragraph_tags(raw_text)
             logging.info(f"   ✅ Pre-merged FL to paragraph-level tags: {len(raw_text):,} chars")
+
+        # ── Step 1b: Pre-cleaning (line number stripping) ────────────
+        # Same deterministic pre-cleaning that clean_extracted_text() does:
+        # strip trailing, leading, and bare-block line numbers before LLM.
+        raw_text = _clean_tagged_text(raw_text, strip_line_numbers=True)
+        try:
+            from text_accuracy_helpers import (
+                strip_trailing_line_numbers,
+                strip_leading_line_numbers,
+                strip_bare_line_number_blocks,
+            )
+            _before = len(raw_text)
+            raw_text = strip_trailing_line_numbers(raw_text, state_code=state_code)
+            raw_text = strip_leading_line_numbers(raw_text, state_code=state_code)
+            raw_text = strip_bare_line_number_blocks(raw_text, state_code=state_code)
+            _after = len(raw_text)
+            if _after < _before:
+                logging.info(
+                    f"   🧹 Pre-clean stripped line numbers: {_before:,} → {_after:,} chars"
+                )
+        except ImportError:
+            pass
+
+        # Save pre-cleaned text for debugging / accuracy comparison
+        pre_cleaned_path = str(Path(pdf_path).with_suffix('')) + "_hybrid_precleaned.txt"
+        with open(pre_cleaned_path, "w", encoding="utf-8") as f:
+            f.write(raw_text)
+        logging.info(f"   💾 Pre-cleaned text saved to: {pre_cleaned_path}")
 
         # ── Step 2: Split into chunks ────────────────────────────────
         chunks = _split_text_into_chunks(raw_text, max_chars=40000, overlap_chars=2000)
@@ -1485,6 +1518,41 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
                     f"{len(chunk):,} chars). Possible silent truncation "
                     f"or unwanted summarisation."
                 )
+                # Retry with explicit anti-summarisation nudge
+                if attempt < max_retries:
+                    logging.info(f"   🔄 Retrying chunk {i} with anti-truncation prompt...")
+                    anti_trunc_prefix = (
+                        "[CRITICAL: Your previous attempt only produced "
+                        f"{len(cleaned):,} chars from {len(chunk):,} chars of input. "
+                        "You MUST output the COMPLETE cleaned text — do NOT summarise, "
+                        "abbreviate, or skip any sections. Output every single line.]\n\n"
+                    )
+                    user_message_retry = anti_trunc_prefix + user_message
+                    try:
+                        cleaned = ""
+                        final_msg = None
+                        with client.messages.stream(
+                            model="claude-opus-4-6",
+                            max_tokens=64000,
+                            timeout=600.0,
+                            system=system_prompt,
+                            messages=[{"role": "user", "content": user_message_retry}],
+                        ) as stream:
+                            for text in stream.text_stream:
+                                cleaned += text
+                            final_msg = stream.get_final_message()
+                            _track_usage(f"Hybrid Chunk {i}/{total_chunks} (retry)", final_msg.usage)
+                        retry_ratio = len(cleaned) / max(1, len(chunk))
+                        logging.info(
+                            f"   🔄 Retry result: {len(cleaned):,} chars "
+                            f"({retry_ratio:.0%} of raw). "
+                            f"{'✅ Accepted' if retry_ratio >= 0.70 else '⚠️ Still short'}"
+                        )
+                        if retry_ratio > ratio:
+                            # Use retry result if it's better
+                            cleaned_chunks[-1] = cleaned.strip()
+                    except Exception as retry_err:
+                        logging.warning(f"   ⚠️ Retry failed: {retry_err}")
             logging.info(f"   ✅ Chunk {i}: {len(chunk):,} → {len(cleaned):,} chars")
 
         # ── Step 4: Merge cleaned chunks ─────────────────────────────
@@ -2219,17 +2287,26 @@ def _merge_cleaned_chunks(chunks):
         return ""
 
     merged = chunks[0]
+    any_fallback = False
     for i in range(1, len(chunks)):
-        merged = _stitch_two_chunks(merged, chunks[i], chunk_index=i + 1)
+        merged, used_fallback = _stitch_two_chunks(merged, chunks[i], chunk_index=i + 1)
+        if used_fallback:
+            any_fallback = True
 
-    # Final defensive pass: drop any consecutive duplicate paragraph runs.
-    deduped = _dedupe_consecutive_duplicate_blocks(merged)
-    if deduped != merged:
-        logging.info(
-            f"   🧹 Post-merge dedup removed {len(merged) - len(deduped):,} "
-            f"chars of duplicate paragraph runs"
-        )
-    return deduped
+    # Only run the dedup pass when Strategy 4 (raw concatenation) was used.
+    # Strategies 1-3 already handle overlap precisely — running dedup after
+    # them risks removing LEGITIMATE duplicate content that appears in the
+    # source PDF (e.g. identical boilerplate subsections across different
+    # numbered sections in legislation).
+    if any_fallback:
+        deduped = _dedupe_consecutive_duplicate_blocks(merged)
+        if deduped != merged:
+            logging.info(
+                f"   🧹 Post-merge dedup removed {len(merged) - len(deduped):,} "
+                f"chars of duplicate paragraph runs"
+            )
+        return deduped
+    return merged
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -2277,8 +2354,9 @@ def _section_anchors(text):
 def _stitch_two_chunks(merged, next_chunk, *, chunk_index, window=4000):
     """Stitch ``next_chunk`` onto ``merged``, deduplicating any overlap.
 
-    Returns the new merged string.  See ``_merge_cleaned_chunks`` for the
-    strategy hierarchy.
+    Returns a tuple ``(merged_string, used_fallback)`` where
+    ``used_fallback`` is True only when Strategy 4 (raw concatenation)
+    was used.  See ``_merge_cleaned_chunks`` for the strategy hierarchy.
     """
     # ── Strategy 1: section-anchor merge ────────────────────────────────
     tail_window = merged[-window:]
@@ -2324,7 +2402,7 @@ def _stitch_two_chunks(merged, next_chunk, *, chunk_index, window=4000):
                     f"'{label}' (tail offset {global_tail_pos:,}, "
                     f"head offset {head_pos:,})"
                 )
-                return merged[:global_tail_pos].rstrip() + '\n\n' + next_chunk[head_pos:]
+                return merged[:global_tail_pos].rstrip() + '\n\n' + next_chunk[head_pos:], False
 
     # ── Strategy 2: exact suffix-prefix ─────────────────────────────────
     # Whitespace-normalised character match.  Cheaper to compute than the
@@ -2367,7 +2445,7 @@ def _stitch_two_chunks(merged, next_chunk, *, chunk_index, window=4000):
                 f"   🔗 Chunk {chunk_index}: exact suffix-prefix overlap "
                 f"({best_overlap} normalised chars, {raw_cut} raw chars)"
             )
-            return merged + next_chunk[raw_cut:]
+            return merged + next_chunk[raw_cut:], False
 
     # ── Strategy 2b: tail-probe overlap ─────────────────────────────────
     # When the LLM starts the head mid-sentence (e.g. "n section 10-264s,
@@ -2422,7 +2500,7 @@ def _stitch_two_chunks(merged, next_chunk, *, chunk_index, window=4000):
                         f"({actual_probe_len} probe chars matched at norm "
                         f"offset {probe_hit}, raw cut at {raw_cut_2b})"
                     )
-                    return candidate
+                    return candidate, False
                 else:
                     logging.warning(
                         f"   ⚠️  Chunk {chunk_index}: tail-probe cut would "
@@ -2490,7 +2568,7 @@ def _stitch_two_chunks(merged, next_chunk, *, chunk_index, window=4000):
                         f"({actual_2c_len} probe chars matched at stripped "
                         f"offset {probe_2c_hit}, raw cut at {raw_cut_2c})"
                     )
-                    return candidate_2c
+                    return candidate_2c, False
                 else:
                     logging.warning(
                         f"   ⚠️  Chunk {chunk_index}: tag-stripped cut "
@@ -2552,7 +2630,7 @@ def _stitch_two_chunks(merged, next_chunk, *, chunk_index, window=4000):
                 f"tail cut at -{len(tail_win_2d) - t_cut_pos}, "
                 f"head cut at {h_cut_pos})"
             )
-            return candidate_2d
+            return candidate_2d, False
         else:
             logging.warning(
                 f"   ⚠️  Chunk {chunk_index}: paragraph-level cut would "
@@ -2622,7 +2700,7 @@ def _stitch_two_chunks(merged, next_chunk, *, chunk_index, window=4000):
                 break  # fall through to Strategy 4
             # Use the version from `merged` (cleaner because earlier pipeline
             # state) and append the rest of next_chunk after the match.
-            return merged[:global_tail_end].rstrip() + '\n\n' + next_chunk[cut_offset_in_head:].lstrip('\n')
+            return merged[:global_tail_end].rstrip() + '\n\n' + next_chunk[cut_offset_in_head:].lstrip('\n'), False
 
     # ── Strategy 4: concatenate with separator (last resort) ────────────
     # When no overlap is found, the LLM likely truncated content at the
@@ -2685,7 +2763,7 @@ def _stitch_two_chunks(merged, next_chunk, *, chunk_index, window=4000):
             )
             _head_stripped = _head_paras[1].lstrip()
 
-    return _merged_stripped.rstrip() + '\n\n' + _head_stripped.lstrip()
+    return _merged_stripped.rstrip() + '\n\n' + _head_stripped.lstrip(), True
 
 
 def _dedupe_consecutive_duplicate_blocks(text, *, min_run_chars=200):
@@ -2794,6 +2872,25 @@ def _dedupe_consecutive_duplicate_blocks(text, *, min_run_chars=200):
                     continue
                 run2 = norms[j : j + run_len]
                 if run1 == run2:
+                    # ── Guard: don't remove if the gap contains a section
+                    # anchor.  In legislation, identical subsection text
+                    # (e.g. "(a) File an application...") legitimately
+                    # repeats across different numbered sections.  If the
+                    # gap has "Sec. N" it's a new section, not a duplicate.
+                    gap_raw = '\n'.join(
+                        paras[k] for k in range(i + run_len, j)
+                    )
+                    if _RE_SECTION_ANCHOR.search('\n' + gap_raw):
+                        i += 1
+                        break  # skip this gap, try next i
+
+                    # Also require higher char threshold for gapped dedup
+                    # to avoid false positives on short repeated phrases
+                    # common in legislation.
+                    if total_chars < 500:
+                        i += 1
+                        break
+
                     # Drop the gap paragraphs and the second run
                     for k in range(i + run_len, j + run_len):
                         keep[k] = False
