@@ -47,6 +47,8 @@ import io
 import logging
 from pathlib import Path
 from datetime import datetime
+
+from paragraph_break_detector import strip_table_markers
  
 import pypdfium2 as pdfium
 from PIL import Image
@@ -1429,7 +1431,9 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         logging.info(f"   💾 Pre-cleaned text saved to: {pre_cleaned_path}")
 
         # ── Step 2: Split into chunks ────────────────────────────────
-        chunks = _split_text_into_chunks(raw_text, max_chars=40000, overlap_chars=2000)
+        # Strip TABLE markers — they are for human readability only
+        _llm_text = strip_table_markers(raw_text)
+        chunks = _split_text_into_chunks(_llm_text, max_chars=40000, overlap_chars=2000)
         total_chunks = len(chunks)
         logging.info(f"   📐 Split into {total_chunks} chunk(s)")
 
@@ -3235,7 +3239,193 @@ def _reformat_ia_signature_block(text: str, state_code: str | None = None) -> st
     return '\n'.join(result_lines)
 
 
-def deterministic_cleanup(text, state_config=None, state_code=None):
+def _ensure_blank_line_spacing(text):
+    """Ensure every non-blank line is followed by a blank line.
+
+    Converts single line breaks between content lines to double line breaks
+    for consistent double-spaced output.  Already-blank lines are preserved
+    without creating triple+ blank lines.
+
+    Returns:
+        str: Text with uniform blank-line spacing.
+    """
+    if not text:
+        return text
+
+    lines = text.split('\n')
+    result = []
+    for i, line in enumerate(lines):
+        result.append(line)
+        # If this is a non-blank line and the next line is also non-blank,
+        # insert a blank line between them.
+        if (line.strip()
+                and i + 1 < len(lines)
+                and lines[i + 1].strip()):
+            result.append('')
+
+    # Collapse any triple+ blank lines that may result
+    text = '\n'.join(result)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text
+
+
+def _restore_merged_lines(text, reference_text):
+    """Restore line breaks the LLM incorrectly removed.
+
+    Compares each output line against the reference (precleaned) text.
+    If an output line appears to be two or more consecutive reference
+    lines concatenated with whitespace, it is split back to match the
+    reference layout.
+
+    This is a *general* fix — it works for any table format, header
+    block, or structured layout, not just specific patterns.
+
+    Only "structured" lines are restored — the algorithm skips lines
+    that look like intentional paragraph unwraps (prose sentences the
+    LLM correctly joined from hard-wrapped source lines).
+    """
+    if not reference_text:
+        return text
+
+    ref_lines = reference_text.split('\n')
+    # Build lookup: stripped line → list of original (index, line) pairs
+    # Use stripped versions for matching (LLM may trim whitespace)
+    ref_stripped = [l.rstrip() for l in ref_lines]
+
+    # Build a set of consecutive-pair signatures for fast lookup.
+    # Key = normalised merged form, Value = list of (line_a, line_b) originals
+    # We normalise by collapsing internal whitespace runs to single space
+    # for matching, since the LLM may change spacing when merging.
+    def _norm(s):
+        return re.sub(r'\s+', ' ', s.strip())
+
+    pair_map = {}  # norm(a + " " + b) → [(a, b), ...]
+    for i in range(len(ref_stripped) - 1):
+        a = ref_stripped[i]
+        b = ref_stripped[i + 1]
+        if not a.strip() or not b.strip():
+            continue  # skip pairs involving blank lines
+        # Also build triples and quads for multi-line merges
+        key2 = _norm(a + " " + b)
+        pair_map.setdefault(key2, []).append((a, b))
+
+    # Build triple map for 3-line merges
+    triple_map = {}
+    for i in range(len(ref_stripped) - 2):
+        a, b, c = ref_stripped[i], ref_stripped[i+1], ref_stripped[i+2]
+        if not a.strip() or not b.strip() or not c.strip():
+            continue
+        key3 = _norm(a + " " + b + " " + c)
+        triple_map.setdefault(key3, []).append((a, b, c))
+
+    # Build quad map for 4-line merges
+    quad_map = {}
+    for i in range(len(ref_stripped) - 3):
+        a, b, c, d = ref_stripped[i], ref_stripped[i+1], ref_stripped[i+2], ref_stripped[i+3]
+        if not a.strip() or not b.strip() or not c.strip() or not d.strip():
+            continue
+        key4 = _norm(a + " " + b + " " + c + " " + d)
+        quad_map.setdefault(key4, []).append((a, b, c, d))
+
+    # ── Helper: detect if a group of reference lines is just hard-wrapped
+    # prose that the LLM correctly unwrapped into a single paragraph.
+    # Structured lines (tables, headers, numbered items) should be split
+    # back; prose continuation lines should stay merged.
+    _RE_STRUCTURED = re.compile(
+        r'^\s*(?:'
+        r'\d+[\.\)]\s'               # numbered list: "1. " or "2) "
+        r'|[a-z][\.\)]\s'            # lettered list: "a. " or "b) "
+        r'|\([a-z0-9]+\)\s'          # parenthesised: "(a) " or "(1) "
+        r'|\[A>'                     # tag start
+        r'|---'                      # separator / page break
+        r'|SR \d|HB \d|SB \d'       # bill/resolution headers
+        r'|Number of members'        # table header
+        r')',
+        re.IGNORECASE,
+    )
+    # Lines that look like table data (multiple large whitespace gaps)
+    _RE_TABLE_DATA = re.compile(r'\S\s{3,}\S')
+
+    def _is_structured(line):
+        """True if a line looks like a structured/tabular element."""
+        s = line.strip()
+        if not s:
+            return False
+        if _RE_STRUCTURED.match(s):
+            return True
+        if _RE_TABLE_DATA.search(s):
+            return True
+        return False
+
+    def _is_prose_wrap(lines_tuple):
+        """True if the reference lines are just hard-wrapped prose continuation.
+
+        Heuristic: if NONE of the lines are structured (tags, numbered items,
+        table data), they're just hard-wrapped prose the LLM correctly merged.
+        If ANY line is structured, return False so the split is applied.
+        """
+        if len(lines_tuple) < 2:
+            return False
+        # If ANY line in the group is structured, it's NOT simple prose wrap
+        for ln in lines_tuple:
+            if _is_structured(ln):
+                return False  # structured → DO split
+        # All lines are plain prose continuations → LLM was right to merge
+        return True
+
+    out_lines = text.split('\n')
+    result = []
+    splits_done = 0
+
+    for line in out_lines:
+        norm_line = _norm(line)
+
+        # Skip short lines or blank lines — no merge possible
+        if len(norm_line) < 20:
+            result.append(line)
+            continue
+
+        # Try quad split first (most specific)
+        if norm_line in quad_map:
+            parts = quad_map[norm_line][0]
+            if _is_prose_wrap(parts):
+                result.append(line)  # prose — keep merged
+            else:
+                result.extend(parts)
+                splits_done += 1
+            continue
+
+        # Try triple split
+        if norm_line in triple_map:
+            parts = triple_map[norm_line][0]
+            if _is_prose_wrap(parts):
+                result.append(line)
+            else:
+                result.extend(parts)
+                splits_done += 1
+            continue
+
+        # Try pair split
+        if norm_line in pair_map:
+            parts = pair_map[norm_line][0]
+            if _is_prose_wrap(parts):
+                result.append(line)
+            else:
+                result.extend(parts)
+                splits_done += 1
+            continue
+
+        result.append(line)
+
+    if splits_done:
+        logging.info(
+            f"   🔧 Restored {splits_done} line-merge(s) using precleaned reference"
+        )
+
+    return '\n'.join(result)
+
+
+def deterministic_cleanup(text, state_config=None, state_code=None, reference_text=None):
     """
     Apply deterministic fixes for common Claude output inconsistencies.
     These are formatting errors that Claude makes intermittently regardless
@@ -3680,6 +3870,19 @@ def deterministic_cleanup(text, state_config=None, state_code=None):
         text = _split_tabular_header_from_data(text)
         text = _split_tabular_tag_at_dollar(text)
 
+    # ── Fix: Restore lines the LLM incorrectly merged ──────────
+    # Instead of pattern-matching specific table formats, compare against
+    # the precleaned reference text.  If an output line is a concatenation
+    # of 2+ consecutive reference lines, split it back.
+    if reference_text:
+        text = _restore_merged_lines(text, reference_text)
+
+    # ── Final: collapse double/triple spaces between words ────────
+    # Preserves 4+ space gaps (intentional table/column alignment)
+    text = re.sub(r'(?<=\S) {2,3}(?=\S)', ' ', text)
+    # Rejoin line-break hyphenations: "export- limiting" → "export-limiting"
+    text = re.sub(r'(\w)- (\w)', r'\1-\2', text)
+
     return text
 
 
@@ -4053,8 +4256,19 @@ def main():
         converted_text = self_correction_pass(client, converted_text, cached_page_images, state_config)
 
     # Post-process: deterministic cleanup of common Claude inconsistencies
+    # For hybrid mode, load the precleaned text as reference so merged lines
+    # can be restored generically (not just for specific table patterns).
+    _reference_text = None
+    if hybrid_mode:
+        _precleaned_path = str(Path(pdf_path).with_suffix('')) + "_hybrid_precleaned.txt"
+        if os.path.isfile(_precleaned_path):
+            with open(_precleaned_path, "r", encoding="utf-8") as _pf:
+                _reference_text = _pf.read()
     print(f"🔧 Running deterministic cleanup...")
-    converted_text = deterministic_cleanup(converted_text, state_config=state_config, state_code=state_code)
+    converted_text = deterministic_cleanup(
+        converted_text, state_config=state_config, state_code=state_code,
+        reference_text=_reference_text,
+    )
 
     # Post-process: fix Iowa signature block layout
     converted_text = _reformat_ia_signature_block(converted_text, state_code=state_code)
