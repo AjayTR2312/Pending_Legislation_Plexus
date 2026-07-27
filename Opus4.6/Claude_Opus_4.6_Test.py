@@ -48,7 +48,7 @@ import logging
 from pathlib import Path
 from datetime import datetime
 
-from paragraph_break_detector import strip_table_markers
+from paragraph_break_detector import strip_table_markers, pdf_unwrap_paragraphs
  
 import pypdfium2 as pdfium
 from PIL import Image
@@ -1424,15 +1424,34 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         except ImportError:
             pass
 
-        # Save pre-cleaned text for debugging / accuracy comparison
+        # ── Step 1c: PDF-based paragraph unwrapping ────────────────
+        # Join continuation lines using PDF layout boundaries and add
+        # TABLE markers around detected table regions.
+        try:
+            _before_unwrap = len(raw_text)
+            raw_text = pdf_unwrap_paragraphs(raw_text, pdf_path)
+            _after_unwrap = len(raw_text)
+            logging.info(
+                f"   📐 PDF unwrap: {_before_unwrap:,} → {_after_unwrap:,} chars"
+            )
+        except Exception as _unwrap_err:
+            logging.warning(f"   ⚠️ PDF unwrap skipped: {_unwrap_err}")
+
+        # Save unwrapped text (with TABLE markers) for human readability
+        _unwrapped_path = str(Path(pdf_path).with_suffix('')) + "_unwrapped.txt"
+        with open(_unwrapped_path, "w", encoding="utf-8") as f:
+            f.write(raw_text)
+        logging.info(f"   📄 Unwrapped text saved to: {_unwrapped_path}")
+
+        # Save pre-cleaned text (TABLE markers stripped) for accuracy comparison
+        _llm_text = strip_table_markers(raw_text)
         pre_cleaned_path = str(Path(pdf_path).with_suffix('')) + "_hybrid_precleaned.txt"
         with open(pre_cleaned_path, "w", encoding="utf-8") as f:
-            f.write(raw_text)
+            f.write(_llm_text)
         logging.info(f"   💾 Pre-cleaned text saved to: {pre_cleaned_path}")
 
         # ── Step 2: Split into chunks ────────────────────────────────
-        # Strip TABLE markers — they are for human readability only
-        _llm_text = strip_table_markers(raw_text)
+        # _llm_text already has TABLE markers stripped
         chunks = _split_text_into_chunks(_llm_text, max_chars=40000, overlap_chars=2000)
         total_chunks = len(chunks)
         logging.info(f"   📐 Split into {total_chunks} chunk(s)")

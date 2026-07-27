@@ -754,7 +754,7 @@ def strip_trailing_line_numbers(
 # Leading line number: 1-3 digits at start of line, followed by 1+ spaces,
 # then actual content.  Group 1 = number, Group 2 = content, Group 3 = EOL.
 _RE_LEADING_LINE_NUMBER = re.compile(
-    r"^[ \t]*(\d{1,3})[ \t]+(\S.+?)[ \t]*(\r?\n)?$"
+    r"^[ \t]*(\d{1,3})([ \t]+)(\S.+?)[ \t]*(\r?\n)?$"
 )
 
 # Bare leading line number: 1-3 digits on an otherwise empty/whitespace line.
@@ -819,16 +819,16 @@ def strip_leading_line_numbers(
     lines = text.splitlines(keepends=True)
 
     # Phase 1: collect content-bearing candidates for sequence validation
-    candidates: list[tuple[int, int, str, str]] = []  # (idx, num, content, eol)
+    candidates: list[tuple[int, int, str, str, int]] = []  # (idx, num, content, eol, gap)
     for idx, line in enumerate(lines):
         m = _RE_LEADING_LINE_NUMBER.match(line)
         if not m:
             continue
-        num_s, content, eol = m.group(1), m.group(2), m.group(3) or ""
+        num_s, gap_ws, content, eol = m.group(1), m.group(2), m.group(3), m.group(4) or ""
         # Skip very short content — protects numbered list items like "1. "
         if len(content.strip()) < 5:
             continue
-        candidates.append((idx, int(num_s), content, eol))
+        candidates.append((idx, int(num_s), content, eol, len(gap_ws)))
 
     # Phase 1a: collect bare (orphaned) line numbers on blank lines.
     # These are lines like "2   \n" or "14  \n" with no content payload.
@@ -855,9 +855,21 @@ def strip_leading_line_numbers(
             return text
 
         # Sequence confirmed — strip content-bearing line numbers
+        # Compute the typical gap between line number and content so we
+        # can preserve excess indentation (e.g. table headers like
+        # "22                  Number" → "                 Number").
+        gaps = [g for _, _, _, _, g in candidates]
+        gaps_sorted = sorted(gaps)
+        _median_gap = gaps_sorted[len(gaps_sorted) // 2]
+
         out_lines = list(lines)
-        for idx, _num, content, eol in candidates:
-            out_lines[idx] = content + eol
+        for idx, _num, content, eol, gap in candidates:
+            if gap > _median_gap + 4:
+                # Excess indentation — preserve the difference
+                indent = " " * (gap - _median_gap)
+                out_lines[idx] = indent + content + eol
+            else:
+                out_lines[idx] = content + eol
 
         # Also strip bare line numbers within the confirmed range.
         max_num = max(nums)
