@@ -5364,8 +5364,42 @@ def clean_extracted_text(
             len(raw_text), len(pre_cleaned),
         )
 
-    # Build the user message: metadata (if any) + pre-cleaned text
-    user_content = metadata_prefix + pre_cleaned
+    # ── PDF-based paragraph unwrapping ─────────────────────────────
+    # Join continuation lines using PDF layout boundaries and add
+    # TABLE markers around detected table regions.
+    _unwrapped_text = None  # Will hold the unwrapped+TABLE-marked text
+    if pdf_path:
+        try:
+            import sys as _sys
+            _opus_dir = str(Path(__file__).resolve().parent.parent / "Opus4.6")
+            if _opus_dir not in _sys.path:
+                _sys.path.insert(0, _opus_dir)
+            from paragraph_break_detector import pdf_unwrap_paragraphs, strip_table_markers
+            _before_unwrap = len(pre_cleaned)
+            pre_cleaned = pdf_unwrap_paragraphs(pre_cleaned, str(pdf_path))
+            _unwrapped_text = pre_cleaned  # Save before TABLE markers are stripped
+            logger.info(
+                "📐 PDF unwrap: %d → %d chars",
+                _before_unwrap, len(pre_cleaned),
+            )
+            # Save unwrapped text (with TABLE markers) for human readability
+            _unwrapped_path = str(Path(pdf_path).with_suffix('')) + "_unwrapped.txt"
+            with open(_unwrapped_path, "w", encoding="utf-8") as _uf:
+                _uf.write(pre_cleaned)
+            logger.info("📄 Unwrapped text saved to: %s", _unwrapped_path)
+        except Exception as _unwrap_err:
+            logger.warning("⚠️ PDF unwrap skipped: %s", _unwrap_err)
+
+    # Strip TABLE markers before sending to LLM (human-readability only)
+    _llm_pre_cleaned = pre_cleaned
+    try:
+        from paragraph_break_detector import strip_table_markers
+        _llm_pre_cleaned = strip_table_markers(pre_cleaned)
+    except ImportError:
+        pass
+
+    # Build the user message: metadata (if any) + pre-cleaned text (markers stripped)
+    user_content = metadata_prefix + _llm_pre_cleaned
 
     logger.info(
         "🧹 Cleaning extracted text with %s (state=%s, metadata=%d chars) …",
@@ -5578,6 +5612,7 @@ def clean_extracted_text(
 
     # Store the pre-cleaned text and diff report for the caller to retrieve and save
     clean_extracted_text._last_pre_cleaned = pre_cleaned
+    clean_extracted_text._last_unwrapped = _unwrapped_text  # With TABLE markers
     clean_extracted_text._last_diff_report = diff_report
 
     # ── Passive watchdog: scan the final cleaned text for known

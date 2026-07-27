@@ -296,6 +296,124 @@ def _format_table_block(lines: list[str]) -> list[str]:
     return formatted
 
 
+def pdf_unwrap_paragraphs(text: str, pdf_path: str) -> str:
+    """Unwrap multi-line paragraphs using PDF layout boundaries.
+
+    Instead of regex heuristics, this uses ``extract_paragraph_boundaries()``
+    from :mod:`paragraph_accuracy_checker` to detect real paragraph starts
+    via x0 indentation, bold fonts, and vertical gaps.
+
+    Lines that are *not* paragraph starts and *not* structural elements
+    (page markers, headings, blank lines) are joined to the previous line.
+    Table regions are wrapped in ``---TABLE START/END---`` markers.
+
+    Parameters
+    ----------
+    text : str
+        Pre-cleaned text (line numbers already stripped).
+    pdf_path : str
+        Path to the source PDF for layout analysis.
+
+    Returns
+    -------
+    str
+        Text with continuation lines joined and TABLE markers inserted.
+    """
+    from pathlib import Path as _Path
+
+    # Import PDF paragraph boundary extractor
+    try:
+        import sys as _sys
+        _app_dir = str(_Path(__file__).resolve().parent.parent / "app")
+        if _app_dir not in _sys.path:
+            _sys.path.insert(0, _app_dir)
+        from paragraph_accuracy_checker import extract_paragraph_boundaries
+    except ImportError:
+        # Fallback: return text with regex-based unwrapping
+        return unwrap_paragraphs(text)
+
+    # Extract PDF paragraph boundaries
+    boundaries = extract_paragraph_boundaries(pdf_path)
+
+    # Build a set of "first words" that start new paragraphs
+    # We'll match these against lines in the text
+    boundary_prefixes = set()
+    for b in boundaries:
+        # Normalize: strip leading whitespace, take first ~40 chars
+        prefix = b.first_words.strip()[:40]
+        if prefix:
+            boundary_prefixes.add(prefix)
+
+    # Detect table regions using existing two-pass detection
+    results = detect_paragraph_breaks(text)
+    table_lines = _find_table_regions(results)
+
+    lines = text.split("\n")
+    output_lines: list[str] = []
+    in_table = False
+    i = 0
+
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+
+        # Handle table regions
+        if i in table_lines:
+            if not in_table:
+                output_lines.append("---TABLE START---")
+                in_table = True
+            output_lines.append(line)
+            # Check if next line exits table
+            if (i + 1) not in table_lines:
+                in_table = False
+                output_lines.append("---TABLE END---")
+            i += 1
+            continue
+
+        if in_table:
+            in_table = False
+            output_lines.append("---TABLE END---")
+
+        # Structural lines: always keep on their own line
+        if (not stripped
+                or PATTERNS["page_separator"].match(stripped)
+                or PATTERNS["page_header"].match(stripped)
+                or PATTERNS["rule_heading"].match(stripped)
+                or PATTERNS["tagged_header"].match(stripped)):
+            output_lines.append(line)
+            i += 1
+            continue
+
+        # Check if this line starts a new paragraph (PDF boundary match)
+        is_para_start = False
+
+        # Obvious structural paragraph starters
+        if (PATTERNS["alpha_subsection"].match(stripped)
+                or PATTERNS["numeric_subsection"].match(stripped)
+                or PATTERNS["numbered_list"].match(stripped)):
+            is_para_start = True
+        else:
+            # Match against PDF boundary prefixes
+            for prefix in boundary_prefixes:
+                if stripped.startswith(prefix[:30]):
+                    is_para_start = True
+                    break
+
+        if is_para_start or not output_lines or not output_lines[-1].strip():
+            # Start a new paragraph — add blank line separator if previous
+            # line has content (keeps readability consistent with tables)
+            if output_lines and output_lines[-1].strip():
+                output_lines.append("")
+            output_lines.append(stripped)
+        else:
+            # Continuation line — join to previous
+            output_lines[-1] = output_lines[-1] + " " + stripped
+
+        i += 1
+
+    return "\n".join(output_lines)
+
+
 def unwrap_paragraphs(text: str) -> str:
     """
     Join multi-line paragraphs into single lines.
