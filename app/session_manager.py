@@ -56,8 +56,12 @@ class SessionManager:
             logging.error(f"Error type: {type(e).__name__}")
             raise Exception(f"Session directory not writable: {base_sessions_dir}") from e
         
-        # Register cleanup on exit
-        atexit.register(self._cleanup_all_sessions)
+        # NOTE: We no longer delete session directories on shutdown.
+        # Session files (input PDFs, output text, accuracy reports) are
+        # valuable artifacts the user may need after the app stops.
+        # Stale sessions are still cleaned by the background thread
+        # (_start_cleanup_thread) based on expiry age.
+        # atexit.register(self._cleanup_all_sessions)  # disabled
         
         # Start cleanup thread
         self._start_cleanup_thread()

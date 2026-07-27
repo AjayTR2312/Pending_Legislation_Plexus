@@ -2244,8 +2244,10 @@ def _clean_tagged_text(text: str, strip_line_numbers: bool = False) -> str:
     # general collapse intentionally preserves for column layout.
     text = _RE_CURRENCY_PADDING.sub(r"\1 \2", text)
     # Normalize small runs of multiple spaces (2-3) to single space
-    # but preserve larger gaps (4+) which are intentional layout formatting
+    # but preserve larger gaps (4+) which are intentional table/column alignment
     text = re.sub(r"(?<=\S) {2,3}(?=\S)", " ", text)
+    # Rejoin line-break hyphenations: "export- limiting" → "export-limiting"
+    text = re.sub(r'(\w)- (\w)', r'\1-\2', text)
     # Collapse excessive blank lines
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()

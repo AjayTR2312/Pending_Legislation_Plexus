@@ -30,6 +30,7 @@ Usage:
 """
 
 import os
+import re
 import sys
 import json
 import time
@@ -245,6 +246,13 @@ def convert_pdf(pdf_path: str, state_code: str, output_dir: Path) -> str | None:
     converted_text = deterministic_cleanup(converted_text, state_config=state_config)
     if state_config:
         converted_text = post_process_output(converted_text, state_config)
+
+    # ── Final whitespace normalization ─────────────────────────────
+    # Collapse double/triple spaces between words to single space
+    # but preserve 4+ space gaps (intentional table/column alignment)
+    converted_text = re.sub(r'(?<=\S) {2,3}(?=\S)', ' ', converted_text)
+    # Rejoin line-break hyphenations: "export- limiting" → "export-limiting"
+    converted_text = re.sub(r'(\w)- (\w)', r'\1-\2', converted_text)
 
     # Save output
     output_dir.mkdir(parents=True, exist_ok=True)

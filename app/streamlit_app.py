@@ -460,6 +460,8 @@ try:
         st.session_state.audit_counts = None
     if 'content_accuracy_report' not in st.session_state:
         st.session_state.content_accuracy_report = None
+    if 'content_accuracy_detail' not in st.session_state:
+        st.session_state.content_accuracy_detail = None
     if 'gpt_audit_failed' not in st.session_state:
         st.session_state.gpt_audit_failed = False
     if 'last_uploaded_file_id' not in st.session_state:
@@ -533,12 +535,16 @@ def setup_simple_logging():
     current_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     log_file_path = os.path.join(LOG_FOLDER, f'simple_app_{current_time}.log')
     
+    import sys as _sys
+    _stream_handler = logging.StreamHandler()
+    _stream_handler.stream = open(_sys.stderr.fileno(), mode='w', encoding='utf-8', closefd=False)
+
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s',
         handlers=[
             logging.FileHandler(log_file_path, encoding="utf-8"),
-            logging.StreamHandler()
+            _stream_handler,
         ]
     )
     
@@ -1874,6 +1880,105 @@ def _run_text_accuracy_check(
         return None
 
 
+def _run_content_accuracy_check(
+    precleaned_text: str | None,
+    output_text: str | None,
+    add_log,
+    *,
+    save_to: str | None = None,
+):
+    """Run word-level content accuracy check (precleaned vs final output).
+
+    This compares content-to-content (not raw extraction vs output),
+    giving a true measure of whether the LLM preserved all legislative text.
+    Each difference is classified: content_drop, paragraph_drop, content_added,
+    hyphen_rejoin, header_reorder, artifact_removed, formatting_fix.
+
+    Parameters
+    ----------
+    precleaned_text : str
+        The precleaned/pre-LLM text (artifacts already removed by extraction).
+    output_text : str
+        The final LLM-cleaned output text.
+    add_log : callable
+        Pipeline logging function.
+    save_to : str, optional
+        Path to save the JSON report.
+
+    Returns
+    -------
+    dict | None
+        The content accuracy report, also stored on st.session_state.
+    """
+    if not precleaned_text or not output_text:
+        return None
+
+    # Strip TABLE markers — they are for human readability only
+    import re as _re
+    _tbl_re = _re.compile(r"^---TABLE (?:START|END)---\n?", _re.MULTILINE)
+    precleaned_text = _tbl_re.sub("", precleaned_text)
+
+    try:
+        from content_accuracy_checker import check_content_accuracy
+    except ImportError:
+        logging.warning("content_accuracy_checker not available")
+        return None
+
+    try:
+        report = check_content_accuracy(precleaned_text, output_text)
+        st.session_state.content_accuracy_detail = report
+
+        _acc = report["accuracy_pct"]
+        _matching = report["matching_words"]
+        _max_words = max(report["precleaned_words"], report["output_words"])
+        _blocks = report["difference_blocks"]
+        _issues = report.get("content_issue_count", 0)
+        _cats = report.get("category_summary", {})
+
+        _icon = "✅" if _acc >= 99 else "⚠️" if _acc >= 95 else "❌"
+
+        # Build category breakdown string
+        _cat_parts = []
+        for cat, count in sorted(_cats.items()):
+            _cat_parts.append(f"{count} {cat}")
+        _cat_str = ", ".join(_cat_parts) if _cat_parts else "no differences"
+
+        add_log(
+            f"{_icon} Content accuracy: {_acc:.2f}% "
+            f"({_matching:,}/{_max_words:,} words — "
+            f"{_blocks} blocks: {_cat_str})"
+        )
+
+        if _issues > 0:
+            add_log(
+                f"⚠️ {_issues} content issue(s) detected — "
+                f"check Content Accuracy report for details"
+            )
+            # Log each content issue
+            for ci in report.get("content_issues", [])[:5]:
+                _sev = ci.get("severity", "warning")
+                _expl = ci.get("explanation", "")
+                _log_level = "error" if _sev == "critical" else "warning"
+                add_log(f"  ⚠️ {_expl[:150]}", _log_level)
+            if _issues > 5:
+                add_log(f"  ... and {_issues - 5} more issue(s)")
+
+        # Save JSON report
+        if save_to:
+            import json as _json
+            Path(save_to).parent.mkdir(parents=True, exist_ok=True)
+            with open(save_to, "w", encoding="utf-8") as f:
+                _json.dump(report, f, indent=2, ensure_ascii=False, default=str)
+            add_log(f"📋 Content accuracy report saved: {Path(save_to).name}")
+
+        return report
+
+    except Exception as e:
+        add_log(f"⚠️ Content accuracy check failed: {e}", "warning")
+        logging.error(f"Content accuracy error: {e}", exc_info=True)
+        return None
+
+
 def _run_llm_diff_verification(
     accuracy_report: dict | None,
     highlighted_images_b64: list | None,
@@ -2504,6 +2609,15 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
             pdf_path=pdf_path,
         )
 
+        # Content accuracy — word-level pymupdf vs output comparison (Visual mode)
+        _content_acc_json = output_path.replace(".txt", "_content_accuracy.json") if output_path else None
+        _run_content_accuracy_check(
+            precleaned_text=pymupdf_text,
+            output_text=converted_text,
+            add_log=add_log,
+            save_to=_content_acc_json,
+        )
+
         _para_report = _fut_para.result()
         _para_executor.shutdown(wait=False)
 
@@ -2976,6 +3090,15 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
             pdf_path=pdf_path,
         )
 
+        # Content accuracy — word-level precleaned vs output (PyMuPDF Clean mode)
+        _content_acc_json = output_path.replace(".txt", "_content_accuracy.json") if output_path else None
+        _run_content_accuracy_check(
+            precleaned_text=_accuracy_raw,
+            output_text=pymupdf_clean_text,
+            add_log=add_log,
+            save_to=_content_acc_json,
+        )
+
         _para_report = _fut_para.result()
         _para_executor.shutdown(wait=False)
 
@@ -3348,7 +3471,16 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
         add_log(f"✅ Hybrid conversion complete: {len(converted_text):,} characters")
 
         # Apply deterministic cleanup (same as visual mode)
-        converted_text = opus.deterministic_cleanup(converted_text, state_config=state_config, state_code=detected_state)
+        # Load precleaned text as reference for merged-line restoration
+        _precleaned_path = str(Path(pdf_path).with_suffix('')) + "_hybrid_precleaned.txt"
+        _precleaned_text = None
+        if os.path.exists(_precleaned_path):
+            with open(_precleaned_path, "r", encoding="utf-8") as _pf:
+                _precleaned_text = _pf.read()
+        converted_text = opus.deterministic_cleanup(
+            converted_text, state_config=state_config, state_code=detected_state,
+            reference_text=_precleaned_text,
+        )
         add_log("🔧 Deterministic cleanup applied")
 
         # Strip protected clauses
@@ -3445,6 +3577,16 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
             save_removals_to=_removals_json,
             save_accuracy_to=_accuracy_json,
             pdf_path=pdf_path,
+        )
+
+        # Content accuracy — word-level precleaned vs output comparison
+        # _precleaned_text already loaded above for deterministic_cleanup
+        _content_acc_json = output_path.replace(".txt", "_content_accuracy.json") if output_path else None
+        _run_content_accuracy_check(
+            precleaned_text=_precleaned_text,
+            output_text=converted_text,
+            add_log=add_log,
+            save_to=_content_acc_json,
         )
 
         # Collect paragraph accuracy result
@@ -5466,11 +5608,11 @@ def show_results_section():
             f'<span style="font-weight:800;">{_size_label}</span></div>'
         )
 
-        # Content accuracy chip
+        # Text accuracy chip (raw PyMuPDF vs cleaned output)
         _acc_chip = ""
         _acc_report = st.session_state.get('content_accuracy_report')
         if _acc_report:
-            _acc_val = _acc_report['accuracy']
+            _acc_val = _acc_report.get('accuracy', 0)
             if _acc_val >= 99:
                 _acc_bg, _acc_fg, _acc_bdr = '#f0fdf4', '#166534', '#bbf7d0'
             elif _acc_val >= 95:
@@ -5479,8 +5621,33 @@ def show_results_section():
                 _acc_bg, _acc_fg, _acc_bdr = '#fef2f2', '#991b1b', '#fecaca'
             _acc_chip = (
                 f'<div style="{_chip} background:{_acc_bg}; color:{_acc_fg}; border:1px solid {_acc_bdr};">'
-                f'<span style="font-size:1rem;">📊</span> Text Accuracy '
+                f'<span style="font-size:1rem;">🔍</span> Text Accuracy '
                 f'<span style="font-weight:800;">{_acc_val:.1f}%</span></div>'
+            )
+
+        # Content accuracy chip (precleaned vs final output — word-level)
+        _content_acc_chip = ""
+        _content_rpt = st.session_state.get('content_accuracy_detail')
+        if _content_rpt:
+            _content_val = _content_rpt.get('accuracy_pct', 100.0)
+            _content_words = _content_rpt.get('matching_words', 0)
+            _content_max = max(_content_rpt.get('precleaned_words', 0), _content_rpt.get('output_words', 0))
+            _content_issues = _content_rpt.get('content_issue_count', 0)
+            if _content_val >= 99:
+                _ca_bg, _ca_fg, _ca_bdr = '#f0fdf4', '#166534', '#bbf7d0'
+            elif _content_val >= 95:
+                _ca_bg, _ca_fg, _ca_bdr = '#fefce8', '#854d0e', '#fde68a'
+            else:
+                _ca_bg, _ca_fg, _ca_bdr = '#fef2f2', '#991b1b', '#fecaca'
+            _ca_detail = f" ({_content_words:,}/{_content_max:,} words"
+            if _content_issues:
+                _ca_detail += f", {_content_issues} issue{'s' if _content_issues != 1 else ''}"
+            _ca_detail += ")"
+            _content_acc_chip = (
+                f'<div style="{_chip} background:{_ca_bg}; color:{_ca_fg}; border:1px solid {_ca_bdr};">'
+                f'<span style="font-size:1rem;">📊</span> Content Accuracy '
+                f'<span style="font-weight:800;">{_content_val:.1f}%</span>'
+                f'<span style="font-size:0.75rem; font-weight:400; margin-left:4px;">{_ca_detail}</span></div>'
             )
 
         # Paragraph accuracy chip
@@ -5520,7 +5687,7 @@ def show_results_section():
             f'{_state_pill}'
             '</div>'
             '<div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px;">'
-            f'{_conv_chip}{_val_chip}{_size_chip}{_acc_chip}{_para_chip}'
+            f'{_conv_chip}{_val_chip}{_size_chip}{_acc_chip}{_content_acc_chip}{_para_chip}'
             '</div>'
             '<div style="background:#f8fafc; border-radius:8px; padding:8px 16px;'
             ' display:flex; align-items:center; justify-content:space-between;'

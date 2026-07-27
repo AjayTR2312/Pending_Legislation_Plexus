@@ -757,6 +757,14 @@ _RE_LEADING_LINE_NUMBER = re.compile(
     r"^[ \t]*(\d{1,3})[ \t]+(\S.+?)[ \t]*(\r?\n)?$"
 )
 
+# Bare leading line number: 1-3 digits on an otherwise empty/whitespace line.
+# Group 1 = the number, Group 2 = optional trailing newline.
+# These are orphaned line numbers on blank lines (e.g. "2   \n") that the
+# content-bearing regex above cannot match because there is no \S content.
+_RE_BARE_LEADING_LINE_NUMBER = re.compile(
+    r"^[ \t]*(\d{1,3})[ \t]*(\r?\n)?$"
+)
+
 
 def strip_leading_line_numbers(
     text: str,
@@ -779,6 +787,10 @@ def strip_leading_line_numbers(
     Detection uses the same monotonic-sequence validation as
     :func:`strip_trailing_line_numbers` — numbers must form a mostly
     increasing sequence across the document to be stripped.
+
+    Bare line numbers on otherwise-empty lines (e.g. ``"2   \\n"``) are
+    also removed once stripping is confirmed, provided their value falls
+    within the range of the validated monotonic sequence.
 
     Parameters
     ----------
@@ -806,6 +818,7 @@ def strip_leading_line_numbers(
 
     lines = text.splitlines(keepends=True)
 
+    # Phase 1: collect content-bearing candidates for sequence validation
     candidates: list[tuple[int, int, str, str]] = []  # (idx, num, content, eol)
     for idx, line in enumerate(lines):
         m = _RE_LEADING_LINE_NUMBER.match(line)
@@ -817,21 +830,75 @@ def strip_leading_line_numbers(
             continue
         candidates.append((idx, int(num_s), content, eol))
 
+    # Phase 1a: collect bare (orphaned) line numbers on blank lines.
+    # These are lines like "2   \n" or "14  \n" with no content payload.
+    bare_candidates: list[tuple[int, int, str]] = []  # (idx, num, eol)
+    for idx, line in enumerate(lines):
+        m_bare = _RE_BARE_LEADING_LINE_NUMBER.match(line)
+        if m_bare:
+            bare_candidates.append((idx, int(m_bare.group(1)), m_bare.group(2) or ""))
+
     if len(candidates) < min_candidates:
+        # No content-bearing line numbers — fall through to bare-only mode
+        # below.  This happens when pre-cleaning already stripped content
+        # line numbers but left behind orphaned bare numbers.
+        if not bare_candidates:
+            return text
+    else:
+        nums = [c[1] for c in candidates]
+        if nums[0] > max_starting_number:
+            return text
+
+        pair_count = len(nums) - 1
+        increasing = sum(1 for a, b in zip(nums, nums[1:]) if b > a)
+        if pair_count == 0 or increasing / pair_count < monotonic_ratio:
+            return text
+
+        # Sequence confirmed — strip content-bearing line numbers
+        out_lines = list(lines)
+        for idx, _num, content, eol in candidates:
+            out_lines[idx] = content + eol
+
+        # Also strip bare line numbers within the confirmed range.
+        max_num = max(nums)
+        for idx, bare_num, eol in bare_candidates:
+            if 1 <= bare_num <= max_num:
+                out_lines[idx] = eol
+
+        return "".join(out_lines)
+
+    # ── Bare-only mode ──────────────────────────────────────────────
+    # Pre-cleaning already stripped content-bearing line numbers but
+    # left behind scattered bare numbers on blank lines (e.g. "2\n",
+    # "4\n", "7\n").  Validate that these form a plausible line-number
+    # sequence: values 1-36 (typical page-line range), repeating across
+    # pages in a mostly-increasing pattern that resets near 1.
+    bare_nums = [c[1] for c in bare_candidates]
+    if not bare_nums or bare_nums[0] > max_starting_number:
         return text
 
-    nums = [c[1] for c in candidates]
-    if nums[0] > max_starting_number:
+    # Check that enough bare numbers exist (at least min_candidates)
+    if len(bare_nums) < min_candidates:
         return text
 
-    pair_count = len(nums) - 1
-    increasing = sum(1 for a, b in zip(nums, nums[1:]) if b > a)
-    if pair_count == 0 or increasing / pair_count < monotonic_ratio:
+    # All values must be in the typical line-number range (1-40)
+    if max(bare_nums) > 40:
         return text
 
+    # Check monotonic-with-resets pattern: each pair is either increasing
+    # or a page-boundary reset (drop back to a small number ≤ max_starting_number).
+    pair_count = len(bare_nums) - 1
+    good_pairs = sum(
+        1 for a, b in zip(bare_nums, bare_nums[1:])
+        if b > a or b <= max_starting_number
+    )
+    if pair_count == 0 or good_pairs / pair_count < monotonic_ratio:
+        return text
+
+    # Confirmed — strip all bare line numbers
     out_lines = list(lines)
-    for idx, _num, content, eol in candidates:
-        out_lines[idx] = content + eol
+    for idx, _num, eol in bare_candidates:
+        out_lines[idx] = eol
     return "".join(out_lines)
 
 
