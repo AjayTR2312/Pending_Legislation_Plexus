@@ -3343,24 +3343,29 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
         if status_placeholder:
             status_placeholder.info("🧹 Hybrid: splitting text into chunks and cleaning with LLM...")
 
-        # ── Launch highlight rendering in background (runs in parallel with LLM) ──
-        # Highlight images only depend on PDF + JSON report, not on LLM output.
-        from concurrent.futures import ThreadPoolExecutor
-        from pymupdf_extractor import highlight_pdf_formatting
+        # ── Launch highlight rendering in background (only if there are spans) ──
+        _highlight_future = None
+        _highlight_executor = None
+        _highlight_dir = None
+        if n_spans > 0:
+            from concurrent.futures import ThreadPoolExecutor
+            from pymupdf_extractor import highlight_pdf_formatting
 
-        _highlight_executor = ThreadPoolExecutor(max_workers=1)
-        _output_path_for_highlight = os.path.join(session_folders['output_folder'], Path(pdf_path).stem + ".txt")
-        _highlight_dir = Path(_output_path_for_highlight).parent / f"{Path(pdf_path).stem}_highlighted"
+            _highlight_executor = ThreadPoolExecutor(max_workers=1)
+            _output_path_for_highlight = os.path.join(session_folders['output_folder'], Path(pdf_path).stem + ".txt")
+            _highlight_dir = Path(_output_path_for_highlight).parent / f"{Path(pdf_path).stem}_highlighted"
 
-        def _run_highlight():
-            return highlight_pdf_formatting(
-                pdf_path,
-                report=pymupdf_report,
-                output_dir=_highlight_dir,
-                **_mark_flags,
-            )
+            def _run_highlight():
+                return highlight_pdf_formatting(
+                    pdf_path,
+                    report=pymupdf_report,
+                    output_dir=_highlight_dir,
+                    **_mark_flags,
+                )
 
-        _highlight_future = _highlight_executor.submit(_run_highlight)
+            _highlight_future = _highlight_executor.submit(_run_highlight)
+        else:
+            add_log("⏭️ No formatted spans — skipping highlight rendering")
 
         # Use the Opus module's hybrid conversion function
         # Pass pre-extracted text to avoid duplicate PyMuPDF extraction
@@ -3480,90 +3485,99 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
         st.session_state.current_step = 5
         st.session_state.step_status[5] = "🔄"
         update_progress()
-        add_log("🤖 Running Claude Opus 4.7 audit on hybrid-cleaned text...")
-        if status_placeholder:
-            status_placeholder.info("🤖 Running Claude Opus 4.7 audit...")
 
-        try:
-            from pymupdf_extractor import highlight_pdf_formatting
-
-            # Collect pre-rendered highlight images (launched in parallel with LLM)
-            highlight_dir = _highlight_dir
-            hi_imgs = _highlight_future.result()  # blocks only if not yet done
-            _highlight_executor.shutdown(wait=False)
-            add_log(f"🖍️ {len(hi_imgs)} highlighted page images saved")
-            st.session_state.audit_highlighted_dir = str(highlight_dir)
-
-            import base64 as _b64
-            hi_images_b64 = []
-            for img_file in sorted(highlight_dir.glob("page_*.png")):
-                hi_images_b64.append(_b64.b64encode(img_file.read_bytes()).decode())
-
-            opus46_dir = os.path.normpath(
-                os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                             '..', 'Opus4.6')
-            )
-            if opus46_dir not in sys.path:
-                sys.path.insert(0, opus46_dir)
-            from pymupdf_compare import pymupdf_compare_tags
-
-            sr_parts = []
-            if state_config:
-                sr_parts.append(
-                    f"State: {state_config.get('state_name', detected_state or 'unknown')}"
-                )
-                a_cfg = state_config.get("add_markup", {})
-                d_cfg = state_config.get("delete_markup", {})
-                sr_parts.append(f"Underline={a_cfg.get('underline', False)}")
-                sr_parts.append(f"Strikethrough={d_cfg.get('strike_out', False)}")
-                sr_parts.append(f"Italic={a_cfg.get('italic', False)}")
-                sr_parts.append(f"Bold={a_cfg.get('bold', False)}")
-                if d_cfg.get('strike_out', False) and (
-                    a_cfg.get('underline', False)
-                    or a_cfg.get('italic', False)
-                    or a_cfg.get('bold', False)
-                ):
-                    sr_parts.append(
-                        "PRIORITY: strikethrough + any other formatting → tag "
-                        "as [D>...<D] only, never [A>...<A]"
-                    )
-            state_rules_str = ", ".join(sr_parts) if sr_parts else (
-                f"State: {detected_state or 'unknown'}"
-            )
-
-            audit_xlsx = output_path.replace(".txt", "_audit.xlsx") if isinstance(output_path, str) else str(output_path).replace(".txt", "_audit.xlsx")
-            audit_summary = pymupdf_compare_tags(
-                highlighted_images_b64=hi_images_b64,
-                pymupdf_report=pymupdf_report,
-                pymupdf_clean_text=converted_text,
-                state_code=detected_state or "XX",
-                state_rules=state_rules_str,
-                output_xlsx=audit_xlsx,
-            )
-
-            st.session_state.audit_excel_path = audit_xlsx
+        if n_spans == 0:
+            # No formatting detected — skip audit entirely
+            add_log("⏭️ No formatted spans detected — skipping tag audit (no tagging required)")
             st.session_state.audit_counts = {
-                'total_checklist': audit_summary.get('total_checklist', 0),
-                'passes': audit_summary.get('passes', 0),
-                'warnings': audit_summary.get('warnings', 0),
-                'errors': audit_summary.get('errors', 0),
-                'additional_findings': audit_summary.get('additional_findings', 0),
+                'total_checklist': 0, 'passes': 0, 'warnings': 0, 'errors': 0, 'additional_findings': 0,
             }
-            add_log(
-                f"✅ Audit complete — "
-                f"Checklist: {audit_summary['total_checklist']} | "
-                f"✅ Pass: {audit_summary['passes']} | "
-                f"⚠️ Warn: {audit_summary['warnings']} | "
-                f"❌ Error: {audit_summary['errors']}"
-            )
-            if audit_summary.get('additional_findings'):
-                add_log(f"🔍 Additional findings: {audit_summary['additional_findings']}")
             st.session_state.step_status[5] = "✅"
-        except Exception as audit_err:
-            add_log(f"⚠️ Audit failed: {audit_err}", "warning")
-            logging.error(f"Hybrid mode audit error: {audit_err}", exc_info=True)
-            st.session_state.step_status[5] = "⚠️"
-            st.session_state.gpt_audit_failed = True
+        else:
+            add_log("🤖 Running Claude Opus 4.7 audit on hybrid-cleaned text...")
+            if status_placeholder:
+                status_placeholder.info("🤖 Running Claude Opus 4.7 audit...")
+
+            try:
+                from pymupdf_extractor import highlight_pdf_formatting
+
+                # Collect pre-rendered highlight images (launched in parallel with LLM)
+                highlight_dir = _highlight_dir
+                hi_imgs = _highlight_future.result()  # blocks only if not yet done
+                _highlight_executor.shutdown(wait=False)
+                add_log(f"🖍️ {len(hi_imgs)} highlighted page images saved")
+                st.session_state.audit_highlighted_dir = str(highlight_dir)
+
+                import base64 as _b64
+                hi_images_b64 = []
+                for img_file in sorted(highlight_dir.glob("page_*.png")):
+                    hi_images_b64.append(_b64.b64encode(img_file.read_bytes()).decode())
+
+                opus46_dir = os.path.normpath(
+                    os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                 '..', 'Opus4.6')
+                )
+                if opus46_dir not in sys.path:
+                    sys.path.insert(0, opus46_dir)
+                from pymupdf_compare import pymupdf_compare_tags
+
+                sr_parts = []
+                if state_config:
+                    sr_parts.append(
+                        f"State: {state_config.get('state_name', detected_state or 'unknown')}"
+                    )
+                    a_cfg = state_config.get("add_markup", {})
+                    d_cfg = state_config.get("delete_markup", {})
+                    sr_parts.append(f"Underline={a_cfg.get('underline', False)}")
+                    sr_parts.append(f"Strikethrough={d_cfg.get('strike_out', False)}")
+                    sr_parts.append(f"Italic={a_cfg.get('italic', False)}")
+                    sr_parts.append(f"Bold={a_cfg.get('bold', False)}")
+                    if d_cfg.get('strike_out', False) and (
+                        a_cfg.get('underline', False)
+                        or a_cfg.get('italic', False)
+                        or a_cfg.get('bold', False)
+                    ):
+                        sr_parts.append(
+                            "PRIORITY: strikethrough + any other formatting → tag "
+                            "as [D>...<D] only, never [A>...<A]"
+                        )
+                state_rules_str = ", ".join(sr_parts) if sr_parts else (
+                    f"State: {detected_state or 'unknown'}"
+                )
+
+                audit_xlsx = output_path.replace(".txt", "_audit.xlsx") if isinstance(output_path, str) else str(output_path).replace(".txt", "_audit.xlsx")
+                audit_summary = pymupdf_compare_tags(
+                    highlighted_images_b64=hi_images_b64,
+                    pymupdf_report=pymupdf_report,
+                    pymupdf_clean_text=converted_text,
+                    state_code=detected_state or "XX",
+                    state_rules=state_rules_str,
+                    output_xlsx=audit_xlsx,
+                )
+
+                st.session_state.audit_excel_path = audit_xlsx
+                st.session_state.audit_counts = {
+                    'total_checklist': audit_summary.get('total_checklist', 0),
+                    'passes': audit_summary.get('passes', 0),
+                    'warnings': audit_summary.get('warnings', 0),
+                    'errors': audit_summary.get('errors', 0),
+                    'additional_findings': audit_summary.get('additional_findings', 0),
+                }
+                add_log(
+                    f"✅ Audit complete — "
+                    f"Checklist: {audit_summary['total_checklist']} | "
+                    f"✅ Pass: {audit_summary['passes']} | "
+                    f"⚠️ Warn: {audit_summary['warnings']} | "
+                    f"❌ Error: {audit_summary['errors']}"
+                )
+                if audit_summary.get('additional_findings'):
+                    add_log(f"🔍 Additional findings: {audit_summary['additional_findings']}")
+                st.session_state.step_status[5] = "✅"
+            except Exception as audit_err:
+                add_log(f"⚠️ Audit failed: {audit_err}", "warning")
+                logging.error(f"Hybrid mode audit error: {audit_err}", exc_info=True)
+                st.session_state.step_status[5] = "⚠️"
+                st.session_state.gpt_audit_failed = True
         update_progress()
 
         # ── Wrap up ──────────────────────────────────────────────────────────────
@@ -4915,12 +4929,20 @@ def show_simple_ui():
                             if detect_pdf_type is not None:
                                 st.write("🔍 Analyzing PDF — detecting document type...")
                                 pdf_analysis = detect_pdf_type(temp_path)
+                                st.session_state['_pdf_analysis'] = pdf_analysis
                                 if pdf_analysis:
                                     _pg = pdf_analysis.get('total_pages', '?')
                                     _tp = pdf_analysis.get('type', 'unknown')
-                                    _tp_label = ('Digital (text-based)' if _tp == 'digital'
-                                                 else 'Hybrid (text + images)' if _tp == 'hybrid'
-                                                 else _tp.capitalize())
+                                    # If any pages have images, treat as hybrid for display
+                                    _any_images = any(d.get('has_images') for d in pdf_analysis.get('details', []))
+                                    if _any_images and _tp == 'digital':
+                                        _tp_label = 'Hybrid (text + images)'
+                                    elif _tp == 'digital':
+                                        _tp_label = 'Digital (text-based)'
+                                    elif _tp == 'hybrid':
+                                        _tp_label = 'Hybrid (text + images)'
+                                    else:
+                                        _tp_label = _tp.capitalize()
                                     st.write(f"📊 **{_pg} pages** detected — Type: **{_tp_label}**")
                                 if pdf_analysis and pdf_analysis['type'] == 'scanned':
                                     st.session_state['_pdf_is_scanned'] = True
@@ -5548,6 +5570,31 @@ def show_results_section():
             '</p></div>'
         )
         st.markdown(_summary_html, unsafe_allow_html=True)
+
+        # ── Pages with images warning: flag for human review ───────────
+        _pdf_analysis = st.session_state.get('_pdf_analysis')
+        if _pdf_analysis:
+            _page_details = _pdf_analysis.get('details', [])
+            _img_pages = [str(pd['page']) for pd in _page_details if pd.get('has_images')]
+            if _img_pages:
+                if _pdf_analysis.get('type') == 'scanned':
+                    st.warning(
+                        "📷 **Scanned PDF Detected** — This document is a scanned "
+                        "(image-based) PDF. Text was extracted using visual conversion "
+                        "which may introduce errors. "
+                        "**Full human review is required** to ensure accuracy."
+                    )
+                else:
+                    _pages_str = ', '.join(_img_pages)
+                    _n = len(_img_pages)
+                    st.warning(
+                        f"📷 **Hybrid PDF Detected** — This document contains "
+                        f"embedded images on **{_n} page{'s' if _n != 1 else ''}** "
+                        f"(page{'s' if _n != 1 else ''} {_pages_str}). "
+                        f"Text extraction may be incomplete on those pages. "
+                        f"**Please review {'these pages' if _n > 1 else 'this page'}** "
+                        f"to ensure no content was missed."
+                    )
 
         # ── Tag Issues (compact, only when tag accuracy < 100%) ───────────
         if isinstance(_cached_audit, dict):
