@@ -7648,6 +7648,110 @@ def extract_pdf_json_report(
         # Recount total
         report["summary"]["total_formatted_spans"] = len(report["formatted_spans"])
 
+    # -- ALL CAPS detection (CO and similar states) --------------------------
+    # For states where ALL CAPS indicates additions, generate synthetic
+    # ground-truth spans by scanning the extracted text for uppercase runs.
+    _add_markup = {}
+    if state_code:
+        try:
+            import json as _json
+            _template_path = Path(__file__).resolve().parent.parent / "Opus4.6" / "netscan_state_template.json"
+            if _template_path.exists():
+                with open(_template_path, "r", encoding="utf-8") as _tf:
+                    _all_states = _json.load(_tf)
+                _states = _all_states.get("states", _all_states)
+                _st_cfg = _states.get(state_code.upper(), {})
+                _add_markup = _st_cfg.get("add_markup", {})
+        except Exception:
+            pass
+
+    if _add_markup.get("all_caps"):
+        _caps_condition = _add_markup.get("all_caps_condition", "")
+        report["summary"]["all_caps_spans"] = 0
+        # Regex: contiguous ALL CAPS words (≥2 chars each), may include
+        # numbers/connectors between them as CO rules specify
+        _RE_ALL_CAPS_RUN = re.compile(
+            r'\b([A-Z][A-Z\d]{1,}(?:\s+(?:[A-Z][A-Z\d]{1,}|(?:of|or|and|the|to|for|a|in|on|by|at|is|an|as)\b|[\d,.;:()/-]+))*)\b'
+        )
+        # Words to exclude when they appear at line start
+        _CAPS_EXCLUDE_LINE_START = {"SECTION", "SEC", "SEC."}
+
+        for idx in page_indices:
+            if idx < 0 or idx >= len(doc):
+                continue
+            page = doc[idx]
+            page_num = idx + 1
+            full_page_text = page.get_text("text")
+
+            # Only scan pages that have line-numbered content.
+            # CO rule: "Begin mark up at line numbered lines starting with number 1"
+            # Line-numbered lines start with a number at the left margin.
+            _page_lines = full_page_text.split('\n')
+            _has_line_numbers = any(
+                re.match(r'^\s*\d{1,3}\s+\S', ln) for ln in _page_lines
+            )
+            if not _has_line_numbers:
+                continue
+
+            # Only process lines that ARE line-numbered (have leading number)
+            _in_numbered_body = False
+            for line in _page_lines:
+                line_stripped = line.strip()
+                if not line_stripped:
+                    continue
+                # Check if this line starts with a line number
+                _ln_match = re.match(r'^(\d{1,3})\s+(.+)', line_stripped)
+                if _ln_match:
+                    _in_numbered_body = True
+                    line_stripped = _ln_match.group(2)  # text after line number
+                elif not _in_numbered_body:
+                    continue  # skip header lines before first numbered line
+
+                for m in _RE_ALL_CAPS_RUN.finditer(line_stripped):
+                    caps_text = m.group(1).strip()
+                    # Must have at least 2 uppercase letters
+                    alpha_chars = [c for c in caps_text if c.isalpha()]
+                    if len(alpha_chars) < 2:
+                        continue
+                    # All alpha chars must be uppercase
+                    if not all(c.isupper() for c in alpha_chars):
+                        continue
+                    # Skip if it's a line-start excluded word (SECTION at start)
+                    first_word = caps_text.split()[0].rstrip(".")
+                    if m.start() == 0 and first_word in _CAPS_EXCLUDE_LINE_START:
+                        continue
+                    # Skip short single words that are common abbreviations
+                    if len(caps_text.split()) == 1 and len(caps_text) <= 3:
+                        continue
+                    # Build context
+                    start_pos = m.start()
+                    end_pos = m.end()
+                    before = line_stripped[max(0, start_pos - 40):start_pos].strip()
+                    after = line_stripped[end_pos:min(len(line_stripped), end_pos + 40)].strip()
+                    ctx = ""
+                    if before:
+                        ctx += f"…{before} "
+                    ctx += f">>>{caps_text}<<<"
+                    if after:
+                        ctx += f" {after}…"
+
+                    span_entry = {
+                        "text": caps_text,
+                        "format_types": ["all_caps"],
+                        "page": page_num,
+                        "bill_line": int(_ln_match.group(1)) if _ln_match else None,
+                        "bbox": [0, 0, 0, 0],
+                        "context": ctx,
+                    }
+                    report["formatted_spans"].append(span_entry)
+                    report["summary"]["all_caps_spans"] += 1
+
+        report["summary"]["total_formatted_spans"] = len(report["formatted_spans"])
+        logger.info(
+            "🔠 ALL CAPS detection: found %d spans",
+            report["summary"]["all_caps_spans"],
+        )
+
     doc.close()
     return report
 

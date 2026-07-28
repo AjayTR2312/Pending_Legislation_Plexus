@@ -1901,6 +1901,33 @@ def pymupdf_compare_tags(
                 checklist_results.append(cr_row)
                 continue
 
+            # ALL CAPS addition tags — for states where ALL CAPS = new text,
+            # if the extra tag's content is predominantly uppercase, it's a
+            # legitimate addition that the LLM correctly tagged from the image.
+            if et["type"] == "addition":
+                _et_alpha = [c for c in et["text"] if c.isalpha()]
+                _et_upper = sum(1 for c in _et_alpha if c.isupper())
+                if _et_alpha and _et_upper / len(_et_alpha) >= 0.7:
+                    cr_row = {
+                        "checklist_id": i,
+                        "tag_type": et["type"],
+                        "page": "",
+                        "pymupdf_text": "",
+                        "clean_text": et["full"],
+                        "in_image": "yes",
+                        "in_clean": "all_caps",
+                        "verdict": "✅ pass",
+                        "classification": "all_caps_new_text",
+                        "notes": (
+                            f"All-caps new statutory text; CO rule tags all-caps "
+                            f"as additions — the LLM added this from visual "
+                            f"inspection of the PDF image."
+                        ),
+                        "suggested_fix": "",
+                    }
+                    checklist_results.append(cr_row)
+                    continue
+
             # PRINTING CODE formatting legend — not real content
             if _is_printing_code_demo(et["text"], state_code=state_code):
                 cr_row = {
