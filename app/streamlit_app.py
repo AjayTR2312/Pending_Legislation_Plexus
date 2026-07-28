@@ -5574,9 +5574,12 @@ def show_results_section():
                         st.caption("Audit Excel not available — re-run processing to generate.")
 
         # ── Content Issues (compact, only when content accuracy has issues) ─
-        _content_rpt = st.session_state.get('content_accuracy_report')
-        if _content_rpt and _content_rpt.get('has_content_issues'):
-            _ci_list = _content_rpt.get('content_issues', [])
+        # Check both report sources: content_accuracy_detail (from _run_content_accuracy_check)
+        # and content_accuracy_report (from _run_text_accuracy_check / compare_files)
+        _content_rpt = st.session_state.get('content_accuracy_detail') or st.session_state.get('content_accuracy_report')
+        if _content_rpt:
+            # Support both compare_files (real_diffs) and content_accuracy_checker (content_issues) formats
+            _ci_list = _content_rpt.get('content_issues') or _content_rpt.get('real_diffs') or []
             _ci_count = len(_ci_list)
             if _ci_count > 0:
                 with st.expander(f"📊 Content Issues ({_ci_count} difference{'s' if _ci_count != 1 else ''})", expanded=False):
@@ -5601,11 +5604,12 @@ def show_results_section():
                     _ci_rows = []
                     for _ci in _ci_list[:30]:
                         _ci_type = str(_ci.get("type", "")).capitalize()
-                        _ci_pre = str(_ci.get("precleaned", "") or "—")[:80]
-                        _ci_out = str(_ci.get("output", "") or "—")[:80]
-                        _ci_cat = str(_ci.get("category", "") or "").replace("_", " ").title()
+                        # Support both field naming conventions
+                        _ci_pre = str(_ci.get("precleaned") or _ci.get("pymupdf_text") or _ci.get("missing_text") or "—")[:80]
+                        _ci_out = str(_ci.get("output") or _ci.get("converted_text") or _ci.get("extra_text") or "—")[:80]
+                        _ci_cat = str(_ci.get("category") or _ci.get("sub_type") or _ci.get("allowed_category") or "").replace("_", " ").title()
                         _ci_line = ""
-                        _ci_word_start = _ci.get("output_word_start")
+                        _ci_word_start = _ci.get("output_word_start") or _ci.get("j1")
                         if _ci_word_start is not None and _word_to_line:
                             _ci_line = str(_word_to_line.get(_ci_word_start, ""))
                         _ci_rows.append({

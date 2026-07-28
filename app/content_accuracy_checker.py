@@ -211,6 +211,28 @@ def _classify_difference(
                 "content_type": "header_block",
             }
 
+    # ── Table/column line-number markers (CT "T1", "T2", "T8 T9", etc.) ─
+    # Single or multiple uppercase letter + 1-3 digits — tab/column markers
+    # in PDF tables that the LLM correctly strips during cleanup.
+    if diff_type == "delete" and re.match(r"^(?:[A-Z]\d{1,3}\s*)+$", pre.strip()):
+        return {
+            "category": "artifact_removed",
+            "severity": "info",
+            "explanation": f"Table line-number marker correctly stripped: \"{pre}\"",
+            "is_expected": True,
+            "content_type": "page_artifact",
+        }
+
+    # ── Standalone line numbers (bare digits) ─────────────────────
+    if diff_type == "delete" and re.match(r"^\d{1,3}$", pre.strip()):
+        return {
+            "category": "artifact_removed",
+            "severity": "info",
+            "explanation": f"Line number correctly stripped: \"{pre}\"",
+            "is_expected": True,
+            "content_type": "page_artifact",
+        }
+
     # ── Content drop (paragraph or word level) ────────────────────
     if diff_type == "delete":
         if words_affected >= _LARGE_DROP_THRESHOLD:

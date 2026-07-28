@@ -94,6 +94,11 @@ _RE_PAGE_MARKER = re.compile(
 # missing-word candidate).
 _RE_LINE_NUMBER_ALONE = re.compile(r"^\s*\d{1,3}\s*$")
 
+# Letter-prefixed line/tab markers: "T1", "T2", "S3", etc.
+# CT bills use these as column/tab markers in the PDF.  They appear as
+# single uppercase-letter + 1-3 digits (e.g. "T1", "T12", "S3").
+_RE_LETTER_LINE_NUMBER = re.compile(r"^\s*(?:[A-Z]\d{1,3}\s*)+$")
+
 # Trailing line numbers: right-aligned 1-3 digit number at end of a content
 # line.  Used by ``strip_trailing_line_numbers`` (sequence-validated, so a
 # stray "rate of 5" at end of paragraph is never stripped).
@@ -566,6 +571,9 @@ def _classify_one(text: str, state_code: str | None) -> dict[str, Any] | None:
         # Standalone tiny number — most often a line number, but on some bills
         # also a page number.  Caller treats both the same way.
         return _hit(CAT_LINE_NUMBER, _RE_LINE_NUMBER_ALONE.pattern, "high")
+    if _RE_LETTER_LINE_NUMBER.match(text):
+        # Letter-prefixed tab/line marker (CT "T1", "T2", etc.)
+        return _hit(CAT_LINE_NUMBER, _RE_LETTER_LINE_NUMBER.pattern, "high")
     if _RE_PAGE_NUMBER.match(text):
         return _hit(CAT_PAGE_NUMBER, _RE_PAGE_NUMBER.pattern, "medium")
     if _RE_DATE_STAMP.match(text):
