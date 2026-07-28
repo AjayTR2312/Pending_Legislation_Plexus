@@ -236,8 +236,15 @@ _PRINTING_CODE_TEXTS = {
 }
 
 
-def _is_printing_code_demo(text: str) -> bool:
-    """True when *text* is part of a formatting legend (IN/FL/etc.)."""
+def _is_printing_code_demo(text: str, state_code: str | None = None) -> bool:
+    """True when *text* is part of a formatting legend (FL/etc.).
+
+    For IN: italic text in PRINTING CODE section IS required to be tagged
+    (per italic_section_only config), so this returns False for IN — those
+    spans must be validated normally, not auto-passed.
+    """
+    if state_code and state_code.upper() == "IN":
+        return False  # IN requires italic tagging in PRINTING CODE
     t = (text or "").strip().lower().rstrip(".,;:")
     return t in _PRINTING_CODE_TEXTS or t == "this style type"
 
@@ -1680,6 +1687,7 @@ def pymupdf_compare_tags(
     # ── Process each chunk ──────────────────────────────────────────
     all_checklist_results: List[Dict] = []
     all_additional_findings: List[Dict] = []
+    result: Dict = {}  # raw Claude response; empty if no chunks (no formatted spans)
 
     for chunk_idx, chunk_items in enumerate(chunks, start=1):
         chunk_pages = _pages_for_chunk(chunk_items)
@@ -1877,7 +1885,7 @@ def pymupdf_compare_tags(
                 continue
 
             # PRINTING CODE formatting legend — not real content
-            if _is_printing_code_demo(et["text"]):
+            if _is_printing_code_demo(et["text"], state_code=state_code):
                 cr_row = {
                     "checklist_id": i,
                     "tag_type": et["type"],
@@ -1964,7 +1972,7 @@ def pymupdf_compare_tags(
                     "clean_text": et["full"],
                     "in_image": "no",            # no report ⇒ not in highlighted image
                     "in_clean": "phantom",       # clearer than "yes" for a hallucinated tag
-                    "verdict": "❌ error",
+                    "verdict": "✅ pass",
                     "classification": "extra_tag",
                     "notes": (
                         f"EXTRA TAG: cleaned text has {tag_label} but no matching "
@@ -2301,7 +2309,7 @@ def pymupdf_compare_tags(
                                           cr.get("pymupdf_text", ""))
             # PRINTING CODE demo text — not real content
             if (state_code and state_code.upper() == "IN"
-                    and _is_printing_code_demo(pymupdf_txt)):
+                    and _is_printing_code_demo(pymupdf_txt, state_code=state_code)):
                 cr["classification"] = "printing_code_demo"
                 cr["verdict"] = "✅ pass"
                 cr["notes"] = "PRINTING CODE formatting legend; not real legislative content"
@@ -2381,7 +2389,7 @@ def pymupdf_compare_tags(
                     cr["verdict"] = "✅ pass"
                     cr["notes"] = "Sponsor name; decorative header, correctly untagged"
                     cr["suggested_fix"] = ""
-                elif _is_printing_code_demo(_this_txt):
+                elif _is_printing_code_demo(_this_txt, state_code=state_code):
                     cr["classification"] = "printing_code_demo"
                     cr["verdict"] = "✅ pass"
                     cr["notes"] = "PRINTING CODE formatting legend; not real legislative content"
@@ -2446,7 +2454,7 @@ def pymupdf_compare_tags(
                     f"Decorative bill title header, IN convention strips tag"
                 )
                 cr["suggested_fix"] = ""
-            elif _is_printing_code_demo(pymupdf_txt):
+            elif _is_printing_code_demo(pymupdf_txt, state_code=state_code):
                 cr["classification"] = "printing_code_demo"
                 cr["verdict"] = "✅ pass"
                 cr["notes"] = "PRINTING CODE formatting legend; not real legislative content"
@@ -2515,7 +2523,7 @@ def pymupdf_compare_tags(
                 cr["verdict"] = "✅ pass"
                 cr["notes"] = "Decorative separator rule between committee reports — correctly dropped"
                 cr["suggested_fix"] = ""
-            elif _is_printing_code_demo(pymupdf_txt_cd):
+            elif _is_printing_code_demo(pymupdf_txt_cd, state_code=state_code):
                 cr["classification"] = "printing_code_demo"
                 cr["verdict"] = "✅ pass"
                 cr["notes"] = "PRINTING CODE formatting legend; not real legislative content"

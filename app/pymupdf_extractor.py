@@ -1622,6 +1622,29 @@ def _extract_page_tagged_text(
             _ocr_spans, _total_spans,
         )
 
+    # -- 2e. Compute page-level dominant (body) font size ----------------
+    # Used to detect title/heading text that is significantly larger than
+    # body text.  Bold spans whose font size exceeds the body size by a
+    # factor of TITLE_FONT_SIZE_RATIO are treated as titles/headings and
+    # are excluded from [A>...<A] tagging (they are document structure,
+    # not legislative additions).  This handles e.g. IN "ENGROSSED HOUSE
+    # BILL No. 1018" which is bold but should NOT be tagged.
+    TITLE_FONT_SIZE_RATIO = 1.3  # span_size > body_size * ratio → title
+    _font_size_counts: dict = {}
+    for _blk in text_dict.get("blocks", []):
+        if _blk.get("type") != 0:
+            continue
+        for _ln in _blk.get("lines", []):
+            for _sp in _ln.get("spans", []):
+                _sp_text = _sp.get("text", "").strip()
+                if not _sp_text:
+                    continue
+                _sz = round(_sp.get("size", 12), 1)
+                _font_size_counts[_sz] = _font_size_counts.get(_sz, 0) + len(_sp_text)
+    _page_body_font_size = 12.0  # fallback
+    if _font_size_counts:
+        _page_body_font_size = max(_font_size_counts, key=_font_size_counts.get)
+
     output: List[str] = []
     in_add = False
     in_del = False
@@ -1929,6 +1952,10 @@ def _extract_page_tagged_text(
                         span_is_whitespace = span_text.strip() == ""
                         need_add = (s_ul and mark_underline) or (span_is_italic and mark_italic and not span_is_whitespace) or (span_is_bold and mark_bold and not span_is_whitespace)
                         need_del = s_so and mark_strikethrough
+                        # Suppress bold/italic tagging for title-sized text
+                        # (font significantly larger than body text)
+                        if need_add and font_size > _page_body_font_size * TITLE_FONT_SIZE_RATIO:
+                            need_add = False
                         # Suppress all tagging inside table zones
                         if line_in_table:
                             need_add = False
@@ -1986,6 +2013,9 @@ def _extract_page_tagged_text(
                     char_is_space = c.strip() == ""
                     need_add = (is_ul and mark_underline) or (span_is_italic and mark_italic and not char_is_space) or (span_is_bold and mark_bold and not char_is_space)
                     need_del = is_so and mark_strikethrough
+                    # Suppress bold/italic tagging for title-sized text
+                    if need_add and font_size > _page_body_font_size * TITLE_FONT_SIZE_RATIO:
+                        need_add = False
                     # Suppress all tagging inside table zones
                     if line_in_table:
                         need_add = False
@@ -3647,10 +3677,10 @@ _RE_IN_YEAR_FOOTER = re.compile(
     re.MULTILINE,
 )
 
-# Regex: Decorative divider lines tagged as underline — [A>____<A] or [A>———<A]
-# These are horizontal rules in the PDF that the underline detector wraps.
+# Regex: Decorative divider lines — tagged [A>____<A] or plain _____ or ———
+# These are horizontal rules in the PDF that may or may not be wrapped in tags.
 _RE_IN_DECORATIVE_LINE = re.compile(
-    r"^\s*\[A>[_\s\u2014\u2013\-]+<A\]\s*$",
+    r"^\s*(?:\[A>)?[_\s\u2014\u2013\-]{3,}(?:<A\])?\s*$",
     re.MULTILINE,
 )
 
@@ -5265,39 +5295,9 @@ def clean_extracted_text(
             len(raw_text), len(pre_cleaned),
         )
 
-    # ── PDF-based paragraph unwrapping ─────────────────────────────
-    # Join continuation lines using PDF layout boundaries and add
-    # TABLE markers around detected table regions.
-    _unwrapped_text = None  # Will hold the unwrapped+TABLE-marked text
-    if pdf_path:
-        try:
-            import sys as _sys
-            _opus_dir = str(Path(__file__).resolve().parent.parent / "Opus4.6")
-            if _opus_dir not in _sys.path:
-                _sys.path.insert(0, _opus_dir)
-            from paragraph_break_detector import pdf_unwrap_paragraphs, strip_table_markers
-            _before_unwrap = len(pre_cleaned)
-            pre_cleaned = pdf_unwrap_paragraphs(pre_cleaned, str(pdf_path))
-            _unwrapped_text = pre_cleaned  # Save before TABLE markers are stripped
-            logger.info(
-                "📐 PDF unwrap: %d → %d chars",
-                _before_unwrap, len(pre_cleaned),
-            )
-            # Save unwrapped text (with TABLE markers) for human readability
-            _unwrapped_path = str(Path(pdf_path).with_suffix('')) + "_unwrapped.txt"
-            with open(_unwrapped_path, "w", encoding="utf-8") as _uf:
-                _uf.write(pre_cleaned)
-            logger.info("📄 Unwrapped text saved to: %s", _unwrapped_path)
-        except Exception as _unwrap_err:
-            logger.warning("⚠️ PDF unwrap skipped: %s", _unwrap_err)
-
-    # Strip TABLE markers before sending to LLM (human-readability only)
+    # ── Save pre-cleaned text for reference (no unwrapping) ────────
+    _unwrapped_text = None
     _llm_pre_cleaned = pre_cleaned
-    try:
-        from paragraph_break_detector import strip_table_markers
-        _llm_pre_cleaned = strip_table_markers(pre_cleaned)
-    except ImportError:
-        pass
 
     # Build the user message: metadata (if any) + pre-cleaned text (markers stripped)
     user_content = metadata_prefix + _llm_pre_cleaned
@@ -7212,6 +7212,23 @@ def extract_pdf_json_report(
         if total_chars == 0:
             text_dict = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)
 
+        # -- Compute page-level dominant (body) font size for title detection --
+        TITLE_FONT_SIZE_RATIO = 1.3
+        _font_size_counts: dict = {}
+        for _blk in text_dict.get("blocks", []):
+            if _blk.get("type") != 0:
+                continue
+            for _ln in _blk.get("lines", []):
+                for _sp in _ln.get("spans", []):
+                    _sp_text = _sp.get("text", "").strip()
+                    if not _sp_text:
+                        continue
+                    _sz = round(_sp.get("size", 12), 1)
+                    _font_size_counts[_sz] = _font_size_counts.get(_sz, 0) + len(_sp_text)
+        _page_body_font_size = 12.0
+        if _font_size_counts:
+            _page_body_font_size = max(_font_size_counts, key=_font_size_counts.get)
+
         # -- Pass 1: collect margin line numbers --
         margin_nums: List[Tuple[float, int]] = []
         line_infos: List[Tuple[float, dict]] = []  # (y_mid, line_dict)
@@ -7302,6 +7319,10 @@ def extract_pdf_json_report(
                     if s_so and mark_strikethrough:   fmt.add("strikethrough")
                     if sp_italic and mark_italic:     fmt.add("italic")
                     if sp_bold and mark_bold:         fmt.add("bold")
+                    # Suppress bold/italic for title-sized text
+                    if fmt and font_size > _page_body_font_size * TITLE_FONT_SIZE_RATIO:
+                        fmt.discard("italic")
+                        fmt.discard("bold")
                     fs = frozenset(fmt)
                     for c in sp.get("text", ""):
                         char_entries.append((c, fs, s_bbox))
@@ -7331,6 +7352,10 @@ def extract_pdf_json_report(
                     if is_so and mark_strikethrough:   fmt.add("strikethrough")
                     if sp_italic and mark_italic:      fmt.add("italic")
                     if sp_bold and mark_bold:          fmt.add("bold")
+                    # Suppress bold/italic for title-sized text
+                    if fmt and font_size > _page_body_font_size * TITLE_FONT_SIZE_RATIO:
+                        fmt.discard("italic")
+                        fmt.discard("bold")
                     char_entries.append((c, frozenset(fmt), bbox))
 
             if not char_entries:

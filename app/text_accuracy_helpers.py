@@ -877,6 +877,38 @@ def strip_leading_line_numbers(
             if 1 <= bare_num <= max_num:
                 out_lines[idx] = eol
 
+        # ── Insert blank lines where line-number gaps indicate ───────
+        # paragraph breaks.  E.g. line numbers 3→5 means line 4 was
+        # blank in the PDF (paragraph break).  Build a combined sorted
+        # sequence of (line_index, line_number) from both content and
+        # bare candidates, then detect gaps.
+        all_numbered: list[tuple[int, int]] = []
+        for idx, num, _c, _e, _g in candidates:
+            all_numbered.append((idx, num))
+        for idx, num, _e in bare_candidates:
+            if 1 <= num <= max_num:
+                all_numbered.append((idx, num))
+        all_numbered.sort(key=lambda x: x[0])
+
+        # Walk the sequence looking for gaps within the same page
+        # (line numbers reset at page boundaries, so only flag gaps
+        # where the second number > first number and diff > 1).
+        insert_after: set[int] = set()  # line indices after which to insert blank
+        for j in range(len(all_numbered) - 1):
+            idx_a, num_a = all_numbered[j]
+            idx_b, num_b = all_numbered[j + 1]
+            if num_b > num_a and num_b - num_a > 1:
+                # Gap detected — insert blank line after idx_a
+                insert_after.add(idx_a)
+
+        if insert_after:
+            final_lines: list[str] = []
+            for idx, line in enumerate(out_lines):
+                final_lines.append(line)
+                if idx in insert_after:
+                    final_lines.append("\n")
+            out_lines = final_lines
+
         return "".join(out_lines)
 
     # ── Bare-only mode ──────────────────────────────────────────────

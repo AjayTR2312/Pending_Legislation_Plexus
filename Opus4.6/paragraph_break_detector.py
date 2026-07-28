@@ -297,52 +297,65 @@ def _format_table_block(lines: list[str]) -> list[str]:
 
 
 def pdf_unwrap_paragraphs(text: str, pdf_path: str) -> str:
-    """Unwrap multi-line paragraphs using PDF layout boundaries.
+    """Unwrap multi-line paragraphs into single lines.
 
-    Instead of regex heuristics, this uses ``extract_paragraph_boundaries()``
-    from :mod:`paragraph_accuracy_checker` to detect real paragraph starts
-    via x0 indentation, bold fonts, and vertical gaps.
-
-    Lines that are *not* paragraph starts and *not* structural elements
-    (page markers, headings, blank lines) are joined to the previous line.
-    Table regions are wrapped in ``---TABLE START/END---`` markers.
+    Uses pattern-based paragraph break detection to identify where
+    paragraphs start.  Lines that are *not* paragraph starts and *not*
+    structural elements (page markers, headings, blank lines) are joined
+    to the previous line.  Table regions are wrapped in
+    ``---TABLE START/END---`` markers.
 
     Parameters
     ----------
     text : str
         Pre-cleaned text (line numbers already stripped).
     pdf_path : str
-        Path to the source PDF for layout analysis.
+        Path to the source PDF (reserved for future use).
 
     Returns
     -------
     str
         Text with continuation lines joined and TABLE markers inserted.
     """
-    from pathlib import Path as _Path
+    # ── Step 0: Collapse double-spaced text ──────────────────────
+    # PyMuPDF often produces text with a blank line between every line.
+    # Detect this: if >50% of content lines are followed by exactly one
+    # blank line, collapse single blanks (keep runs of 2+ blanks as real
+    # paragraph separators).
+    raw_lines = text.split("\n")
+    content_count = 0
+    single_blank_after = 0
+    for idx in range(len(raw_lines) - 1):
+        if raw_lines[idx].strip():
+            content_count += 1
+            # Check if next line is blank and line after that is non-blank
+            if (not raw_lines[idx + 1].strip()
+                    and idx + 2 < len(raw_lines)
+                    and raw_lines[idx + 2].strip()):
+                single_blank_after += 1
 
-    # Import PDF paragraph boundary extractor
-    try:
-        import sys as _sys
-        _app_dir = str(_Path(__file__).resolve().parent.parent / "app")
-        if _app_dir not in _sys.path:
-            _sys.path.insert(0, _app_dir)
-        from paragraph_accuracy_checker import extract_paragraph_boundaries
-    except ImportError:
-        # Fallback: return text with regex-based unwrapping
-        return unwrap_paragraphs(text)
+    is_double_spaced = (content_count > 0
+                        and single_blank_after / content_count > 0.4)
 
-    # Extract PDF paragraph boundaries
-    boundaries = extract_paragraph_boundaries(pdf_path)
-
-    # Build a set of "first words" that start new paragraphs
-    # We'll match these against lines in the text
-    boundary_prefixes = set()
-    for b in boundaries:
-        # Normalize: strip leading whitespace, take first ~40 chars
-        prefix = b.first_words.strip()[:40]
-        if prefix:
-            boundary_prefixes.add(prefix)
+    if is_double_spaced:
+        collapsed: list[str] = []
+        i = 0
+        while i < len(raw_lines):
+            line = raw_lines[i]
+            if not line.strip():
+                # Count consecutive blank lines
+                blank_start = i
+                while i < len(raw_lines) and not raw_lines[i].strip():
+                    i += 1
+                blank_count = i - blank_start
+                if blank_count >= 2:
+                    # Real paragraph break — keep one blank
+                    collapsed.append("")
+                # Single blank between content lines — skip it
+            else:
+                collapsed.append(line)
+                i += 1
+        text = "\n".join(collapsed)
 
     # Detect table regions using existing two-pass detection
     results = detect_paragraph_breaks(text)
@@ -374,34 +387,87 @@ def pdf_unwrap_paragraphs(text: str, pdf_path: str) -> str:
             in_table = False
             output_lines.append("---TABLE END---")
 
-        # Structural lines: always keep on their own line
-        if (not stripped
-                or PATTERNS["page_separator"].match(stripped)
-                or PATTERNS["page_header"].match(stripped)
-                or PATTERNS["rule_heading"].match(stripped)
-                or PATTERNS["tagged_header"].match(stripped)):
+        # Blank lines: keep as-is (paragraph separator)
+        if not stripped:
             output_lines.append(line)
             i += 1
             continue
 
-        # Check if this line starts a new paragraph (PDF boundary match)
+        # Structural lines: always keep on their own line
+        if stripped.startswith("--- Page ") or PATTERNS["page_header"].match(stripped):
+            output_lines.append(line)
+            i += 1
+            continue
+
+        # Check if this line starts a new paragraph
         is_para_start = False
 
-        # Obvious structural paragraph starters
-        if (PATTERNS["alpha_subsection"].match(stripped)
-                or PATTERNS["numeric_subsection"].match(stripped)
-                or PATTERNS["numbered_list"].match(stripped)):
+        # Tagged headers/rules: [A>Rule N. ...<A] or [A>...<A] alone
+        if stripped.startswith("[A>"):
             is_para_start = True
-        else:
-            # Match against PDF boundary prefixes
-            for prefix in boundary_prefixes:
-                if stripped.startswith(prefix[:30]):
+        # Lettered subsection: (a) , (b) , etc.
+        elif (len(stripped) > 3 and stripped[0] == "("
+              and stripped[1].isalpha() and stripped[2] == ")"
+              and (len(stripped) < 4 or stripped[3] == " ")):
+            is_para_start = True
+        # Numbered subsection: (1) , (2) , (10) , etc.
+        elif (stripped[0] == "(" and stripped.find(") ") < 5
+              and stripped[1:stripped.find(")")].isdigit()):
+            is_para_start = True
+        # Numbered list: 1. , 2. , 10. , etc.
+        elif (stripped[0].isdigit()
+              and "." in stripped[:4]
+              and stripped[:stripped.index(".")].isdigit()
+              and stripped[stripped.index("."):].startswith(". ")):
+            is_para_start = True
+        # SECTION N, ARTICLE N, CHAPTER N
+        elif any(stripped.startswith(h) and len(stripped) > len(h)
+                 and stripped[len(h)] == " "
+                 and stripped[len(h) + 1:len(h) + 2].isdigit()
+                 for h in ("SECTION ", "ARTICLE ", "CHAPTER ")):
+            is_para_start = True
+        # ALL-CAPS lines ≥ 15 chars (only first line of a caps block)
+        elif (len(stripped) >= 15 and stripped == stripped.upper()
+              and any(c.isalpha() for c in stripped)):
+            prev_text = output_lines[-1].strip() if output_lines else ""
+            if not (prev_text and prev_text == prev_text.upper()
+                    and any(c.isalpha() for c in prev_text)):
+                is_para_start = True
+        # Common legislative headings
+        elif stripped.lower().startswith(("for an act to be entitled",
+                                          "subtitle", "be it enacted",
+                                          "be it resolved", "be it ordained",
+                                          "preamble", "whereas",
+                                          "now, therefore", "now therefore")):
+            is_para_start = True
+
+        # Previous line ends with sentence-ending punctuation → new paragraph
+        if (not is_para_start and output_lines and output_lines[-1].strip()):
+            prev = output_lines[-1].rstrip()
+            # Page markers always force a new paragraph after them
+            if prev.startswith("--- Page "):
+                is_para_start = True
+            # Strip trailing tags like <A] to check the real ending
+            if not is_para_start and prev.endswith("<A]"):
+                prev = prev[:prev.rfind("<A]")].rstrip()
+            if not is_para_start and prev and prev[-1] in ".?!:":
+                is_para_start = True
+            # Decorative/separator lines (underscores, dashes, etc.) → next line is new para
+            if not is_para_start:
+                _prev_content = re.sub(r"\[A>|<A\]|\[D>|<D\]", "", prev).strip()
+                if _prev_content and all(c in "_-=~*. " for c in _prev_content):
                     is_para_start = True
-                    break
+            # ALL-CAPS heading lines → next line is new para
+            if not is_para_start:
+                _prev_plain = re.sub(r"\[A>|<A\]|\[D>|<D\]", "", prev).strip()
+                if (len(_prev_plain) >= 4
+                        and _prev_plain == _prev_plain.upper()
+                        and any(c.isalpha() for c in _prev_plain)):
+                    is_para_start = True
 
         if is_para_start or not output_lines or not output_lines[-1].strip():
             # Start a new paragraph — add blank line separator if previous
-            # line has content (keeps readability consistent with tables)
+            # line has content (keeps readability)
             if output_lines and output_lines[-1].strip():
                 output_lines.append("")
             output_lines.append(stripped)

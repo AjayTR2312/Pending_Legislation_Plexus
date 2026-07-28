@@ -1755,6 +1755,16 @@ def _run_text_accuracy_check(
                 if _meta:
                     set_pdf_metadata_allowlist(_meta)
                     add_log("📋 PDF metadata loaded for header/footer allowlist")
+                    # Save metadata JSON alongside accuracy artifacts
+                    try:
+                        import json as _json
+                        _meta_path = str(Path(pdf_path).with_suffix('')) + "_metadata.json"
+                        Path(_meta_path).parent.mkdir(parents=True, exist_ok=True)
+                        with open(_meta_path, "w", encoding="utf-8") as _mf:
+                            _json.dump(_meta, _mf, indent=2, ensure_ascii=False, default=str)
+                        add_log(f"📋 PDF metadata saved: {Path(_meta_path).name}")
+                    except Exception as _save_err:
+                        logging.debug("Could not save PDF metadata: %s", _save_err)
             except Exception as _meta_err:
                 logging.debug("Could not load PDF metadata for allowlist: %s", _meta_err)
 
@@ -1881,6 +1891,8 @@ def _run_content_accuracy_check(
     add_log,
     *,
     save_to: str | None = None,
+    pdf_metadata: dict | None = None,
+    pdf_path: str | None = None,
 ):
     """Run word-level content accuracy check (precleaned vs final output).
 
@@ -1919,8 +1931,32 @@ def _run_content_accuracy_check(
         logging.warning("content_accuracy_checker not available")
         return None
 
+    # Load PDF metadata for header/footer recognition if not provided
+    if pdf_metadata is None and pdf_path:
+        try:
+            import json as _json
+            _meta_path = str(Path(pdf_path).with_suffix('')) + "_metadata.json"
+            if Path(_meta_path).exists():
+                with open(_meta_path, "r", encoding="utf-8") as _mf:
+                    pdf_metadata = _json.load(_mf)
+        except Exception:
+            pass
+
+    # Load detected artifacts from removals report if available
+    _detected_artifacts = None
+    if save_to:
+        import json as _json2
+        _removals_path = save_to.replace("_content_accuracy.json", "_removals.json")
+        if Path(_removals_path).exists():
+            try:
+                with open(_removals_path, "r", encoding="utf-8") as _rf:
+                    _rm_data = _json2.load(_rf)
+                _detected_artifacts = _rm_data.get("detected_artifacts", [])
+            except Exception:
+                pass
+
     try:
-        report = check_content_accuracy(precleaned_text, output_text)
+        report = check_content_accuracy(precleaned_text, output_text, metadata=pdf_metadata, detected_artifacts=_detected_artifacts)
         st.session_state.content_accuracy_detail = report
 
         _acc = report["accuracy_pct"]
@@ -2398,7 +2434,7 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
                     add_cfg = state_config.get("add_markup", {})
                     del_cfg = state_config.get("delete_markup", {})
                     _mark_flags["mark_underline"] = add_cfg.get("underline", True)
-                    _mark_flags["mark_italic"] = add_cfg.get("italic", False) or del_cfg.get("italic", False)
+                    _mark_flags["mark_italic"] = add_cfg.get("italic", False) or del_cfg.get("italic", False) or bool(add_cfg.get("italic_section_only"))
                     _mark_flags["mark_bold"] = add_cfg.get("bold", False)
                     _mark_flags["mark_strikethrough"] = del_cfg.get("strike_out", True)
                     _mark_flags["mark_brackets"] = add_cfg.get("brackets", False) or del_cfg.get("brackets", False)
@@ -2489,53 +2525,6 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
                         df.write(_diff_report)
                     add_log(f"📋 LLM diff report saved: {diff_path}")
 
-                # Surface extraction-validator anomalies (read-only watchdog
-                # added by extraction_validator.py).  Persist as JSON for
-                # offline triage and render a Streamlit banner inline so QA
-                # users notice layout regressions before downstream tools do.
-                _anomalies = getattr(clean_extracted_text, '_last_anomalies', None) or []
-                if _anomalies:
-                    anomalies_path = pymupdf_clean_path.replace(
-                        "_pymupdf_clean.txt", "_extraction_anomalies.json"
-                    )
-                    try:
-                        with open(anomalies_path, "w", encoding="utf-8") as af:
-                            _json.dump(
-                                [
-                                    {
-                                        "kind": a.kind,
-                                        "severity": a.severity,
-                                        "description": a.description,
-                                        "snippet": a.snippet,
-                                        "char_offset": a.char_offset,
-                                        "page_number": a.page_number,
-                                        "state_code": a.state_code,
-                                        "pdf_basename": a.pdf_basename,
-                                    }
-                                    for a in _anomalies
-                                ],
-                                af,
-                                indent=2,
-                            )
-                        add_log(
-                            f"⚠️ {len(_anomalies)} extraction anomalies detected → {anomalies_path}",
-                            "warning",
-                        )
-                    except Exception as _aexc:
-                        logging.warning(f"Could not save anomaly report: {_aexc}")
-                    _render_extraction_anomaly_banner(_anomalies)
-                    # Store for Summary tab display
-                    st.session_state['_extraction_anomalies'] = [
-                        {
-                            "kind": a.kind,
-                            "severity": a.severity,
-                            "description": a.description,
-                            "snippet": a.snippet,
-                            "page_number": a.page_number,
-                        }
-                        for a in _anomalies
-                    ]
-
                 # Rebuild report context using cleaned text for better anchor matching
                 if pymupdf_report:
                     try:
@@ -2575,24 +2564,6 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
         st.session_state.content_accuracy_report = None
         _removals_json = output_path.replace(".txt", "_removals.json") if output_path else None
         _accuracy_json = output_path.replace(".txt", "_accuracy.json") if output_path else None
-        _para_json = output_path.replace(".txt", "_paragraph_accuracy.json") if output_path else None
-
-        from concurrent.futures import ThreadPoolExecutor
-
-        # Launch paragraph accuracy in background (PDF I/O, no st.session_state)
-        def _run_para_acc():
-            try:
-                from paragraph_accuracy_checker import check_paragraph_accuracy
-                return check_paragraph_accuracy(
-                    pdf_path, converted_text, state_code=detected_state,
-                )
-            except Exception as e:
-                logging.warning("Paragraph accuracy check failed: %s", e)
-                return None
-
-        _para_executor = ThreadPoolExecutor(max_workers=1)
-        _fut_para = _para_executor.submit(_run_para_acc)
-
         # Text accuracy on main thread (uses st.session_state)
         _run_text_accuracy_check(
             raw_text=pymupdf_text,
@@ -2611,6 +2582,7 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
             output_text=converted_text,
             add_log=add_log,
             save_to=_content_acc_json,
+            pdf_path=st.session_state.get('temp_pdf_path'),
         )
 
         _para_report = _fut_para.result()
@@ -2873,7 +2845,7 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
             add_cfg = state_config.get("add_markup", {})
             del_cfg = state_config.get("delete_markup", {})
             _mark_flags["mark_underline"] = add_cfg.get("underline", True)
-            _mark_flags["mark_italic"] = add_cfg.get("italic", False) or del_cfg.get("italic", False)
+            _mark_flags["mark_italic"] = add_cfg.get("italic", False) or del_cfg.get("italic", False) or bool(add_cfg.get("italic_section_only"))
             _mark_flags["mark_bold"] = add_cfg.get("bold", False)
             _mark_flags["mark_strikethrough"] = del_cfg.get("strike_out", True)
             _mark_flags["mark_brackets"] = add_cfg.get("brackets", False) or del_cfg.get("brackets", False)
@@ -2955,6 +2927,12 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
         update_progress()
         add_log(f"✅ Clean text: {len(pymupdf_text):,} → {len(pymupdf_clean_text):,} chars")
 
+        # ── Conversion milestone (extraction + LLM clean) ────────────────────────
+        conversion_elapsed = time.time() - start_time
+        st.session_state.conversion_elapsed_secs = conversion_elapsed
+        _cm, _cs = int(conversion_elapsed // 60), int(conversion_elapsed % 60)
+        st.session_state.conversion_time = f"{_cm}m {_cs}s" if _cm > 0 else f"{_cs}s"
+
         # Save pre-cleaned text (what the LLM received as input)
         _pre_cleaned = getattr(clean_extracted_text, '_last_pre_cleaned', None)
         if _pre_cleaned:
@@ -2973,51 +2951,6 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
             with open(diff_path, "w", encoding="utf-8") as df:
                 df.write(_diff_report)
             add_log(f"📋 LLM diff report saved")
-
-        # Extraction-validator anomalies (passive watchdog) — mirrors the
-        # main pipeline.  See extraction_validator.py.
-        _anomalies = getattr(clean_extracted_text, '_last_anomalies', None) or []
-        if _anomalies:
-            anomalies_path = pymupdf_json_path.replace(
-                "_report.json", "_extraction_anomalies.json"
-            )
-            try:
-                with open(anomalies_path, "w", encoding="utf-8") as af:
-                    _json.dump(
-                        [
-                            {
-                                "kind": a.kind,
-                                "severity": a.severity,
-                                "description": a.description,
-                                "snippet": a.snippet,
-                                "char_offset": a.char_offset,
-                                "page_number": a.page_number,
-                                "state_code": a.state_code,
-                                "pdf_basename": a.pdf_basename,
-                            }
-                            for a in _anomalies
-                        ],
-                        af,
-                        indent=2,
-                    )
-                add_log(
-                    f"⚠️ {len(_anomalies)} extraction anomalies detected → {anomalies_path}",
-                    "warning",
-                )
-            except Exception as _aexc:
-                logging.warning(f"Could not save anomaly report: {_aexc}")
-            _render_extraction_anomaly_banner(_anomalies)
-            # Store for Summary tab display
-            st.session_state['_extraction_anomalies'] = [
-                {
-                    "kind": a.kind,
-                    "severity": a.severity,
-                    "description": a.description,
-                    "snippet": a.snippet,
-                    "page_number": a.page_number,
-                }
-                for a in _anomalies
-            ]
 
         # Rebuild report context using cleaned text for better anchor matching
         if pymupdf_report:
@@ -3057,21 +2990,6 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
             _clean_lines = set(pymupdf_clean_text.splitlines())
             _llm_removed = [l for l in _pre_lines - _clean_lines if l.strip()]
         from concurrent.futures import ThreadPoolExecutor
-        _para_json = output_path.replace(".txt", "_paragraph_accuracy.json") if output_path else None
-
-        # Launch paragraph accuracy in background (PDF I/O, no st.session_state)
-        def _run_para_acc():
-            try:
-                from paragraph_accuracy_checker import check_paragraph_accuracy
-                return check_paragraph_accuracy(
-                    pdf_path, pymupdf_clean_text, state_code=detected_state,
-                )
-            except Exception as e:
-                logging.warning("Paragraph accuracy check failed: %s", e)
-                return None
-
-        _para_executor = ThreadPoolExecutor(max_workers=1)
-        _fut_para = _para_executor.submit(_run_para_acc)
 
         # Text accuracy on main thread (uses st.session_state)
         _run_text_accuracy_check(
@@ -3092,25 +3010,8 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
             output_text=pymupdf_clean_text,
             add_log=add_log,
             save_to=_content_acc_json,
+            pdf_path=st.session_state.get('temp_pdf_path'),
         )
-
-        _para_report = _fut_para.result()
-        _para_executor.shutdown(wait=False)
-
-        if _para_report:
-            _para_acc = _para_report.get("accuracy_pct", 100.0)
-            _splits = len(_para_report.get("splits_needed", []))
-            _merges = len(_para_report.get("merges_needed", []))
-            _total = _para_report.get("total_boundaries", 0)
-            st.session_state.paragraph_accuracy_report = _para_report
-            if _splits or _merges:
-                add_log(f"📐 Paragraph accuracy: {_para_acc:.1f}% ({_total} boundaries — {_splits} splits, {_merges} merges needed)")
-            else:
-                add_log(f"📐 Paragraph accuracy: {_para_acc:.1f}% ({_total} boundaries — all correct)")
-            if _para_json:
-                import json as _json
-                with open(_para_json, "w", encoding="utf-8") as _pf:
-                    _json.dump(_para_report, _pf, indent=2, default=str)
 
         # ── Step 6: Tag Validation (PyMuPDF report → clean text) ────────────
         # 1. Render highlighted PDF page images
@@ -3388,7 +3289,7 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
             add_cfg = state_config.get("add_markup", {})
             del_cfg = state_config.get("delete_markup", {})
             _mark_flags["mark_underline"] = add_cfg.get("underline", True)
-            _mark_flags["mark_italic"] = add_cfg.get("italic", False) or del_cfg.get("italic", False)
+            _mark_flags["mark_italic"] = add_cfg.get("italic", False) or del_cfg.get("italic", False) or bool(add_cfg.get("italic_section_only"))
             _mark_flags["mark_bold"] = add_cfg.get("bold", False)
             _mark_flags["mark_strikethrough"] = del_cfg.get("strike_out", True)
             _mark_flags["mark_brackets"] = add_cfg.get("brackets", False) or del_cfg.get("brackets", False)
@@ -3541,26 +3442,11 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
         st.session_state.gpt_audit_failed = False
         st.session_state.content_accuracy_report = None
 
-        # ── Content Accuracy + Paragraph Accuracy (parallel) ────────────
+        # ── Content Accuracy ───────────────────────────────────────────
         _removals_json = output_path.replace(".txt", "_removals.json") if output_path else None
         _accuracy_json = output_path.replace(".txt", "_accuracy.json") if output_path else None
-        _para_json = output_path.replace(".txt", "_paragraph_accuracy.json") if output_path else None
 
         from concurrent.futures import ThreadPoolExecutor
-
-        # Launch paragraph accuracy in background (PDF I/O, no st.session_state)
-        def _run_para_acc():
-            try:
-                from paragraph_accuracy_checker import check_paragraph_accuracy
-                return check_paragraph_accuracy(
-                    pdf_path, converted_text, state_code=detected_state,
-                )
-            except Exception as e:
-                logging.warning("Paragraph accuracy check failed: %s", e)
-                return None
-
-        _para_executor = ThreadPoolExecutor(max_workers=1)
-        _fut_para = _para_executor.submit(_run_para_acc)
 
         # Text accuracy runs on main thread (uses st.session_state via add_log)
         add_log(f"🔍 Accuracy check inputs: pymupdf_text={len(pymupdf_text):,} chars, converted_text={len(converted_text):,} chars")
@@ -3582,34 +3468,8 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
             output_text=converted_text,
             add_log=add_log,
             save_to=_content_acc_json,
+            pdf_path=st.session_state.get('temp_pdf_path'),
         )
-
-        # Collect paragraph accuracy result
-        _para_report = _fut_para.result()
-        _para_executor.shutdown(wait=False)
-
-        if _para_report:
-            _para_acc = _para_report.get("accuracy_pct", 100.0)
-            _splits = len(_para_report.get("splits_needed", []))
-            _merges = len(_para_report.get("merges_needed", []))
-            _total = _para_report.get("total_boundaries", 0)
-            st.session_state.paragraph_accuracy_report = _para_report
-
-            if _splits or _merges:
-                add_log(
-                    f"📐 Paragraph accuracy: {_para_acc:.1f}% "
-                    f"({_total} boundaries — {_splits} splits, {_merges} merges needed)"
-                )
-            else:
-                add_log(f"📐 Paragraph accuracy: {_para_acc:.1f}% ({_total} boundaries — all correct)")
-
-            if _para_json:
-                import json as _json
-                with open(_para_json, "w", encoding="utf-8") as _pf:
-                    _json.dump(_para_report, _pf, indent=2, default=str)
-                add_log(f"📐 Paragraph accuracy report saved: {Path(_para_json).name}")
-        else:
-            add_log("⚠️ Paragraph accuracy check skipped", "warning")
 
         # ── Step 6: Claude Opus 4.7 Audit (Validation Report) ─────────────
         st.session_state.current_step = 5
@@ -5465,8 +5325,6 @@ def show_results_section():
     if _show_pdf_compare:
         tab_labels.append("📄 PDF ↔ Text Compare")
     tab_labels.append("📊 Summary")
-    if not _skip_validation and (_has_audit or _has_accuracy or _has_highlighted or _audit_failed) and render_inline_validation_review:
-        tab_labels.append("🔍 Validation Review")
     if st.session_state.get('processing_logs'):
         tab_labels.append("📋 Activity Log")
 
@@ -5573,23 +5431,6 @@ def show_results_section():
             f'<span style="font-weight:800;">{_size_label}</span></div>'
         )
 
-        # Text accuracy chip (raw PyMuPDF vs cleaned output)
-        _acc_chip = ""
-        _acc_report = st.session_state.get('content_accuracy_report')
-        if _acc_report:
-            _acc_val = _acc_report.get('accuracy', 0)
-            if _acc_val >= 99:
-                _acc_bg, _acc_fg, _acc_bdr = '#f0fdf4', '#166534', '#bbf7d0'
-            elif _acc_val >= 95:
-                _acc_bg, _acc_fg, _acc_bdr = '#fefce8', '#854d0e', '#fde68a'
-            else:
-                _acc_bg, _acc_fg, _acc_bdr = '#fef2f2', '#991b1b', '#fecaca'
-            _acc_chip = (
-                f'<div style="{_chip} background:{_acc_bg}; color:{_acc_fg}; border:1px solid {_acc_bdr};">'
-                f'<span style="font-size:1rem;">🔍</span> Text Accuracy '
-                f'<span style="font-weight:800;">{_acc_val:.1f}%</span></div>'
-            )
-
         # Content accuracy chip (precleaned vs final output — word-level)
         _content_acc_chip = ""
         _content_rpt = st.session_state.get('content_accuracy_detail')
@@ -5611,36 +5452,42 @@ def show_results_section():
             _content_acc_chip = (
                 f'<div style="{_chip} background:{_ca_bg}; color:{_ca_fg}; border:1px solid {_ca_bdr};">'
                 f'<span style="font-size:1rem;">📊</span> Content Accuracy '
-                f'<span style="font-weight:800;">{_content_val:.1f}%</span>'
+                f'<span style="font-weight:800;">{_content_val:.2f}%</span>'
                 f'<span style="font-size:0.75rem; font-weight:400; margin-left:4px;">{_ca_detail}</span></div>'
             )
 
-        # Paragraph accuracy chip
-        _para_chip = ""
-        _para_rpt = st.session_state.get('paragraph_accuracy_report')
-        if _para_rpt:
-            _para_val = _para_rpt.get('accuracy_pct', 100.0)
-            _para_splits = len(_para_rpt.get('splits_needed', []))
-            _para_merges = len(_para_rpt.get('merges_needed', []))
-            _para_total = _para_rpt.get('total_boundaries', 0)
-            _para_correct = _para_rpt.get('correct_boundaries', 0)
-            if _para_val >= 99:
-                _p_bg, _p_fg, _p_bdr = '#f0fdf4', '#166534', '#bbf7d0'
-            elif _para_val >= 95:
-                _p_bg, _p_fg, _p_bdr = '#fefce8', '#854d0e', '#fde68a'
+        # Tag accuracy chip (from audit counts)
+        _tag_acc_chip = ""
+        _cached_audit = st.session_state.get('audit_counts')
+        if isinstance(_cached_audit, dict):
+            _ta_total = int(_cached_audit.get('total_checklist') or 0)
+            _ta_pass = int(_cached_audit.get('passes') or 0)
+            _ta_err = int(_cached_audit.get('errors') or 0)
+            _ta_warn = int(_cached_audit.get('warnings') or 0)
+            if _ta_total == 0:
+                # No formatted spans detected — nothing to tag
+                _ta_pct = 100.0
+                _ta_bg, _ta_fg, _ta_bdr = '#f0fdf4', '#166534', '#bbf7d0'
+                _ta_detail = " (No formatting modifications detected — no tagging required)"
             else:
-                _p_bg, _p_fg, _p_bdr = '#fef2f2', '#991b1b', '#fecaca'
-            _para_detail = f" ({_para_correct}/{_para_total}"
-            if _para_splits:
-                _para_detail += f", {_para_splits} split{'s' if _para_splits != 1 else ''}"
-            if _para_merges:
-                _para_detail += f", {_para_merges} merge{'s' if _para_merges != 1 else ''}"
-            _para_detail += ")"
-            _para_chip = (
-                f'<div style="{_chip} background:{_p_bg}; color:{_p_fg}; border:1px solid {_p_bdr};">'
-                f'<span style="font-size:1rem;">📐</span> Paragraph Accuracy '
-                f'<span style="font-weight:800;">{_para_val:.1f}%</span>'
-                f'<span style="font-size:0.75rem; font-weight:400; margin-left:4px;">{_para_detail}</span></div>'
+                _ta_pct = (_ta_pass / _ta_total * 100.0)
+                if _ta_pct >= 99:
+                    _ta_bg, _ta_fg, _ta_bdr = '#f0fdf4', '#166534', '#bbf7d0'
+                elif _ta_pct >= 95:
+                    _ta_bg, _ta_fg, _ta_bdr = '#fefce8', '#854d0e', '#fde68a'
+                else:
+                    _ta_bg, _ta_fg, _ta_bdr = '#fef2f2', '#991b1b', '#fecaca'
+                _ta_detail = f" ({_ta_pass}/{_ta_total}"
+                if _ta_err:
+                    _ta_detail += f", {_ta_err} error{'s' if _ta_err != 1 else ''}"
+                if _ta_warn:
+                    _ta_detail += f", {_ta_warn} warning{'s' if _ta_warn != 1 else ''}"
+                _ta_detail += ")"
+            _tag_acc_chip = (
+                f'<div style="{_chip} background:{_ta_bg}; color:{_ta_fg}; border:1px solid {_ta_bdr};">'
+                f'<span style="font-size:1rem;">🏷️</span> Tag Accuracy '
+                f'<span style="font-weight:800;">{_ta_pct:.1f}%</span>'
+                f'<span style="font-size:0.75rem; font-weight:400; margin-left:4px;">{_ta_detail}</span></div>'
             )
 
         _summary_html = (
@@ -5652,7 +5499,7 @@ def show_results_section():
             f'{_state_pill}'
             '</div>'
             '<div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px;">'
-            f'{_conv_chip}{_val_chip}{_size_chip}{_acc_chip}{_content_acc_chip}{_para_chip}'
+            f'{_conv_chip}{_val_chip}{_size_chip}{_content_acc_chip}{_tag_acc_chip}'
             '</div>'
             '<div style="background:#f8fafc; border-radius:8px; padding:8px 16px;'
             ' display:flex; align-items:center; justify-content:space-between;'
@@ -5662,113 +5509,120 @@ def show_results_section():
             '</div>'
             '<p style="margin:12px 0 0; font-size:0.82rem; color:#64748b;">'
             'Your PDF has been converted to tagged legislative text with Claude Opus 4.6. '
-            f'{"Click the <b>Validation Review</b> tab to compare against the original PDF." if _has_audit else ""}'
+            'Review the chips above for accuracy metrics.'
             '</p></div>'
         )
         st.markdown(_summary_html, unsafe_allow_html=True)
 
-        # ── Extraction anomalies (if any) ─────────────────────────────────
-        _anomalies_data = st.session_state.get('_extraction_anomalies', [])
-        if _anomalies_data:
-            _n_anom = len(_anomalies_data)
-            st.warning(f"🚨 {_n_anom} extraction anomal{'ies' if _n_anom != 1 else 'y'} detected")
-            with st.expander("Show anomaly details", expanded=False):
-                for _idx_a, _a in enumerate(_anomalies_data):
-                    _pg = f" (page {_a['page_number']})" if _a.get('page_number') else ""
-                    _sev_icon = "🔴" if _a['severity'] == "error" else "🟡" if _a['severity'] == "warning" else "ℹ️"
-                    st.markdown(
-                        f"{_sev_icon} **{_a['kind']}**{_pg}\n\n"
-                        f"> {_a['description']}",
-                    )
-                    if _a.get('snippet'):
-                        # Unescape \n to real newlines and trim for readability
-                        _snip = _a['snippet'].replace('\\n', '\n')[:300]
-                        st.code(_snip, language=None)
-                    if _idx_a < len(_anomalies_data) - 1:
-                        st.divider()
+        # ── Tag Issues (compact, only when tag accuracy < 100%) ───────────
+        if isinstance(_cached_audit, dict):
+            _ta_err_count = int(_cached_audit.get('errors') or 0)
+            _ta_warn_count = int(_cached_audit.get('warnings') or 0)
+            if _ta_err_count > 0 or _ta_warn_count > 0:
+                _issue_label = []
+                if _ta_err_count:
+                    _issue_label.append(f"{_ta_err_count} error{'s' if _ta_err_count != 1 else ''}")
+                if _ta_warn_count:
+                    _issue_label.append(f"{_ta_warn_count} warning{'s' if _ta_warn_count != 1 else ''}")
+                with st.expander(f"🏷️ Tag Issues ({', '.join(_issue_label)})", expanded=False):
+                    # Try to load from the audit Excel
+                    _excel_path = st.session_state.get('audit_excel_path')
+                    if _excel_path and os.path.exists(_excel_path):
+                        try:
+                            import openpyxl as _xl
+                            _wb = _xl.load_workbook(str(_excel_path), read_only=True, data_only=True)
+                            _ws = _wb["Checklist Audit"]
+                            _rows = list(_ws.iter_rows(min_row=4, values_only=True))
+                            _wb.close()
+                            if _rows:
+                                _hdrs = [str(h).strip() if h else f"col{i}" for i, h in enumerate(_rows[0])]
+                                _all_items = [dict(zip(_hdrs, r)) for r in _rows[1:] if r[0] is not None]
+                                _issue_items = [
+                                    r for r in _all_items
+                                    if str(r.get("Verdict", "")).startswith("❌")
+                                    or str(r.get("Verdict", "")).startswith("⚠")
+                                ]
+                                if _issue_items:
+                                    _tbl_rows = []
+                                    for _it in _issue_items[:30]:  # cap at 30
+                                        _verdict = str(_it.get("Verdict", ""))
+                                        _status = "❌ Error" if _verdict.startswith("❌") else "⚠️ Warning"
+                                        _page = str(_it.get("Page", "") or "")
+                                        _line = str(_it.get("Line", "") or "")
+                                        _text = str(_it.get("PyMuPDF Text", "") or _it.get("Clean Text", "") or "")[:80]
+                                        _note = str(_it.get("Notes", "") or "")[:120]
+                                        _fix = str(_it.get("Suggested Fix", "") or "")[:120]
+                                        _tbl_rows.append({
+                                            "Status": _status,
+                                            "Page": _page,
+                                            "Line": _line,
+                                            "Text": _text,
+                                            "Issue": _note,
+                                            "Suggested Fix": _fix,
+                                        })
+                                    import pandas as _pd
+                                    st.dataframe(
+                                        _pd.DataFrame(_tbl_rows),
+                                        use_container_width=True,
+                                        hide_index=True,
+                                    )
+                                    if len(_issue_items) > 30:
+                                        st.caption(f"Showing first 30 of {len(_issue_items)} issues. Download the audit Excel for the full list.")
+                        except Exception as _tag_ex:
+                            st.caption(f"Could not load tag issues: {_tag_ex}")
+                    else:
+                        st.caption("Audit Excel not available — re-run processing to generate.")
 
-        # ── Audit metrics (Total Items / Pass / Warnings / Errors) ────────
-        if _has_audit:
-            # ── 1. Pull counts ──────────────────────────────────────────────
-            # Prefer the in-memory snapshot saved right after the audit ran
-            # (fast, exact, no I/O). Fall back to re-parsing the Excel when
-            # the user revisits the page after a process restart.
-            _n_total = _n_pass = _n_warn = _n_err = None
-            _n_add = 0
-            _cached = st.session_state.get('audit_counts')
-            if isinstance(_cached, dict) and _cached.get('total_checklist'):
-                _n_total = int(_cached.get('total_checklist') or 0)
-                _n_pass  = int(_cached.get('passes') or 0)
-                _n_warn  = int(_cached.get('warnings') or 0)
-                _n_err   = int(_cached.get('errors') or 0)
-                _n_add   = int(_cached.get('additional_findings') or 0)
-            else:
-                try:
-                    import openpyxl as _xl
-                    _wb = _xl.load_workbook(str(st.session_state.audit_excel_path), read_only=True, data_only=True)
-                    _ws = _wb["Checklist Audit"]
-                    _rows = list(_ws.iter_rows(min_row=4, values_only=True))
-                    _wb.close()
-                    if _rows:
-                        _headers = [str(h).strip() if h else f"col{i}" for i, h in enumerate(_rows[0])]
-                        _cl = [dict(zip(_headers, r)) for r in _rows[1:] if r[0] is not None]
-                        _n_total = len(_cl)
-                        _n_pass  = sum(1 for r in _cl if str(r.get("Verdict", "")).startswith("\u2705"))
-                        _n_warn  = sum(1 for r in _cl if str(r.get("Verdict", "")).startswith("\u26a0"))
-                        _n_err   = sum(1 for r in _cl if str(r.get("Verdict", "")).startswith("\u274c"))
-                except Exception:
-                    pass  # audit metrics are nice-to-have; don't break Summary tab
+        # ── Content Issues (compact, only when content accuracy has issues) ─
+        _content_rpt = st.session_state.get('content_accuracy_report')
+        if _content_rpt and _content_rpt.get('has_content_issues'):
+            _ci_list = _content_rpt.get('content_issues', [])
+            _ci_count = len(_ci_list)
+            if _ci_count > 0:
+                with st.expander(f"📊 Content Issues ({_ci_count} difference{'s' if _ci_count != 1 else ''})", expanded=False):
+                    # Build word-index-to-line-number map from the output text
+                    _out_text_for_lines = None
+                    _out_path = st.session_state.get('processed_file_path')
+                    if _out_path and os.path.exists(_out_path):
+                        try:
+                            with open(_out_path, 'r', encoding='utf-8') as _of:
+                                _out_text_for_lines = _of.read()
+                        except Exception:
+                            pass
+                    _word_to_line = {}
+                    if _out_text_for_lines:
+                        _w_idx = 0
+                        for _ln_no, _ln_text in enumerate(_out_text_for_lines.splitlines(), start=1):
+                            _ln_words = _ln_text.split()
+                            for _ in _ln_words:
+                                _word_to_line[_w_idx] = _ln_no
+                                _w_idx += 1
 
-            # ── 2. Prominent status banner ──────────────────────────────────
-            # Symmetric treatment to the Excel Summary sheet:
-            #   • errors > 0           → big red banner
-            #   • warnings > 0         → big yellow banner
-            #   • everything passed    → big green "100% TAG ACCURACY" banner
-            # This makes the audit verdict UNMISSABLE — no need to scroll
-            # through logs or open the Excel file to know if there are issues.
-            if _n_total is not None and _n_total > 0:
-                _accuracy = (_n_pass / _n_total) * 100.0 if _n_total else 0.0
-                _extras_note = (
-                    f" (plus {_n_add} additional finding{'s' if _n_add != 1 else ''} flagged by the LLM)"
-                    if _n_add else ""
-                )
-                if _n_err > 0:
-                    st.error(
-                        f"❌ **Audit found {_n_err} error{'s' if _n_err != 1 else ''}**"
-                        f"{(' and ' + str(_n_warn) + ' warning' + ('s' if _n_warn != 1 else '')) if _n_warn else ''}"
-                        f" out of {_n_total} checklist items"
-                        f" — Tag accuracy: **{_accuracy:.1f}%**{_extras_note}.  \n"
-                        f"👉 Open the **🔍 Validation Review** tab to fix or ignore each issue."
+                    _ci_rows = []
+                    for _ci in _ci_list[:30]:
+                        _ci_type = str(_ci.get("type", "")).capitalize()
+                        _ci_pre = str(_ci.get("precleaned", "") or "—")[:80]
+                        _ci_out = str(_ci.get("output", "") or "—")[:80]
+                        _ci_cat = str(_ci.get("category", "") or "").replace("_", " ").title()
+                        _ci_line = ""
+                        _ci_word_start = _ci.get("output_word_start")
+                        if _ci_word_start is not None and _word_to_line:
+                            _ci_line = str(_word_to_line.get(_ci_word_start, ""))
+                        _ci_rows.append({
+                            "Line": _ci_line,
+                            "Type": _ci_type,
+                            "Expected (PDF)": _ci_pre,
+                            "Output": _ci_out,
+                            "Category": _ci_cat,
+                        })
+                    import pandas as _pd
+                    st.dataframe(
+                        _pd.DataFrame(_ci_rows),
+                        use_container_width=True,
+                        hide_index=True,
                     )
-                elif _n_warn > 0:
-                    st.warning(
-                        f"⚠️ **Audit found {_n_warn} warning{'s' if _n_warn != 1 else ''}**"
-                        f" out of {_n_total} checklist items"
-                        f" — Tag accuracy: **{_accuracy:.1f}%**{_extras_note}.  \n"
-                        f"👉 Open the **🔍 Validation Review** tab to review each item."
-                    )
-                else:
-                    st.success(
-                        f"🎉 **100% TAG ACCURACY** — all {_n_total} checklist items passed, "
-                        f"no errors and no warnings.{_extras_note}"
-                    )
-
-            # ── 3. Metrics cards (only if we have counts) ───────────────────
-            if _n_total is not None:
-                try:
-                    _card = (
-                        'display:flex; flex-direction:column; align-items:center; '
-                        'padding:14px 10px; border-radius:10px; flex:1; min-width:100px;'
-                    )
-                    st.markdown(f"""
-                <div style="display:flex; gap:12px; flex-wrap:wrap; margin:0 0 16px;">
-                    <div style="{_card} background:#f8fafc; border:1px solid #e2e8f0;">
-                        <span style="font-size:1.6rem; font-weight:800; color:#0f172a;">{_n_total}</span>
-                        <span style="font-size:0.78rem; color:#64748b; margin-top:2px;">Total Items</span>
-                    </div>
-                    """, unsafe_allow_html=True)
-                except Exception:
-                    pass  # audit metrics are nice-to-have; don't break Summary tab
+                    if _ci_count > 30:
+                        st.caption(f"Showing first 30 of {_ci_count} issues. Download the accuracy JSON for the full list.")
 
         # ── Submit to Keyed (SFTP Upload) ─────────────────────────────────────
         st.markdown("---")
@@ -5808,25 +5662,6 @@ def show_results_section():
                     st.warning("No processed file available to submit.")
 
     _tab_idx += 1
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # TAB — Validation Review (only if audit data exists)
-    # ══════════════════════════════════════════════════════════════════════════
-    if not _skip_validation and (_has_audit or _has_accuracy or _has_highlighted or _audit_failed) and render_inline_validation_review:
-        with tabs[_tab_idx]:
-            # Scrollable container so the validation review body scrolls
-            # independently of the page (keeps the tab strip + page header
-            # visible while reviewing long checklists / side-by-side text).
-            with st.container(height=850, border=False):
-                render_inline_validation_review(
-                    excel_path=st.session_state.get('audit_excel_path') or "",
-                    converted_txt_path=st.session_state.processed_file_path,
-                    highlighted_dir=st.session_state.get('audit_highlighted_dir'),
-                    json_report=st.session_state.get('audit_json_report'),
-                    accuracy_report=st.session_state.get('content_accuracy_report'),
-                    gpt_audit_failed=_audit_failed,
-                )
-        _tab_idx += 1
 
     # ══════════════════════════════════════════════════════════════════════════
     # TAB — Activity Log
@@ -6153,7 +5988,7 @@ class BatchWorker:
                 add_cfg = state_config.get("add_markup", {})
                 del_cfg = state_config.get("delete_markup", {})
                 _mark_flags["mark_underline"] = add_cfg.get("underline", True)
-                _mark_flags["mark_italic"] = add_cfg.get("italic", False) or del_cfg.get("italic", False)
+                _mark_flags["mark_italic"] = add_cfg.get("italic", False) or del_cfg.get("italic", False) or bool(add_cfg.get("italic_section_only"))
                 _mark_flags["mark_bold"] = add_cfg.get("bold", False)
                 _mark_flags["mark_strikethrough"] = del_cfg.get("strike_out", True)
                 _mark_flags["mark_brackets"] = add_cfg.get("brackets", False) or del_cfg.get("brackets", False)
@@ -6517,12 +6352,6 @@ def show_batch_processing():
 
     # ── Tab layout (live) ─────────────────────────────────────────────
     tab_labels = ["📦 Progress"]
-    has_review_files = any(
-        r.get('audit_excel_path') or r.get('content_accuracy_report')
-        for r in batch_results
-    )
-    if batch_results:
-        tab_labels.append("🔍 Validation Review")
     if any(r.get('processing_logs') for r in batch_results):
         tab_labels.append("📋 Activity Logs")
 
@@ -6579,66 +6408,10 @@ def show_batch_processing():
                     st.rerun()
 
     # ══════════════════════════════════════════════════════════════════
-    # TAB 2 — Validation Review (live, for completed files)
+    # TAB 2 — Activity Logs
     # ══════════════════════════════════════════════════════════════════
-    if batch_results and len(tabs) > 1:
+    if any(r.get('processing_logs') for r in batch_results) and len(tabs) > 1:
         with tabs[1]:
-            _success_results = [r for r in batch_results if r['status'] == 'success']
-            _success_indices = [i for i, r in enumerate(batch_results) if r['status'] == 'success']
-
-            if not _success_results:
-                st.info("No successfully processed files available for review yet.")
-            else:
-                file_options = [
-                    f"#{i+1} — {r['file_name']} ({r.get('detected_state', '?')})"
-                    for i, r in zip(_success_indices, _success_results)
-                ]
-
-                prev_sel_idx = st.session_state.get('batch_selected_file', 0)
-
-                selected_label = st.selectbox(
-                    "Select file to review:",
-                    file_options,
-                    index=min(prev_sel_idx, len(file_options) - 1) if file_options else 0,
-                    key="batch_file_selector_live",
-                )
-                new_sel_idx = file_options.index(selected_label) if selected_label in file_options else 0
-
-                # Swap vri_ state if selection changed
-                if new_sel_idx != prev_sel_idx:
-                    _swap_batch_vri_state(from_idx=prev_sel_idx, to_idx=new_sel_idx)
-                    st.session_state.batch_selected_file = new_sel_idx
-
-                actual_result_idx = _success_indices[new_sel_idx]
-                r = batch_results[actual_result_idx]
-
-                if r.get('audit_excel_path') or r.get('content_accuracy_report') or r.get('audit_highlighted_dir') or r.get('gpt_audit_failed'):
-                    _output_path = r.get('output_path', '')
-                    if render_inline_validation_review:
-                        # Scrollable body keeps the file selector above pinned
-                        # in place while the long review content scrolls.
-                        with st.container(height=850, border=False):
-                            render_inline_validation_review(
-                                excel_path=r.get('audit_excel_path') or "",
-                                converted_txt_path=_output_path,
-                                highlighted_dir=r.get('audit_highlighted_dir'),
-                                json_report=r.get('audit_json_report'),
-                                accuracy_report=r.get('content_accuracy_report'),
-                                gpt_audit_failed=bool(r.get('gpt_audit_failed')),
-                            )
-                    else:
-                        st.warning("Validation review module not available.")
-                else:
-                    st.info(f"No audit data available for **{r['file_name']}**.")
-
-                if is_processing:
-                    st.info("💡 More files will appear here as they complete processing.")
-
-    # ══════════════════════════════════════════════════════════════════
-    # TAB 3 — Activity Logs
-    # ══════════════════════════════════════════════════════════════════
-    if any(r.get('processing_logs') for r in batch_results) and len(tabs) > 2:
-        with tabs[2]:
             for i, r in enumerate(batch_results):
                 if r.get('processing_logs'):
                     with st.expander(f"📋 {r['file_name']}", expanded=(i == len(batch_results) - 1)):
@@ -6712,8 +6485,6 @@ def show_batch_results_section():
 
     # ── Tab layout ────────────────────────────────────────────────────
     tab_labels = ["📊 Batch Summary"]
-    if any(r.get('audit_excel_path') or r.get('content_accuracy_report') for r in results):
-        tab_labels.append("🔍 Validation Review")
     if any(r.get('processing_logs') for r in results):
         tab_labels.append("📋 Activity Logs")
 
@@ -6910,67 +6681,10 @@ def show_batch_results_section():
                     st.rerun()
 
     # ══════════════════════════════════════════════════════════════════
-    # TAB 2 — Validation Review (per-file selector)
-    # ══════════════════════════════════════════════════════════════════
-    _tab_idx = 1
-    if any(r.get('audit_excel_path') or r.get('content_accuracy_report') for r in results):
-        with tabs[_tab_idx]:
-            # File selector
-            file_options = [
-                f"#{i+1} — {r['file_name']} ({r.get('detected_state', '?')})"
-                for i, r in enumerate(results)
-                if r['status'] == 'success'
-            ]
-            success_indices = [i for i, r in enumerate(results) if r['status'] == 'success']
-
-            if not file_options:
-                st.warning("No successfully processed files available for review.")
-            else:
-                # Map current selection
-                prev_sel_idx = st.session_state.get('batch_selected_file', 0)
-
-                selected_label = st.selectbox(
-                    "Select file to review:",
-                    file_options,
-                    index=min(prev_sel_idx, len(file_options) - 1) if file_options else 0,
-                    key="batch_file_selector",
-                )
-                new_sel_idx = file_options.index(selected_label) if selected_label in file_options else 0
-                actual_result_idx = success_indices[new_sel_idx]
-
-                # Swap vri_ state if selection changed
-                if new_sel_idx != prev_sel_idx:
-                    _swap_batch_vri_state(from_idx=prev_sel_idx, to_idx=new_sel_idx)
-                    st.session_state.batch_selected_file = new_sel_idx
-
-                # Load the selected file's data and render validation review
-                r = results[actual_result_idx]
-                if r.get('audit_excel_path') or r.get('content_accuracy_report') or r.get('audit_highlighted_dir') or r.get('gpt_audit_failed'):
-                    _output_path = r.get('output_path', '')
-                    if render_inline_validation_review:
-                        # Scrollable body keeps the file selector above pinned
-                        # in place while the long review content scrolls.
-                        with st.container(height=850, border=False):
-                            render_inline_validation_review(
-                                excel_path=r.get('audit_excel_path') or "",
-                                converted_txt_path=_output_path,
-                                highlighted_dir=r.get('audit_highlighted_dir'),
-                                json_report=r.get('audit_json_report'),
-                                accuracy_report=r.get('content_accuracy_report'),
-                                gpt_audit_failed=bool(r.get('gpt_audit_failed')),
-                            )
-                    else:
-                        st.warning("Validation review module not available.")
-                else:
-                    st.info(f"No audit data available for **{r['file_name']}**.")
-
-        _tab_idx += 1
-
-    # ══════════════════════════════════════════════════════════════════
-    # TAB 3 — Activity Logs (per-file)
+    # TAB 2 — Activity Logs (per-file)
     # ══════════════════════════════════════════════════════════════════
     if any(r.get('processing_logs') for r in results):
-        with tabs[_tab_idx]:
+        with tabs[1]:
             for i, r in enumerate(results):
                 if r.get('processing_logs'):
                     with st.expander(f"📋 {r['file_name']}", expanded=(i == 0)):
