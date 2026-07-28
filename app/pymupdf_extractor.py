@@ -2249,6 +2249,49 @@ _RE_LINE_NUMBER_BETWEEN_TAGS = re.compile(
 _RE_CURRENCY_PADDING = re.compile(r"(\$)[ \t]{2,}(\d)")
 
 
+def _strip_repeating_page_artifacts(text: str) -> str:
+    """Remove short lines that repeat across multiple pages.
+
+    Splits text on ``--- Page N ---`` markers, collects short lines
+    (≤10 words) from the first/last few lines of each page, and removes
+    any that appear on ≥2 pages.  This catches repeating headers like
+    "ENROLLED ORIGINAL", footer stamps, bill numbers, etc.
+    """
+    _PAGE_SEP = re.compile(r"^---\s*Page\s+\d+\s*---$", re.MULTILINE)
+    pages = _PAGE_SEP.split(text)
+    if len(pages) < 2:
+        return text
+
+    from collections import Counter
+    _candidate_counts: Counter = Counter()
+    _SCAN_LINES = 4
+
+    for page in pages:
+        lines = [l.strip() for l in page.strip().split('\n') if l.strip()]
+        if not lines:
+            continue
+        candidates = set()
+        for line in lines[:_SCAN_LINES] + lines[-_SCAN_LINES:]:
+            if len(line.split()) <= 10:
+                candidates.add(line)
+        for c in candidates:
+            _candidate_counts[c] += 1
+
+    # Lines appearing on ≥2 pages are artifacts
+    artifacts = {line for line, count in _candidate_counts.items() if count >= 2 and len(line) >= 3}
+    if not artifacts:
+        return text
+
+    logger.info("🧹 Detected %d repeating page artifact(s): %s", len(artifacts), list(artifacts)[:5])
+
+    out_lines = []
+    for line in text.split('\n'):
+        if line.strip() in artifacts:
+            continue
+        out_lines.append(line)
+    return '\n'.join(out_lines)
+
+
 def _clean_tagged_text(text: str, strip_line_numbers: bool = False) -> str:
     """Remove empty tags, merge adjacent same-type tags, tidy whitespace."""
     # Normalize non-breaking spaces to regular spaces
@@ -5387,6 +5430,12 @@ def clean_extracted_text(
             pre_cleaned = pre_cleaned_bare
     except ImportError:
         pass
+
+    # ── Repeating page headers/footers (all states) ─────────────────────
+    # Detect short lines that repeat across ≥2 page boundaries and strip
+    # ALL occurrences (including page 1) so the LLM never sees them.
+    # Catches "ENROLLED ORIGINAL", bill numbers, date stamps, etc.
+    pre_cleaned = _strip_repeating_page_artifacts(pre_cleaned)
 
     if pre_cleaned != raw_text:
         logger.info(

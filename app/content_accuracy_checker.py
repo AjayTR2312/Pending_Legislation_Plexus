@@ -479,6 +479,41 @@ def check_content_accuracy(
         if not classification["is_expected"]:
             content_issues.append(diff_entry)
 
+    # ── Post-diff: check for repeated artifacts still present in output ──
+    # If a known repeated text (page header/footer) survived into the output,
+    # flag it as a content issue even though the diff sees it as "equal".
+    _all_artifact_texts = set()
+    if repeated_texts:
+        _all_artifact_texts.update(repeated_texts)
+    if metadata_hf_texts:
+        _all_artifact_texts.update(metadata_hf_texts)
+
+    if _all_artifact_texts:
+        for out_line in out.split('\n'):
+            out_stripped = out_line.strip()
+            if not out_stripped or len(out_stripped) < 3:
+                continue
+            # Check if this output line matches a known artifact
+            out_base = re.sub(r"\s+\d+\s*$", "", out_stripped).strip()
+            if out_base in _all_artifact_texts or out_stripped in _all_artifact_texts:
+                _words_in_line = len(out_stripped.split())
+                _issue = {
+                    "type": "artifact_retained",
+                    "precleaned": None,
+                    "output": out_stripped,
+                    "words_affected": _words_in_line,
+                    "category": "artifact_not_removed",
+                    "severity": "medium",
+                    "explanation": f"Repeated artifact still present in output: \"{out_stripped[:80]}\"",
+                    "is_expected": False,
+                    "content_type": "page_header",
+                }
+                content_issues.append(_issue)
+                differences.append(_issue)
+                cat = "artifact_not_removed"
+                category_counts[cat] = category_counts.get(cat, 0) + 1
+                extra += _words_in_line
+
     # Calculate adjusted accuracy: exclude expected differences from penalty
     # but penalize for non-expected (real) content issues
     expected_words_removed = sum(

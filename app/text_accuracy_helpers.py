@@ -2110,6 +2110,21 @@ def build_removals_report(
     # Build a set of normalised artifact strings for fast lookup
     _artifact_normals = {_normalise_for_repeat(a["text"]) for a in _detected_artifacts}
 
+    # ── Also scan full output for retained artifacts (not just additions) ──
+    # Lines that exist in BOTH source and output won't appear in additions_out,
+    # but if they match a detected repeating artifact, they should be flagged.
+    for ln_idx, cline in enumerate(clean_lines, start=1):
+        _ctxt = cline.strip()
+        if not _ctxt or len(_ctxt) < 3:
+            continue
+        if _normalise_for_repeat(_ctxt) in _artifact_normals:
+            _footer_warnings.append({
+                "line": ln_idx,
+                "text": _ctxt,
+                "warning": "artifact_not_removed",
+                "category": "detected_repeating",
+            })
+
     for item in additions_out:
         _txt = item["text"].strip()
         if not _txt:

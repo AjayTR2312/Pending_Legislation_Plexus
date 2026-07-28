@@ -1262,6 +1262,53 @@ def self_correction_pass(client, converted_text, page_images, state_config=None)
         return converted_text  # Fall back to original
 
 
+def _strip_repeating_page_artifacts(text: str) -> str:
+    """Remove short lines that repeat across multiple pages.
+
+    Splits text on ``--- Page N ---`` markers, collects short lines
+    (≤10 words) from the first 3 and last 3 lines of each page, and
+    removes any that appear on ≥2 pages.  This catches repeating headers
+    like "ENROLLED ORIGINAL", footer stamps, bill numbers, etc.
+    """
+    import re as _re
+    _PAGE_SEP = _re.compile(r"^---\s*Page\s+\d+\s*---$", _re.MULTILINE)
+    pages = _PAGE_SEP.split(text)
+    if len(pages) < 2:
+        return text
+
+    # Collect candidate artifact lines from top/bottom of each page
+    from collections import Counter
+    _candidate_counts: Counter = Counter()
+    _SCAN_LINES = 4  # lines from top/bottom of each page to inspect
+
+    for page in pages:
+        lines = [l.strip() for l in page.strip().split('\n') if l.strip()]
+        if not lines:
+            continue
+        candidates = set()
+        for line in lines[:_SCAN_LINES] + lines[-_SCAN_LINES:]:
+            # Only short lines (≤10 words) — long lines are real content
+            if len(line.split()) <= 10:
+                candidates.add(line)
+        for c in candidates:
+            _candidate_counts[c] += 1
+
+    # Lines appearing on ≥2 pages are artifacts
+    artifacts = {line for line, count in _candidate_counts.items() if count >= 2 and len(line) >= 3}
+    if not artifacts:
+        return text
+
+    logging.info(f"   🧹 Detected {len(artifacts)} repeating page artifact(s): {list(artifacts)[:5]}")
+
+    # Remove all occurrences (entire lines) from text
+    out_lines = []
+    for line in text.split('\n'):
+        if line.strip() in artifacts:
+            continue
+        out_lines.append(line)
+    return '\n'.join(out_lines)
+
+
 def _split_text_into_chunks(text, max_chars=40000, overlap_chars=2000):
     """
     Split extracted text into chunks at section/paragraph boundaries.
@@ -1430,6 +1477,12 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         # and added TABLE markers.  Removed because it was causing false
         # positives and the LLM handles paragraph structure correctly
         # without pre-unwrapping.
+
+        # ── Step 1d: Strip repeating page headers/footers ────────────
+        # Detect short lines that repeat across page boundaries (≥2 pages)
+        # and remove them BEFORE the LLM sees the text.  This prevents the
+        # LLM from keeping the first-page occurrence (e.g. "ENROLLED ORIGINAL").
+        raw_text = _strip_repeating_page_artifacts(raw_text)
 
         # Save pre-cleaned text for accuracy comparison
         _llm_text = strip_table_markers(raw_text)
