@@ -3593,11 +3593,14 @@ def deterministic_cleanup(text, state_config=None, state_code=None, reference_te
         fix_log.append(f"Fixed {smart_quote_count} smart quotes → regular quotes")
 
     # ── Fix 6: Normalize whitespace inside tags ───────────────────
-    # [A> text <A] → [A>text<A]  (trim leading/trailing spaces inside tags)
-    text = re.sub(r'\[A>\s+', '[A>', text)
-    text = re.sub(r'\s+<A\]', '<A]', text)
-    text = re.sub(r'\[D>\s+', '[D>', text)
-    text = re.sub(r'\s+<D\]', '<D]', text)
+    # Trim trailing spaces before close tags: "text <A]" → "text<A]"
+    # Trim leading spaces only when followed by more spaces (excess indent):
+    #   [A>  text<A] → [A> text<A] — but preserve single leading space like [D> if<D]
+    # The single leading space is meaningful — it represents whitespace in the PDF.
+    text = re.sub(r'\[A> {2,}', '[A> ', text)   # collapse 2+ leading spaces to 1
+    text = re.sub(r' +<A\]', '<A]', text)        # trim trailing spaces before close
+    text = re.sub(r'\[D> {2,}', '[D> ', text)   # collapse 2+ leading spaces to 1
+    text = re.sub(r' +<D\]', '<D]', text)        # trim trailing spaces before close
 
     # ── Fix 7: Merge adjacent same-type tags ──────────────────────
     # [A>text1<A] [A>text2<A] → [A>text1 text2<A]  (if only spaces/tabs between, NOT newlines)

@@ -58,8 +58,9 @@ _ARTIFACT_PATTERNS = [
 
 # Patterns used for classifying differences
 _RE_ARTIFACT = re.compile(
-    r"^(?:\*[A-Z]{3}\d+\*|\d{2}-\d{2}-\d{4}\s+\d{2}:\d{2}:\d{2}|"
-    r"---\s*Page\s+\d+\s*---|As\s+Engrossed:|HB\d+$|SB\d+$)",
+    r"(?:^\*[A-Z]{3}\d+\*|\d{2}-\d{2}-\d{4}\s+\d{2}:\d{2}:\d{2}|"
+    r"---\s*Page\s+\d+\s*---|As\s+Engrossed:|^HB\d+$|^SB\d+$|"
+    r"^(?:EH|SH|HB|SB|HJ|SJ)\s*\d+)",
     re.IGNORECASE,
 )
 _RE_HYPHEN_REJOIN = re.compile(r"^(\S+)-$")  # word ending with hyphen
@@ -96,6 +97,7 @@ def _classify_difference(
     out_text: Optional[str],
     words_affected: int,
     repeated_texts: Optional[set] = None,
+    metadata_hf_texts: Optional[set] = None,
 ) -> Dict[str, Any]:
     """Classify a difference block into a category with explanation.
 
@@ -129,7 +131,7 @@ def _classify_difference(
     # If the deleted text (or a base form of it) appears multiple times
     # in the precleaned source, it's a repeating page header/footer that
     # the LLM correctly removed.
-    if diff_type == "delete" and repeated_texts and words_affected <= 10:
+    if diff_type == "delete" and repeated_texts and words_affected <= 20:
         # Strip trailing digits (page number) to find the base pattern
         base = re.sub(r"\s+\d+\s*$", "", pre).strip()
         if base in repeated_texts or pre in repeated_texts:
@@ -154,6 +156,25 @@ def _classify_difference(
                 "is_expected": True,
                 "content_type": "decorative_line",
             }
+
+    # ── Metadata-based header/footer detection ────────────────────
+    # If the deleted text matches known header/footer text from PDF
+    # metadata, classify as expected artifact removal.
+    if diff_type == "delete" and metadata_hf_texts and pre.strip():
+        pre_lower = pre.strip().lower()
+        for hf_text in metadata_hf_texts:
+            hf_lower = hf_text.lower()
+            # Exact match or precleaned text is a substring of a known header/footer
+            if (pre_lower == hf_lower
+                    or pre_lower in hf_lower
+                    or hf_lower in pre_lower):
+                return {
+                    "category": "artifact_removed",
+                    "severity": "info",
+                    "explanation": f"PDF metadata header/footer correctly stripped: \"{pre[:80]}\"",
+                    "is_expected": True,
+                    "content_type": "page_header",
+                }
 
     # ── Hyphen rejoin ─────────────────────────────────────────────
     if diff_type == "replace":
@@ -278,6 +299,8 @@ def check_content_accuracy(
     *,
     strip_artifacts: bool = True,
     strip_tags: bool = True,
+    metadata: Optional[Dict[str, Any]] = None,
+    detected_artifacts: Optional[list] = None,
 ) -> Dict[str, Any]:
     """Compare precleaned input vs final output at word level.
 
@@ -337,6 +360,34 @@ def check_content_accuracy(
     # Lines appearing 3+ times are repeating headers/footers
     repeated_texts = {base for base, count in _line_counts.items() if count >= 3}
 
+    # Build metadata header/footer text set for classification
+    metadata_hf_texts: Optional[set] = None
+    if metadata:
+        _hf_set: set = set()
+        for _pg, _txt in (metadata.get("headers") or {}).items():
+            for _line in _txt.split("\n"):
+                _s = _line.strip()
+                if _s and len(_s) >= 3:
+                    _hf_set.add(_s)
+        for _pg, _txt in (metadata.get("footers") or {}).items():
+            for _line in _txt.split("\n"):
+                _s = _line.strip()
+                if _s and len(_s) >= 3:
+                    _hf_set.add(_s)
+        if _hf_set:
+            metadata_hf_texts = _hf_set
+
+    # Merge detected repeating artifacts (from removals report)
+    if detected_artifacts:
+        if metadata_hf_texts is None:
+            metadata_hf_texts = set()
+        for _art in detected_artifacts:
+            _art_text = _art.get("text", "") if isinstance(_art, dict) else str(_art)
+            # Strip [A>...<A] tags if present
+            _art_clean = re.sub(r"\[A>|<A\]", "", _art_text).strip()
+            if _art_clean and len(_art_clean) >= 3:
+                metadata_hf_texts.add(_art_clean)
+
     # Tokenize
     pre_words = _to_words(pre)
     out_words = _to_words(out)
@@ -385,13 +436,15 @@ def check_content_accuracy(
             words_affected = max(i2 - i1, j2 - j1)
 
         # Classify the difference
-        classification = _classify_difference(tag, pre_text, out_text, words_affected, repeated_texts=repeated_texts)
+        classification = _classify_difference(tag, pre_text, out_text, words_affected, repeated_texts=repeated_texts, metadata_hf_texts=metadata_hf_texts)
 
         diff_entry = {
             "type": tag,
             "precleaned": pre_text,
             "output": out_text,
             "words_affected": words_affected,
+            "output_word_start": j1,
+            "output_word_end": j2,
             **classification,
         }
         differences.append(diff_entry)
@@ -405,11 +458,17 @@ def check_content_accuracy(
             content_issues.append(diff_entry)
 
     # Calculate adjusted accuracy: exclude expected differences from penalty
+    # but penalize for non-expected (real) content issues
     expected_words_removed = sum(
         d["words_affected"] for d in differences if d.get("is_expected")
     )
+    issue_words = sum(
+        d["words_affected"] for d in differences if not d.get("is_expected")
+    )
     adjusted_max = max_words - expected_words_removed
-    adjusted_accuracy = (matching_words / adjusted_max * 100) if adjusted_max > 0 else 100.0
+    adjusted_matching = matching_words - issue_words
+    adjusted_accuracy = (adjusted_matching / adjusted_max * 100) if adjusted_max > 0 else 100.0
+    adjusted_accuracy = max(min(adjusted_accuracy, 100.0), 0.0)  # Clamp 0-100%
 
     return {
         "accuracy_pct": round(adjusted_accuracy, 2),
