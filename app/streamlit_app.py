@@ -2590,8 +2590,14 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
             pdf_path=st.session_state.get('temp_pdf_path'),
         )
 
-        _para_report = _fut_para.result()
-        _para_executor.shutdown(wait=False)
+        # Paragraph accuracy (if future was submitted earlier)
+        _para_report = None
+        if '_fut_para' in dir() and _fut_para is not None:
+            try:
+                _para_report = _fut_para.result()
+                _para_executor.shutdown(wait=False)
+            except Exception:
+                pass
 
         if _para_report:
             _para_acc = _para_report.get("accuracy_pct", 100.0)
