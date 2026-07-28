@@ -2562,18 +2562,6 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
         # output.  state_code lets compare_texts bucket intentional artifact
         # removals into ``allowed_diffs`` so they don't count against accuracy.
         st.session_state.content_accuracy_report = None
-        _removals_json = output_path.replace(".txt", "_removals.json") if output_path else None
-        _accuracy_json = output_path.replace(".txt", "_accuracy.json") if output_path else None
-        # Text accuracy on main thread (uses st.session_state)
-        _run_text_accuracy_check(
-            raw_text=pymupdf_text,
-            clean_text=converted_text,
-            state_code=detected_state,
-            add_log=add_log,
-            save_removals_to=_removals_json,
-            save_accuracy_to=_accuracy_json,
-            pdf_path=pdf_path,
-        )
 
         # Save precleaned file (pymupdf_clean_text = line numbers/headers stripped)
         _pre_cleaned_for_accuracy = pymupdf_clean_text if pymupdf_clean_text else pymupdf_text
@@ -3010,18 +2998,6 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
             _clean_lines = set(pymupdf_clean_text.splitlines())
             _llm_removed = [l for l in _pre_lines - _clean_lines if l.strip()]
         from concurrent.futures import ThreadPoolExecutor
-
-        # Text accuracy on main thread (uses st.session_state)
-        _run_text_accuracy_check(
-            raw_text=_accuracy_raw,
-            clean_text=pymupdf_clean_text,
-            state_code=detected_state,
-            add_log=add_log,
-            save_removals_to=_removals_json,
-            save_accuracy_to=_accuracy_json,
-            llm_removed_lines=_llm_removed,
-            pdf_path=pdf_path,
-        )
 
         # Content accuracy — word-level precleaned vs output (PyMuPDF Clean mode)
         _content_acc_json = output_path.replace(".txt", "_content_accuracy.json") if output_path else None
@@ -3472,18 +3448,6 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
         _accuracy_json = output_path.replace(".txt", "_accuracy.json") if output_path else None
 
         from concurrent.futures import ThreadPoolExecutor
-
-        # Text accuracy runs on main thread (uses st.session_state via add_log)
-        add_log(f"🔍 Accuracy check inputs: pymupdf_text={len(pymupdf_text):,} chars, converted_text={len(converted_text):,} chars")
-        _run_text_accuracy_check(
-            raw_text=pymupdf_text,
-            clean_text=converted_text,
-            state_code=detected_state,
-            add_log=add_log,
-            save_removals_to=_removals_json,
-            save_accuracy_to=_accuracy_json,
-            pdf_path=pdf_path,
-        )
 
         # Content accuracy — word-level precleaned vs output comparison
         # _precleaned_text already loaded above for deterministic_cleanup
