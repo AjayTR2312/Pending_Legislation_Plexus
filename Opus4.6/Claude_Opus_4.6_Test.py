@@ -1424,26 +1424,13 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         except ImportError:
             pass
 
-        # ── Step 1c: PDF-based paragraph unwrapping ────────────────
-        # Join continuation lines using PDF layout boundaries and add
-        # TABLE markers around detected table regions.
-        try:
-            _before_unwrap = len(raw_text)
-            raw_text = pdf_unwrap_paragraphs(raw_text, pdf_path)
-            _after_unwrap = len(raw_text)
-            logging.info(
-                f"   📐 PDF unwrap: {_before_unwrap:,} → {_after_unwrap:,} chars"
-            )
-        except Exception as _unwrap_err:
-            logging.warning(f"   ⚠️ PDF unwrap skipped: {_unwrap_err}")
+        # ── Step 1c: PDF-based paragraph unwrapping — DISABLED ──────
+        # Previously joined continuation lines using PDF layout boundaries
+        # and added TABLE markers.  Removed because it was causing false
+        # positives and the LLM handles paragraph structure correctly
+        # without pre-unwrapping.
 
-        # Save unwrapped text (with TABLE markers) for human readability
-        _unwrapped_path = str(Path(pdf_path).with_suffix('')) + "_unwrapped.txt"
-        with open(_unwrapped_path, "w", encoding="utf-8") as f:
-            f.write(raw_text)
-        logging.info(f"   📄 Unwrapped text saved to: {_unwrapped_path}")
-
-        # Save pre-cleaned text (TABLE markers stripped) for accuracy comparison
+        # Save pre-cleaned text for accuracy comparison
         _llm_text = strip_table_markers(raw_text)
         pre_cleaned_path = str(Path(pdf_path).with_suffix('')) + "_hybrid_precleaned.txt"
         with open(pre_cleaned_path, "w", encoding="utf-8") as f:

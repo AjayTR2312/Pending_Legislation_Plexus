@@ -76,6 +76,7 @@
       "abbreviation": "DC",
       "file_type": ".pdf-text or .pdf-tif",
       "deletions": "headers (ex: 'enrolled original'), footers, line numbers, page numbers. NOTES on right margin move to left justified on separate line above the one on which it appears",
+      "tag_scope": "line_numbered_only",
       "add_markup": {
         "underline": true,
         "bold": false,

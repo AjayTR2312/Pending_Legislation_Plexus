@@ -1659,6 +1659,23 @@ def pymupdf_compare_tags(
     log.info("📋 Built checklist: %d formatted spans from PyMuPDF report",
              len(checklist_items))
 
+    # ── State rule: only validate spans in line-numbered content ────
+    # States with tag_scope="line_numbered_only" (e.g. DC) should only
+    # have tagging in the main body (sections with printed line numbers).
+    # Spans outside line-numbered areas are excluded from the audit.
+    _LINE_NUMBERED_ONLY_STATES = {"DC"}
+    if state_code and state_code.upper() in _LINE_NUMBERED_ONLY_STATES:
+        _before = len(checklist_items)
+        checklist_items = [ci for ci in checklist_items if ci.get("bill_line") is not None]
+        # Re-number IDs sequentially after filtering
+        for _i, _ci in enumerate(checklist_items, start=1):
+            _ci["id"] = _i
+        if len(checklist_items) < _before:
+            log.info(
+                "🏛️ DC line-number filter: %d → %d spans (removed %d outside line-numbered area)",
+                _before, len(checklist_items), _before - len(checklist_items),
+            )
+
     # ── Deterministic pre-check against the cleaned text ────────────
     precheck, extra_clean_tags = _precheck_clean_text(
         checklist_items, pymupdf_clean_text, state_code=state_code
