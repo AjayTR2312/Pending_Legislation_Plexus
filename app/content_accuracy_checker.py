@@ -482,6 +482,8 @@ def check_content_accuracy(
     # ── Post-diff: check for repeated artifacts still present in output ──
     # If a known repeated text (page header/footer) survived into the output,
     # flag it as a content issue even though the diff sees it as "equal".
+    # Only flag if the line appears MORE THAN ONCE in the output — a single
+    # occurrence is the legitimate page-1 header, not a repeated artifact.
     _all_artifact_texts = set()
     if repeated_texts:
         _all_artifact_texts.update(repeated_texts)
@@ -489,30 +491,40 @@ def check_content_accuracy(
         _all_artifact_texts.update(metadata_hf_texts)
 
     if _all_artifact_texts:
+        # Count occurrences of each output line
+        from collections import Counter
+        _out_line_counts: Counter = Counter()
         for out_line in out.split('\n'):
             out_stripped = out_line.strip()
-            if not out_stripped or len(out_stripped) < 3:
+            if out_stripped and len(out_stripped) >= 3:
+                _out_line_counts[out_stripped] += 1
+
+        for out_stripped, count in _out_line_counts.items():
+            # Only flag if the artifact appears more than once in output
+            if count <= 1:
                 continue
             # Check if this output line matches a known artifact
             out_base = re.sub(r"\s+\d+\s*$", "", out_stripped).strip()
             if out_base in _all_artifact_texts or out_stripped in _all_artifact_texts:
                 _words_in_line = len(out_stripped.split())
-                _issue = {
-                    "type": "artifact_retained",
-                    "precleaned": None,
-                    "output": out_stripped,
-                    "words_affected": _words_in_line,
-                    "category": "artifact_not_removed",
-                    "severity": "medium",
-                    "explanation": f"Repeated artifact still present in output: \"{out_stripped[:80]}\"",
-                    "is_expected": False,
-                    "content_type": "page_header",
-                }
-                content_issues.append(_issue)
-                differences.append(_issue)
+                # Flag each extra occurrence (keep one as legitimate)
+                for _ in range(count - 1):
+                    _issue = {
+                        "type": "artifact_retained",
+                        "precleaned": None,
+                        "output": out_stripped,
+                        "words_affected": _words_in_line,
+                        "category": "artifact_not_removed",
+                        "severity": "medium",
+                        "explanation": f"Repeated artifact still present in output ({count}x): \"{out_stripped[:80]}\"",
+                        "is_expected": False,
+                        "content_type": "page_header",
+                    }
+                    content_issues.append(_issue)
+                    differences.append(_issue)
                 cat = "artifact_not_removed"
-                category_counts[cat] = category_counts.get(cat, 0) + 1
-                extra += _words_in_line
+                category_counts[cat] = category_counts.get(cat, 0) + (count - 1)
+                extra += _words_in_line * (count - 1)
 
     # Calculate adjusted accuracy: exclude expected differences from penalty
     # but penalize for non-expected (real) content issues

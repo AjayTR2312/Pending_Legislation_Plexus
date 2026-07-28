@@ -2365,7 +2365,7 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
         # blocks are already guarded by ``if pymupdf_text``,
         # ``if pymupdf_clean_text``, etc., so leaving those unset here is
         # enough to make them all skip cleanly.
-        _skip_validation_states = {"CO"}
+        _skip_validation_states: set = set()  # Previously {"CO"} — now ALL CAPS detection provides ground truth
         _skip_audit = (
             (detected_state or "").upper() in _skip_validation_states
             or st.session_state.get('_pdf_is_scanned', False)
@@ -2575,10 +2575,18 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
             pdf_path=pdf_path,
         )
 
-        # Content accuracy — word-level pymupdf vs output comparison (Visual mode)
+        # Save precleaned file (pymupdf_clean_text = line numbers/headers stripped)
+        _pre_cleaned_for_accuracy = pymupdf_clean_text if pymupdf_clean_text else pymupdf_text
+        if pymupdf_clean_text and output_path:
+            _pre_clean_path = output_path.replace(".txt", "_pre_cleaned.txt")
+            with open(_pre_clean_path, "w", encoding="utf-8") as _pcf:
+                _pcf.write(pymupdf_clean_text)
+            add_log(f"📋 Pre-cleaned text saved: {len(pymupdf_text):,} → {len(pymupdf_clean_text):,} chars")
+
+        # Content accuracy — word-level precleaned vs output comparison (Visual mode)
         _content_acc_json = output_path.replace(".txt", "_content_accuracy.json") if output_path else None
         _run_content_accuracy_check(
-            precleaned_text=pymupdf_text,
+            precleaned_text=_pre_cleaned_for_accuracy,
             output_text=converted_text,
             add_log=add_log,
             save_to=_content_acc_json,
@@ -2609,93 +2617,99 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
                 with open(_para_json, "w", encoding="utf-8") as _pf:
                     _json.dump(_para_report, _pf, indent=2, default=str)
 
-        # ── Step 8: GPT Audit (comparison Excel) — DISABLED ────────────────────
-        # Disabled to save cost/time; extraction_validator.py passive watchdog
-        # still runs automatically after conversion as the safety net.
-        st.session_state.step_status[7] = "⏭️"
-        add_log("⏭️ GPT audit skipped (disabled)")
-        update_progress()
-        # if pymupdf_clean_text and highlight_dir and highlight_dir.exists():
-        #     st.session_state.current_step = 7
-        #     st.session_state.step_status[7] = "🔄"
-        #     update_progress()
-        #     add_log("🤖 Running GPT 5.4 checklist-driven audit...")
-        #     if status_placeholder:
-        #         status_placeholder.info("🤖 Running GPT 5.4 audit (comparing PyMuPDF vs Claude)...")
-        #
-        #     try:
-        #         # Import gpt_compare from Opus4.6
-        #         opus46_dir = os.path.normpath(
-        #             os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'Opus4.6')
-        #         )
-        #         if opus46_dir not in sys.path:
-        #             sys.path.insert(0, opus46_dir)
-        #         from gpt_compare import gpt_compare_tags
-        #
-        #         # Load highlighted images as base64
-        #         import base64 as _b64
-        #         hi_images_b64 = []
-        #         for img_file in sorted(highlight_dir.glob("page_*.png")):
-        #             hi_images_b64.append(_b64.b64encode(img_file.read_bytes()).decode())
-        #         add_log(f"📷 Loaded {len(hi_images_b64)} highlighted page images for GPT")
-        #
-        #         # ── LLM-verify residual text-accuracy diffs (opt-in) ──────────
-        #         _run_llm_diff_verification(
-        #             accuracy_report=st.session_state.get("content_accuracy_report"),
-        #             highlighted_images_b64=hi_images_b64,
-        #             state_code=detected_state,
-        #             add_log=add_log,
-        #             save_accuracy_to=_accuracy_json,
-        #         )
-        #
-        #         # Build state rules description
-        #         sr_parts = []
-        #         if state_config:
-        #             sr_parts.append(f"State: {state_config.get('state_name', detected_state or 'unknown')}")
-        #             a_cfg = state_config.get("add_markup", {})
-        #             d_cfg = state_config.get("delete_markup", {})
-        #             sr_parts.append(f"Underline={a_cfg.get('underline', False)}")
-        #             sr_parts.append(f"Strikethrough={d_cfg.get('strike_out', False)}")
-        #             sr_parts.append(f"Italic={a_cfg.get('italic', False)}")
-        #             sr_parts.append(f"Bold={a_cfg.get('bold', False)}")
-        #             if d_cfg.get('strike_out', False) and (a_cfg.get('underline', False) or a_cfg.get('italic', False) or a_cfg.get('bold', False)):
-        #                 sr_parts.append("PRIORITY: If text has strikethrough AND any other formatting (underline/italic/bold), strikethrough ALWAYS wins → tag as [D>...<D] only, NEVER [A>...<A]")
-        #         state_rules_str = ", ".join(sr_parts) if sr_parts else f"State: {detected_state or 'unknown'}"
-        #
-        #         gpt_xlsx = output_path.replace(".txt", "_gpt_comparison.xlsx") if isinstance(output_path, str) else str(output_path).replace(".txt", "_gpt_comparison.xlsx")
-        #         gpt_cmp = gpt_compare_tags(
-        #             highlighted_images_b64=hi_images_b64,
-        #             pymupdf_clean_text=pymupdf_clean_text,
-        #             claude_converted_text=converted_text,
-        #             state_code=detected_state or "XX",
-        #             state_rules=state_rules_str,
-        #             output_xlsx=gpt_xlsx,
-        #             pymupdf_report=pymupdf_report,
-        #             pymupdf_raw_text=pymupdf_text,
-        #         )
-        #
-        #         st.session_state.audit_excel_path = gpt_xlsx
-        #         add_log(
-        #             f"✅ GPT audit complete — "
-        #             f"Checklist: {gpt_cmp['total_checklist']} items | "
-        #             f"✅ Pass: {gpt_cmp['passes']} | "
-        #             f"⚠️ Warnings: {gpt_cmp['warnings']} | "
-        #             f"❌ Errors: {gpt_cmp['errors']}"
-        #         )
-        #         if gpt_cmp.get('additional_findings'):
-        #             add_log(f"🔍 Additional findings: {gpt_cmp['additional_findings']}")
-        #         st.session_state.step_status[7] = "✅"
-        #     except Exception as gpt_err:
-        #         add_log(f"⚠️ GPT audit failed: {gpt_err}", "warning")
-        #         logging.error(f"GPT audit error: {gpt_err}", exc_info=True)
-        #         st.session_state.step_status[7] = "⚠️"
-        #         st.session_state.gpt_audit_failed = True
-        #     update_progress()
-        # else:
-        #     st.session_state.step_status[7] = "⚠️"
-        #     if not pymupdf_clean_text:
-        #         add_log("⚠️ GPT audit skipped — PyMuPDF clean text not available", "warning")
-        #     update_progress()
+        # ── Step 8: Tag Validation Audit (pymupdf_compare) ─────────────────────
+        if pymupdf_clean_text and pymupdf_report and highlight_dir and Path(highlight_dir).exists():
+            n_spans = len(pymupdf_report.get("formatted_spans", []))
+            if n_spans == 0:
+                st.session_state.step_status[7] = "⏭️"
+                add_log("⏭️ Tag audit skipped — 0 formatted spans detected")
+                st.session_state.audit_counts = {
+                    'total_checklist': 0, 'passes': 0, 'warnings': 0,
+                    'errors': 0, 'tag_accuracy_pct': 100.0,
+                }
+            else:
+                st.session_state.current_step = 7
+                st.session_state.step_status[7] = "🔄"
+                update_progress()
+                add_log("🤖 Running Claude Opus 4.7 tag validation audit...")
+                if status_placeholder:
+                    status_placeholder.info("🤖 Running tag validation audit (comparing PyMuPDF report vs converted text)...")
+
+                try:
+                    opus46_dir = os.path.normpath(
+                        os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'Opus4.6')
+                    )
+                    if opus46_dir not in sys.path:
+                        sys.path.insert(0, opus46_dir)
+                    from pymupdf_compare import pymupdf_compare_tags
+
+                    import base64 as _b64
+                    hi_images_b64 = []
+                    for img_file in sorted(Path(highlight_dir).glob("page_*.png")):
+                        hi_images_b64.append(_b64.b64encode(img_file.read_bytes()).decode())
+                    add_log(f"📷 Loaded {len(hi_images_b64)} highlighted page images for audit")
+
+                    # Build state rules description
+                    sr_parts = []
+                    if state_config:
+                        sr_parts.append(f"State: {state_config.get('state_name', detected_state or 'unknown')}")
+                        a_cfg = state_config.get("add_markup", {})
+                        d_cfg = state_config.get("delete_markup", {})
+                        sr_parts.append(f"Underline={a_cfg.get('underline', False)}")
+                        sr_parts.append(f"Strikethrough={d_cfg.get('strike_out', False)}")
+                        sr_parts.append(f"Italic={a_cfg.get('italic', False)}")
+                        sr_parts.append(f"Bold={a_cfg.get('bold', False)}")
+                        sr_parts.append(f"AllCaps={a_cfg.get('all_caps', False)}")
+                        if d_cfg.get('strike_out', False) and (
+                            a_cfg.get('underline', False) or a_cfg.get('italic', False)
+                            or a_cfg.get('bold', False)
+                        ):
+                            sr_parts.append(
+                                "PRIORITY: strikethrough + any other formatting → tag "
+                                "as [D>...<D] only, never [A>...<A]"
+                            )
+                    state_rules_str = ", ".join(sr_parts) if sr_parts else f"State: {detected_state or 'unknown'}"
+
+                    audit_xlsx = output_path.replace(".txt", "_tag_validation.xlsx") \
+                        if isinstance(output_path, str) \
+                        else str(output_path).replace(".txt", "_tag_validation.xlsx")
+
+                    audit_summary = pymupdf_compare_tags(
+                        highlighted_images_b64=hi_images_b64,
+                        pymupdf_report=pymupdf_report,
+                        pymupdf_clean_text=converted_text,
+                        state_code=detected_state or "XX",
+                        state_rules=state_rules_str,
+                        output_xlsx=audit_xlsx,
+                    )
+
+                    st.session_state.audit_excel_path = audit_xlsx
+                    st.session_state.audit_counts = {
+                        'total_checklist': audit_summary.get('total_checklist', 0),
+                        'passes': audit_summary.get('passes', 0),
+                        'warnings': audit_summary.get('warnings', 0),
+                        'errors': audit_summary.get('errors', 0),
+                        'tag_accuracy_pct': audit_summary.get('tag_accuracy_pct', 0),
+                    }
+                    add_log(
+                        f"✅ Tag audit complete — "
+                        f"Checklist: {audit_summary.get('total_checklist', 0)} items | "
+                        f"✅ Pass: {audit_summary.get('passes', 0)} | "
+                        f"⚠️ Warnings: {audit_summary.get('warnings', 0)} | "
+                        f"❌ Errors: {audit_summary.get('errors', 0)}"
+                    )
+                    st.session_state.step_status[7] = "✅"
+                except Exception as audit_err:
+                    add_log(f"⚠️ Tag audit failed: {audit_err}", "warning")
+                    logging.error(f"Tag audit error: {audit_err}", exc_info=True)
+                    st.session_state.step_status[7] = "⚠️"
+                    st.session_state.gpt_audit_failed = True
+            update_progress()
+        else:
+            st.session_state.step_status[7] = "⚠️"
+            if not pymupdf_clean_text:
+                add_log("⚠️ Tag audit skipped — PyMuPDF clean text not available", "warning")
+            update_progress()
 
         # ── Wrap up ──────────────────────────────────────────────────────────────
         elapsed = time.time() - start_time
