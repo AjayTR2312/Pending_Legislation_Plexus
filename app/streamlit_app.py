@@ -4420,7 +4420,7 @@ def show_simple_ui():
         if _input_mode == "📁 Upload PDF Files":
             # Full upload section — before processing
             st.header("📁 Upload PDF Files")
-            st.caption("Upload one file for single processing, or multiple files (up to 20, max 2 MB total) for serial batch processing.")
+            st.caption("Upload one file for single processing, or multiple files (up to 20, max 5 MB total) for serial batch processing.")
             _uploader_key = f"pdf_uploader_{st.session_state.uploader_key_counter}"
             uploaded_files = st.file_uploader(
                 "Choose PDF file(s) to process",
@@ -4644,7 +4644,7 @@ def show_simple_ui():
 
     if uploaded_files:
         # ── Validate all files ────────────────────────────────────────────
-        MAX_TOTAL_SIZE = 2 * 1024 * 1024   # 2 MB total for all files combined
+        MAX_TOTAL_SIZE = 5 * 1024 * 1024   # 5 MB total for all files combined
         MAX_BATCH = 20
         MAX_PAGES = 15
         valid_files = []
@@ -4669,7 +4669,7 @@ def show_simple_ui():
             except Exception:
                 pass  # if we can't check, let it through — batch upload will catch it
 
-            # Check if adding this file would exceed the 2 MB total limit
+            # Check if adding this file would exceed the 5 MB total limit
             if _running_size + uf.size > MAX_TOTAL_SIZE:
                 skipped_size_names.append(f"{uf.name} ({format_file_size(uf.size)})")
                 continue
