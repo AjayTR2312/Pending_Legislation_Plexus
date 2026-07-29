@@ -5503,6 +5503,13 @@ def clean_extracted_text(
         len(raw_text), len(pre_cleaned), len(cleaned),
     )
 
+    # ── Restore tag-internal whitespace stripped by LLM ──────────────
+    # The LLM often trims leading/trailing spaces inside [A>...<A] and
+    # [D>...<D] tags (e.g. "[D> $350,000<D]" → "[D>$350,000<D]").
+    # This deterministic step compares against the pre-cleaned pymupdf
+    # text and restores the original internal whitespace.
+    cleaned = _restore_tag_internal_whitespace(cleaned, pre_cleaned)
+
     # ── bracket-to-[D>] tagging (runs AFTER LLM to avoid confusing it) ──
     if mark_brackets:
         cleaned = _tag_brackets(cleaned)
@@ -5694,6 +5701,58 @@ def clean_extracted_text(
         clean_extracted_text._last_anomalies = []
 
     return cleaned
+
+
+# ---------------------------------------------------------------------------
+# _restore_tag_internal_whitespace — deterministic post-LLM fix
+# ---------------------------------------------------------------------------
+_RE_TAG_EXTRACT = re.compile(r'\[([AD])>(.*?)<\1\]', re.DOTALL)
+
+
+def _restore_tag_internal_whitespace(cleaned: str, pre_cleaned: str) -> str:
+    """Restore leading/trailing whitespace inside tags that the LLM stripped.
+
+    The PyMuPDF extractor may produce ``[D> $350,000<D]`` (space inside tag)
+    but the LLM reflows this to ``[D>$350,000<D]`` (space moved outside or
+    dropped).  This function builds a lookup from the pre-cleaned (pymupdf)
+    text mapping stripped tag content → original tag content (with internal
+    whitespace), then replaces each tag in the cleaned text with the
+    whitespace-preserving version.
+
+    Only restores whitespace — never changes the actual text content.
+    """
+    # Build mapping: stripped content → original content (with whitespace)
+    # from the pre-cleaned (pymupdf) text.
+    original_ws: dict[str, str] = {}
+    for m in _RE_TAG_EXTRACT.finditer(pre_cleaned):
+        tag_type = m.group(1)
+        content = m.group(2)
+        stripped = content.strip()
+        if stripped and (content != stripped):  # had leading/trailing ws
+            key = (tag_type, stripped)
+            # Keep the first occurrence (most authoritative)
+            if key not in original_ws:
+                original_ws[key] = content
+
+    if not original_ws:
+        return cleaned
+
+    def _restore(m: re.Match) -> str:
+        tag_type = m.group(1)
+        content = m.group(2)
+        stripped = content.strip()
+        key = (tag_type, stripped)
+        if key in original_ws:
+            return f'[{tag_type}>{original_ws[key]}<{tag_type}]'
+        return m.group(0)
+
+    result = _RE_TAG_EXTRACT.sub(_restore, cleaned)
+    if result != cleaned:
+        logger.debug("Restored internal whitespace in %d tag(s)",
+                     sum(1 for a, b in zip(
+                         _RE_TAG_EXTRACT.findall(cleaned),
+                         _RE_TAG_EXTRACT.findall(result)) if a != b))
+    return result
 
 
 def consolidate_adjacent_tags(text: str, state_code: str = None) -> str:

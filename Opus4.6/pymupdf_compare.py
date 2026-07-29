@@ -1836,6 +1836,43 @@ def pymupdf_compare_tags(
     log.info("✅ All chunks done: %d checklist results, %d additional findings",
              len(checklist_results), len(additional_findings))
 
+    # ── Build page-estimation index from cleaned text ────────────────
+    # Split cleaned text by page separators or line count to estimate
+    # which page an extra tag appears on.
+    def _estimate_extra_tag_page_line(tag_full: str, clean_text: str) -> tuple:
+        """Return (page, line) by finding *tag_full* in *clean_text*."""
+        idx = clean_text.find(tag_full)
+        if idx < 0:
+            return ("", "")
+        text_before = clean_text[:idx]
+        # Count lines up to the match
+        line_no = text_before.count('\n') + 1
+        # Estimate page: look for nearest page separator or section header
+        # Use 'Sec.' / 'Section' boundaries as rough page proxies if no
+        # page-break markers exist.  Fall back to line-based estimation.
+        import re as _re2
+        # Check checklist items for page→line mapping to estimate
+        _pages_seen = {}
+        for ci in checklist_items:
+            p = ci.get("page")
+            bl = ci.get("bill_line")
+            if p and bl:
+                try:
+                    _pages_seen.setdefault(int(p), []).append(int(bl))
+                except (ValueError, TypeError):
+                    pass
+        # Find the page whose line range contains our line_no
+        best_page = ""
+        if _pages_seen:
+            for pg in sorted(_pages_seen):
+                lines = _pages_seen[pg]
+                if line_no <= max(lines) + 5:  # small margin
+                    best_page = str(pg)
+                    break
+            if not best_page:
+                best_page = str(max(_pages_seen))  # last page
+        return (best_page, str(line_no))
+
     # ── Inject deterministic extra-tag findings as checklist rows ───
     if extra_clean_tags:
         log.info("➕ Injecting %d extra clean tags as checklist rows",
@@ -1982,12 +2019,17 @@ def pymupdf_compare_tags(
             # phantom tag wraps protected-clause text, this is a
             # specific bug ("protected_clause_tagged") — the LLM should
             # have removed the tag because state policy forbids it.
+            # Estimate page / line for this extra tag
+            _et_page, _et_line = _estimate_extra_tag_page_line(
+                et["full"], pymupdf_clean_text
+            )
+
             is_prot = _is_protected_text(et["text"], protected_for_state)
             if is_prot:
                 cr_row = {
                     "checklist_id": i,
                     "tag_type": et["type"],
-                    "page": "",
+                    "page": _et_page,
                     "pymupdf_text": "",
                     "clean_text": et["full"],
                     "in_image": "yes",          # the text IS in the document
@@ -2011,7 +2053,7 @@ def pymupdf_compare_tags(
                 cr_row = {
                     "checklist_id": i,
                     "tag_type": et["type"],
-                    "page": "",
+                    "page": _et_page,
                     "pymupdf_text": "",          # no source span exists
                     "clean_text": et["full"],
                     "in_image": "no",            # no report ⇒ not in highlighted image
@@ -2033,8 +2075,8 @@ def pymupdf_compare_tags(
                 "id": i,
                 "tag_type": et["type"],
                 "text": "",                 # leave PyMuPDF Text column blank for phantoms
-                "page": "",
-                "bill_line": "",
+                "page": _et_page,
+                "bill_line": _et_line,
                 "format_types": [],
                 "bbox": [],
                 "context": f"Extra tag added by LLM: {et['full'][:80]}",
@@ -2686,8 +2728,36 @@ def pymupdf_compare_tags(
         log.info("🔄 Fixed %d partial_match item(s) with exact duplicates", n_partial_fix)
 
     # ── Normalize verdict / classification consistency ──────────────
+    # Smart/curly quotes + common punctuation + dash variants
+    _SINGLE_PUNCT = set('.,;:!?\'"()[]{}–—-/\u201c\u201d\u2018\u2019\u00ab\u00bb')
+    # Dash-like noise patterns: "--", "---", em-dash, en-dash standing alone
+    _DASH_NOISE = re.compile(r'^[-–—]{1,3}$')
     for cr in checklist_results:
         cls = cr.get("classification", "")
+        # Single-punctuation or dash-variant tags are noise — always pass.
+        # The PyMuPDF extractor or LLM may split or add a tag around a
+        # lone quote, comma, semicolon, parenthesis, dash, etc.
+        # These never represent meaningful formatting differences.
+        _cr_text = (
+            cr.get("pymupdf_text", "") or cr.get("clean_text", "") or ""
+        )
+        # Extract inner text from tag wrapper if present
+        _inner = re.sub(r'^\[[AD]>(.*)<[AD]\]$', r'\1', _cr_text.strip())
+        _inner_s = _inner.strip()
+        if _inner_s and (
+            (len(_inner_s) == 1 and _inner_s in _SINGLE_PUNCT)
+            or _DASH_NOISE.match(_inner_s)
+        ):
+            cr["verdict"] = "✅ pass"
+            cr["classification"] = "single_punct_noise"
+            if not cr.get("notes", "").startswith("Single punctuation"):
+                cr["notes"] = (
+                    f"Single punctuation/dash '{_inner_s}' — "
+                    f"not a meaningful formatting difference. "
+                    f"(Original classification: {cls})"
+                )
+            cr["suggested_fix"] = ""
+            continue
         if cls in _ERROR_CLASSES and not cr.get("verdict", "").startswith("❌"):
             cr["verdict"] = "❌ error"
         elif cls in _WARNING_CLASSES and not cr.get("verdict", "").startswith("⚠"):

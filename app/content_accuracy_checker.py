@@ -54,6 +54,17 @@ _ARTIFACT_PATTERNS = [
     re.compile(r"^\s*As Engrossed:.*?[A-Z]{2}\d+\s*$", re.MULTILINE),  # As Engrossed: H3/12/25  HB1163
     re.compile(r"^\s*HB\d+\s*$", re.MULTILINE),                  # Standalone bill numbers
     re.compile(r"^\s*SB\d+\s*$", re.MULTILINE),                  # Standalone bill numbers
+    # CA page headers: "AB 827 — 2 —" or "— 3 — AB 827" or "92 Ch. 574 — 2 —"
+    re.compile(
+        r"^\s*(?:"
+        r"(?:(?:AB|SB|ACA|SCA|ACR|SCR|AJR|SJR|HR|SR)\s*\d+|\d+\s*Ch\.?\s*\d+)\s*(?:\u2014|--|\u2015)\s*\d+\s*(?:\u2014|--|\u2015)"
+        r"|"
+        r"(?:\u2014|--|\u2015)\s*\d+\s*(?:\u2014|--|\u2015)\s*(?:(?:AB|SB|ACA|SCA|ACR|SCR|AJR|SJR|HR|SR)\s*\d+|\d+\s*Ch\.?\s*\d+)"
+        r")\s*$",
+        re.MULTILINE | re.IGNORECASE,
+    ),
+    # CA page footer: bare number repeated on every page (e.g. "98") or trailing "O"
+    re.compile(r"^\s*O\s*$", re.MULTILINE),                       # trailing O ornament
 ]
 
 # Patterns used for classifying differences
@@ -61,6 +72,30 @@ _RE_ARTIFACT = re.compile(
     r"(?:^\*[A-Z]{3}\d+\*|\d{2}-\d{2}-\d{4}\s+\d{2}:\d{2}:\d{2}|"
     r"---\s*Page\s+\d+\s*---|As\s+Engrossed:|^HB\d+$|^SB\d+$|"
     r"^(?:EH|SH|HB|SB|HJ|SJ)\s*\d+)",
+    re.IGNORECASE,
+)
+
+# ── CA page header / footer patterns ──────────────────────────────
+# CA bills have repeating page footers (a bare number like "98") and
+# alternating page headers such as "AB 827 — 2 —" or "— 3 — AB 827".
+# The trailing "O" on the last page is also a footer ornament.
+_RE_CA_PAGE_HEADER = re.compile(
+    r"^\s*(?:"
+    # "AB 827 — 2 —" or "92 Ch. 574 — 2 —" (even pages)
+    r"(?:(?:AB|SB|ACA|SCA|ACR|SCR|AJR|SJR|HR|SR)\s*\d+|\d+\s*Ch\.?\s*\d+)\s*(?:\u2014|--|\u2015)\s*\d+\s*(?:\u2014|--|\u2015)"
+    r"|"
+    # "— 3 — AB 827" or "— 3 — 92 Ch. 574" (odd pages)
+    r"(?:\u2014|--|\u2015)\s*\d+\s*(?:\u2014|--|\u2015)\s*(?:(?:AB|SB|ACA|SCA|ACR|SCR|AJR|SJR|HR|SR)\s*\d+|\d+\s*Ch\.?\s*\d+)"
+    r")\s*$",
+    re.IGNORECASE,
+)
+_RE_CA_PAGE_FOOTER = re.compile(
+    r"^\s*(?:\d{1,4}|O)\s*$",  # bare number like "98" or trailing "O"
+)
+# Spaced-out decorative headers (e.g. "F L O R I D A H O U S E ...")
+# Matches text where most "words" are single letters separated by spaces.
+_RE_SPACED_HEADER = re.compile(
+    r"^(?:[A-Z]\s+){4,}",  # at least 4 single letters in a row
     re.IGNORECASE,
 )
 _RE_HYPHEN_REJOIN = re.compile(r"^(\S+)-$")  # word ending with hyphen
@@ -132,8 +167,8 @@ def _classify_difference(
     # in the precleaned source, it's a repeating page header/footer that
     # the LLM correctly removed.
     if diff_type == "delete" and repeated_texts and words_affected <= 20:
-        # Strip trailing digits (page number) to find the base pattern
-        base = re.sub(r"\s+\d+\s*$", "", pre).strip()
+        # Normalize all standalone numbers to # (matches how we built the set)
+        base = re.sub(r"(?<!\w)\d+(?!\w)", "#", pre).strip()
         if base in repeated_texts or pre in repeated_texts:
             # Determine content_type
             has_number = bool(re.search(r"\d+$", pre.strip()))
@@ -224,7 +259,7 @@ def _classify_difference(
         }
 
     # ── Standalone line numbers (bare digits) ─────────────────────
-    if diff_type == "delete" and re.match(r"^\d{1,3}$", pre.strip()):
+    if diff_type == "delete" and re.match(r"^\d{1,5}$", pre.strip()):
         return {
             "category": "artifact_removed",
             "severity": "info",
@@ -232,6 +267,49 @@ def _classify_difference(
             "is_expected": True,
             "content_type": "page_artifact",
         }
+
+    # ── Page number patterns (e.g. "Page 1 of 2") ────────────────
+    if diff_type == "delete" and re.match(
+        r"^(?:Page\s+\d+\s+of\s+\d+|\d+\s+of\s+\d+)$", pre.strip(), re.IGNORECASE
+    ):
+        return {
+            "category": "artifact_removed",
+            "severity": "info",
+            "explanation": f"Page number correctly stripped: \"{pre.strip()}\"",
+            "is_expected": True,
+            "content_type": "page_number",
+        }
+
+    # ── CA page headers / footers ─────────────────────────────────
+    # Catch alternating CA headers like "AB 827 — 2 —" / "— 3 — AB 827"
+    # and repeating footers like "98" or the trailing "O".
+    if diff_type == "delete":
+        _pre_s = pre.strip()
+        if _RE_CA_PAGE_HEADER.match(_pre_s):
+            return {
+                "category": "artifact_removed",
+                "severity": "info",
+                "explanation": f"CA page header correctly stripped: \"{_pre_s}\"",
+                "is_expected": True,
+                "content_type": "page_header",
+            }
+        if _RE_CA_PAGE_FOOTER.match(_pre_s):
+            return {
+                "category": "artifact_removed",
+                "severity": "info",
+                "explanation": f"CA page footer correctly stripped: \"{_pre_s}\"",
+                "is_expected": True,
+                "content_type": "page_footer",
+            }
+        # Spaced-out decorative headers (e.g. "F L O R I D A H O U S E ...")
+        if _RE_SPACED_HEADER.match(_pre_s):
+            return {
+                "category": "artifact_removed",
+                "severity": "info",
+                "explanation": f"Spaced-out page header correctly stripped: \"{_pre_s[:80]}\"",
+                "is_expected": True,
+                "content_type": "page_header",
+            }
 
     # ── Content drop (paragraph or word level) ────────────────────
     if diff_type == "delete":
@@ -277,6 +355,18 @@ def _classify_difference(
 
     # ── Replace — could be content change or formatting fix ───────
     if diff_type == "replace":
+        # Smart/curly quote normalization — PDFs use \u201c \u201d \u2018 \u2019
+        # but the LLM may output straight quotes.  If that is the ONLY
+        # difference, treat it as an expected formatting fix.
+        _QUOTE_MAP = str.maketrans('\u201c\u201d\u2018\u2019\u00ab\u00bb', '""\'\'""')
+        if pre.translate(_QUOTE_MAP) == out.translate(_QUOTE_MAP):
+            return {
+                "category": "formatting_fix",
+                "severity": "info",
+                "explanation": f"Quote normalization: \"{pre}\" → \"{out}\"",
+                "is_expected": True,
+                "content_type": "formatting",
+            }
         # Small replacements (1-2 words) that look like formatting
         if words_affected <= 2:
             return {
@@ -369,15 +459,23 @@ def check_content_accuracy(
     # Detect lines that appear multiple times in precleaned text.
     # These are page headers/footers the LLM is expected to remove.
     # We strip trailing page numbers to find the repeating base pattern.
+    # We also normalize ALL standalone numbers (surrounded by non-alnum)
+    # to catch CA-style headers where the page number is embedded:
+    #   "AB 827 — 2 —" / "AB 827 — 3 —" → base "AB 827 — # —"
+    #   "— 2 — AB 827" / "— 3 — AB 827" → base "— # — AB 827"
+    #   "92 Ch. 574 — 2 —" → base "# Ch. # — # —"
+    #   "Page 1 of 2" / "Page 2 of 2" → base "Page # of #"
     _line_counts: Dict[str, int] = {}
+    _line_to_base: Dict[str, str] = {}  # map original stripped → base
     for line in pre.split('\n'):
         stripped = line.strip()
         if not stripped or len(stripped) < 3:
             continue
-        # Base form: remove trailing page number
-        base = re.sub(r"\s+\d+\s*$", "", stripped).strip()
+        # Base form: replace all standalone numbers with #
+        base = re.sub(r"(?<!\w)\d+(?!\w)", "#", stripped).strip()
         if base:
             _line_counts[base] = _line_counts.get(base, 0) + 1
+            _line_to_base[stripped] = base
 
     # Lines appearing 3+ times are repeating headers/footers
     repeated_texts = {base for base, count in _line_counts.items() if count >= 3}
