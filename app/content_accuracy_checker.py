@@ -71,7 +71,9 @@ _ARTIFACT_PATTERNS = [
 _RE_ARTIFACT = re.compile(
     r"(?:^\*[A-Z]{3}\d+\*|\d{2}-\d{2}-\d{4}\s+\d{2}:\d{2}:\d{2}|"
     r"---\s*Page\s+\d+\s*---|As\s+Engrossed:|^HB\d+$|^SB\d+$|"
-    r"^(?:EH|SH|HB|SB|HJ|SJ)\s*\d+)",
+    r"^(?:EH|SH|HB|SB|HJ|SJ)\s*\d+|"
+    r"^T?LSB\s+\d+\w*|"
+    r"^-\d+-\s+[a-z/]+\s+\d+/\d+)",  # Iowa page footers: -1- dg/jh 1/5
     re.IGNORECASE,
 )
 
@@ -95,7 +97,7 @@ _RE_CA_PAGE_FOOTER = re.compile(
 # Spaced-out decorative headers (e.g. "F L O R I D A H O U S E ...")
 # Matches text where most "words" are single letters separated by spaces.
 _RE_SPACED_HEADER = re.compile(
-    r"^(?:[A-Z]\s+){4,}",  # at least 4 single letters in a row
+    r"(?:[A-Z]\s+){4,}",  # at least 4 single letters in a row
     re.IGNORECASE,
 )
 _RE_HYPHEN_REJOIN = re.compile(r"^(\S+)-$")  # word ending with hyphen
@@ -302,7 +304,8 @@ def _classify_difference(
                 "content_type": "page_footer",
             }
         # Spaced-out decorative headers (e.g. "F L O R I D A H O U S E ...")
-        if _RE_SPACED_HEADER.match(_pre_s):
+        # or combined with page number: "Page 1 of 3 F L O R I D A ..."
+        if _RE_SPACED_HEADER.search(_pre_s):
             return {
                 "category": "artifact_removed",
                 "severity": "info",
@@ -477,8 +480,8 @@ def check_content_accuracy(
             _line_counts[base] = _line_counts.get(base, 0) + 1
             _line_to_base[stripped] = base
 
-    # Lines appearing 3+ times are repeating headers/footers
-    repeated_texts = {base for base, count in _line_counts.items() if count >= 3}
+    # Lines appearing 2+ times are repeating headers/footers
+    repeated_texts = {base for base, count in _line_counts.items() if count >= 2}
 
     # Build metadata header/footer text set for classification
     metadata_hf_texts: Optional[set] = None
