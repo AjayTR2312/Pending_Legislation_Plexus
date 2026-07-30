@@ -489,11 +489,11 @@ def check_content_accuracy(
     out = out.replace("\u2014", "-").replace("\u2013", "-")
     out = re.sub(r"--+", "-", out)
 
-    # ── Normalize line-break hyphenations: "full- time" → "full-time" ──
-    # PDF text often has a space after a hyphen at a line break.
+    # ── Normalize line-break hyphenations: "full- time" / "full-\ntime" → "full-time" ──
+    # PDF text often has a space or newline after a hyphen at a line break.
     # The LLM rejoins them, so both sides should match.
-    pre = re.sub(r'(\w)- (\w)', r'\1-\2', pre)
-    out = re.sub(r'(\w)- (\w)', r'\1-\2', out)
+    pre = re.sub(r'(\w)-\s+(\w)', r'\1-\2', pre)
+    out = re.sub(r'(\w)-\s+(\w)', r'\1-\2', out)
 
     # ── Build repeated-text set ───────────────────────────────────
     # Detect lines that appear multiple times in precleaned text.
