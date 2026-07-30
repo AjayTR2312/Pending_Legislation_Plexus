@@ -2279,8 +2279,12 @@ def _strip_repeating_page_artifacts(text: str) -> str:
     # Lines appearing on ≥2 pages are artifacts — but only if they have
     # ≥2 words.  Single-word lines like "section." are often legitimate
     # legislative text split across a page boundary, not artifacts.
+    # Also exclude lines >60 chars — long lines like
+    # "repair, expansion, construction, equipping, renovation, purchase, improvement"
+    # are real bill text that happens to repeat across sections, not artifacts.
     artifacts = {line for line, count in _candidate_counts.items()
-                 if count >= 2 and len(line) >= 3 and len(line.split()) >= 2}
+                 if count >= 2 and len(line) >= 3 and len(line.split()) >= 2
+                 and len(line) <= 60}
     if not artifacts:
         return text
 
