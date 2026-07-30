@@ -3451,9 +3451,18 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
 
         # Content accuracy — word-level precleaned vs output comparison
         # _precleaned_text already loaded above for deterministic_cleanup
+        # Apply repeating-page-artifact stripping so headers/footers the LLM
+        # correctly removed don't count as false-positive "content drops".
+        _precleaned_for_acc = _precleaned_text
+        if _precleaned_for_acc:
+            try:
+                from pymupdf_extractor import _strip_repeating_page_artifacts
+                _precleaned_for_acc = _strip_repeating_page_artifacts(_precleaned_for_acc)
+            except ImportError:
+                pass
         _content_acc_json = output_path.replace(".txt", "_content_accuracy.json") if output_path else None
         _run_content_accuracy_check(
-            precleaned_text=_precleaned_text,
+            precleaned_text=_precleaned_for_acc,
             output_text=converted_text,
             add_log=add_log,
             save_to=_content_acc_json,
@@ -5570,8 +5579,9 @@ def show_results_section():
                                 _all_items = [dict(zip(_hdrs, r)) for r in _rows[1:] if r[0] is not None]
                                 _issue_items = [
                                     r for r in _all_items
-                                    if str(r.get("Verdict", "")).startswith("❌")
-                                    or str(r.get("Verdict", "")).startswith("⚠")
+                                    if (str(r.get("Verdict", "")).startswith("❌")
+                                        or str(r.get("Verdict", "")).startswith("⚠"))
+                                    and "dash normali" not in str(r.get("Notes", "") or "").lower()
                                 ]
                                 if _issue_items:
                                     _tbl_rows = []

@@ -1566,6 +1566,10 @@ _PASS_CLASSES = {
     # :func:`_is_in_decorative_header`.  This is the EXPECTED behavior
     # per the IN prompt — NOT a ``tag_dropped`` error.
     "decorative_header_dropped",
+    # Dash normalization: em-dash/en-dash/double-hyphen are equivalent
+    "dash_normalized",
+    # Single punctuation noise
+    "single_punct_noise",
 }
 
 
@@ -2726,6 +2730,29 @@ def pymupdf_compare_tags(
             n_partial_fix += 1
     if n_partial_fix:
         log.info("🔄 Fixed %d partial_match item(s) with exact duplicates", n_partial_fix)
+
+    # ── Dash normalization: promote errors that differ only by dash style ──
+    # Double-hyphen "--" is equivalent to em-dash "—" and en-dash "–".
+    # If the LLM audit flagged an item as an error purely because of dash
+    # normalization, promote it to a pass.
+    _DASH_NORM_KEYWORDS = ("dash normalized", "dash character normalized",
+                           "dash normali")
+    n_dash_promoted = 0
+    for cr in checklist_results:
+        if not cr.get("verdict", "").startswith("❌"):
+            continue
+        notes_lower = (cr.get("notes", "") or "").lower()
+        if any(kw in notes_lower for kw in _DASH_NORM_KEYWORDS):
+            cr["verdict"] = "✅ pass"
+            cr["classification"] = "dash_normalized"
+            cr["notes"] = (
+                "Dash normalization (em-dash/en-dash/double-hyphen are equivalent) — "
+                "not a real error. " + (cr.get("notes", "") or "")
+            ).strip()
+            cr["suggested_fix"] = ""
+            n_dash_promoted += 1
+    if n_dash_promoted:
+        log.info("🔄 Promoted %d dash-normalization item(s) to pass", n_dash_promoted)
 
     # ── Normalize verdict / classification consistency ──────────────
     # Smart/curly quotes + common punctuation + dash variants

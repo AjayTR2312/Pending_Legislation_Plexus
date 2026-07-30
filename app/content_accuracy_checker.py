@@ -51,6 +51,9 @@ _ARTIFACT_PATTERNS = [
     re.compile(r"^\*[A-Z]{3}\d+\*.*$", re.MULTILINE),           # *KMW004* ...
     re.compile(r"^\d{2}-\d{2}-\d{4} \d{2}:\d{2}:\d{2} \w+$", re.MULTILINE),  # 03-12-2025 15:44:32 KMW004
     re.compile(r"^--- Page \d+ ---$", re.MULTILINE),              # --- Page 2 ---
+    re.compile(r"^\s*Page\s+\d+\s+of\s+\d+\s*$", re.MULTILINE),  # Page 1 of 19
+    re.compile(r"^\s*(?:ENROLLED|ENGROSSED)\s+\w+\s*$", re.MULTILINE),  # ENROLLED 20267026er
+    re.compile(r"^\s*CODING:\s*Words\s+.+?additions\.\s*$", re.MULTILINE),  # FL CODING line
     re.compile(r"^\s*As Engrossed:.*?[A-Z]{2}\d+\s*$", re.MULTILINE),  # As Engrossed: H3/12/25  HB1163
     re.compile(r"^\s*HB\d+\s*$", re.MULTILINE),                  # Standalone bill numbers
     re.compile(r"^\s*SB\d+\s*$", re.MULTILINE),                  # Standalone bill numbers
@@ -65,15 +68,27 @@ _ARTIFACT_PATTERNS = [
     ),
     # CA page footer: bare number repeated on every page (e.g. "98") or trailing "O"
     re.compile(r"^\s*O\s*$", re.MULTILINE),                       # trailing O ornament
+    # CT page headers: "Public Act No. 26-142 12 of 46", "LCO 1 of 29"
+    re.compile(r"^\s*Public\s+Act\s+No\.\s*\d+[-–]\d+\s+\d+\s+of\s+\d+\s*$", re.MULTILINE | re.IGNORECASE),
+    re.compile(r"^\s*LCO\s+\d+\s+of\s+\d+\s*$", re.MULTILINE | re.IGNORECASE),
+    # CT: "LCO No. 1234"
+    re.compile(r"^\s*LCO\s+No\.?\s*\d+\s*$", re.MULTILINE | re.IGNORECASE),
+    # Generic state bill page headers: "HB 1234 — 5" or "SB 2-D" with page num
+    re.compile(r"^\s*(?:House|Senate)\s+Bill\s+No\.?\s*\d+[-–]?\w*\s*$", re.MULTILINE | re.IGNORECASE),
 ]
 
 # Patterns used for classifying differences
 _RE_ARTIFACT = re.compile(
     r"(?:^\*[A-Z]{3}\d+\*|\d{2}-\d{2}-\d{4}\s+\d{2}:\d{2}:\d{2}|"
-    r"---\s*Page\s+\d+\s*---|As\s+Engrossed:|^HB\d+$|^SB\d+$|"
+    r"---\s*Page\s+\d+\s*---|Page\s+\d+\s+of\s+\d+|"
+    r"CODING:\s*Words\s+.+?additions\.|"
+    r"As\s+Engrossed:|^HB\d+$|^SB\d+$|"
     r"^(?:EH|SH|HB|SB|HJ|SJ)\s*\d+|"
     r"^T?LSB\s+\d+\w*|"
-    r"^-\d+-\s+[a-z/]+\s+\d+/\d+)",  # Iowa page footers: -1- dg/jh 1/5
+    r"^-\d+-\s+[a-z/]+\s+\d+/\d+|"
+    r"Public\s+Act\s+No\.\s*\d+[-\u2013]\d+\s+\d+\s+of\s+\d+|"
+    r"^LCO\s+\d+\s+of\s+\d+|"
+    r"^LCO\s+No\.?\s*\d+)",  # CT page headers
     re.IGNORECASE,
 )
 
@@ -627,8 +642,9 @@ def check_content_accuracy(
                 category_counts[cat] = category_counts.get(cat, 0) + (count - 1)
                 extra += _words_in_line * (count - 1)
 
-    # Calculate adjusted accuracy: exclude expected differences from penalty
-    # but penalize for non-expected (real) content issues
+    # Calculate adjusted accuracy: exclude expected differences from the
+    # denominator so they don't penalize the score.  The numerator is simply
+    # the count of words that matched (already excludes all diffs).
     expected_words_removed = sum(
         d["words_affected"] for d in differences if d.get("is_expected")
     )
@@ -636,8 +652,7 @@ def check_content_accuracy(
         d["words_affected"] for d in differences if not d.get("is_expected")
     )
     adjusted_max = max_words - expected_words_removed
-    adjusted_matching = matching_words - issue_words
-    adjusted_accuracy = (adjusted_matching / adjusted_max * 100) if adjusted_max > 0 else 100.0
+    adjusted_accuracy = (matching_words / adjusted_max * 100) if adjusted_max > 0 else 100.0
     adjusted_accuracy = max(min(adjusted_accuracy, 100.0), 0.0)  # Clamp 0-100%
 
     return {

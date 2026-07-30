@@ -2276,8 +2276,11 @@ def _strip_repeating_page_artifacts(text: str) -> str:
         for c in candidates:
             _candidate_counts[c] += 1
 
-    # Lines appearing on ≥2 pages are artifacts
-    artifacts = {line for line, count in _candidate_counts.items() if count >= 2 and len(line) >= 3}
+    # Lines appearing on ≥2 pages are artifacts — but only if they have
+    # ≥2 words.  Single-word lines like "section." are often legitimate
+    # legislative text split across a page boundary, not artifacts.
+    artifacts = {line for line, count in _candidate_counts.items()
+                 if count >= 2 and len(line) >= 3 and len(line.split()) >= 2}
     if not artifacts:
         return text
 
@@ -5265,23 +5268,15 @@ def clean_extracted_text(
         metadata_prefix = extract_page_metadata(pdf_path)
 
     # ── Pre-clean raw text BEFORE sending to LLM ──────────────────
-    # The raw _pymupdf.txt may contain:
+    # The precleaner's job is to strip line numbers only:
     #   • Margin line numbers ("line 1", "line 2", …) for CA bills
     #   • Trailing line numbers (FL/CT style: "...public 3\n")
-    #   • Adjacent same-type tags split across line wraps:
-    #       [A>SECTION 1.<A]\n line 2 [A>to read:<A]
-    # The LLM is unreliable at merging these split tags — it sometimes
-    # drops the second tag entirely (case observed: AB 502 page 3 lost
-    # the `[A>to read:<A]` wrapper).  By pre-merging deterministically
-    # with `_clean_tagged_text`, the LLM only sees:
-    #       [A>SECTION 1. ... to read:<A]
-    # which it just has to preserve verbatim.
+    #   • Leading line numbers (KS/NE/MO style: "1 AN ACT...")
+    #   • Bare line-number blocks (MA/CT page-boundary style)
     #
-    # This is safe for ALL states — `_RE_LINE_NUMBER` only matches the
-    # literal "line N" pattern (CA-specific) and is a no-op elsewhere.
-    # The tag-merge regexes only collapse adjacent same-type tags
-    # separated by a single newline (within-paragraph), preserving
-    # paragraph breaks (\n\n).
+    # All other cleanup (headers, footers, artifacts, tag merging)
+    # is the LLM's responsibility.  The content_accuracy_checker
+    # handles classification of expected removals vs real issues.
     pre_cleaned = _clean_tagged_text(raw_text, strip_line_numbers=True)
 
     # ── Strip trailing line numbers (FL/CT style) before LLM ──────
@@ -5332,11 +5327,17 @@ def clean_extracted_text(
     except ImportError:
         pass
 
-    # ── Repeating page headers/footers (all states) ─────────────────────
-    # Detect short lines that repeat across ≥2 page boundaries and strip
-    # ALL occurrences (including page 1) so the LLM never sees them.
-    # Catches "ENROLLED ORIGINAL", bill numbers, date stamps, etc.
+    # ── Repeating page headers/footers ─────────────────────────────────
+    # Strip repeating headers/footers from the precleaned text used for
+    # content-accuracy comparison.  This ensures headers the LLM correctly
+    # removes don't show up as false-positive "content drops".
+    # NOTE: The LLM pipeline (Claude_Opus_4.6_Test.py) has this DISABLED
+    # so the LLM still sees headers/footers and can decide what to keep.
     pre_cleaned = _strip_repeating_page_artifacts(pre_cleaned)
+
+    # ── AR scan/print artifacts (barcode lines, timestamps) ─────────────
+    if state_code and state_code.upper() == "AR":
+        pre_cleaned = _strip_ar_artifacts(pre_cleaned)
 
     if pre_cleaned != raw_text:
         logger.info(
