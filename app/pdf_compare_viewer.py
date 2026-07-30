@@ -363,7 +363,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,san
 }
 @keyframes hlP{0%{opacity:0}100%{opacity:1}}
 
-.cz{position:absolute;cursor:pointer;z-index:4;border:1px solid transparent;transition:all .12s}
+.cz{position:absolute;cursor:pointer;z-index:7;border:1px solid transparent;transition:all .12s}
 .cz:hover{border-color:rgba(9,105,218,.3);background:rgba(9,105,218,.06)}
 
 /* PDF.js native text layer */
@@ -730,7 +730,7 @@ S=_renderScale;
       // All pages rendered — build overlays
       syncTextLayers();
       rebuildPdfOverlays();
-      _buildLinePdfPos();
+      if(syncScrollEnabled) _buildSyncAnchors();
     });
   }).catch(function(err){
     document.getElementById('statBar').textContent='\u26a0\ufe0f PDF render failed: '+err.message;
@@ -862,117 +862,134 @@ function toggleSyncScroll(){
   syncScrollEnabled=!syncScrollEnabled;
   var btn=document.getElementById('syncBtn');
   btn.classList.toggle('on',syncScrollEnabled);
-  // Rebuild position map when enabling (in case it wasn't built yet)
-  if(syncScrollEnabled && Object.keys(_linePdfPos).length===0) _buildLinePdfPos();
-  var n=Object.keys(_linePdfPos).length;
+  if(syncScrollEnabled) _buildSyncAnchors();
+  var n=_syncAnchors.length;
   document.getElementById('statBar').textContent=
-    syncScrollEnabled?'⇔ Sync scroll ON ('+n+' lines mapped)':'⇔ Sync scroll OFF';
+    syncScrollEnabled?'⇔ Sync scroll ON ('+n+' anchor points)':'⇔ Sync scroll OFF';
 }
 
-// Build line→page/y lookup for sync: for each text line that has a
-// wordMap entry, record its PDF page and average y position.
-var _linePdfPos={};  // li → {page, y}
-function _buildLinePdfPos(){
-  _linePdfPos={};
-  Object.keys(lg).forEach(function(li){
-    var ws=lg[li];
-    if(!ws||!ws.length)return;
-    var sumY=0;
-    ws.forEach(function(w){sumY+=w.y0;});
-    _linePdfPos[li]={page:ws[0].page, y:sumY/ws.length};
-  });
-}
+// ── Build anchor table: sorted list of {pdfY, textY} positions ──────
+// Each mapped text line becomes an anchor. We precompute the absolute
+// scroll positions on both sides so that during scroll we just binary-
+// search + interpolate — no DOM queries, no layout thrashing.
+var _syncAnchors=[]; // [{pdfY, textY}, ...] sorted by pdfY
+var _syncAnchorsByText=[]; // same array sorted by textY
 
-// Given a scroll fraction (0..1) of one panel, find the corresponding
-// line index using the wordMap data.
-function _pdfScrollToLine(){
-  // Which page is visible at the top of the PDF panel?
+function _buildSyncAnchors(){
+  _syncAnchors=[];
   var pp=document.getElementById('pdfPanel');
-  var scrollTop=pp.scrollTop;
-  var bestPage=0;
-  containers.forEach(function(c,i){if(c.offsetTop-60<=scrollTop)bestPage=i;});
-  // How far into that page?
-  var ctr=containers[bestPage];
-  var cv=ctr?ctr.querySelector('canvas'):null;
-  if(!cv||!cv.width)return -1;
-  var ds=cv.clientWidth/cv.width;
-  var yInPage=(scrollTop-ctr.offsetTop-(cv?cv.offsetTop:0))/(ds*S);
-  if(yInPage<0)yInPage=0;
-  // Find closest line on this page
-  var bestLi=-1,bestDist=1e9;
-  Object.keys(_linePdfPos).forEach(function(li){
-    var lp=_linePdfPos[li];
-    if(lp.page===bestPage){
-      var d=Math.abs(lp.y-yInPage);
-      if(d<bestDist){bestDist=d;bestLi=parseInt(li);}
-    }
+  var tp=document.getElementById('textPanel');
+  if(!pp||!tp)return;
+
+  // Build line→pdfPos lookup from lg (wordMap grouped by line)
+  var linePdfPos={};
+  Object.keys(lg).forEach(function(li){
+    var ws=lg[li];if(!ws||!ws.length)return;
+    var sumY=0;ws.forEach(function(w){sumY+=w.y0;});
+    linePdfPos[li]={page:ws[0].page, y:sumY/ws.length};
   });
-  return bestLi;
-}
 
-function _lineToTextScrollTop(li){
-  var tl=document.querySelector('.tl[data-li="'+li+'"]');
-  if(!tl)return -1;
-  var tp=document.getElementById('textPanel');
-  // Use getBoundingClientRect for accurate offset regardless of nesting
-  var tlRect=tl.getBoundingClientRect();
-  var tpRect=tp.getBoundingClientRect();
-  return tlRect.top - tpRect.top + tp.scrollTop;
-}
-
-function _lineToPdfScrollTop(li){
-  var lp=_linePdfPos[li];
-  if(!lp)return -1;
-  var ctr=containers[lp.page];
-  if(!ctr)return -1;
-  var cv=ctr.querySelector('canvas');
-  if(!cv||!cv.width)return -1;
-  var ds=cv.clientWidth/cv.width;
-  return ctr.offsetTop+cv.offsetTop+lp.y*S*ds;
-}
-
-function _textScrollToLine(){
-  var tp=document.getElementById('textPanel');
-  var tpRect=tp.getBoundingClientRect();
+  // For each mapped line, compute both scroll positions
   var tls=tp.querySelectorAll('.tl');
-  var bestLi=-1;
-  for(var i=0;i<tls.length;i++){
-    var r=tls[i].getBoundingClientRect();
-    // Find the last line whose top is at or above the panel's top edge + small offset
-    if(r.top <= tpRect.top+50) bestLi=parseInt(tls[i].dataset.li);
-    else break;
+  var tlMap={};
+  tls.forEach(function(tl){tlMap[tl.dataset.li]=tl;});
+
+  Object.keys(linePdfPos).forEach(function(li){
+    var lp=linePdfPos[li];
+    var tl=tlMap[li];
+    if(!tl)return;
+
+    // PDF scroll position for this line
+    var ctr=containers[lp.page];if(!ctr)return;
+    var cv=ctr.querySelector('canvas');if(!cv||!cv.width)return;
+    var ds=cv.clientWidth/cv.width;
+    var pdfY=ctr.offsetTop+cv.offsetTop+lp.y*S*ds;
+
+    // Text scroll position for this line
+    var textY=tl.offsetTop;
+
+    _syncAnchors.push({pdfY:pdfY, textY:textY, li:parseInt(li)});
+  });
+
+  // Sort by pdfY
+  _syncAnchors.sort(function(a,b){return a.pdfY-b.pdfY;});
+  // Also create a copy sorted by textY for reverse lookup
+  _syncAnchorsByText=_syncAnchors.slice().sort(function(a,b){return a.textY-b.textY;});
+}
+
+// ── Interpolate: given a scroll position on one side, find the
+// corresponding position on the other side using linear interpolation
+// between the two nearest anchors.
+function _interpolate(anchors, fromKey, toKey, pos){
+  if(!anchors.length)return -1;
+  // Binary search for the insertion point
+  var lo=0,hi=anchors.length-1;
+  while(lo<hi){
+    var mid=(lo+hi)>>1;
+    if(anchors[mid][fromKey]<pos)lo=mid+1;
+    else hi=mid;
   }
-  return bestLi;
+  // lo is the first anchor >= pos
+  if(lo===0){
+    // Before first anchor — extrapolate from first two or use ratio
+    if(anchors.length>=2){
+      var a=anchors[0],b=anchors[1];
+      var ratio=(b[toKey]-a[toKey])/(b[fromKey]-a[fromKey]||1);
+      return a[toKey]+ratio*(pos-a[fromKey]);
+    }
+    return anchors[0][toKey]+(pos-anchors[0][fromKey]);
+  }
+  if(lo>=anchors.length){
+    // After last anchor — extrapolate
+    var n=anchors.length;
+    if(n>=2){
+      var a=anchors[n-2],b=anchors[n-1];
+      var ratio=(b[toKey]-a[toKey])/(b[fromKey]-a[fromKey]||1);
+      return b[toKey]+ratio*(pos-b[fromKey]);
+    }
+    return anchors[n-1][toKey]+(pos-anchors[n-1][fromKey]);
+  }
+  // Interpolate between anchors[lo-1] and anchors[lo]
+  var prev=anchors[lo-1],next=anchors[lo];
+  var range=next[fromKey]-prev[fromKey];
+  if(range===0)return prev[toKey];
+  var t=(pos-prev[fromKey])/range;
+  return prev[toKey]+t*(next[toKey]-prev[toKey]);
+}
+
+function _pdfToTextScroll(pdfScrollTop){
+  return _interpolate(_syncAnchors,'pdfY','textY',pdfScrollTop);
+}
+function _textToPdfScroll(textScrollTop){
+  return _interpolate(_syncAnchorsByText,'textY','pdfY',textScrollTop);
 }
 
 // Attach listeners
 var _syncDebounceP=null,_syncDebounceT=null;
 document.getElementById('pdfPanel').addEventListener('scroll',function(){
   if(!syncScrollEnabled||_syncScrolling)return;
-  if(_syncDebounceP)clearTimeout(_syncDebounceP);
-  _syncDebounceP=setTimeout(function(){
-    var li=_pdfScrollToLine();
-    if(li<0)return;
-    var top=_lineToTextScrollTop(li);
-    if(top<0)return;
+  if(_syncDebounceP)cancelAnimationFrame(_syncDebounceP);
+  _syncDebounceP=requestAnimationFrame(function(){
+    var pdfTop=document.getElementById('pdfPanel').scrollTop;
+    var textTop=_pdfToTextScroll(pdfTop);
+    if(textTop<0)return;
     _syncScrolling=true;
-    document.getElementById('textPanel').scrollTo({top:Math.max(0,top),behavior:'auto'});
-    requestAnimationFrame(function(){setTimeout(function(){_syncScrolling=false;},60);});
-  },16);
+    document.getElementById('textPanel').scrollTop=Math.max(0,Math.round(textTop));
+    requestAnimationFrame(function(){_syncScrolling=false;});
+  });
 },{passive:true});
 
 document.getElementById('textPanel').addEventListener('scroll',function(){
   if(!syncScrollEnabled||_syncScrolling)return;
-  if(_syncDebounceT)clearTimeout(_syncDebounceT);
-  _syncDebounceT=setTimeout(function(){
-    var li=_textScrollToLine();
-    if(li<0)return;
-    var top=_lineToPdfScrollTop(li);
-    if(top<0)return;
+  if(_syncDebounceT)cancelAnimationFrame(_syncDebounceT);
+  _syncDebounceT=requestAnimationFrame(function(){
+    var textTop=document.getElementById('textPanel').scrollTop;
+    var pdfTop=_textToPdfScroll(textTop);
+    if(pdfTop<0)return;
     _syncScrolling=true;
-    document.getElementById('pdfPanel').scrollTo({top:Math.max(0,top-40),behavior:'auto'});
-    requestAnimationFrame(function(){setTimeout(function(){_syncScrolling=false;},60);});
-  },16);
+    document.getElementById('pdfPanel').scrollTop=Math.max(0,Math.round(pdfTop));
+    requestAnimationFrame(function(){_syncScrolling=false;});
+  });
 },{passive:true});
 
 // Zoom
@@ -1221,6 +1238,24 @@ function buildZones(){
 function rebuildPdfOverlays(){
   buildZones();
 }
+function buildZonesForPage(pgIdx){
+  // Remove old zones for this page, then rebuild just that page
+  var ctr=containers[pgIdx];
+  if(!ctr)return;
+  ctr.querySelectorAll('.cz').forEach(function(z){z.remove();});
+  Object.keys(lg).forEach(function(li){
+    var ws=lg[li];if(ws[0].page!==pgIdx)return;
+    var cv=ctr.querySelector('canvas');if(!cv||!cv.width)return;
+    var ds=cv.clientWidth/cv.width;
+    var x0=1e9,y0=1e9,x1=0,y1=0;
+    ws.forEach(function(w){if(w.x0<x0)x0=w.x0;if(w.y0<y0)y0=w.y0;if(w.x1>x1)x1=w.x1;if(w.y1>y1)y1=w.y1;});
+    var z=document.createElement('div');z.className='cz';
+    z.style.left=(x0*S*ds)+'px';z.style.top=(y0*S*ds+cv.offsetTop)+'px';
+    z.style.width=((x1-x0)*S*ds)+'px';z.style.height=((y1-y0)*S*ds)+'px';
+    z.onclick=function(){clickPdfLine(parseInt(li));};
+    ctr.appendChild(z);
+  });
+}
 // PDF.js renders text layers once; on resize we just re-sync transforms
 window.addEventListener('resize',function(){clearHL();syncTextLayers();rebuildPdfOverlays();});
 
@@ -1303,59 +1338,90 @@ document.getElementById('pdfPanel').addEventListener('mousedown',function(e){
 // ── PDF text-layer selection → bidirectional highlight ──────────────
 // PDF.js native text layer provides real text selection.  On mouseup we
 // match the selected text back to our wordMap for bidirectional linking.
+// Also handles clicks on .cz zones or bare canvas areas.
 document.getElementById('pdfPanel').addEventListener('mouseup',function(e){
-  if(!e.target.closest('.pdf-text-layer'))return;
+  // If user clicked a .cz zone, its own onclick will handle it
+  if(e.target.closest('.cz'))return;
+
   setTimeout(function(){
     var sel=window.getSelection();
-    if(!sel||!sel.rangeCount)return;
-    clearHL();
-    if(sel.isCollapsed){
-      // Single click — find the closest wordMap entry by position
-      var sp=e.target.closest('.pdf-text-layer span');
-      if(sp){
+    // Handle clicks on PDF text layer
+    if(e.target.closest('.pdf-text-layer')){
+      if(!sel||!sel.rangeCount)return;
+      clearHL();
+      if(sel.isCollapsed){
+        var sp=e.target.closest('.pdf-text-layer span');
+        if(sp){
+          var pgIdx=_findPageOfTextLayerSpan(sp);
+          var bestLi=_findClosestLine(sp,pgIdx);
+          if(bestLi>=0) clickPdfLine(bestLi);
+        }
+        return;
+      }
+      // Range selection
+      var range=sel.getRangeAt(0);
+      var allSp=document.querySelectorAll('.pdf-text-layer span');
+      var lineSet={},n=0,firstWd=null;
+      allSp.forEach(function(sp){
+        if(!range.intersectsNode(sp))return;
         var pgIdx=_findPageOfTextLayerSpan(sp);
         var bestLi=_findClosestLine(sp,pgIdx);
-        if(bestLi>=0) clickPdfLine(bestLi);
+        if(bestLi>=0){
+          lineSet[bestLi]=true;
+          var keys=Object.keys(wordMap);
+          for(var ki=0;ki<keys.length;ki++){
+            var k=keys[ki];
+            if(parseInt(k.split('_')[0])===bestLi){
+              var wd=wordMap[k];
+              if(wd.page===pgIdx){hlWord(wd,''+bestLi);n++;if(!firstWd)firstWd=wd;}
+            }
+          }
+        }
+      });
+      flushHL();
+      var lineKeys=Object.keys(lineSet);
+      lineKeys.forEach(function(li){
+        var tl=document.querySelector('.tl[data-li="'+li+'"]');
+        if(tl){
+          tl.classList.add('active');
+          tl.querySelectorAll('.tw').forEach(function(tw){tw.classList.add('sel');});
+        }
+      });
+      if(lineKeys.length>0){
+        var firstLi=Math.min.apply(null,lineKeys.map(Number));
+        var firstTl=document.querySelector('.tl[data-li="'+firstLi+'"]');
+        if(firstTl)scrollElIntoPanel(firstTl,document.getElementById('textPanel'),'center');
+        document.getElementById('statBar').textContent=
+          'PDF selection \u2192 '+lineKeys.length+' line(s)  (Ctrl+C to copy)';
       }
       return;
     }
-    // Range selection — find PDF.js text spans that intersect
-    var range=sel.getRangeAt(0);
-    var allSp=document.querySelectorAll('.pdf-text-layer span');
-    var lineSet={},n=0,firstWd=null;
-    allSp.forEach(function(sp){
-      if(!range.intersectsNode(sp))return;
-      var pgIdx=_findPageOfTextLayerSpan(sp);
-      var bestLi=_findClosestLine(sp,pgIdx);
-      if(bestLi>=0){
-        lineSet[bestLi]=true;
-        // Highlight matching words on PDF overlay
-        var keys=Object.keys(wordMap);
-        for(var ki=0;ki<keys.length;ki++){
-          var k=keys[ki];
-          if(parseInt(k.split('_')[0])===bestLi){
-            var wd=wordMap[k];
-            if(wd.page===pgIdx){hlWord(wd,''+bestLi);n++;if(!firstWd)firstWd=wd;}
-          }
-        }
+
+    // Click on canvas/page area (not on text layer) — find closest line by Y position
+    if(sel&&!sel.isCollapsed)return; // don't interfere with drags
+    var pageCtr=e.target.closest('.page-ctr');
+    if(!pageCtr)return;
+    var pgIdx=-1;
+    for(var i=0;i<containers.length;i++){if(containers[i]===pageCtr){pgIdx=i;break;}}
+    if(pgIdx<0)return;
+    var cv=pageCtr.querySelector('canvas');if(!cv||!cv.width)return;
+    var ds=cv.clientWidth/cv.width;
+    var ctrRect=cv.getBoundingClientRect();
+    var pdfY=((e.clientY-ctrRect.top)/ds)/S;
+    // Find closest line on this page
+    var bestLi=-1,bestDist=1e9;
+    var keys=Object.keys(lg);
+    for(var i=0;i<keys.length;i++){
+      var li=keys[i],ws=lg[li];
+      if(ws[0].page!==pgIdx)continue;
+      for(var j=0;j<ws.length;j++){
+        var dy=Math.abs(ws[j].y0-pdfY);
+        if(dy<bestDist){bestDist=dy;bestLi=parseInt(li);}
       }
-    });
-    flushHL();
-    // Highlight corresponding text lines
-    var lineKeys=Object.keys(lineSet);
-    lineKeys.forEach(function(li){
-      var tl=document.querySelector('.tl[data-li="'+li+'"]');
-      if(tl){
-        tl.classList.add('active');
-        tl.querySelectorAll('.tw').forEach(function(tw){tw.classList.add('sel');});
-      }
-    });
-    if(lineKeys.length>0){
-      var firstLi=Math.min.apply(null,lineKeys.map(Number));
-      var firstTl=document.querySelector('.tl[data-li="'+firstLi+'"]');
-      if(firstTl)scrollElIntoPanel(firstTl,document.getElementById('textPanel'),'center');
-      document.getElementById('statBar').textContent=
-        'PDF selection \u2192 '+lineKeys.length+' line(s)  (Ctrl+C to copy)';
+    }
+    if(bestLi>=0&&bestDist<40){
+      clearHL();
+      clickPdfLine(bestLi);
     }
   },10);
 });

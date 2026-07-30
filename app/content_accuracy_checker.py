@@ -659,8 +659,16 @@ def check_content_accuracy(
     issue_words = sum(
         d["words_affected"] for d in differences if not d.get("is_expected")
     )
+    # Post-diff issues (like artifact_retained) were counted as "equal" by
+    # SequenceMatcher because the text exists on both sides.  Subtract them
+    # from matching_words so they penalize accuracy correctly.
+    post_diff_issue_words = sum(
+        d["words_affected"] for d in differences
+        if not d.get("is_expected") and d.get("type") == "artifact_retained"
+    )
+    adjusted_matching = matching_words - post_diff_issue_words
     adjusted_max = max_words - expected_words_removed
-    adjusted_accuracy = (matching_words / adjusted_max * 100) if adjusted_max > 0 else 100.0
+    adjusted_accuracy = (adjusted_matching / adjusted_max * 100) if adjusted_max > 0 else 100.0
     adjusted_accuracy = max(min(adjusted_accuracy, 100.0), 0.0)  # Clamp 0-100%
 
     return {
