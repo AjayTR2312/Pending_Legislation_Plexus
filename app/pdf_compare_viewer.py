@@ -1223,16 +1223,24 @@ Object.keys(wordMap).forEach(function(k){
 function buildZones(){
   document.querySelectorAll('.cz').forEach(function(z){z.remove();});
   Object.keys(lg).forEach(function(li){
-    var ws=lg[li],pg=ws[0].page,ctr=containers[pg],cv=ctr.querySelector('canvas');
-    if(!cv||!cv.width)return;
-    var ds=cv.clientWidth/cv.width;
-    var x0=1e9,y0=1e9,x1=0,y1=0;
-    ws.forEach(function(w){if(w.x0<x0)x0=w.x0;if(w.y0<y0)y0=w.y0;if(w.x1>x1)x1=w.x1;if(w.y1>y1)y1=w.y1;});
-    var z=document.createElement('div');z.className='cz';
-    z.style.left=(x0*S*ds)+'px';z.style.top=(y0*S*ds+cv.offsetTop)+'px';
-    z.style.width=((x1-x0)*S*ds)+'px';z.style.height=((y1-y0)*S*ds)+'px';
-    z.onclick=function(){clickPdfLine(parseInt(li));};
-    ctr.appendChild(z);
+    var ws=lg[li];
+    // Group words by page AND PDF row (similar y0) to avoid giant boxes
+    var rows={};
+    ws.forEach(function(w){
+      var rowKey=w.page+'_'+Math.round(w.y0/4)*4;
+      if(!rows[rowKey])rows[rowKey]={page:w.page,x0:w.x0,y0:w.y0,x1:w.x1,y1:w.y1};
+      else{var r=rows[rowKey];r.x0=Math.min(r.x0,w.x0);r.y0=Math.min(r.y0,w.y0);r.x1=Math.max(r.x1,w.x1);r.y1=Math.max(r.y1,w.y1);}
+    });
+    Object.keys(rows).forEach(function(rk){
+      var r=rows[rk],ctr=containers[r.page],cv=ctr?ctr.querySelector('canvas'):null;
+      if(!cv||!cv.width)return;
+      var ds=cv.clientWidth/cv.width;
+      var z=document.createElement('div');z.className='cz';
+      z.style.left=(r.x0*S*ds)+'px';z.style.top=(r.y0*S*ds+cv.offsetTop)+'px';
+      z.style.width=((r.x1-r.x0)*S*ds)+'px';z.style.height=((r.y1-r.y0)*S*ds)+'px';
+      z.onclick=function(){clickPdfLine(parseInt(li));};
+      ctr.appendChild(z);
+    });
   });
 }
 function rebuildPdfOverlays(){
@@ -1244,16 +1252,25 @@ function buildZonesForPage(pgIdx){
   if(!ctr)return;
   ctr.querySelectorAll('.cz').forEach(function(z){z.remove();});
   Object.keys(lg).forEach(function(li){
-    var ws=lg[li];if(ws[0].page!==pgIdx)return;
+    var ws=lg[li];
+    // Only process words on this page, group by row
+    var rows={};
+    ws.forEach(function(w){
+      if(w.page!==pgIdx)return;
+      var rowKey=Math.round(w.y0/4)*4;
+      if(!rows[rowKey])rows[rowKey]={x0:w.x0,y0:w.y0,x1:w.x1,y1:w.y1};
+      else{var r=rows[rowKey];r.x0=Math.min(r.x0,w.x0);r.y0=Math.min(r.y0,w.y0);r.x1=Math.max(r.x1,w.x1);r.y1=Math.max(r.y1,w.y1);}
+    });
     var cv=ctr.querySelector('canvas');if(!cv||!cv.width)return;
     var ds=cv.clientWidth/cv.width;
-    var x0=1e9,y0=1e9,x1=0,y1=0;
-    ws.forEach(function(w){if(w.x0<x0)x0=w.x0;if(w.y0<y0)y0=w.y0;if(w.x1>x1)x1=w.x1;if(w.y1>y1)y1=w.y1;});
-    var z=document.createElement('div');z.className='cz';
-    z.style.left=(x0*S*ds)+'px';z.style.top=(y0*S*ds+cv.offsetTop)+'px';
-    z.style.width=((x1-x0)*S*ds)+'px';z.style.height=((y1-y0)*S*ds)+'px';
-    z.onclick=function(){clickPdfLine(parseInt(li));};
-    ctr.appendChild(z);
+    Object.keys(rows).forEach(function(rk){
+      var r=rows[rk];
+      var z=document.createElement('div');z.className='cz';
+      z.style.left=(r.x0*S*ds)+'px';z.style.top=(r.y0*S*ds+cv.offsetTop)+'px';
+      z.style.width=((r.x1-r.x0)*S*ds)+'px';z.style.height=((r.y1-r.y0)*S*ds)+'px';
+      z.onclick=function(){clickPdfLine(parseInt(li));};
+      ctr.appendChild(z);
+    });
   });
 }
 // PDF.js renders text layers once; on resize we just re-sync transforms

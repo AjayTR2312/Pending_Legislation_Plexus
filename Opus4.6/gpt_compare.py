@@ -676,6 +676,13 @@ def _word_diff_fix(pymupdf_text: str, claude_text: str) -> str:
     ct_clean = re.sub(r'\[([AD])>', '', claude_text)
     ct_clean = re.sub(r'<([AD])\]', '', ct_clean).strip()
 
+    # Normalize curly quotes/apostrophes before comparison
+    # so 'Iowa\u2019s' vs 'Iowa's' aren't flagged as different
+    pymupdf_text = pymupdf_text.replace("\u2018", "'").replace("\u2019", "'")
+    pymupdf_text = pymupdf_text.replace("\u201c", '"').replace("\u201d", '"')
+    ct_clean = ct_clean.replace("\u2018", "'").replace("\u2019", "'")
+    ct_clean = ct_clean.replace("\u201c", '"').replace("\u201d", '"')
+
     pw = pymupdf_text.split()
     cw = ct_clean.split()
 

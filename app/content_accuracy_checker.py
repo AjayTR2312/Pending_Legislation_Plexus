@@ -473,6 +473,14 @@ def check_content_accuracy(
         pre = _strip_tags(pre)
         out = _strip_tags(out)
 
+    # ── Normalize quotes: curly apostrophes/quotes → straight ──────────
+    # These are typographically equivalent and should never count as
+    # a content difference.
+    pre = pre.replace("\u2018", "'").replace("\u2019", "'")
+    pre = pre.replace("\u201c", '"').replace("\u201d", '"')
+    out = out.replace("\u2018", "'").replace("\u2019", "'")
+    out = out.replace("\u201c", '"').replace("\u201d", '"')
+
     # ── Normalize dashes: em-dash/en-dash/double-hyphen → single hyphen ──
     # These are typographically equivalent in legislative text and should
     # never count as a content difference.
@@ -480,6 +488,12 @@ def check_content_accuracy(
     pre = re.sub(r"--+", "-", pre)
     out = out.replace("\u2014", "-").replace("\u2013", "-")
     out = re.sub(r"--+", "-", out)
+
+    # ── Normalize line-break hyphenations: "full- time" → "full-time" ──
+    # PDF text often has a space after a hyphen at a line break.
+    # The LLM rejoins them, so both sides should match.
+    pre = re.sub(r'(\w)- (\w)', r'\1-\2', pre)
+    out = re.sub(r'(\w)- (\w)', r'\1-\2', out)
 
     # ── Build repeated-text set ───────────────────────────────────
     # Detect lines that appear multiple times in precleaned text.
@@ -538,6 +552,10 @@ def check_content_accuracy(
     pre_words = _to_words(pre)
     out_words = _to_words(out)
 
+    # Build a joined version of precleaned for substring checks
+    # (used to detect false "content_added" from alignment disruption)
+    _pre_joined = " ".join(pre_words)
+
     # Compare
     matcher = difflib.SequenceMatcher(None, pre_words, out_words)
     ratio = matcher.ratio()
@@ -584,6 +602,23 @@ def check_content_accuracy(
         # Classify the difference
         classification = _classify_difference(tag, pre_text, out_text, words_affected, repeated_texts=repeated_texts, metadata_hf_texts=metadata_hf_texts)
 
+        # ── False-positive guard for "content_added" ──────────────────
+        # When repeated page headers disrupt SequenceMatcher alignment,
+        # real text that exists in BOTH precleaned and output can appear
+        # as an "insert". If the "added" text exists verbatim in the
+        # precleaned, it's not truly added — it's an alignment artifact.
+        if (classification["category"] == "content_added"
+                and out_text
+                and len(out_text) >= 10
+                and out_text in _pre_joined):
+            classification = {
+                "category": "alignment_match",
+                "severity": "info",
+                "explanation": f"Text exists in source (alignment shift): \"{out_text[:80]}\"",
+                "is_expected": True,
+                "content_type": "legislative_text",
+            }
+
         diff_entry = {
             "type": tag,
             "precleaned": pre_text,
@@ -608,9 +643,34 @@ def check_content_accuracy(
     # flag it as a content issue even though the diff sees it as "equal".
     # Only flag if the line appears MORE THAN ONCE in the output — a single
     # occurrence is the legitimate page-1 header, not a repeated artifact.
+    #
+    # IMPORTANT: Only consider lines that actually look like page artifacts
+    # (page numbers, bill identifiers, CODING lines, short header patterns).
+    # Repeated legislative content (table headers, section titles) must NOT
+    # be flagged as artifacts.
     _all_artifact_texts = set()
+
+    # Only include repeated_texts entries that look like real page artifacts
+    _RE_ARTIFACT_LIKE = re.compile(
+        r"(?:"
+        r"Page\s+\d+\s+of\s+\d+"          # "Page 1 of 29"
+        r"|CODING:\s*Words"                 # FL CODING line
+        r"|^\s*(?:ENROLLED|ENGROSSED)\s"   # ENROLLED marker
+        r"|^\d{1,4}\s*$"                    # bare page number
+        r"|^\s*O\s*$"                       # trailing O ornament
+        r"|(?:\u2014|--)\s*\d+\s*(?:\u2014|--)"  # CA page headers
+        r"|Public\s+Act\s+No\."            # CT public act
+        r"|LCO\s+\d+\s+of\s+\d+"          # CT LCO
+        r"|^\s*(?:AB|SB|HB|SB|CS\s+for)\s+(?:SB|HB)\s+\d+"  # bill identifiers
+        r")",
+        re.IGNORECASE,
+    )
+
     if repeated_texts:
-        _all_artifact_texts.update(repeated_texts)
+        for rt in repeated_texts:
+            # Only add to artifact set if it matches artifact-like patterns
+            if _RE_ARTIFACT_LIKE.search(rt):
+                _all_artifact_texts.add(rt)
     if metadata_hf_texts:
         _all_artifact_texts.update(metadata_hf_texts)
 
@@ -668,7 +728,17 @@ def check_content_accuracy(
     )
     adjusted_matching = matching_words - post_diff_issue_words
     adjusted_max = max_words - expected_words_removed
-    adjusted_accuracy = (adjusted_matching / adjusted_max * 100) if adjusted_max > 0 else 100.0
+    # If there are real content issues, ensure accuracy reflects them.
+    # The issue_words are already excluded from matching_words by
+    # SequenceMatcher (they appear as delete/insert/replace, not equal),
+    # but we must also exclude expected_words_removed from the denominator
+    # WITHOUT letting the ratio exceed 1.0 when the removed words and
+    # issue words happen to cancel out numerically.
+    if issue_words > 0 and adjusted_max > 0 and adjusted_matching >= adjusted_max:
+        # Force accuracy below 100% — use the raw ratio instead
+        adjusted_accuracy = (matching_words / max_words * 100) if max_words > 0 else 100.0
+    else:
+        adjusted_accuracy = (adjusted_matching / adjusted_max * 100) if adjusted_max > 0 else 100.0
     adjusted_accuracy = max(min(adjusted_accuracy, 100.0), 0.0)  # Clamp 0-100%
 
     return {
