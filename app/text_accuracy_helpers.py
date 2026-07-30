@@ -828,6 +828,12 @@ def strip_leading_line_numbers(
 
     # Phase 1: collect content-bearing candidates for sequence validation
     candidates: list[tuple[int, int, str, str, int]] = []  # (idx, num, content, eol, gap)
+    # Pattern to exclude header lines where the "number" is actually a year
+    # or session identifier (e.g. "2026 Legislature  CS for SB 156")
+    _header_content_re = re.compile(
+        r"(?:Legislature|Session|Congress|General\s+Assembly|Regular|Special|Extraordinary)",
+        re.IGNORECASE,
+    )
     for idx, line in enumerate(lines):
         m = _RE_LEADING_LINE_NUMBER.match(line)
         if not m:
@@ -836,7 +842,11 @@ def strip_leading_line_numbers(
         # Skip very short content — protects numbered list items like "1. "
         if len(content.strip()) < 5:
             continue
-        candidates.append((idx, int(num_s), content, eol, len(gap_ws)))
+        # Skip header lines where the leading "number" is a year (2020-2030)
+        num_val = int(num_s)
+        if 2000 <= num_val <= 2099 and _header_content_re.search(content):
+            continue
+        candidates.append((idx, num_val, content, eol, len(gap_ws)))
 
     # Phase 1a: collect bare (orphaned) line numbers on blank lines.
     # These are lines like "2   \n" or "14  \n" with no content payload.
