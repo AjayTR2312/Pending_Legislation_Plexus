@@ -1479,10 +1479,11 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         # without pre-unwrapping.
 
         # ── Step 1d: Strip repeating page headers/footers ────────────
-        # Detect short lines that repeat across page boundaries (≥2 pages)
-        # and remove them BEFORE the LLM sees the text.  This prevents the
-        # LLM from keeping the first-page occurrence (e.g. "ENROLLED ORIGINAL").
-        raw_text = _strip_repeating_page_artifacts(raw_text)
+        # DISABLED: _strip_repeating_page_artifacts was too aggressive —
+        # it removed legitimate single-word content like "section." that
+        # appears at page breaks.  Header/footer detection is now handled
+        # by the content_accuracy_checker at comparison time instead.
+        # raw_text = _strip_repeating_page_artifacts(raw_text)
 
         # Save pre-cleaned text for accuracy comparison
         _llm_text = strip_table_markers(raw_text)
@@ -1490,6 +1491,41 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         with open(pre_cleaned_path, "w", encoding="utf-8") as f:
             f.write(_llm_text)
         logging.info(f"   💾 Pre-cleaned text saved to: {pre_cleaned_path}")
+
+        # ── Save metadata (headers/footers detected from page structure) ──
+        # Detect repeating short lines across page boundaries and save as
+        # metadata.json so the content_accuracy_checker can ignore them.
+        try:
+            import json as _json_meta
+            _PAGE_SEP_META = re.compile(r"^---\s*Page\s+\d+\s*---$", re.MULTILINE)
+            _meta_pages = _PAGE_SEP_META.split(_llm_text)
+            if len(_meta_pages) >= 2:
+                from collections import Counter as _Counter_meta
+                _hf_counts: _Counter_meta = _Counter_meta()
+                _SCAN = 4
+                for _pg in _meta_pages:
+                    _pg_lines = [l.strip() for l in _pg.strip().split('\n') if l.strip()]
+                    if not _pg_lines:
+                        continue
+                    _candidates = set()
+                    for _ln in _pg_lines[:_SCAN] + _pg_lines[-_SCAN:]:
+                        if len(_ln.split()) <= 10 and len(_ln) >= 3:
+                            _candidates.add(_ln)
+                    for _c in _candidates:
+                        _hf_counts[_c] += 1
+                # Lines appearing on ≥2 pages with ≥2 words = headers/footers
+                _hf_texts = {t for t, cnt in _hf_counts.items() if cnt >= 2 and len(t.split()) >= 2}
+                if _hf_texts:
+                    _meta_path = str(Path(pdf_path).with_suffix('')) + "_metadata.json"
+                    _meta_dict = {
+                        "headers": {str(i): t for i, t in enumerate(_hf_texts)},
+                        "footers": {},
+                    }
+                    with open(_meta_path, "w", encoding="utf-8") as _mf:
+                        _json_meta.dump(_meta_dict, _mf, indent=2)
+                    logging.info(f"   💾 Metadata saved ({len(_hf_texts)} header/footer patterns): {_meta_path}")
+        except Exception as _meta_err:
+            logging.warning(f"   ⚠️ Metadata generation failed: {_meta_err}")
 
         # ── Step 2: Split into chunks ────────────────────────────────
         # _llm_text already has TABLE markers stripped

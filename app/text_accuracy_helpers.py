@@ -762,15 +762,15 @@ def strip_trailing_line_numbers(
 # Leading line number: 1-3 digits at start of line, followed by 1+ spaces,
 # then actual content.  Group 1 = number, Group 2 = content, Group 3 = EOL.
 _RE_LEADING_LINE_NUMBER = re.compile(
-    r"^[ \t]*(\d{1,3})([ \t]+)(\S.+?)[ \t]*(\r?\n)?$"
+    r"^[ \t]*(\d{1,5})([ \t]+)(\S.+?)[ \t]*(\r?\n)?$"
 )
 
-# Bare leading line number: 1-3 digits on an otherwise empty/whitespace line.
+# Bare leading line number: 1-4 digits on an otherwise empty/whitespace line.
 # Group 1 = the number, Group 2 = optional trailing newline.
 # These are orphaned line numbers on blank lines (e.g. "2   \n") that the
 # content-bearing regex above cannot match because there is no \S content.
 _RE_BARE_LEADING_LINE_NUMBER = re.compile(
-    r"^[ \t]*(\d{1,3})[ \t]*(\r?\n)?$"
+    r"^[ \t]*(\d{1,5})[ \t]*(\r?\n)?$"
 )
 
 
