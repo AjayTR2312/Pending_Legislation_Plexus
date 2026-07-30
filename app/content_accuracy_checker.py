@@ -473,6 +473,14 @@ def check_content_accuracy(
         pre = _strip_tags(pre)
         out = _strip_tags(out)
 
+    # ── Normalize dashes: em-dash/en-dash/double-hyphen → single hyphen ──
+    # These are typographically equivalent in legislative text and should
+    # never count as a content difference.
+    pre = pre.replace("\u2014", "-").replace("\u2013", "-")
+    pre = re.sub(r"--+", "-", pre)
+    out = out.replace("\u2014", "-").replace("\u2013", "-")
+    out = re.sub(r"--+", "-", out)
+
     # ── Build repeated-text set ───────────────────────────────────
     # Detect lines that appear multiple times in precleaned text.
     # These are page headers/footers the LLM is expected to remove.
