@@ -1623,6 +1623,29 @@ def _extract_page_tagged_text(
             _ocr_spans, _total_spans,
         )
 
+    # -- 2e. Compute page-level dominant (body) font size ----------------
+    # Used to detect title/heading text that is significantly larger than
+    # body text.  Bold spans whose font size exceeds the body size by a
+    # factor of TITLE_FONT_SIZE_RATIO are treated as titles/headings and
+    # are excluded from [A>...<A] tagging (they are document structure,
+    # not legislative additions).  This handles e.g. IN "ENGROSSED HOUSE
+    # BILL No. 1018" which is bold but should NOT be tagged.
+    TITLE_FONT_SIZE_RATIO = 1.3  # span_size > body_size * ratio → title
+    _font_size_counts: dict = {}
+    for _blk in text_dict.get("blocks", []):
+        if _blk.get("type") != 0:
+            continue
+        for _ln in _blk.get("lines", []):
+            for _sp in _ln.get("spans", []):
+                _sp_text = _sp.get("text", "").strip()
+                if not _sp_text:
+                    continue
+                _sz = round(_sp.get("size", 12), 1)
+                _font_size_counts[_sz] = _font_size_counts.get(_sz, 0) + len(_sp_text)
+    _page_body_font_size = 12.0  # fallback
+    if _font_size_counts:
+        _page_body_font_size = max(_font_size_counts, key=_font_size_counts.get)
+
     output: List[str] = []
     in_add = False
     in_del = False
@@ -1930,6 +1953,10 @@ def _extract_page_tagged_text(
                         span_is_whitespace = span_text.strip() == ""
                         need_add = (s_ul and mark_underline) or (span_is_italic and mark_italic and not span_is_whitespace) or (span_is_bold and mark_bold and not span_is_whitespace)
                         need_del = s_so and mark_strikethrough
+                        # Suppress bold/italic tagging for title-sized text
+                        # (font significantly larger than body text)
+                        if need_add and font_size > _page_body_font_size * TITLE_FONT_SIZE_RATIO:
+                            need_add = False
                         # Suppress all tagging inside table zones
                         if line_in_table:
                             need_add = False
@@ -1987,6 +2014,9 @@ def _extract_page_tagged_text(
                     char_is_space = c.strip() == ""
                     need_add = (is_ul and mark_underline) or (span_is_italic and mark_italic and not char_is_space) or (span_is_bold and mark_bold and not char_is_space)
                     need_del = is_so and mark_strikethrough
+                    # Suppress bold/italic tagging for title-sized text
+                    if need_add and font_size > _page_body_font_size * TITLE_FONT_SIZE_RATIO:
+                        need_add = False
                     # Suppress all tagging inside table zones
                     if line_in_table:
                         need_add = False
@@ -2219,6 +2249,56 @@ _RE_LINE_NUMBER_BETWEEN_TAGS = re.compile(
 _RE_CURRENCY_PADDING = re.compile(r"(\$)[ \t]{2,}(\d)")
 
 
+def _strip_repeating_page_artifacts(text: str) -> str:
+    """Remove short lines that repeat across multiple pages.
+
+    Splits text on ``--- Page N ---`` markers, collects short lines
+    (≤10 words) from the first/last few lines of each page, and removes
+    any that appear on ≥2 pages.  This catches repeating headers like
+    "ENROLLED ORIGINAL", footer stamps, bill numbers, etc.
+    """
+    _PAGE_SEP = re.compile(r"^---\s*Page\s+\d+\s*---$", re.MULTILINE)
+    pages = _PAGE_SEP.split(text)
+    if len(pages) < 2:
+        return text
+
+    from collections import Counter
+    _candidate_counts: Counter = Counter()
+    _SCAN_LINES = 4
+
+    for page in pages:
+        lines = [l.strip() for l in page.strip().split('\n') if l.strip()]
+        if not lines:
+            continue
+        candidates = set()
+        for line in lines[:_SCAN_LINES] + lines[-_SCAN_LINES:]:
+            if len(line.split()) <= 10:
+                candidates.add(line)
+        for c in candidates:
+            _candidate_counts[c] += 1
+
+    # Lines appearing on ≥2 pages are artifacts — but only if they have
+    # ≥2 words.  Single-word lines like "section." are often legitimate
+    # legislative text split across a page boundary, not artifacts.
+    # Also exclude lines >60 chars — long lines like
+    # "repair, expansion, construction, equipping, renovation, purchase, improvement"
+    # are real bill text that happens to repeat across sections, not artifacts.
+    artifacts = {line for line, count in _candidate_counts.items()
+                 if count >= 2 and len(line) >= 3 and len(line.split()) >= 2
+                 and len(line) <= 60}
+    if not artifacts:
+        return text
+
+    logger.info("🧹 Detected %d repeating page artifact(s): %s", len(artifacts), list(artifacts)[:5])
+
+    out_lines = []
+    for line in text.split('\n'):
+        if line.strip() in artifacts:
+            continue
+        out_lines.append(line)
+    return '\n'.join(out_lines)
+
+
 def _clean_tagged_text(text: str, strip_line_numbers: bool = False) -> str:
     """Remove empty tags, merge adjacent same-type tags, tidy whitespace."""
     # Normalize non-breaking spaces to regular spaces
@@ -2244,8 +2324,10 @@ def _clean_tagged_text(text: str, strip_line_numbers: bool = False) -> str:
     # general collapse intentionally preserves for column layout.
     text = _RE_CURRENCY_PADDING.sub(r"\1 \2", text)
     # Normalize small runs of multiple spaces (2-3) to single space
-    # but preserve larger gaps (4+) which are intentional layout formatting
+    # but preserve larger gaps (4+) which are intentional table/column alignment
     text = re.sub(r"(?<=\S) {2,3}(?=\S)", " ", text)
+    # Rejoin line-break hyphenations: "export- limiting" → "export-limiting"
+    text = re.sub(r'(\w)- (\w)', r'\1-\2', text)
     # Collapse excessive blank lines
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
@@ -3744,10 +3826,10 @@ _RE_IN_YEAR_FOOTER = re.compile(
     re.MULTILINE,
 )
 
-# Regex: Decorative divider lines tagged as underline — [A>____<A] or [A>———<A]
-# These are horizontal rules in the PDF that the underline detector wraps.
+# Regex: Decorative divider lines — tagged [A>____<A] or plain _____ or ———
+# These are horizontal rules in the PDF that may or may not be wrapped in tags.
 _RE_IN_DECORATIVE_LINE = re.compile(
-    r"^\s*\[A>[_\s\u2014\u2013\-]+<A\]\s*$",
+    r"^\s*(?:\[A>)?[_\s\u2014\u2013\-]{3,}(?:<A\])?\s*$",
     re.MULTILINE,
 )
 
@@ -5289,31 +5371,89 @@ def clean_extracted_text(
         metadata_prefix = extract_page_metadata(pdf_path)
 
     # ── Pre-clean raw text BEFORE sending to LLM ──────────────────
-    # The raw _pymupdf.txt may contain:
+    # The precleaner's job is to strip line numbers only:
     #   • Margin line numbers ("line 1", "line 2", …) for CA bills
-    #   • Adjacent same-type tags split across line wraps:
-    #       [A>SECTION 1.<A]\n line 2 [A>to read:<A]
-    # The LLM is unreliable at merging these split tags — it sometimes
-    # drops the second tag entirely (case observed: AB 502 page 3 lost
-    # the `[A>to read:<A]` wrapper).  By pre-merging deterministically
-    # with `_clean_tagged_text`, the LLM only sees:
-    #       [A>SECTION 1. ... to read:<A]
-    # which it just has to preserve verbatim.
+    #   • Trailing line numbers (FL/CT style: "...public 3\n")
+    #   • Leading line numbers (KS/NE/MO style: "1 AN ACT...")
+    #   • Bare line-number blocks (MA/CT page-boundary style)
     #
-    # This is safe for ALL states — `_RE_LINE_NUMBER` only matches the
-    # literal "line N" pattern (CA-specific) and is a no-op elsewhere.
-    # The tag-merge regexes only collapse adjacent same-type tags
-    # separated by a single newline (within-paragraph), preserving
-    # paragraph breaks (\n\n).
+    # All other cleanup (headers, footers, artifacts, tag merging)
+    # is the LLM's responsibility.  The content_accuracy_checker
+    # handles classification of expected removals vs real issues.
     pre_cleaned = _clean_tagged_text(raw_text, strip_line_numbers=True)
+
+    # ── Strip trailing line numbers (FL/CT style) before LLM ──────
+    # Florida/Connecticut bills have line numbers at the END of each line:
+    #   "A bill to be entitled 1"
+    #   "An act relating to public records; amending s. 2"
+    # These are stripped deterministically using sequence validation
+    # (only fires when trailing numbers form a monotonic sequence).
+    try:
+        from text_accuracy_helpers import strip_trailing_line_numbers
+        pre_cleaned_trailing = strip_trailing_line_numbers(pre_cleaned, state_code=state_code)
+        if pre_cleaned_trailing != pre_cleaned:
+            logger.info(
+                "🧹 Stripped trailing line numbers (FL/CT style): %d → %d chars",
+                len(pre_cleaned), len(pre_cleaned_trailing),
+            )
+            pre_cleaned = pre_cleaned_trailing
+    except ImportError:
+        pass
+
+    # ── Leading line numbers (KS/NE/MO style) ──────────────────────────
+    # "1 AN ACT concerning education; relating to the Kansas promise"
+    # Same monotonic-sequence validation as the trailing stripper.
+    try:
+        from text_accuracy_helpers import strip_leading_line_numbers
+        pre_cleaned_leading = strip_leading_line_numbers(pre_cleaned, state_code=state_code)
+        if pre_cleaned_leading != pre_cleaned:
+            logger.info(
+                "🧹 Stripped leading line numbers (KS style): %d → %d chars",
+                len(pre_cleaned), len(pre_cleaned_leading),
+            )
+            pre_cleaned = pre_cleaned_leading
+    except ImportError:
+        pass
+
+    # ── Bare line-number blocks (MA/CT page-boundary style) ─────────────
+    # Blocks of sequential bare numbers ("1\n2\n3\n...\n34") that appear
+    # at page boundaries when PyMuPDF extracts margin numbers as a group.
+    try:
+        from text_accuracy_helpers import strip_bare_line_number_blocks
+        pre_cleaned_bare = strip_bare_line_number_blocks(pre_cleaned, state_code=state_code)
+        if pre_cleaned_bare != pre_cleaned:
+            logger.info(
+                "🧹 Stripped bare line-number blocks (MA style): %d → %d chars",
+                len(pre_cleaned), len(pre_cleaned_bare),
+            )
+            pre_cleaned = pre_cleaned_bare
+    except ImportError:
+        pass
+
+    # ── Repeating page headers/footers ─────────────────────────────────
+    # Strip repeating headers/footers from the precleaned text used for
+    # content-accuracy comparison.  This ensures headers the LLM correctly
+    # removes don't show up as false-positive "content drops".
+    # NOTE: The LLM pipeline (Claude_Opus_4.6_Test.py) has this DISABLED
+    # so the LLM still sees headers/footers and can decide what to keep.
+    pre_cleaned = _strip_repeating_page_artifacts(pre_cleaned)
+
+    # ── AR scan/print artifacts (barcode lines, timestamps) ─────────────
+    if state_code and state_code.upper() == "AR":
+        pre_cleaned = _strip_ar_artifacts(pre_cleaned)
+
     if pre_cleaned != raw_text:
         logger.info(
             "🧹 Pre-cleaned raw text before LLM: %d → %d chars (line numbers stripped, split tags merged)",
             len(raw_text), len(pre_cleaned),
         )
 
-    # Build the user message: metadata (if any) + pre-cleaned text
-    user_content = metadata_prefix + pre_cleaned
+    # ── Save pre-cleaned text for reference (no unwrapping) ────────
+    _unwrapped_text = None
+    _llm_pre_cleaned = pre_cleaned
+
+    # Build the user message: metadata (if any) + pre-cleaned text (markers stripped)
+    user_content = metadata_prefix + _llm_pre_cleaned
 
     logger.info(
         "🧹 Cleaning extracted text with %s (state=%s, metadata=%d chars) …",
@@ -5367,6 +5507,13 @@ def clean_extracted_text(
         "✅ Cleaned text: %d → %d → %d chars (raw → pre-cleaned → LLM)",
         len(raw_text), len(pre_cleaned), len(cleaned),
     )
+
+    # ── Restore tag-internal whitespace stripped by LLM ──────────────
+    # The LLM often trims leading/trailing spaces inside [A>...<A] and
+    # [D>...<D] tags (e.g. "[D> $350,000<D]" → "[D>$350,000<D]").
+    # This deterministic step compares against the pre-cleaned pymupdf
+    # text and restores the original internal whitespace.
+    cleaned = _restore_tag_internal_whitespace(cleaned, pre_cleaned)
 
     # ── bracket-to-[D>] tagging (runs AFTER LLM to avoid confusing it) ──
     if mark_brackets:
@@ -5524,7 +5671,9 @@ def clean_extracted_text(
     if state_code and state_code.upper() == "IN":
         cleaned = _strip_in_leading_indent(cleaned)
 
-    # Store the diff report for the caller to retrieve and save
+    # Store the pre-cleaned text and diff report for the caller to retrieve and save
+    clean_extracted_text._last_pre_cleaned = pre_cleaned
+    clean_extracted_text._last_unwrapped = _unwrapped_text  # With TABLE markers
     clean_extracted_text._last_diff_report = diff_report
 
     # ── Passive watchdog: scan the final cleaned text for known
@@ -5557,6 +5706,58 @@ def clean_extracted_text(
         clean_extracted_text._last_anomalies = []
 
     return cleaned
+
+
+# ---------------------------------------------------------------------------
+# _restore_tag_internal_whitespace — deterministic post-LLM fix
+# ---------------------------------------------------------------------------
+_RE_TAG_EXTRACT = re.compile(r'\[([AD])>(.*?)<\1\]', re.DOTALL)
+
+
+def _restore_tag_internal_whitespace(cleaned: str, pre_cleaned: str) -> str:
+    """Restore leading/trailing whitespace inside tags that the LLM stripped.
+
+    The PyMuPDF extractor may produce ``[D> $350,000<D]`` (space inside tag)
+    but the LLM reflows this to ``[D>$350,000<D]`` (space moved outside or
+    dropped).  This function builds a lookup from the pre-cleaned (pymupdf)
+    text mapping stripped tag content → original tag content (with internal
+    whitespace), then replaces each tag in the cleaned text with the
+    whitespace-preserving version.
+
+    Only restores whitespace — never changes the actual text content.
+    """
+    # Build mapping: stripped content → original content (with whitespace)
+    # from the pre-cleaned (pymupdf) text.
+    original_ws: dict[str, str] = {}
+    for m in _RE_TAG_EXTRACT.finditer(pre_cleaned):
+        tag_type = m.group(1)
+        content = m.group(2)
+        stripped = content.strip()
+        if stripped and (content != stripped):  # had leading/trailing ws
+            key = (tag_type, stripped)
+            # Keep the first occurrence (most authoritative)
+            if key not in original_ws:
+                original_ws[key] = content
+
+    if not original_ws:
+        return cleaned
+
+    def _restore(m: re.Match) -> str:
+        tag_type = m.group(1)
+        content = m.group(2)
+        stripped = content.strip()
+        key = (tag_type, stripped)
+        if key in original_ws:
+            return f'[{tag_type}>{original_ws[key]}<{tag_type}]'
+        return m.group(0)
+
+    result = _RE_TAG_EXTRACT.sub(_restore, cleaned)
+    if result != cleaned:
+        logger.debug("Restored internal whitespace in %d tag(s)",
+                     sum(1 for a, b in zip(
+                         _RE_TAG_EXTRACT.findall(cleaned),
+                         _RE_TAG_EXTRACT.findall(result)) if a != b))
+    return result
 
 
 def consolidate_adjacent_tags(text: str, state_code: str = None) -> str:
@@ -7232,6 +7433,23 @@ def extract_pdf_json_report(
         if total_chars == 0:
             text_dict = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)
 
+        # -- Compute page-level dominant (body) font size for title detection --
+        TITLE_FONT_SIZE_RATIO = 1.3
+        _font_size_counts: dict = {}
+        for _blk in text_dict.get("blocks", []):
+            if _blk.get("type") != 0:
+                continue
+            for _ln in _blk.get("lines", []):
+                for _sp in _ln.get("spans", []):
+                    _sp_text = _sp.get("text", "").strip()
+                    if not _sp_text:
+                        continue
+                    _sz = round(_sp.get("size", 12), 1)
+                    _font_size_counts[_sz] = _font_size_counts.get(_sz, 0) + len(_sp_text)
+        _page_body_font_size = 12.0
+        if _font_size_counts:
+            _page_body_font_size = max(_font_size_counts, key=_font_size_counts.get)
+
         # -- Pass 1: collect margin line numbers --
         margin_nums: List[Tuple[float, int]] = []
         line_infos: List[Tuple[float, dict]] = []  # (y_mid, line_dict)
@@ -7322,6 +7540,10 @@ def extract_pdf_json_report(
                     if s_so and mark_strikethrough:   fmt.add("strikethrough")
                     if sp_italic and mark_italic:     fmt.add("italic")
                     if sp_bold and mark_bold:         fmt.add("bold")
+                    # Suppress bold/italic for title-sized text
+                    if fmt and font_size > _page_body_font_size * TITLE_FONT_SIZE_RATIO:
+                        fmt.discard("italic")
+                        fmt.discard("bold")
                     fs = frozenset(fmt)
                     for c in sp.get("text", ""):
                         char_entries.append((c, fs, s_bbox))
@@ -7351,6 +7573,10 @@ def extract_pdf_json_report(
                     if is_so and mark_strikethrough:   fmt.add("strikethrough")
                     if sp_italic and mark_italic:      fmt.add("italic")
                     if sp_bold and mark_bold:          fmt.add("bold")
+                    # Suppress bold/italic for title-sized text
+                    if fmt and font_size > _page_body_font_size * TITLE_FONT_SIZE_RATIO:
+                        fmt.discard("italic")
+                        fmt.discard("bold")
                     char_entries.append((c, frozenset(fmt), bbox))
 
             if not char_entries:
@@ -7451,6 +7677,18 @@ def extract_pdf_json_report(
                 inner = bm.group(1)
                 if not inner.strip():
                     continue
+                # Strip embedded line numbers from multi-line bracket spans.
+                # CT (and similar) PDFs have margin line numbers that PyMuPDF
+                # includes in the extracted text (e.g. "twenty- 236 five" or
+                # "the third-party 1107 administrator").  Remove them so the
+                # checklist text can match the cleaned output.
+                inner_clean = re.sub(
+                    r'(?<=\S)\s+\d{1,4}\s+(?=\S)', ' ', inner
+                )
+                # Also strip line numbers at start of lines within the span
+                inner_clean = re.sub(r'\n\s*\d{1,4}\s+', '\n', inner_clean)
+                # Collapse whitespace / newlines into single spaces
+                inner_clean = ' '.join(inner_clean.split())
                 # Build context snippet
                 start, end = bm.start(), bm.end()
                 before = full_page_text[max(0, start - 50):start].strip()
@@ -7458,11 +7696,11 @@ def extract_pdf_json_report(
                 ctx = ""
                 if before:
                     ctx += f"…{before} "
-                ctx += f">>>[{inner}]<<<"
+                ctx += f">>>[{inner_clean}]<<<"
                 if after:
                     ctx += f" {after}…"
                 span_entry = {
-                    "text": f"[{inner}]",
+                    "text": f"[{inner_clean}]",
                     "format_types": ["brackets"],
                     "page": page_num,
                     "bill_line": None,
@@ -7473,6 +7711,110 @@ def extract_pdf_json_report(
                 report["summary"]["bracket_spans"] += 1
         # Recount total
         report["summary"]["total_formatted_spans"] = len(report["formatted_spans"])
+
+    # -- ALL CAPS detection (CO and similar states) --------------------------
+    # For states where ALL CAPS indicates additions, generate synthetic
+    # ground-truth spans by scanning the extracted text for uppercase runs.
+    _add_markup = {}
+    if state_code:
+        try:
+            import json as _json
+            _template_path = Path(__file__).resolve().parent.parent / "Opus4.6" / "netscan_state_template.json"
+            if _template_path.exists():
+                with open(_template_path, "r", encoding="utf-8") as _tf:
+                    _all_states = _json.load(_tf)
+                _states = _all_states.get("states", _all_states)
+                _st_cfg = _states.get(state_code.upper(), {})
+                _add_markup = _st_cfg.get("add_markup", {})
+        except Exception:
+            pass
+
+    if _add_markup.get("all_caps"):
+        _caps_condition = _add_markup.get("all_caps_condition", "")
+        report["summary"]["all_caps_spans"] = 0
+        # Regex: contiguous ALL CAPS words (≥2 chars each), may include
+        # numbers/connectors between them as CO rules specify
+        _RE_ALL_CAPS_RUN = re.compile(
+            r'\b([A-Z][A-Z\d]{1,}(?:\s+(?:[A-Z][A-Z\d]{1,}|(?:of|or|and|the|to|for|a|in|on|by|at|is|an|as)\b|[\d,.;:()/-]+))*)\b'
+        )
+        # Words to exclude when they appear at line start
+        _CAPS_EXCLUDE_LINE_START = {"SECTION", "SEC", "SEC."}
+
+        for idx in page_indices:
+            if idx < 0 or idx >= len(doc):
+                continue
+            page = doc[idx]
+            page_num = idx + 1
+            full_page_text = page.get_text("text")
+
+            # Only scan pages that have line-numbered content.
+            # CO rule: "Begin mark up at line numbered lines starting with number 1"
+            # Line-numbered lines start with a number at the left margin.
+            _page_lines = full_page_text.split('\n')
+            _has_line_numbers = any(
+                re.match(r'^\s*\d{1,3}\s+\S', ln) for ln in _page_lines
+            )
+            if not _has_line_numbers:
+                continue
+
+            # Only process lines that ARE line-numbered (have leading number)
+            _in_numbered_body = False
+            for line in _page_lines:
+                line_stripped = line.strip()
+                if not line_stripped:
+                    continue
+                # Check if this line starts with a line number
+                _ln_match = re.match(r'^(\d{1,3})\s+(.+)', line_stripped)
+                if _ln_match:
+                    _in_numbered_body = True
+                    line_stripped = _ln_match.group(2)  # text after line number
+                elif not _in_numbered_body:
+                    continue  # skip header lines before first numbered line
+
+                for m in _RE_ALL_CAPS_RUN.finditer(line_stripped):
+                    caps_text = m.group(1).strip()
+                    # Must have at least 2 uppercase letters
+                    alpha_chars = [c for c in caps_text if c.isalpha()]
+                    if len(alpha_chars) < 2:
+                        continue
+                    # All alpha chars must be uppercase
+                    if not all(c.isupper() for c in alpha_chars):
+                        continue
+                    # Skip if it's a line-start excluded word (SECTION at start)
+                    first_word = caps_text.split()[0].rstrip(".")
+                    if m.start() == 0 and first_word in _CAPS_EXCLUDE_LINE_START:
+                        continue
+                    # Skip short single words that are common abbreviations
+                    if len(caps_text.split()) == 1 and len(caps_text) <= 3:
+                        continue
+                    # Build context
+                    start_pos = m.start()
+                    end_pos = m.end()
+                    before = line_stripped[max(0, start_pos - 40):start_pos].strip()
+                    after = line_stripped[end_pos:min(len(line_stripped), end_pos + 40)].strip()
+                    ctx = ""
+                    if before:
+                        ctx += f"…{before} "
+                    ctx += f">>>{caps_text}<<<"
+                    if after:
+                        ctx += f" {after}…"
+
+                    span_entry = {
+                        "text": caps_text,
+                        "format_types": ["all_caps"],
+                        "page": page_num,
+                        "bill_line": int(_ln_match.group(1)) if _ln_match else None,
+                        "bbox": [0, 0, 0, 0],
+                        "context": ctx,
+                    }
+                    report["formatted_spans"].append(span_entry)
+                    report["summary"]["all_caps_spans"] += 1
+
+        report["summary"]["total_formatted_spans"] = len(report["formatted_spans"])
+        logger.info(
+            "🔠 ALL CAPS detection: found %d spans",
+            report["summary"]["all_caps_spans"],
+        )
 
     doc.close()
     return report

@@ -94,6 +94,11 @@ _RE_PAGE_MARKER = re.compile(
 # missing-word candidate).
 _RE_LINE_NUMBER_ALONE = re.compile(r"^\s*\d{1,3}\s*$")
 
+# Letter-prefixed line/tab markers: "T1", "T2", "S3", etc.
+# CT bills use these as column/tab markers in the PDF.  They appear as
+# single uppercase-letter + 1-3 digits (e.g. "T1", "T12", "S3").
+_RE_LETTER_LINE_NUMBER = re.compile(r"^\s*(?:[A-Z]\d{1,3}\s*)+$")
+
 # Trailing line numbers: right-aligned 1-3 digit number at end of a content
 # line.  Used by ``strip_trailing_line_numbers`` (sequence-validated, so a
 # stray "rate of 5" at end of paragraph is never stripped).
@@ -329,7 +334,11 @@ STATE_PATTERNS: dict[str, dict[str, list[re.Pattern]]] = {
             re.compile(r"^\s*CALIFORNIA\s+LEGISLATURE", re.IGNORECASE),
             re.compile(r"^\s*\d{4}-\d{2}\s+REGULAR\s+SESSION", re.IGNORECASE),
             re.compile(r"^\s*(?:ASSEMBLY|SENATE)\s+BILL\s+No\.\s*\d+", re.IGNORECASE),
-            re.compile(r"^\s*AB\s*\d+", re.IGNORECASE),
+            # Match CA page headers like "AB 223       — 2 —" but NOT
+            # digest captions like "AB 223, Pacheco. Jury selection: ..."
+            # Require the line to be ONLY the bill ref (optionally with
+            # dash-page-dash suffix) — no comma or prose after.
+            re.compile(r"^\s*AB\s*\d+\s*(?:[\u2014\u2013\-]\s*\d+\s*[\u2014\u2013\-])?\s*$", re.IGNORECASE),
         ],
         CAT_FOOTER: [
             re.compile(r"^\s*\d+\s*$"),  # bare page numbers
@@ -367,7 +376,21 @@ STATE_PATTERNS: dict[str, dict[str, list[re.Pattern]]] = {
             re.compile(r"^\s*(?:HF|SF)\s*\d+", re.IGNORECASE),
             re.compile(r"^\s*\d+(?:st|nd|rd|th)\s+General\s+Assembly", re.IGNORECASE),
         ],
-        CAT_FOOTER: [],
+        CAT_FOOTER: [
+            # Iowa bill footers (full line):
+            #   "TLSB 1895YH (4) da/ns H.F. 1"
+            #   "LSB 1895YH (4) -1- lh/ko 1/32 H.F. 1"
+            re.compile(r"^\s*T?LSB\s+\w+\s*\(\d+\)", re.IGNORECASE),
+            # Footer fragments (word-level diff remnants):
+            #   "da/ns H.F. 1"   "-1- lh/ko 1/32 1"   "lh/ko 1"
+            #   Drafter initials are 2-4 lowercase letters separated by /
+            #   e.g. da/ns, lh/ko, jm/jh, rn/md
+            re.compile(r"^\s*-?\d*-?\s*[a-z]{1,4}/[a-z]{1,4}\b", re.IGNORECASE),
+            re.compile(r"^\s*\d+/\d+\s+[HS]\.F\.\s*\d+", re.IGNORECASE),    # "1/15 H.F. 1"
+            re.compile(r"^\s*[HS]\.F\.\s*\d+\s*$", re.IGNORECASE),           # "H.F. 1"
+            # Bare page refs like "House File 310, p. 2"
+            re.compile(r"^\s*(?:House|Senate)\s+File\s+\d+,\s*p\.\s*\d+", re.IGNORECASE),
+        ],
     },
     "CO": {
         CAT_HEADER: [
@@ -382,6 +405,75 @@ STATE_PATTERNS: dict[str, dict[str, list[re.Pattern]]] = {
         CAT_FOOTER: [],
     },
 }
+
+
+# ─────────────────────────────────────────────────────────────────────
+# PDF-metadata-based allowlist
+# ─────────────────────────────────────────────────────────────────────
+# When we have actual header/footer text extracted from the PDF via
+# PyMuPDF, we can use those exact strings as an allowlist — far more
+# accurate than regex patterns alone.
+
+_pdf_header_footer_texts: list[str] = []  # module-level cache
+
+
+def set_pdf_metadata_allowlist(metadata: dict | None) -> None:
+    """Populate the header/footer allowlist from PDF metadata.
+
+    Call this BEFORE running text accuracy checks.  The metadata dict
+    should come from ``paragraph_accuracy_checker.extract_full_metadata()``.
+
+    Parameters
+    ----------
+    metadata : dict or None
+        Dict with "headers" and "footers" keys (page→text mappings).
+        Pass None to clear the allowlist.
+    """
+    global _pdf_header_footer_texts
+    _pdf_header_footer_texts = []
+
+    if not metadata:
+        return
+
+    # Collect all unique header/footer text fragments
+    seen = set()
+    for zone_key in ("headers", "footers"):
+        zone = metadata.get(zone_key, {})
+        for _page, text in zone.items():
+            # Split multi-line zone text into individual lines
+            for line in text.splitlines():
+                stripped = line.strip()
+                if stripped and stripped not in seen and len(stripped) > 1:
+                    seen.add(stripped)
+                    _pdf_header_footer_texts.append(stripped)
+
+
+def _classify_against_pdf_metadata(text: str) -> dict | None:
+    """Check if text matches any header/footer extracted from the PDF."""
+    if not _pdf_header_footer_texts:
+        return None
+
+    stripped = text.strip()
+    if not stripped:
+        return None
+
+    # Normalize: remove tags, collapse whitespace
+    normalized = re.sub(r'\[([AD])>(.*?)<\1\]', r'\2', stripped, flags=re.DOTALL)
+    normalized = re.sub(r'\s+', ' ', normalized).strip().lower()
+
+    for hf_text in _pdf_header_footer_texts:
+        hf_norm = re.sub(r'\s+', ' ', hf_text).strip().lower()
+        # Exact match
+        if normalized == hf_norm:
+            return _hit(CAT_HEADER, f"pdf_metadata_exact: {hf_text[:40]}", "high")
+        # Substring match (the diff text is part of a header/footer)
+        if len(normalized) >= 3 and normalized in hf_norm:
+            return _hit(CAT_HEADER, f"pdf_metadata_substring: {hf_text[:40]}", "high")
+        # Reverse: header/footer text is part of the diff text
+        if len(hf_norm) >= 5 and hf_norm in normalized:
+            return _hit(CAT_FOOTER, f"pdf_metadata_contains: {hf_text[:40]}", "high")
+
+    return None
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -479,6 +571,9 @@ def _classify_one(text: str, state_code: str | None) -> dict[str, Any] | None:
         # Standalone tiny number — most often a line number, but on some bills
         # also a page number.  Caller treats both the same way.
         return _hit(CAT_LINE_NUMBER, _RE_LINE_NUMBER_ALONE.pattern, "high")
+    if _RE_LETTER_LINE_NUMBER.match(text):
+        # Letter-prefixed tab/line marker (CT "T1", "T2", etc.)
+        return _hit(CAT_LINE_NUMBER, _RE_LETTER_LINE_NUMBER.pattern, "high")
     if _RE_PAGE_NUMBER.match(text):
         return _hit(CAT_PAGE_NUMBER, _RE_PAGE_NUMBER.pattern, "medium")
     if _RE_DATE_STAMP.match(text):
@@ -494,6 +589,14 @@ def _classify_one(text: str, state_code: str | None) -> dict[str, Any] | None:
             for pat in state_patterns.get(category, []):
                 if pat.search(text):
                     return _hit(category, pat.pattern, "high")
+
+    # ── 3. PDF-metadata-based header/footer allowlist ─────────────
+    # When actual header/footer text has been extracted from the PDF,
+    # match against those exact strings.  This catches state-specific
+    # headers/footers that don't have regex patterns defined.
+    pdf_verdict = _classify_against_pdf_metadata(text)
+    if pdf_verdict:
+        return pdf_verdict
 
     return None
 
@@ -649,6 +752,299 @@ def strip_trailing_line_numbers(
     out_lines = list(lines)
     for idx, _num, prefix, eol in candidates:
         out_lines[idx] = prefix + eol
+    return "".join(out_lines)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Leading line-number stripper (KS / NE / MO style)
+# ─────────────────────────────────────────────────────────────────────
+
+# Leading line number: 1-3 digits at start of line, followed by 1+ spaces,
+# then actual content.  Group 1 = number, Group 2 = content, Group 3 = EOL.
+_RE_LEADING_LINE_NUMBER = re.compile(
+    r"^[ \t]*(\d{1,5})([ \t]+)(\S.+?)[ \t]*(\r?\n)?$"
+)
+
+# Bare leading line number: 1-4 digits on an otherwise empty/whitespace line.
+# Group 1 = the number, Group 2 = optional trailing newline.
+# These are orphaned line numbers on blank lines (e.g. "2   \n") that the
+# content-bearing regex above cannot match because there is no \S content.
+_RE_BARE_LEADING_LINE_NUMBER = re.compile(
+    r"^[ \t]*(\d{1,5})[ \t]*(\r?\n)?$"
+)
+
+
+def strip_leading_line_numbers(
+    text: str,
+    state_code: str | None = None,
+    *,
+    min_candidates: int = 5,
+    monotonic_ratio: float = 0.70,
+    max_starting_number: int = 20,
+) -> str:
+    """Remove left-margin line numbers that precede content on each line.
+
+    Kansas and several other states print line numbers in a left-margin
+    column.  PyMuPDF sometimes extracts them as leading digits on content
+    lines::
+
+        "1 AN ACT concerning education; relating to the Kansas promise"
+        "2 scholarship program; expanding the postsecondary educational"
+        "3 institutions eligible to participate in such program."
+
+    Detection uses the same monotonic-sequence validation as
+    :func:`strip_trailing_line_numbers` — numbers must form a mostly
+    increasing sequence across the document to be stripped.
+
+    Bare line numbers on otherwise-empty lines (e.g. ``"2   \\n"``) are
+    also removed once stripping is confirmed, provided their value falls
+    within the range of the validated monotonic sequence.
+
+    Parameters
+    ----------
+    text
+        Input text (may contain tag markup).
+    state_code
+        Optional two-letter state code (reserved for future per-state
+        policy).
+    min_candidates
+        Minimum lines with leading numbers before stripping activates.
+    monotonic_ratio
+        Required fraction of consecutive pairs that are strictly
+        increasing.
+    max_starting_number
+        First detected number must be ≤ this value.
+
+    Returns
+    -------
+    str
+        Text with leading line numbers removed, or unchanged if safety
+        checks fail.
+    """
+    if not text:
+        return text
+
+    lines = text.splitlines(keepends=True)
+
+    # Phase 1: collect content-bearing candidates for sequence validation
+    candidates: list[tuple[int, int, str, str, int]] = []  # (idx, num, content, eol, gap)
+    # Pattern to exclude header lines where the "number" is actually a year
+    # or session identifier (e.g. "2026 Legislature  CS for SB 156")
+    _header_content_re = re.compile(
+        r"(?:Legislature|Session|Congress|General\s+Assembly|Regular|Special|Extraordinary)",
+        re.IGNORECASE,
+    )
+    for idx, line in enumerate(lines):
+        m = _RE_LEADING_LINE_NUMBER.match(line)
+        if not m:
+            continue
+        num_s, gap_ws, content, eol = m.group(1), m.group(2), m.group(3), m.group(4) or ""
+        # Skip very short content — protects numbered list items like "1. "
+        if len(content.strip()) < 5:
+            continue
+        # Skip header lines where the leading "number" is a year (2020-2030)
+        num_val = int(num_s)
+        if 2000 <= num_val <= 2099 and _header_content_re.search(content):
+            continue
+        candidates.append((idx, num_val, content, eol, len(gap_ws)))
+
+    # Phase 1a: collect bare (orphaned) line numbers on blank lines.
+    # These are lines like "2   \n" or "14  \n" with no content payload.
+    bare_candidates: list[tuple[int, int, str]] = []  # (idx, num, eol)
+    for idx, line in enumerate(lines):
+        m_bare = _RE_BARE_LEADING_LINE_NUMBER.match(line)
+        if m_bare:
+            bare_candidates.append((idx, int(m_bare.group(1)), m_bare.group(2) or ""))
+
+    if len(candidates) < min_candidates:
+        # No content-bearing line numbers — fall through to bare-only mode
+        # below.  This happens when pre-cleaning already stripped content
+        # line numbers but left behind orphaned bare numbers.
+        if not bare_candidates:
+            return text
+    else:
+        nums = [c[1] for c in candidates]
+        if nums[0] > max_starting_number:
+            return text
+
+        pair_count = len(nums) - 1
+        increasing = sum(1 for a, b in zip(nums, nums[1:]) if b > a)
+        if pair_count == 0 or increasing / pair_count < monotonic_ratio:
+            return text
+
+        # Sequence confirmed — strip content-bearing line numbers
+        # Compute the typical gap between line number and content so we
+        # can preserve excess indentation (e.g. table headers like
+        # "22                  Number" → "                 Number").
+        gaps = [g for _, _, _, _, g in candidates]
+        gaps_sorted = sorted(gaps)
+        _median_gap = gaps_sorted[len(gaps_sorted) // 2]
+
+        out_lines = list(lines)
+        for idx, _num, content, eol, gap in candidates:
+            if gap > _median_gap + 4:
+                # Excess indentation — preserve the difference
+                indent = " " * (gap - _median_gap)
+                out_lines[idx] = indent + content + eol
+            else:
+                out_lines[idx] = content + eol
+
+        # Also strip bare line numbers within the confirmed range.
+        max_num = max(nums)
+        for idx, bare_num, eol in bare_candidates:
+            if 1 <= bare_num <= max_num:
+                out_lines[idx] = eol
+
+        # ── Insert blank lines where line-number gaps indicate ───────
+        # paragraph breaks.  E.g. line numbers 3→5 means line 4 was
+        # blank in the PDF (paragraph break).  Build a combined sorted
+        # sequence of (line_index, line_number) from both content and
+        # bare candidates, then detect gaps.
+        all_numbered: list[tuple[int, int]] = []
+        for idx, num, _c, _e, _g in candidates:
+            all_numbered.append((idx, num))
+        for idx, num, _e in bare_candidates:
+            if 1 <= num <= max_num:
+                all_numbered.append((idx, num))
+        all_numbered.sort(key=lambda x: x[0])
+
+        # Walk the sequence looking for gaps within the same page
+        # (line numbers reset at page boundaries, so only flag gaps
+        # where the second number > first number and diff > 1).
+        insert_after: set[int] = set()  # line indices after which to insert blank
+        for j in range(len(all_numbered) - 1):
+            idx_a, num_a = all_numbered[j]
+            idx_b, num_b = all_numbered[j + 1]
+            if num_b > num_a and num_b - num_a > 1:
+                # Gap detected — insert blank line after idx_a
+                insert_after.add(idx_a)
+
+        if insert_after:
+            final_lines: list[str] = []
+            for idx, line in enumerate(out_lines):
+                final_lines.append(line)
+                if idx in insert_after:
+                    final_lines.append("\n")
+            out_lines = final_lines
+
+        return "".join(out_lines)
+
+    # ── Bare-only mode ──────────────────────────────────────────────
+    # Pre-cleaning already stripped content-bearing line numbers but
+    # left behind scattered bare numbers on blank lines (e.g. "2\n",
+    # "4\n", "7\n").  Validate that these form a plausible line-number
+    # sequence: values 1-36 (typical page-line range), repeating across
+    # pages in a mostly-increasing pattern that resets near 1.
+    bare_nums = [c[1] for c in bare_candidates]
+    if not bare_nums or bare_nums[0] > max_starting_number:
+        return text
+
+    # Check that enough bare numbers exist (at least min_candidates)
+    if len(bare_nums) < min_candidates:
+        return text
+
+    # All values must be in the typical line-number range (1-40)
+    if max(bare_nums) > 40:
+        return text
+
+    # Check monotonic-with-resets pattern: each pair is either increasing
+    # or a page-boundary reset (drop back to a small number ≤ max_starting_number).
+    pair_count = len(bare_nums) - 1
+    good_pairs = sum(
+        1 for a, b in zip(bare_nums, bare_nums[1:])
+        if b > a or b <= max_starting_number
+    )
+    if pair_count == 0 or good_pairs / pair_count < monotonic_ratio:
+        return text
+
+    # Confirmed — strip all bare line numbers
+    out_lines = list(lines)
+    for idx, _num, eol in bare_candidates:
+        out_lines[idx] = eol
+    return "".join(out_lines)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Bare line-number block stripper (MA / CT page-boundary style)
+# ─────────────────────────────────────────────────────────────────────
+
+_RE_BARE_NUM_LINE = re.compile(r"^\s*(\d{1,3})\s*$")
+
+
+def strip_bare_line_number_blocks(
+    text: str,
+    state_code: str | None = None,
+    *,
+    min_consecutive: int = 3,
+) -> str:
+    """Remove blocks of bare line numbers (each on its own line).
+
+    Massachusetts and some Connecticut extractions produce a block of
+    sequential bare numbers at the end of each page::
+
+        "curettage of a chalazion, removal and biopsy of skin lesions without"
+        "known malignancy, laser capsulotomy, laser trabeculoplasty and laser"
+        ""
+        "1"
+        "2"
+        "3"
+        ...
+        "34"
+
+    This function detects runs of ≥ *min_consecutive* bare-number lines
+    that form a monotonic sequence and removes them.
+
+    Parameters
+    ----------
+    text
+        Input text.
+    state_code
+        Reserved for future per-state policy.
+    min_consecutive
+        Minimum length of a consecutive bare-number run to strip.
+        Default 3.
+
+    Returns
+    -------
+    str
+        Text with bare number blocks removed.
+    """
+    if not text:
+        return text
+
+    lines = text.splitlines(keepends=True)
+    remove_indices: set[int] = set()
+
+    # Scan for runs of consecutive bare-number lines
+    i = 0
+    while i < len(lines):
+        m = _RE_BARE_NUM_LINE.match(lines[i])
+        if not m:
+            i += 1
+            continue
+        # Start of a potential run
+        run_start = i
+        prev_num = int(m.group(1))
+        i += 1
+        while i < len(lines):
+            m2 = _RE_BARE_NUM_LINE.match(lines[i])
+            if not m2:
+                break
+            cur_num = int(m2.group(1))
+            # Allow non-decreasing (some pages restart at 1)
+            if cur_num <= prev_num and cur_num != 1:
+                break
+            prev_num = cur_num
+            i += 1
+        run_length = i - run_start
+        if run_length >= min_consecutive:
+            for idx in range(run_start, i):
+                remove_indices.add(idx)
+
+    if not remove_indices:
+        return text
+
+    out_lines = [line for idx, line in enumerate(lines) if idx not in remove_indices]
     return "".join(out_lines)
 
 
@@ -1482,6 +1878,116 @@ def strip_in_page_headers(
     return _RE_IN_PAGE_HEADER.sub("", text)
 
 
+# ─────────────────────────────────────────────────────────────────────
+# Repeating artifact detection from raw PyMuPDF text
+# ─────────────────────────────────────────────────────────────────────
+
+_RE_PAGE_SPLIT = re.compile(r"---\s*Page\s+\d+\s*---")
+
+# Number of lines from top/bottom of each page to scan for artifacts
+_ARTIFACT_SCAN_LINES = 5
+# Max words for a line to be considered a candidate artifact
+_ARTIFACT_MAX_WORDS = 15
+
+
+def _normalise_for_repeat(text: str) -> str:
+    """Normalise text for fuzzy matching of repeating artifacts.
+
+    Strips digits, punctuation, extra whitespace, and lowercases — so that
+    variant footers like these collapse to the same key:
+        "TLSB 1895YH (4) da/ns H.F. 1"   → "lsb yh dans hf"
+        "LSB 1895YH (4) -1- da/ns 1/15 H.F. 1" → "lsb yh dans hf"
+
+    Page 1 footers (TLSB vs LSB, no page number) and page 2+ footers
+    (with -N- page counter and N/M fraction) share enough skeleton
+    tokens to match once digits are removed.
+    """
+    # Strip tag wrappers
+    t = re.sub(r"\[[AD]>|<[AD]\]", "", text)
+    # Remove all digits
+    t = re.sub(r"\d+", "", t)
+    # Remove punctuation except letters and spaces
+    t = re.sub(r"[^a-zA-Z\s]", "", t)
+    # Collapse whitespace and lowercase
+    t = " ".join(t.lower().split())
+    # Normalise common prefix variants (TLSB→LSB, etc.)
+    t = re.sub(r"\btlsb\b", "lsb", t)
+    return t
+
+
+def _detect_repeating_artifacts(raw_text: str) -> list[dict[str, Any]]:
+    """Scan raw PyMuPDF text for short lines that repeat across pages.
+
+    Splits by ``--- Page N ---`` markers, takes the top/bottom N lines
+    of each page, and finds lines whose normalised form appears on ≥2
+    pages.  These are almost certainly headers/footers.
+
+    Returns a list of dicts with ``text`` (original), ``pages`` (list of
+    page numbers), and ``position`` ("top" or "bottom").
+    """
+    pages = _RE_PAGE_SPLIT.split(raw_text)
+    if len(pages) < 2:
+        return []
+
+    # Collect candidates: (normalised_key, original_text, page_idx, position)
+    candidates: list[tuple[str, str, int, str]] = []
+
+    for page_idx, page_text in enumerate(pages):
+        lines = [ln for ln in page_text.splitlines() if ln.strip()]
+        if not lines:
+            continue
+
+        # Top lines (headers)
+        top_lines = lines[:_ARTIFACT_SCAN_LINES]
+        # Bottom lines (footers)
+        bottom_lines = lines[-_ARTIFACT_SCAN_LINES:] if len(lines) > _ARTIFACT_SCAN_LINES else []
+
+        for ln in top_lines:
+            stripped = ln.strip()
+            if not stripped or len(stripped.split()) > _ARTIFACT_MAX_WORDS:
+                continue
+            key = _normalise_for_repeat(stripped)
+            if key and len(key) >= 3:  # skip trivially short keys
+                candidates.append((key, stripped, page_idx, "top"))
+
+        for ln in bottom_lines:
+            stripped = ln.strip()
+            if not stripped or len(stripped.split()) > _ARTIFACT_MAX_WORDS:
+                continue
+            key = _normalise_for_repeat(stripped)
+            if key and len(key) >= 3:
+                candidates.append((key, stripped, page_idx, "bottom"))
+
+    # Group by normalised key, count distinct pages
+    from collections import defaultdict
+    key_pages: dict[str, set[int]] = defaultdict(set)
+    key_texts: dict[str, list[str]] = defaultdict(list)
+    key_positions: dict[str, set[str]] = defaultdict(set)
+
+    for key, text, page_idx, position in candidates:
+        key_pages[key].add(page_idx)
+        if text not in key_texts[key]:
+            key_texts[key].append(text)
+        key_positions[key].add(position)
+
+    # Lines appearing on ≥2 pages = repeating artifacts
+    artifacts: list[dict[str, Any]] = []
+    seen_texts: set[str] = set()
+    for key, page_set in key_pages.items():
+        if len(page_set) >= 2:
+            for text in key_texts[key]:
+                if text not in seen_texts:
+                    seen_texts.add(text)
+                    artifacts.append({
+                        "text": text,
+                        "pages": sorted(page_set),
+                        "positions": sorted(key_positions[key]),
+                        "occurrences": len(page_set),
+                    })
+
+    return artifacts
+
+
 def build_removals_report(
     raw_text: str,
     clean_text: str,
@@ -1584,12 +2090,99 @@ def build_removals_report(
         for ln, t in added if t.strip()
     ]
 
+    # ── Detect repeating header/footer artifacts from RAW text ──────────
+    # Scan the PyMuPDF raw text (which always has the artifacts) to discover
+    # repeating short lines across page boundaries.  This catches unknown
+    # patterns that aren't in STATE_PATTERNS yet.
+    #
+    # Strategy:
+    #   1. Split raw text by page separators (--- Page N ---)
+    #   2. For each page, collect short lines (≤15 words) from the top/bottom
+    #   3. Lines that repeat across ≥2 pages (exact OR fuzzy) = artifacts
+    #   4. Check if those artifacts survived in the clean output → warning
+    _detected_artifacts = _detect_repeating_artifacts(raw_text)
+
+    # Flag additions that look like footers/headers/page numbers that should
+    # have been removed.  Checks state-specific, generic, AND repeated patterns.
+    _footer_warnings: list[dict[str, Any]] = []
+    _state_pats = STATE_PATTERNS.get((state_code or "").upper(), {})
+    _footer_pats = _state_pats.get(CAT_FOOTER, []) + _state_pats.get(CAT_HEADER, [])
+
+    # Generic patterns that indicate artifacts in ANY state
+    _generic_artifact_pats: list[tuple[re.Pattern, str]] = [
+        (_RE_PAGE_NUMBER,        "page_number"),
+        (_RE_PAGE_MARKER,        "page_marker"),
+        (_RE_LINE_NUMBER_ALONE,  "line_number"),
+        (_RE_DECORATIVE,         "decorative_rule"),
+        (_RE_DATE_STAMP,         "date_stamp"),
+    ]
+
+    # Build a set of normalised artifact strings for fast lookup
+    _artifact_normals = {_normalise_for_repeat(a["text"]) for a in _detected_artifacts}
+
+    # ── Also scan full output for retained artifacts (not just additions) ──
+    # Lines that exist in BOTH source and output won't appear in additions_out,
+    # but if they match a detected repeating artifact, they should be flagged.
+    for ln_idx, cline in enumerate(clean_lines, start=1):
+        _ctxt = cline.strip()
+        if not _ctxt or len(_ctxt) < 3:
+            continue
+        if _normalise_for_repeat(_ctxt) in _artifact_normals:
+            _footer_warnings.append({
+                "line": ln_idx,
+                "text": _ctxt,
+                "warning": "artifact_not_removed",
+                "category": "detected_repeating",
+            })
+
+    for item in additions_out:
+        _txt = item["text"].strip()
+        if not _txt:
+            continue
+        _matched = False
+        # Check state-specific patterns first
+        for pat in _footer_pats:
+            if pat.search(_txt):
+                _footer_warnings.append({
+                    "line": item["line"],
+                    "text": item["text"],
+                    "warning": "footer_not_removed",
+                    "category": "header_footer",
+                })
+                _matched = True
+                break
+        if _matched:
+            continue
+        # Check generic artifact patterns
+        for pat, cat in _generic_artifact_pats:
+            if pat.match(_txt):
+                _footer_warnings.append({
+                    "line": item["line"],
+                    "text": item["text"],
+                    "warning": "artifact_not_removed",
+                    "category": cat,
+                })
+                _matched = True
+                break
+        if _matched:
+            continue
+        # Check against repeating artifacts detected from raw text
+        if _normalise_for_repeat(_txt) in _artifact_normals:
+            _footer_warnings.append({
+                "line": item["line"],
+                "text": item["text"],
+                "warning": "artifact_not_removed",
+                "category": "detected_repeating",
+            })
+
     return {
         "state":          (state_code or "").upper() or None,
         "raw_lines":      len(raw_lines),
         "clean_lines":    len(clean_lines),
         "removed_lines":  total,
         "added_lines":    len(additions_out),
+        "footer_warnings": _footer_warnings,
+        "detected_artifacts": _detected_artifacts,
         "summary": {
             "by_category":      by_category,
             "classified":       classified,
@@ -1620,6 +2213,8 @@ __all__ = [
     "classify_removed_text",
     "build_removals_report",
     "strip_trailing_line_numbers",
+    "strip_leading_line_numbers",
+    "strip_bare_line_number_blocks",
     "merge_wrapped_artifact_lines",
     "strip_table_row_markers",
     "normalise_ct_title_block",
@@ -1630,6 +2225,7 @@ __all__ = [
     "TRAILING_LINE_NUMBER_STATES",
     "STATE_PATTERNS",
     "RULE_LABELS",
+    "set_pdf_metadata_allowlist",
     # category constants (re-exported for callers building UI badges)
     "CAT_PAGE_MARKER",
     "CAT_LINE_NUMBER",

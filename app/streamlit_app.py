@@ -460,6 +460,8 @@ try:
         st.session_state.audit_counts = None
     if 'content_accuracy_report' not in st.session_state:
         st.session_state.content_accuracy_report = None
+    if 'content_accuracy_detail' not in st.session_state:
+        st.session_state.content_accuracy_detail = None
     if 'gpt_audit_failed' not in st.session_state:
         st.session_state.gpt_audit_failed = False
     if 'last_uploaded_file_id' not in st.session_state:
@@ -533,12 +535,16 @@ def setup_simple_logging():
     current_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     log_file_path = os.path.join(LOG_FOLDER, f'simple_app_{current_time}.log')
     
+    import sys as _sys
+    _stream_handler = logging.StreamHandler()
+    _stream_handler.stream = open(_sys.stderr.fileno(), mode='w', encoding='utf-8', closefd=False)
+
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s',
         handlers=[
             logging.FileHandler(log_file_path, encoding="utf-8"),
-            logging.StreamHandler()
+            _stream_handler,
         ]
     )
     
@@ -1546,17 +1552,19 @@ def _format_accuracy_text_report(
         for idx, d in enumerate(real_diffs, 1):
             dtype = d.get("type", "?")
             sub_t = d.get("sub_type", "")
+            page  = d.get("page")
             tag = f"{dtype}" + (f"/{sub_t}" if sub_t else "")
+            page_str = f"  [Page {page}]" if page else ""
             if dtype == "MISSING_IN_CONVERTED":
                 txt = d.get("missing_text") or d.get("pymupdf_text") or ""
-                lines.append(f"  {idx:>3}. [{tag}]  MISSING from clean output:")
+                lines.append(f"  {idx:>3}. [{tag}]{page_str}  MISSING from clean output:")
                 lines.append(f"        \"{txt}\"")
             elif dtype == "EXTRA_IN_CONVERTED":
                 txt = d.get("extra_text") or d.get("converted_text") or ""
-                lines.append(f"  {idx:>3}. [{tag}]  EXTRA in clean output:")
+                lines.append(f"  {idx:>3}. [{tag}]{page_str}  EXTRA in clean output:")
                 lines.append(f"        \"{txt}\"")
             elif dtype == "REPLACE":
-                lines.append(f"  {idx:>3}. [{tag}]  REPLACED:")
+                lines.append(f"  {idx:>3}. [{tag}]{page_str}  REPLACED:")
                 lines.append(f"        Expected: \"{d.get('pymupdf_text','')}\"")
                 lines.append(f"        Got:      \"{d.get('converted_text','')}\"")
                 if sub_t == "TRANSPOSED":
@@ -1704,6 +1712,8 @@ def _run_text_accuracy_check(
     *,
     save_removals_to: str | None = None,
     save_accuracy_to: str | None = None,
+    llm_removed_lines: list[str] | None = None,
+    pdf_path: str | None = None,
 ):
     """Run compare_texts() with state-aware artifact allowlist + emit log.
 
@@ -1741,7 +1751,38 @@ def _run_text_accuracy_check(
     if not (raw_text and clean_text and compare_texts):
         return None
     try:
-        accuracy_report = compare_texts(raw_text, clean_text, state_code=state_code)
+        # ── Load PDF metadata for header/footer allowlist ─────────
+        if pdf_path:
+            try:
+                from paragraph_accuracy_checker import extract_full_metadata
+                from text_accuracy_helpers import set_pdf_metadata_allowlist
+                _meta = extract_full_metadata(pdf_path)
+                if _meta:
+                    set_pdf_metadata_allowlist(_meta)
+                    add_log("📋 PDF metadata loaded for header/footer allowlist")
+                    # Save metadata JSON alongside accuracy artifacts
+                    try:
+                        import json as _json
+                        _meta_path = str(Path(pdf_path).with_suffix('')) + "_metadata.json"
+                        Path(_meta_path).parent.mkdir(parents=True, exist_ok=True)
+                        with open(_meta_path, "w", encoding="utf-8") as _mf:
+                            _json.dump(_meta, _mf, indent=2, ensure_ascii=False, default=str)
+                        add_log(f"📋 PDF metadata saved: {Path(_meta_path).name}")
+                    except Exception as _save_err:
+                        logging.debug("Could not save PDF metadata: %s", _save_err)
+            except Exception as _meta_err:
+                logging.debug("Could not load PDF metadata for allowlist: %s", _meta_err)
+
+        # Diagnostic: log input sizes so truncation bugs are immediately visible
+        _raw_len = len(raw_text) if raw_text else 0
+        _clean_len = len(clean_text) if clean_text else 0
+        logging.info(
+            "🔍 Text accuracy inputs: raw=%s chars, clean=%s chars (ratio=%.1f%%)",
+            f"{_raw_len:,}", f"{_clean_len:,}",
+            (_clean_len / max(_raw_len, 1)) * 100,
+        )
+
+        accuracy_report = compare_texts(raw_text, clean_text, state_code=state_code, llm_removed_lines=llm_removed_lines)
         st.session_state.content_accuracy_report = accuracy_report
 
         _acc       = accuracy_report['accuracy']
@@ -1766,6 +1807,20 @@ def _run_text_accuracy_check(
             f"({accuracy_report['matching_words']:,}/{_max_words:,} words — "
             f"{_brkdn}, {_repos} repositioned)"
         )
+
+        # Log page-level summary for missing content so users can navigate
+        _real_diffs = accuracy_report.get('real_diffs', []) or []
+        _missing_pages: dict[int, int] = {}
+        for _d in _real_diffs:
+            _pg = _d.get("page")
+            if _pg and _d.get("type") in ("MISSING_IN_CONVERTED", "REPLACE"):
+                _missing_pages[_pg] = _missing_pages.get(_pg, 0) + 1
+        if _missing_pages:
+            _pg_summary = ", ".join(
+                f"p{pg}({n})" for pg, n in sorted(_missing_pages.items())
+            )
+            add_log(f"📄 Content differences by page: {_pg_summary}")
+
         if _allowed and state_code:
             _cat = accuracy_report.get('allowed_categories', {})
             _cat_str = ", ".join(f"{n} {k}" for k, n in sorted(_cat.items(), key=lambda kv: -kv[1]))
@@ -1783,6 +1838,25 @@ def _run_text_accuracy_check(
                 with open(save_removals_to, "w", encoding="utf-8") as _rf:
                     _json.dump(_rm_report, _rf, indent=2, ensure_ascii=False)
                 add_log(f"📋 Removals report saved: {os.path.basename(save_removals_to)}")
+                # Warn if footers/headers/artifacts remain in the cleaned output
+                _fw = _rm_report.get("footer_warnings", [])
+                if _fw:
+                    for _w in _fw[:5]:
+                        _wcat = _w.get('category', 'artifact')
+                        _wtype = _w.get('warning', 'not_removed')
+                        add_log(f"⚠️ {_wcat} not removed (line {_w['line']}): {_w['text'][:80]}", "warning")
+                    if len(_fw) > 5:
+                        add_log(f"⚠️ ... and {len(_fw) - 5} more artifact(s) not removed", "warning")
+                # Log repeating artifacts detected in raw PyMuPDF text
+                _da = _rm_report.get("detected_artifacts", [])
+                if _da:
+                    add_log(f"🔍 Detected {len(_da)} repeating header/footer pattern(s) in raw PDF text")
+                    for _a in _da[:3]:
+                        _positions = ", ".join(_a.get("positions", []))
+                        add_log(
+                            f"   📌 {_positions} artifact ({_a['occurrences']} pages): "
+                            f"{_a['text'][:80]}"
+                        )
             except Exception as _rm_err:
                 logging.warning(f"Failed to save removals report: {_rm_err}")
 
@@ -1813,6 +1887,131 @@ def _run_text_accuracy_check(
     except Exception as acc_err:
         add_log(f"⚠️ Content accuracy check failed: {acc_err}", "warning")
         logging.error(f"Content accuracy error: {acc_err}", exc_info=True)
+        return None
+
+
+def _run_content_accuracy_check(
+    precleaned_text: str | None,
+    output_text: str | None,
+    add_log,
+    *,
+    save_to: str | None = None,
+    pdf_metadata: dict | None = None,
+    pdf_path: str | None = None,
+):
+    """Run word-level content accuracy check (precleaned vs final output).
+
+    This compares content-to-content (not raw extraction vs output),
+    giving a true measure of whether the LLM preserved all legislative text.
+    Each difference is classified: content_drop, paragraph_drop, content_added,
+    hyphen_rejoin, header_reorder, artifact_removed, formatting_fix.
+
+    Parameters
+    ----------
+    precleaned_text : str
+        The precleaned/pre-LLM text (artifacts already removed by extraction).
+    output_text : str
+        The final LLM-cleaned output text.
+    add_log : callable
+        Pipeline logging function.
+    save_to : str, optional
+        Path to save the JSON report.
+
+    Returns
+    -------
+    dict | None
+        The content accuracy report, also stored on st.session_state.
+    """
+    if not precleaned_text or not output_text:
+        return None
+
+    # Strip TABLE markers — they are for human readability only
+    import re as _re
+    _tbl_re = _re.compile(r"^---TABLE (?:START|END)---\n?", _re.MULTILINE)
+    precleaned_text = _tbl_re.sub("", precleaned_text)
+
+    try:
+        from content_accuracy_checker import check_content_accuracy
+    except ImportError:
+        logging.warning("content_accuracy_checker not available")
+        return None
+
+    # Load PDF metadata for header/footer recognition if not provided
+    if pdf_metadata is None and pdf_path:
+        try:
+            import json as _json
+            _meta_path = str(Path(pdf_path).with_suffix('')) + "_metadata.json"
+            if Path(_meta_path).exists():
+                with open(_meta_path, "r", encoding="utf-8") as _mf:
+                    pdf_metadata = _json.load(_mf)
+        except Exception:
+            pass
+
+    # Load detected artifacts from removals report if available
+    _detected_artifacts = None
+    if save_to:
+        import json as _json2
+        _removals_path = save_to.replace("_content_accuracy.json", "_removals.json")
+        if Path(_removals_path).exists():
+            try:
+                with open(_removals_path, "r", encoding="utf-8") as _rf:
+                    _rm_data = _json2.load(_rf)
+                _detected_artifacts = _rm_data.get("detected_artifacts", [])
+            except Exception:
+                pass
+
+    try:
+        report = check_content_accuracy(precleaned_text, output_text, metadata=pdf_metadata, detected_artifacts=_detected_artifacts)
+        st.session_state.content_accuracy_detail = report
+
+        _acc = report["accuracy_pct"]
+        _matching = report["matching_words"]
+        _max_words = max(report["precleaned_words"], report["output_words"])
+        _blocks = report["difference_blocks"]
+        _issues = report.get("content_issue_count", 0)
+        _cats = report.get("category_summary", {})
+
+        _icon = "✅" if _acc >= 99 else "⚠️" if _acc >= 95 else "❌"
+
+        # Build category breakdown string
+        _cat_parts = []
+        for cat, count in sorted(_cats.items()):
+            _cat_parts.append(f"{count} {cat}")
+        _cat_str = ", ".join(_cat_parts) if _cat_parts else "no differences"
+
+        add_log(
+            f"{_icon} Content accuracy: {_acc:.2f}% "
+            f"({_matching:,}/{_max_words:,} words — "
+            f"{_blocks} blocks: {_cat_str})"
+        )
+
+        if _issues > 0:
+            add_log(
+                f"⚠️ {_issues} content issue(s) detected — "
+                f"check Content Accuracy report for details"
+            )
+            # Log each content issue
+            for ci in report.get("content_issues", [])[:5]:
+                _sev = ci.get("severity", "warning")
+                _expl = ci.get("explanation", "")
+                _log_level = "error" if _sev == "critical" else "warning"
+                add_log(f"  ⚠️ {_expl[:150]}", _log_level)
+            if _issues > 5:
+                add_log(f"  ... and {_issues - 5} more issue(s)")
+
+        # Save JSON report
+        if save_to:
+            import json as _json
+            Path(save_to).parent.mkdir(parents=True, exist_ok=True)
+            with open(save_to, "w", encoding="utf-8") as f:
+                _json.dump(report, f, indent=2, ensure_ascii=False, default=str)
+            add_log(f"📋 Content accuracy report saved: {Path(save_to).name}")
+
+        return report
+
+    except Exception as e:
+        add_log(f"⚠️ Content accuracy check failed: {e}", "warning")
+        logging.error(f"Content accuracy error: {e}", exc_info=True)
         return None
 
 
@@ -2171,8 +2370,11 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
         # blocks are already guarded by ``if pymupdf_text``,
         # ``if pymupdf_clean_text``, etc., so leaving those unset here is
         # enough to make them all skip cleanly.
-        _skip_validation_states = {"CO"}
-        _skip_audit = (detected_state or "").upper() in _skip_validation_states
+        _skip_validation_states: set = set()  # Previously {"CO"} — now ALL CAPS detection provides ground truth
+        _skip_audit = (
+            (detected_state or "").upper() in _skip_validation_states
+            or st.session_state.get('_pdf_is_scanned', False)
+        )
 
         # Default values that downstream steps will use if Step 6 is skipped
         pymupdf_text = None
@@ -2181,11 +2383,16 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
         highlight_dir = None
 
         if _skip_audit:
-            _state_lbl = US_STATE_NAMES.get(detected_state, detected_state)
-            add_log(
-                f"⏭️ Validation report skipped — {_state_lbl} ({detected_state}) "
-                f"uses Visual mode without audit"
-            )
+            if st.session_state.get('_pdf_is_scanned', False):
+                add_log(
+                    "⏭️ Validation report skipped — Scanned PDF requires human review"
+                )
+            else:
+                _state_lbl = US_STATE_NAMES.get(detected_state, detected_state)
+                add_log(
+                    f"⏭️ Validation report skipped — {_state_lbl} ({detected_state}) "
+                    f"uses Visual mode without audit"
+                )
             # Mark optional steps complete so the UI doesn't show "in progress"
             for _s_idx in (5, 6, 7):
                 if _s_idx in st.session_state.get('step_status', {}):
@@ -2232,7 +2439,7 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
                     add_cfg = state_config.get("add_markup", {})
                     del_cfg = state_config.get("delete_markup", {})
                     _mark_flags["mark_underline"] = add_cfg.get("underline", True)
-                    _mark_flags["mark_italic"] = add_cfg.get("italic", False) or del_cfg.get("italic", False)
+                    _mark_flags["mark_italic"] = add_cfg.get("italic", False) or del_cfg.get("italic", False) or bool(add_cfg.get("italic_section_only"))
                     _mark_flags["mark_bold"] = add_cfg.get("bold", False)
                     _mark_flags["mark_strikethrough"] = del_cfg.get("strike_out", True)
                     _mark_flags["mark_brackets"] = add_cfg.get("brackets", False) or del_cfg.get("brackets", False)
@@ -2323,42 +2530,6 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
                         df.write(_diff_report)
                     add_log(f"📋 LLM diff report saved: {diff_path}")
 
-                # Surface extraction-validator anomalies (read-only watchdog
-                # added by extraction_validator.py).  Persist as JSON for
-                # offline triage and render a Streamlit banner inline so QA
-                # users notice layout regressions before downstream tools do.
-                _anomalies = getattr(clean_extracted_text, '_last_anomalies', None) or []
-                if _anomalies:
-                    anomalies_path = pymupdf_clean_path.replace(
-                        "_pymupdf_clean.txt", "_extraction_anomalies.json"
-                    )
-                    try:
-                        with open(anomalies_path, "w", encoding="utf-8") as af:
-                            _json.dump(
-                                [
-                                    {
-                                        "kind": a.kind,
-                                        "severity": a.severity,
-                                        "description": a.description,
-                                        "snippet": a.snippet,
-                                        "char_offset": a.char_offset,
-                                        "page_number": a.page_number,
-                                        "state_code": a.state_code,
-                                        "pdf_basename": a.pdf_basename,
-                                    }
-                                    for a in _anomalies
-                                ],
-                                af,
-                                indent=2,
-                            )
-                        add_log(
-                            f"⚠️ {len(_anomalies)} extraction anomalies detected → {anomalies_path}",
-                            "warning",
-                        )
-                    except Exception as _aexc:
-                        logging.warning(f"Could not save anomaly report: {_aexc}")
-                    _render_extraction_anomaly_banner(_anomalies)
-
                 # Rebuild report context using cleaned text for better anchor matching
                 if pymupdf_report:
                     try:
@@ -2396,104 +2567,142 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
         # output.  state_code lets compare_texts bucket intentional artifact
         # removals into ``allowed_diffs`` so they don't count against accuracy.
         st.session_state.content_accuracy_report = None
-        _removals_json = output_path.replace(".txt", "_removals.json") if output_path else None
-        _accuracy_json = output_path.replace(".txt", "_accuracy.json") if output_path else None
-        _run_text_accuracy_check(
-            raw_text=pymupdf_text,
-            clean_text=converted_text,
-            state_code=detected_state,
+
+        # Save precleaned file (pymupdf_clean_text = line numbers/headers stripped)
+        _pre_cleaned_for_accuracy = pymupdf_clean_text if pymupdf_clean_text else pymupdf_text
+        if pymupdf_clean_text and output_path:
+            _pre_clean_path = output_path.replace(".txt", "_pre_cleaned.txt")
+            with open(_pre_clean_path, "w", encoding="utf-8") as _pcf:
+                _pcf.write(pymupdf_clean_text)
+            add_log(f"📋 Pre-cleaned text saved: {len(pymupdf_text):,} → {len(pymupdf_clean_text):,} chars")
+
+        # Content accuracy — word-level precleaned vs output comparison (Visual mode)
+        _content_acc_json = output_path.replace(".txt", "_content_accuracy.json") if output_path else None
+        _run_content_accuracy_check(
+            precleaned_text=_pre_cleaned_for_accuracy,
+            output_text=converted_text,
             add_log=add_log,
-            save_removals_to=_removals_json,
-            save_accuracy_to=_accuracy_json,
+            save_to=_content_acc_json,
+            pdf_path=st.session_state.get('temp_pdf_path'),
         )
 
-        # ── Step 8: GPT Audit (comparison Excel) — DISABLED ────────────────────
-        # Disabled to save cost/time; extraction_validator.py passive watchdog
-        # still runs automatically after conversion as the safety net.
-        st.session_state.step_status[7] = "⏭️"
-        add_log("⏭️ GPT audit skipped (disabled)")
-        update_progress()
-        # if pymupdf_clean_text and highlight_dir and highlight_dir.exists():
-        #     st.session_state.current_step = 7
-        #     st.session_state.step_status[7] = "🔄"
-        #     update_progress()
-        #     add_log("🤖 Running GPT 5.4 checklist-driven audit...")
-        #     if status_placeholder:
-        #         status_placeholder.info("🤖 Running GPT 5.4 audit (comparing PyMuPDF vs Claude)...")
-        #
-        #     try:
-        #         # Import gpt_compare from Opus4.6
-        #         opus46_dir = os.path.normpath(
-        #             os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'Opus4.6')
-        #         )
-        #         if opus46_dir not in sys.path:
-        #             sys.path.insert(0, opus46_dir)
-        #         from gpt_compare import gpt_compare_tags
-        #
-        #         # Load highlighted images as base64
-        #         import base64 as _b64
-        #         hi_images_b64 = []
-        #         for img_file in sorted(highlight_dir.glob("page_*.png")):
-        #             hi_images_b64.append(_b64.b64encode(img_file.read_bytes()).decode())
-        #         add_log(f"📷 Loaded {len(hi_images_b64)} highlighted page images for GPT")
-        #
-        #         # ── LLM-verify residual text-accuracy diffs (opt-in) ──────────
-        #         _run_llm_diff_verification(
-        #             accuracy_report=st.session_state.get("content_accuracy_report"),
-        #             highlighted_images_b64=hi_images_b64,
-        #             state_code=detected_state,
-        #             add_log=add_log,
-        #             save_accuracy_to=_accuracy_json,
-        #         )
-        #
-        #         # Build state rules description
-        #         sr_parts = []
-        #         if state_config:
-        #             sr_parts.append(f"State: {state_config.get('state_name', detected_state or 'unknown')}")
-        #             a_cfg = state_config.get("add_markup", {})
-        #             d_cfg = state_config.get("delete_markup", {})
-        #             sr_parts.append(f"Underline={a_cfg.get('underline', False)}")
-        #             sr_parts.append(f"Strikethrough={d_cfg.get('strike_out', False)}")
-        #             sr_parts.append(f"Italic={a_cfg.get('italic', False)}")
-        #             sr_parts.append(f"Bold={a_cfg.get('bold', False)}")
-        #             if d_cfg.get('strike_out', False) and (a_cfg.get('underline', False) or a_cfg.get('italic', False) or a_cfg.get('bold', False)):
-        #                 sr_parts.append("PRIORITY: If text has strikethrough AND any other formatting (underline/italic/bold), strikethrough ALWAYS wins → tag as [D>...<D] only, NEVER [A>...<A]")
-        #         state_rules_str = ", ".join(sr_parts) if sr_parts else f"State: {detected_state or 'unknown'}"
-        #
-        #         gpt_xlsx = output_path.replace(".txt", "_gpt_comparison.xlsx") if isinstance(output_path, str) else str(output_path).replace(".txt", "_gpt_comparison.xlsx")
-        #         gpt_cmp = gpt_compare_tags(
-        #             highlighted_images_b64=hi_images_b64,
-        #             pymupdf_clean_text=pymupdf_clean_text,
-        #             claude_converted_text=converted_text,
-        #             state_code=detected_state or "XX",
-        #             state_rules=state_rules_str,
-        #             output_xlsx=gpt_xlsx,
-        #             pymupdf_report=pymupdf_report,
-        #             pymupdf_raw_text=pymupdf_text,
-        #         )
-        #
-        #         st.session_state.audit_excel_path = gpt_xlsx
-        #         add_log(
-        #             f"✅ GPT audit complete — "
-        #             f"Checklist: {gpt_cmp['total_checklist']} items | "
-        #             f"✅ Pass: {gpt_cmp['passes']} | "
-        #             f"⚠️ Warnings: {gpt_cmp['warnings']} | "
-        #             f"❌ Errors: {gpt_cmp['errors']}"
-        #         )
-        #         if gpt_cmp.get('additional_findings'):
-        #             add_log(f"🔍 Additional findings: {gpt_cmp['additional_findings']}")
-        #         st.session_state.step_status[7] = "✅"
-        #     except Exception as gpt_err:
-        #         add_log(f"⚠️ GPT audit failed: {gpt_err}", "warning")
-        #         logging.error(f"GPT audit error: {gpt_err}", exc_info=True)
-        #         st.session_state.step_status[7] = "⚠️"
-        #         st.session_state.gpt_audit_failed = True
-        #     update_progress()
-        # else:
-        #     st.session_state.step_status[7] = "⚠️"
-        #     if not pymupdf_clean_text:
-        #         add_log("⚠️ GPT audit skipped — PyMuPDF clean text not available", "warning")
-        #     update_progress()
+        # Paragraph accuracy (if future was submitted earlier)
+        _para_report = None
+        if '_fut_para' in dir() and _fut_para is not None:
+            try:
+                _para_report = _fut_para.result()
+                _para_executor.shutdown(wait=False)
+            except Exception:
+                pass
+
+        if _para_report:
+            _para_acc = _para_report.get("accuracy_pct", 100.0)
+            _splits = len(_para_report.get("splits_needed", []))
+            _merges = len(_para_report.get("merges_needed", []))
+            _total = _para_report.get("total_boundaries", 0)
+            st.session_state.paragraph_accuracy_report = _para_report
+            if _splits or _merges:
+                add_log(f"📐 Paragraph accuracy: {_para_acc:.1f}% ({_total} boundaries — {_splits} splits, {_merges} merges needed)")
+            else:
+                add_log(f"📐 Paragraph accuracy: {_para_acc:.1f}% ({_total} boundaries — all correct)")
+            if _para_json:
+                import json as _json
+                with open(_para_json, "w", encoding="utf-8") as _pf:
+                    _json.dump(_para_report, _pf, indent=2, default=str)
+
+        # ── Step 8: Tag Validation Audit (pymupdf_compare) ─────────────────────
+        if pymupdf_clean_text and pymupdf_report and highlight_dir and Path(highlight_dir).exists():
+            n_spans = len(pymupdf_report.get("formatted_spans", []))
+            if n_spans == 0:
+                st.session_state.step_status[7] = "⏭️"
+                add_log("⏭️ Tag audit skipped — 0 formatted spans detected")
+                st.session_state.audit_counts = {
+                    'total_checklist': 0, 'passes': 0, 'warnings': 0,
+                    'errors': 0, 'tag_accuracy_pct': 100.0,
+                }
+            else:
+                st.session_state.current_step = 7
+                st.session_state.step_status[7] = "🔄"
+                update_progress()
+                add_log("🤖 Running Claude Opus 4.7 tag validation audit...")
+                if status_placeholder:
+                    status_placeholder.info("🤖 Running tag validation audit (comparing PyMuPDF report vs converted text)...")
+
+                try:
+                    opus46_dir = os.path.normpath(
+                        os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'Opus4.6')
+                    )
+                    if opus46_dir not in sys.path:
+                        sys.path.insert(0, opus46_dir)
+                    from pymupdf_compare import pymupdf_compare_tags
+
+                    import base64 as _b64
+                    hi_images_b64 = []
+                    for img_file in sorted(Path(highlight_dir).glob("page_*.png")):
+                        hi_images_b64.append(_b64.b64encode(img_file.read_bytes()).decode())
+                    add_log(f"📷 Loaded {len(hi_images_b64)} highlighted page images for audit")
+
+                    # Build state rules description
+                    sr_parts = []
+                    if state_config:
+                        sr_parts.append(f"State: {state_config.get('state_name', detected_state or 'unknown')}")
+                        a_cfg = state_config.get("add_markup", {})
+                        d_cfg = state_config.get("delete_markup", {})
+                        sr_parts.append(f"Underline={a_cfg.get('underline', False)}")
+                        sr_parts.append(f"Strikethrough={d_cfg.get('strike_out', False)}")
+                        sr_parts.append(f"Italic={a_cfg.get('italic', False)}")
+                        sr_parts.append(f"Bold={a_cfg.get('bold', False)}")
+                        sr_parts.append(f"AllCaps={a_cfg.get('all_caps', False)}")
+                        if d_cfg.get('strike_out', False) and (
+                            a_cfg.get('underline', False) or a_cfg.get('italic', False)
+                            or a_cfg.get('bold', False)
+                        ):
+                            sr_parts.append(
+                                "PRIORITY: strikethrough + any other formatting → tag "
+                                "as [D>...<D] only, never [A>...<A]"
+                            )
+                    state_rules_str = ", ".join(sr_parts) if sr_parts else f"State: {detected_state or 'unknown'}"
+
+                    audit_xlsx = output_path.replace(".txt", "_tag_validation.xlsx") \
+                        if isinstance(output_path, str) \
+                        else str(output_path).replace(".txt", "_tag_validation.xlsx")
+
+                    audit_summary = pymupdf_compare_tags(
+                        highlighted_images_b64=hi_images_b64,
+                        pymupdf_report=pymupdf_report,
+                        pymupdf_clean_text=converted_text,
+                        state_code=detected_state or "XX",
+                        state_rules=state_rules_str,
+                        output_xlsx=audit_xlsx,
+                    )
+
+                    st.session_state.audit_excel_path = audit_xlsx
+                    st.session_state.audit_counts = {
+                        'total_checklist': audit_summary.get('total_checklist', 0),
+                        'passes': audit_summary.get('passes', 0),
+                        'warnings': audit_summary.get('warnings', 0),
+                        'errors': audit_summary.get('errors', 0),
+                        'tag_accuracy_pct': audit_summary.get('tag_accuracy_pct', 0),
+                    }
+                    add_log(
+                        f"✅ Tag audit complete — "
+                        f"Checklist: {audit_summary.get('total_checklist', 0)} items | "
+                        f"✅ Pass: {audit_summary.get('passes', 0)} | "
+                        f"⚠️ Warnings: {audit_summary.get('warnings', 0)} | "
+                        f"❌ Errors: {audit_summary.get('errors', 0)}"
+                    )
+                    st.session_state.step_status[7] = "✅"
+                except Exception as audit_err:
+                    add_log(f"⚠️ Tag audit failed: {audit_err}", "warning")
+                    logging.error(f"Tag audit error: {audit_err}", exc_info=True)
+                    st.session_state.step_status[7] = "⚠️"
+                    st.session_state.gpt_audit_failed = True
+            update_progress()
+        else:
+            st.session_state.step_status[7] = "⚠️"
+            if not pymupdf_clean_text:
+                add_log("⚠️ Tag audit skipped — PyMuPDF clean text not available", "warning")
+            update_progress()
 
         # ── Wrap up ──────────────────────────────────────────────────────────────
         elapsed = time.time() - start_time
@@ -2649,7 +2858,7 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
             add_cfg = state_config.get("add_markup", {})
             del_cfg = state_config.get("delete_markup", {})
             _mark_flags["mark_underline"] = add_cfg.get("underline", True)
-            _mark_flags["mark_italic"] = add_cfg.get("italic", False) or del_cfg.get("italic", False)
+            _mark_flags["mark_italic"] = add_cfg.get("italic", False) or del_cfg.get("italic", False) or bool(add_cfg.get("italic_section_only"))
             _mark_flags["mark_bold"] = add_cfg.get("bold", False)
             _mark_flags["mark_strikethrough"] = del_cfg.get("strike_out", True)
             _mark_flags["mark_brackets"] = add_cfg.get("brackets", False) or del_cfg.get("brackets", False)
@@ -2731,47 +2940,30 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
         update_progress()
         add_log(f"✅ Clean text: {len(pymupdf_text):,} → {len(pymupdf_clean_text):,} chars")
 
+        # ── Conversion milestone (extraction + LLM clean) ────────────────────────
+        conversion_elapsed = time.time() - start_time
+        st.session_state.conversion_elapsed_secs = conversion_elapsed
+        _cm, _cs = int(conversion_elapsed // 60), int(conversion_elapsed % 60)
+        st.session_state.conversion_time = f"{_cm}m {_cs}s" if _cm > 0 else f"{_cs}s"
+
+        # Save pre-cleaned text (what the LLM received as input)
+        _pre_cleaned = getattr(clean_extracted_text, '_last_pre_cleaned', None)
+        if _pre_cleaned:
+            _pre_clean_path = output_path.replace(".txt", "_pre_cleaned.txt")
+            with open(_pre_clean_path, "w", encoding="utf-8") as pf:
+                pf.write(_pre_cleaned)
+            add_log(
+                f"📋 Pre-cleaned text saved: {len(pymupdf_text):,} → {len(_pre_cleaned):,} → "
+                f"{len(pymupdf_clean_text):,} chars (raw → pre-cleaned → LLM)"
+            )
+
         # Save LLM diff report (what did the LLM remove/change?)
         _diff_report = getattr(clean_extracted_text, '_last_diff_report', None)
         if _diff_report:
-            diff_path = pymupdf_json_path.replace("_pymupdf_report.json", "_clean_diff.txt")
+            diff_path = pymupdf_json_path.replace("_report.json", "_clean_diff.txt")
             with open(diff_path, "w", encoding="utf-8") as df:
                 df.write(_diff_report)
             add_log(f"📋 LLM diff report saved")
-
-        # Extraction-validator anomalies (passive watchdog) — mirrors the
-        # main pipeline.  See extraction_validator.py.
-        _anomalies = getattr(clean_extracted_text, '_last_anomalies', None) or []
-        if _anomalies:
-            anomalies_path = pymupdf_json_path.replace(
-                "_pymupdf_report.json", "_extraction_anomalies.json"
-            )
-            try:
-                with open(anomalies_path, "w", encoding="utf-8") as af:
-                    _json.dump(
-                        [
-                            {
-                                "kind": a.kind,
-                                "severity": a.severity,
-                                "description": a.description,
-                                "snippet": a.snippet,
-                                "char_offset": a.char_offset,
-                                "page_number": a.page_number,
-                                "state_code": a.state_code,
-                                "pdf_basename": a.pdf_basename,
-                            }
-                            for a in _anomalies
-                        ],
-                        af,
-                        indent=2,
-                    )
-                add_log(
-                    f"⚠️ {len(_anomalies)} extraction anomalies detected → {anomalies_path}",
-                    "warning",
-                )
-            except Exception as _aexc:
-                logging.warning(f"Could not save anomaly report: {_aexc}")
-            _render_extraction_anomaly_banner(_anomalies)
 
         # Rebuild report context using cleaned text for better anchor matching
         if pymupdf_report:
@@ -2797,137 +2989,139 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
         st.session_state.step_status[4] = "✅"
         update_progress()
 
-        # ── Content Accuracy Check — DISABLED for this branch ─────────
-        # (text accuracy + tag accuracy validation review is on the
-        #  Validation_report_for_Pymupdf_approach branch only)
-        # st.session_state.content_accuracy_report = None
-        # _removals_json = output_path.replace(".txt", "_removals.json")
-        # _accuracy_json = output_path.replace(".txt", "_accuracy.json")
-        # _run_text_accuracy_check(
-        #     raw_text=pymupdf_text,
-        #     clean_text=pymupdf_clean_text,
-        #     state_code=detected_state,
-        #     add_log=add_log,
-        #     save_removals_to=_removals_json,
-        #     save_accuracy_to=_accuracy_json,
-        # )
+        # ── Content Accuracy Check ─────────────────────────────────────
+        # Use pre-cleaned text as ground truth and pass LLM-removed lines
+        # so any content the LLM intentionally removed is not penalized.
+        st.session_state.content_accuracy_report = None
+        _removals_json = output_path.replace(".txt", "_removals.json")
+        _accuracy_json = output_path.replace(".txt", "_accuracy.json")
+        _accuracy_raw = _pre_cleaned if _pre_cleaned else pymupdf_text
+        # Extract lines removed by LLM (in pre-cleaned but not in final output)
+        _llm_removed = None
+        if _pre_cleaned:
+            _pre_lines = set(_pre_cleaned.splitlines())
+            _clean_lines = set(pymupdf_clean_text.splitlines())
+            _llm_removed = [l for l in _pre_lines - _clean_lines if l.strip()]
+        from concurrent.futures import ThreadPoolExecutor
 
-        # ── Step 6: Claude Opus 4.7 Audit — DISABLED for this branch ─────
-        # Validate the cleaned text against (highlighted images + JSON report)
-        # using Claude Opus 4.7 as auditor.  This mirrors the GPT audit step
-        # used by Visual mode but is purpose-built for the PyMuPDF + LLM-clean
-        # pipeline (which has the deterministic report as ground truth).
-        # st.session_state.current_step = 5
-        # st.session_state.step_status[5] = "🔄"
-        # update_progress()
-        # add_log("🤖 Running Claude Opus 4.7 audit on cleaned text...")
-        # if status_placeholder:
-        #     status_placeholder.info("🤖 Running Claude Opus 4.7 audit...")
-        #
-        # try:
-        #     from pymupdf_extractor import highlight_pdf_formatting
-        #
-        #     # Render highlighted page images for the audit
-        #     highlight_dir = Path(output_path).parent / f"{Path(pdf_path).stem}_highlighted"
-        #     hi_imgs = highlight_pdf_formatting(
-        #         pdf_path,
-        #         report=pymupdf_report,
-        #         output_dir=highlight_dir,
-        #         **_mark_flags,
-        #     )
-        #     add_log(f"🖍️ {len(hi_imgs)} highlighted page images saved")
-        #     st.session_state.audit_highlighted_dir = str(highlight_dir)
-        #
-        #     # Load highlighted images as base64
-        #     import base64 as _b64
-        #     hi_images_b64 = []
-        #     for img_file in sorted(highlight_dir.glob("page_*.png")):
-        #         hi_images_b64.append(_b64.b64encode(img_file.read_bytes()).decode())
-        #
-        #     # ── LLM-verify residual text-accuracy diffs (opt-in) ──────────
-        #     # Reuses the highlighted images we just loaded above.  No-op
-        #     # when the sidebar toggle ``use_llm_diff_verification`` is OFF
-        #     # (default).  When ON, applies the strict auto-demote /
-        #     # review-aid policy from llm_diff_verifier.py.
-        #     _run_llm_diff_verification(
-        #         accuracy_report=st.session_state.get("content_accuracy_report"),
-        #         highlighted_images_b64=hi_images_b64,
-        #         state_code=detected_state,
-        #         add_log=add_log,
-        #         save_accuracy_to=_accuracy_json,
-        #     )
-        #
-        #     # Import the PyMuPDF-clean validator from Opus4.6
-        #     opus46_dir = os.path.normpath(
-        #         os.path.join(os.path.dirname(os.path.abspath(__file__)),
-        #                      '..', 'Opus4.6')
-        #     )
-        #     if opus46_dir not in sys.path:
-        #         sys.path.insert(0, opus46_dir)
-        #     from pymupdf_compare import pymupdf_compare_tags
-        #
-        #     # Build state-rules description for the prompt
-        #     sr_parts = []
-        #     if state_config:
-        #         sr_parts.append(
-        #             f"State: {state_config.get('state_name', detected_state or 'unknown')}"
-        #         )
-        #         a_cfg = state_config.get("add_markup", {})
-        #         d_cfg = state_config.get("delete_markup", {})
-        #         sr_parts.append(f"Underline={a_cfg.get('underline', False)}")
-        #         sr_parts.append(f"Strikethrough={d_cfg.get('strike_out', False)}")
-        #         sr_parts.append(f"Italic={a_cfg.get('italic', False)}")
-        #         sr_parts.append(f"Bold={a_cfg.get('bold', False)}")
-        #         if d_cfg.get('strike_out', False) and (
-        #             a_cfg.get('underline', False)
-        #             or a_cfg.get('italic', False)
-        #             or a_cfg.get('bold', False)
-        #         ):
-        #             sr_parts.append(
-        #                 "PRIORITY: strikethrough + any other formatting → tag "
-        #                 "as [D>...<D] only, never [A>...<A]"
-        #             )
-        #     state_rules_str = ", ".join(sr_parts) if sr_parts else (
-        #         f"State: {detected_state or 'unknown'}"
-        #     )
-        #
-        #     audit_xlsx = output_path.replace(".txt", "_audit.xlsx") \
-        #         if isinstance(output_path, str) \
-        #         else str(output_path).replace(".txt", "_audit.xlsx")
-        #
-        #     audit_summary = pymupdf_compare_tags(
-        #         highlighted_images_b64=hi_images_b64,
-        #         pymupdf_report=pymupdf_report,
-        #         pymupdf_clean_text=pymupdf_clean_text,
-        #         state_code=detected_state or "XX",
-        #         state_rules=state_rules_str,
-        #         output_xlsx=audit_xlsx,
-        #     )
-        #
-        #     st.session_state.audit_excel_path = audit_xlsx
-        #     st.session_state.audit_counts = {
-        #         'total_checklist': audit_summary.get('total_checklist', 0),
-        #         'passes': audit_summary.get('passes', 0),
-        #         'warnings': audit_summary.get('warnings', 0),
-        #         'errors': audit_summary.get('errors', 0),
-        #         'additional_findings': audit_summary.get('additional_findings', 0),
-        #     }
-        #     add_log(
-        #         f"✅ Audit complete — "
-        #         f"Checklist: {audit_summary['total_checklist']} | "
-        #         f"✅ Pass: {audit_summary['passes']} | "
-        #         f"⚠️ Warn: {audit_summary['warnings']} | "
-        #         f"❌ Error: {audit_summary['errors']}"
-        #     )
-        #     if audit_summary.get('additional_findings'):
-        #         add_log(f"🔍 Additional findings: {audit_summary['additional_findings']}")
-        #     st.session_state.step_status[5] = "✅"
-        # except Exception as audit_err:
-        #     add_log(f"⚠️ Audit failed: {audit_err}", "warning")
-        #     logging.error(f"PyMuPDF audit error: {audit_err}", exc_info=True)
-        #     st.session_state.step_status[5] = "⚠️"
-        #     st.session_state.gpt_audit_failed = True
-        # update_progress()
+        # Content accuracy — word-level precleaned vs output (PyMuPDF Clean mode)
+        _content_acc_json = output_path.replace(".txt", "_content_accuracy.json") if output_path else None
+        _run_content_accuracy_check(
+            precleaned_text=_accuracy_raw,
+            output_text=pymupdf_clean_text,
+            add_log=add_log,
+            save_to=_content_acc_json,
+            pdf_path=st.session_state.get('temp_pdf_path'),
+        )
+
+        # ── Step 6: Tag Validation (PyMuPDF report → clean text) ────────────
+        # 1. Render highlighted PDF page images
+        # 2. Run deterministic pre-check (checklist from report vs clean tags)
+        # 3. Send images + checklist + clean text to Claude Opus 4.7 for
+        #    visual verification of every tag
+        st.session_state.current_step = 5
+        st.session_state.step_status[5] = "🔄"
+        update_progress()
+        add_log("🔍 Running tag validation (report → clean text)...")
+        if status_placeholder:
+            status_placeholder.info("🔍 Validating tags against PyMuPDF report...")
+
+        try:
+            from pymupdf_extractor import highlight_pdf_formatting
+
+            # Import the PyMuPDF-clean validator from Opus4.6
+            opus46_dir = os.path.normpath(
+                os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             '..', 'Opus4.6')
+            )
+            if opus46_dir not in sys.path:
+                sys.path.insert(0, opus46_dir)
+            from pymupdf_compare import pymupdf_compare_tags
+
+            # ── 6a: Render highlighted page images ──────────────────────
+            highlight_dir = Path(output_path).parent / f"{Path(pdf_path).stem}_highlighted"
+            hi_imgs = highlight_pdf_formatting(
+                pdf_path,
+                report=pymupdf_report,
+                output_dir=highlight_dir,
+                **_mark_flags,
+            )
+            add_log(f"🖍️ {len(hi_imgs)} highlighted page images saved")
+            st.session_state.audit_highlighted_dir = str(highlight_dir)
+
+            # Load highlighted images as base64
+            import base64 as _b64
+            hi_images_b64 = []
+            for img_file in sorted(highlight_dir.glob("page_*.png")):
+                hi_images_b64.append(_b64.b64encode(img_file.read_bytes()).decode())
+
+            # ── 6b: Build state-rules description for the prompt ────────
+            sr_parts = []
+            if state_config:
+                sr_parts.append(
+                    f"State: {state_config.get('state_name', detected_state or 'unknown')}"
+                )
+                a_cfg = state_config.get("add_markup", {})
+                d_cfg = state_config.get("delete_markup", {})
+                sr_parts.append(f"Underline={a_cfg.get('underline', False)}")
+                sr_parts.append(f"Strikethrough={d_cfg.get('strike_out', False)}")
+                sr_parts.append(f"Italic={a_cfg.get('italic', False)}")
+                sr_parts.append(f"Bold={a_cfg.get('bold', False)}")
+                if d_cfg.get('strike_out', False) and (
+                    a_cfg.get('underline', False)
+                    or a_cfg.get('italic', False)
+                    or a_cfg.get('bold', False)
+                ):
+                    sr_parts.append(
+                        "PRIORITY: strikethrough + any other formatting → tag "
+                        "as [D>...<D] only, never [A>...<A]"
+                    )
+            state_rules_str = ", ".join(sr_parts) if sr_parts else (
+                f"State: {detected_state or 'unknown'}"
+            )
+
+            # ── 6c: Run Claude Opus 4.7 vision audit ───────────────────
+            add_log("🤖 Running Claude Opus 4.7 audit on cleaned text...")
+            if status_placeholder:
+                status_placeholder.info("🤖 Running Claude Opus 4.7 audit (comparing PyMuPDF report vs clean text)...")
+
+            audit_xlsx = output_path.replace(".txt", "_tag_validation.xlsx") \
+                if isinstance(output_path, str) \
+                else str(output_path).replace(".txt", "_tag_validation.xlsx")
+
+            audit_summary = pymupdf_compare_tags(
+                highlighted_images_b64=hi_images_b64,
+                pymupdf_report=pymupdf_report,
+                pymupdf_clean_text=pymupdf_clean_text,
+                state_code=detected_state or "XX",
+                state_rules=state_rules_str,
+                output_xlsx=audit_xlsx,
+            )
+
+            st.session_state.audit_excel_path = audit_xlsx
+            st.session_state.audit_counts = {
+                'total_checklist': audit_summary.get('total_checklist', 0),
+                'passes': audit_summary.get('passes', 0),
+                'warnings': audit_summary.get('warnings', 0),
+                'errors': audit_summary.get('errors', 0),
+                'additional_findings': audit_summary.get('additional_findings', 0),
+            }
+            add_log(
+                f"✅ Audit complete — "
+                f"Checklist: {audit_summary['total_checklist']} | "
+                f"✅ Pass: {audit_summary['passes']} | "
+                f"⚠️ Warn: {audit_summary['warnings']} | "
+                f"❌ Error: {audit_summary['errors']}"
+            )
+            if audit_summary.get('additional_findings'):
+                add_log(f"🔍 Additional findings: {audit_summary['additional_findings']}")
+            st.session_state.step_status[5] = "✅"
+        except Exception as audit_err:
+            add_log(f"⚠️ Audit failed: {audit_err}", "warning")
+            logging.error(f"PyMuPDF audit error: {audit_err}", exc_info=True)
+            st.session_state.step_status[5] = "⚠️"
+            st.session_state.gpt_audit_failed = True
+        update_progress()
 
         # ── Wrap up ──────────────────────────────────────────────────────────────
         elapsed = time.time() - start_time
@@ -3096,18 +3290,34 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
             add_cfg = state_config.get("add_markup", {})
             del_cfg = state_config.get("delete_markup", {})
             _mark_flags["mark_underline"] = add_cfg.get("underline", True)
-            _mark_flags["mark_italic"] = add_cfg.get("italic", False) or del_cfg.get("italic", False)
+            _mark_flags["mark_italic"] = add_cfg.get("italic", False) or del_cfg.get("italic", False) or bool(add_cfg.get("italic_section_only"))
             _mark_flags["mark_bold"] = add_cfg.get("bold", False)
             _mark_flags["mark_strikethrough"] = del_cfg.get("strike_out", True)
             _mark_flags["mark_brackets"] = add_cfg.get("brackets", False) or del_cfg.get("brackets", False)
 
-        # JSON report
-        pymupdf_report = extract_pdf_json_report(pdf_path, state_code=detected_state, **_mark_flags)
+        # JSON report + Tagged text — run in parallel (each opens its own
+        # PDF handle so there's no contention; saves ~20-25s on large PDFs).
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import contextlib
+
+        def _extract_report():
+            return extract_pdf_json_report(pdf_path, state_code=detected_state, **_mark_flags)
+
+        def _extract_text():
+            return extract_pdf_with_pymupdf(pdf_path, join_pages=True, state_code=detected_state, **_mark_flags)
+
+        # Suppress PyMuPDF's noisy "find_tables: exception occurred" stderr
+        # output during parallel runs — the exceptions are already caught in
+        # Python code, but the C layer prints before Python can intercept.
+        with open(os.devnull, 'w') as _devnull, contextlib.redirect_stderr(_devnull):
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                fut_report = executor.submit(_extract_report)
+                fut_text = executor.submit(_extract_text)
+                pymupdf_report = fut_report.result()
+                pymupdf_text = fut_text.result()
+
         n_spans = len(pymupdf_report.get("formatted_spans", []))
         add_log(f"📊 PyMuPDF report: {n_spans} formatted spans detected")
-
-        # Tagged text (needed for hybrid conversion)
-        pymupdf_text = extract_pdf_with_pymupdf(pdf_path, join_pages=True, state_code=detected_state, **_mark_flags)
         add_log(f"✅ PyMuPDF tagged text: {len(pymupdf_text):,} chars")
 
         # Filter italic by section if needed
@@ -3129,8 +3339,33 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
         if status_placeholder:
             status_placeholder.info("🧹 Hybrid: splitting text into chunks and cleaning with LLM...")
 
+        # ── Launch highlight rendering in background (only if there are spans) ──
+        _highlight_future = None
+        _highlight_executor = None
+        _highlight_dir = None
+        if n_spans > 0:
+            from concurrent.futures import ThreadPoolExecutor
+            from pymupdf_extractor import highlight_pdf_formatting
+
+            _highlight_executor = ThreadPoolExecutor(max_workers=1)
+            _output_path_for_highlight = os.path.join(session_folders['output_folder'], Path(pdf_path).stem + ".txt")
+            _highlight_dir = Path(_output_path_for_highlight).parent / f"{Path(pdf_path).stem}_highlighted"
+
+            def _run_highlight():
+                return highlight_pdf_formatting(
+                    pdf_path,
+                    report=pymupdf_report,
+                    output_dir=_highlight_dir,
+                    **_mark_flags,
+                )
+
+            _highlight_future = _highlight_executor.submit(_run_highlight)
+        else:
+            add_log("⏭️ No formatted spans — skipping highlight rendering")
+
         # Use the Opus module's hybrid conversion function
-        converted_text = opus.convert_pdf_hybrid_text(client, pdf_path, state_config, detected_state)
+        # Pass pre-extracted text to avoid duplicate PyMuPDF extraction
+        converted_text = opus.convert_pdf_hybrid_text(client, pdf_path, state_config, detected_state, raw_text=pymupdf_text)
 
         if not converted_text:
             raise Exception("Hybrid conversion returned empty result")
@@ -3138,7 +3373,16 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
         add_log(f"✅ Hybrid conversion complete: {len(converted_text):,} characters")
 
         # Apply deterministic cleanup (same as visual mode)
-        converted_text = opus.deterministic_cleanup(converted_text, state_config=state_config, state_code=detected_state)
+        # Load precleaned text as reference for merged-line restoration
+        _precleaned_path = str(Path(pdf_path).with_suffix('')) + "_hybrid_precleaned.txt"
+        _precleaned_text = None
+        if os.path.exists(_precleaned_path):
+            with open(_precleaned_path, "r", encoding="utf-8") as _pf:
+                _precleaned_text = _pf.read()
+        converted_text = opus.deterministic_cleanup(
+            converted_text, state_config=state_config, state_code=detected_state,
+            reference_text=_precleaned_text,
+        )
         add_log("🔧 Deterministic cleanup applied")
 
         # Strip protected clauses
@@ -3204,118 +3448,130 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
         st.session_state.gpt_audit_failed = False
         st.session_state.content_accuracy_report = None
 
-        # ── Content Accuracy Check — DISABLED for this branch ─────────
-        # _removals_json = output_path.replace("_hybrid.txt", "_hybrid_removals.json")
-        # _accuracy_json = output_path.replace("_hybrid.txt", "_hybrid_accuracy.json")
-        # _run_text_accuracy_check(
-        #     raw_text=pymupdf_text,
-        #     clean_text=converted_text,
-        #     state_code=detected_state,
-        #     add_log=add_log,
-        #     save_removals_to=_removals_json,
-        #     save_accuracy_to=_accuracy_json,
-        # )
+        # ── Content Accuracy ───────────────────────────────────────────
+        _removals_json = output_path.replace(".txt", "_removals.json") if output_path else None
+        _accuracy_json = output_path.replace(".txt", "_accuracy.json") if output_path else None
 
-        # ── Step 6: Claude Opus 4.7 Audit — DISABLED for this branch ─────
-        # st.session_state.current_step = 5
-        # st.session_state.step_status[5] = "🔄"
-        # update_progress()
-        # add_log("🤖 Running Claude Opus 4.7 audit on hybrid-cleaned text...")
-        # if status_placeholder:
-        #     status_placeholder.info("🤖 Running Claude Opus 4.7 audit...")
-        #
-        # try:
-        #     from pymupdf_extractor import highlight_pdf_formatting
-        #
-        #     highlight_dir = Path(output_path).parent / f"{Path(pdf_path).stem}_highlighted"
-        #     hi_imgs = highlight_pdf_formatting(
-        #         pdf_path,
-        #         report=pymupdf_report,
-        #         output_dir=highlight_dir,
-        #         **_mark_flags,
-        #     )
-        #     add_log(f"🖍️ {len(hi_imgs)} highlighted page images saved")
-        #     st.session_state.audit_highlighted_dir = str(highlight_dir)
-        #
-        #     import base64 as _b64
-        #     hi_images_b64 = []
-        #     for img_file in sorted(highlight_dir.glob("page_*.png")):
-        #         hi_images_b64.append(_b64.b64encode(img_file.read_bytes()).decode())
-        #
-        #     _run_llm_diff_verification(
-        #         accuracy_report=st.session_state.get("content_accuracy_report"),
-        #         highlighted_images_b64=hi_images_b64,
-        #         state_code=detected_state,
-        #         add_log=add_log,
-        #         save_accuracy_to=_accuracy_json,
-        #     )
-        #
-        #     opus46_dir = os.path.normpath(
-        #         os.path.join(os.path.dirname(os.path.abspath(__file__)),
-        #                      '..', 'Opus4.6')
-        #     )
-        #     if opus46_dir not in sys.path:
-        #         sys.path.insert(0, opus46_dir)
-        #     from pymupdf_compare import pymupdf_compare_tags
-        #
-        #     sr_parts = []
-        #     if state_config:
-        #         sr_parts.append(
-        #             f"State: {state_config.get('state_name', detected_state or 'unknown')}"
-        #         )
-        #         a_cfg = state_config.get("add_markup", {})
-        #         d_cfg = state_config.get("delete_markup", {})
-        #         sr_parts.append(f"Underline={a_cfg.get('underline', False)}")
-        #         sr_parts.append(f"Strikethrough={d_cfg.get('strike_out', False)}")
-        #         sr_parts.append(f"Italic={a_cfg.get('italic', False)}")
-        #         sr_parts.append(f"Bold={a_cfg.get('bold', False)}")
-        #         if d_cfg.get('strike_out', False) and (
-        #             a_cfg.get('underline', False)
-        #             or a_cfg.get('italic', False)
-        #             or a_cfg.get('bold', False)
-        #         ):
-        #             sr_parts.append(
-        #                 "PRIORITY: strikethrough + any other formatting → tag "
-        #                 "as [D>...<D] only, never [A>...<A]"
-        #             )
-        #     state_rules_str = ", ".join(sr_parts) if sr_parts else (
-        #         f"State: {detected_state or 'unknown'}"
-        #     )
-        #
-        #     audit_xlsx = output_path.replace("_hybrid.txt", "_hybrid_audit.xlsx")
-        #     audit_summary = pymupdf_compare_tags(
-        #         highlighted_images_b64=hi_images_b64,
-        #         pymupdf_report=pymupdf_report,
-        #         pymupdf_clean_text=converted_text,
-        #         state_code=detected_state or "XX",
-        #         state_rules=state_rules_str,
-        #         output_xlsx=audit_xlsx,
-        #     )
-        #
-        #     st.session_state.audit_excel_path = audit_xlsx
-        #     st.session_state.audit_counts = {
-        #         'total_checklist': audit_summary.get('total_checklist', 0),
-        #         'passes': audit_summary.get('passes', 0),
-        #         'warnings': audit_summary.get('warnings', 0),
-        #         'errors': audit_summary.get('errors', 0),
-        #         'additional_findings': audit_summary.get('additional_findings', 0),
-        #     }
-        #     add_log(
-        #         f"✅ Audit complete — "
-        #         f"Checklist: {audit_summary['total_checklist']} | "
-        #         f"✅ Pass: {audit_summary['passes']} | "
-        #         f"⚠️ Warn: {audit_summary['warnings']} | "
-        #         f"❌ Error: {audit_summary['errors']}"
-        #     )
-        #     if audit_summary.get('additional_findings'):
-        #         add_log(f"🔍 Additional findings: {audit_summary['additional_findings']}")
-        #     st.session_state.step_status[5] = "✅"
-        # except Exception as audit_err:
-        #     add_log(f"⚠️ Audit failed: {audit_err}", "warning")
-        #     logging.error(f"Hybrid mode audit error: {audit_err}", exc_info=True)
-        #     st.session_state.step_status[5] = "⚠️"
-        #     st.session_state.gpt_audit_failed = True
-        # update_progress()
+        from concurrent.futures import ThreadPoolExecutor
+
+        # Content accuracy — word-level precleaned vs output comparison
+        # _precleaned_text already loaded above for deterministic_cleanup
+        # Apply repeating-page-artifact stripping so headers/footers the LLM
+        # correctly removed don't count as false-positive "content drops".
+        _precleaned_for_acc = _precleaned_text
+        if _precleaned_for_acc:
+            try:
+                from pymupdf_extractor import _strip_repeating_page_artifacts
+                _precleaned_for_acc = _strip_repeating_page_artifacts(_precleaned_for_acc)
+            except ImportError:
+                pass
+        _content_acc_json = output_path.replace(".txt", "_content_accuracy.json") if output_path else None
+        _run_content_accuracy_check(
+            precleaned_text=_precleaned_for_acc,
+            output_text=converted_text,
+            add_log=add_log,
+            save_to=_content_acc_json,
+            pdf_path=st.session_state.get('temp_pdf_path'),
+        )
+
+        # ── Step 6: Claude Opus 4.7 Audit (Validation Report) ─────────────
+        st.session_state.current_step = 5
+        st.session_state.step_status[5] = "🔄"
+        update_progress()
+
+        if n_spans == 0:
+            # No formatting detected — skip audit entirely
+            add_log("⏭️ No formatted spans detected — skipping tag audit (no tagging required)")
+            st.session_state.audit_counts = {
+                'total_checklist': 0, 'passes': 0, 'warnings': 0, 'errors': 0, 'additional_findings': 0,
+            }
+            st.session_state.step_status[5] = "✅"
+        else:
+            add_log("🤖 Running Claude Opus 4.7 audit on hybrid-cleaned text...")
+            if status_placeholder:
+                status_placeholder.info("🤖 Running Claude Opus 4.7 audit...")
+
+            try:
+                from pymupdf_extractor import highlight_pdf_formatting
+
+                # Collect pre-rendered highlight images (launched in parallel with LLM)
+                highlight_dir = _highlight_dir
+                hi_imgs = _highlight_future.result()  # blocks only if not yet done
+                _highlight_executor.shutdown(wait=False)
+                add_log(f"🖍️ {len(hi_imgs)} highlighted page images saved")
+                st.session_state.audit_highlighted_dir = str(highlight_dir)
+
+                import base64 as _b64
+                hi_images_b64 = []
+                for img_file in sorted(highlight_dir.glob("page_*.png")):
+                    hi_images_b64.append(_b64.b64encode(img_file.read_bytes()).decode())
+
+                opus46_dir = os.path.normpath(
+                    os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                 '..', 'Opus4.6')
+                )
+                if opus46_dir not in sys.path:
+                    sys.path.insert(0, opus46_dir)
+                from pymupdf_compare import pymupdf_compare_tags
+
+                sr_parts = []
+                if state_config:
+                    sr_parts.append(
+                        f"State: {state_config.get('state_name', detected_state or 'unknown')}"
+                    )
+                    a_cfg = state_config.get("add_markup", {})
+                    d_cfg = state_config.get("delete_markup", {})
+                    sr_parts.append(f"Underline={a_cfg.get('underline', False)}")
+                    sr_parts.append(f"Strikethrough={d_cfg.get('strike_out', False)}")
+                    sr_parts.append(f"Italic={a_cfg.get('italic', False)}")
+                    sr_parts.append(f"Bold={a_cfg.get('bold', False)}")
+                    if d_cfg.get('strike_out', False) and (
+                        a_cfg.get('underline', False)
+                        or a_cfg.get('italic', False)
+                        or a_cfg.get('bold', False)
+                    ):
+                        sr_parts.append(
+                            "PRIORITY: strikethrough + any other formatting → tag "
+                            "as [D>...<D] only, never [A>...<A]"
+                        )
+                state_rules_str = ", ".join(sr_parts) if sr_parts else (
+                    f"State: {detected_state or 'unknown'}"
+                )
+
+                audit_xlsx = output_path.replace(".txt", "_audit.xlsx") if isinstance(output_path, str) else str(output_path).replace(".txt", "_audit.xlsx")
+                audit_summary = pymupdf_compare_tags(
+                    highlighted_images_b64=hi_images_b64,
+                    pymupdf_report=pymupdf_report,
+                    pymupdf_clean_text=converted_text,
+                    state_code=detected_state or "XX",
+                    state_rules=state_rules_str,
+                    output_xlsx=audit_xlsx,
+                )
+
+                st.session_state.audit_excel_path = audit_xlsx
+                st.session_state.audit_counts = {
+                    'total_checklist': audit_summary.get('total_checklist', 0),
+                    'passes': audit_summary.get('passes', 0),
+                    'warnings': audit_summary.get('warnings', 0),
+                    'errors': audit_summary.get('errors', 0),
+                    'additional_findings': audit_summary.get('additional_findings', 0),
+                }
+                add_log(
+                    f"✅ Audit complete — "
+                    f"Checklist: {audit_summary['total_checklist']} | "
+                    f"✅ Pass: {audit_summary['passes']} | "
+                    f"⚠️ Warn: {audit_summary['warnings']} | "
+                    f"❌ Error: {audit_summary['errors']}"
+                )
+                if audit_summary.get('additional_findings'):
+                    add_log(f"🔍 Additional findings: {audit_summary['additional_findings']}")
+                st.session_state.step_status[5] = "✅"
+            except Exception as audit_err:
+                add_log(f"⚠️ Audit failed: {audit_err}", "warning")
+                logging.error(f"Hybrid mode audit error: {audit_err}", exc_info=True)
+                st.session_state.step_status[5] = "⚠️"
+                st.session_state.gpt_audit_failed = True
+        update_progress()
 
         # ── Wrap up ──────────────────────────────────────────────────────────────
         elapsed = time.time() - start_time
@@ -4173,7 +4429,7 @@ def show_simple_ui():
         if _input_mode == "📁 Upload PDF Files":
             # Full upload section — before processing
             st.header("📁 Upload PDF Files")
-            st.caption("Upload one file for single processing, or multiple files (up to 20, max 2 MB total) for serial batch processing.")
+            st.caption("Upload one file for single processing, or multiple files (up to 20, max 5 MB total) for serial batch processing.")
             _uploader_key = f"pdf_uploader_{st.session_state.uploader_key_counter}"
             uploaded_files = st.file_uploader(
                 "Choose PDF file(s) to process",
@@ -4397,7 +4653,7 @@ def show_simple_ui():
 
     if uploaded_files:
         # ── Validate all files ────────────────────────────────────────────
-        MAX_TOTAL_SIZE = 2 * 1024 * 1024   # 2 MB total for all files combined
+        MAX_TOTAL_SIZE = 5 * 1024 * 1024   # 5 MB total for all files combined
         MAX_BATCH = 20
         MAX_PAGES = 15
         valid_files = []
@@ -4422,7 +4678,7 @@ def show_simple_ui():
             except Exception:
                 pass  # if we can't check, let it through — batch upload will catch it
 
-            # Check if adding this file would exceed the 2 MB total limit
+            # Check if adding this file would exceed the 5 MB total limit
             if _running_size + uf.size > MAX_TOTAL_SIZE:
                 skipped_size_names.append(f"{uf.name} ({format_file_size(uf.size)})")
                 continue
@@ -4550,17 +4806,12 @@ def show_simple_ui():
                         all_ok = False
                         continue
 
-                    # Scanned PDF gate
+                    # Scanned PDF detection (no longer blocks — routes to visual mode)
                     if detect_pdf_type is not None:
                         with st.spinner(f"🔍 Analyzing **{uf.name}** — detecting document type..."):
                             pdf_analysis = detect_pdf_type(temp_path)
                         if pdf_analysis and pdf_analysis['type'] == 'scanned':
-                            logging.info(f"Skipped scanned PDF: {uf.name}")
-                            try:
-                                os.remove(temp_path)
-                            except Exception:
-                                pass
-                            continue
+                            logging.info(f"Scanned PDF detected: {uf.name} — will use Visual mode")
 
                     # Page count gate
                     try:
@@ -4639,6 +4890,8 @@ def show_simple_ui():
                     st.session_state.audit_json_report = None
                     st.session_state.content_accuracy_report = None
                     st.session_state.gpt_audit_failed = False
+                    st.session_state.pop('_scanned_hitl_approved', None)
+                    st.session_state.pop('_pdf_is_scanned', None)
 
                     # Reset validation review state (fixed/ignored from previous file)
                     for _vri_key in ("vri_fixed_ids", "vri_ignored_ids", "vri_undo_history",
@@ -4669,19 +4922,28 @@ def show_simple_ui():
                             if detect_pdf_type is not None:
                                 st.write("🔍 Analyzing PDF — detecting document type...")
                                 pdf_analysis = detect_pdf_type(temp_path)
+                                st.session_state['_pdf_analysis'] = pdf_analysis
                                 if pdf_analysis:
                                     _pg = pdf_analysis.get('total_pages', '?')
                                     _tp = pdf_analysis.get('type', 'unknown')
-                                    _tp_label = ('Digital (text-based)' if _tp == 'digital'
-                                                 else 'Hybrid (text + images)' if _tp == 'hybrid'
-                                                 else _tp.capitalize())
+                                    # If any pages have images, treat as hybrid for display
+                                    _any_images = any(d.get('has_images') for d in pdf_analysis.get('details', []))
+                                    if _any_images and _tp == 'digital':
+                                        _tp_label = 'Hybrid (text + images)'
+                                    elif _tp == 'digital':
+                                        _tp_label = 'Digital (text-based)'
+                                    elif _tp == 'hybrid':
+                                        _tp_label = 'Hybrid (text + images)'
+                                    else:
+                                        _tp_label = _tp.capitalize()
                                     st.write(f"📊 **{_pg} pages** detected — Type: **{_tp_label}**")
                                 if pdf_analysis and pdf_analysis['type'] == 'scanned':
+                                    st.session_state['_pdf_is_scanned'] = True
                                     _upload_status.update(
-                                        label=f"⚠️ {uploaded_file.name} — Scanned PDF detected",
-                                        state="error", expanded=True)
-                                    _scanned_detected = True
+                                        label=f"📷 {uploaded_file.name} — Scanned PDF (will use Visual mode)",
+                                        state="complete", expanded=False)
                                 else:
+                                    st.session_state['_pdf_is_scanned'] = False
                                     _upload_status.update(
                                         label=f"✅ {uploaded_file.name} — Ready to process",
                                         state="complete", expanded=False)
@@ -4696,25 +4958,15 @@ def show_simple_ui():
                                 state="error")
                             st.error("❌ Failed to upload file - check logs for details")
 
-                    # Show scanned-PDF message outside the status container
-                    # so it remains clearly visible.
-                    if _scanned_detected:
+                    # Show scanned-PDF info banner (no longer blocks processing)
+                    if st.session_state.get('_pdf_is_scanned', False):
                         st.info(
-                            f"🛠️ **Scanned PDF Support — Coming Soon**\n\n"
-                            f"The uploaded file **{uploaded_file.name}** appears to be a "
+                            f"📷 **Scanned PDF Detected**\n\n"
+                            f"The uploaded file **{uploaded_file.name}** is a "
                             f"**scanned (image-based) PDF**.\n\n"
-                            f"Support for scanned PDFs (with OCR) is currently under "
-                            f"development and will be available in a future release. "
-                            f"For now, please upload a **digital (text-based) PDF** to "
-                            f"continue."
+                            f"It will be processed using the **Visual (Claude Opus)** "
+                            f"pipeline which converts page images to text."
                         )
-                        try:
-                            os.remove(temp_path)
-                        except Exception:
-                            pass
-                        st.session_state.temp_pdf_path = None
-                        st.session_state.last_uploaded_file_id = None
-                        st.stop()
 
                     if temp_path:
                         st.session_state.temp_pdf_path = temp_path
@@ -5076,11 +5328,13 @@ def show_results_section():
     # processed via Visual mode (claude_opus). Keep this in sync with the
     # _skip_validation_states set inside process_with_claude_opus.
     _state_skips_validation = _detected_state in {"CO"}
+    # Scanned PDFs skip validation — human review is required instead
+    _is_scanned_pdf = st.session_state.get('_pdf_is_scanned', False)
     # NOTE: pymupdf_clean_only and hybrid pipelines now run their own audit
     # (pymupdf_compare_tags) at step 6, so they DO have a Validation Review
     # tab to show. We only skip when the audit was explicitly skipped at the
-    # state level, OR when no audit data was produced.
-    _skip_validation = _state_skips_validation
+    # state level, OR when no audit data was produced, OR scanned PDF.
+    _skip_validation = _state_skips_validation or _is_scanned_pdf
     _show_pdf_compare = (
         compare_build_viewer_html is not None
         and st.session_state.get('temp_pdf_path')
@@ -5090,8 +5344,6 @@ def show_results_section():
     if _show_pdf_compare:
         tab_labels.append("📄 PDF ↔ Text Compare")
     tab_labels.append("📊 Summary")
-    if not _skip_validation and (_has_audit or _has_accuracy or _has_highlighted or _audit_failed) and render_inline_validation_review:
-        tab_labels.append("🔍 Validation Review")
     if st.session_state.get('processing_logs'):
         tab_labels.append("📋 Activity Log")
 
@@ -5229,21 +5481,63 @@ def show_results_section():
             f'<span style="font-weight:800;">{_size_label}</span></div>'
         )
 
-        # Content accuracy chip
-        _acc_chip = ""
-        _acc_report = st.session_state.get('content_accuracy_report')
-        if _acc_report:
-            _acc_val = _acc_report['accuracy']
-            if _acc_val >= 99:
-                _acc_bg, _acc_fg, _acc_bdr = '#f0fdf4', '#166534', '#bbf7d0'
-            elif _acc_val >= 95:
-                _acc_bg, _acc_fg, _acc_bdr = '#fefce8', '#854d0e', '#fde68a'
+        # Content accuracy chip (precleaned vs final output — word-level)
+        _content_acc_chip = ""
+        _content_rpt = st.session_state.get('content_accuracy_detail')
+        if _content_rpt:
+            _content_val = _content_rpt.get('accuracy_pct', 100.0)
+            _content_words = _content_rpt.get('matching_words', 0)
+            _content_max = max(_content_rpt.get('precleaned_words', 0), _content_rpt.get('output_words', 0))
+            _content_issues = _content_rpt.get('content_issue_count', 0)
+            if _content_val >= 99:
+                _ca_bg, _ca_fg, _ca_bdr = '#f0fdf4', '#166534', '#bbf7d0'
+            elif _content_val >= 95:
+                _ca_bg, _ca_fg, _ca_bdr = '#fefce8', '#854d0e', '#fde68a'
             else:
-                _acc_bg, _acc_fg, _acc_bdr = '#fef2f2', '#991b1b', '#fecaca'
-            _acc_chip = (
-                f'<div style="{_chip} background:{_acc_bg}; color:{_acc_fg}; border:1px solid {_acc_bdr};">'
-                f'<span style="font-size:1rem;">📊</span> Text Accuracy '
-                f'<span style="font-weight:800;">{_acc_val:.1f}%</span></div>'
+                _ca_bg, _ca_fg, _ca_bdr = '#fef2f2', '#991b1b', '#fecaca'
+            _ca_detail = f" ({_content_words:,}/{_content_max:,} words"
+            if _content_issues:
+                _ca_detail += f", {_content_issues} issue{'s' if _content_issues != 1 else ''}"
+            _ca_detail += ")"
+            _content_acc_chip = (
+                f'<div style="{_chip} background:{_ca_bg}; color:{_ca_fg}; border:1px solid {_ca_bdr};">'
+                f'<span style="font-size:1rem;">📊</span> Content Accuracy '
+                f'<span style="font-weight:800;">{_content_val:.2f}%</span>'
+                f'<span style="font-size:0.75rem; font-weight:400; margin-left:4px;">{_ca_detail}</span></div>'
+            )
+
+        # Tag accuracy chip (from audit counts)
+        _tag_acc_chip = ""
+        _cached_audit = st.session_state.get('audit_counts')
+        if isinstance(_cached_audit, dict):
+            _ta_total = int(_cached_audit.get('total_checklist') or 0)
+            _ta_pass = int(_cached_audit.get('passes') or 0)
+            _ta_err = int(_cached_audit.get('errors') or 0)
+            _ta_warn = int(_cached_audit.get('warnings') or 0)
+            if _ta_total == 0:
+                # No formatted spans detected — nothing to tag
+                _ta_pct = 100.0
+                _ta_bg, _ta_fg, _ta_bdr = '#f0fdf4', '#166534', '#bbf7d0'
+                _ta_detail = " (No formatting modifications detected — no tagging required)"
+            else:
+                _ta_pct = (_ta_pass / _ta_total * 100.0)
+                if _ta_pct >= 99:
+                    _ta_bg, _ta_fg, _ta_bdr = '#f0fdf4', '#166534', '#bbf7d0'
+                elif _ta_pct >= 95:
+                    _ta_bg, _ta_fg, _ta_bdr = '#fefce8', '#854d0e', '#fde68a'
+                else:
+                    _ta_bg, _ta_fg, _ta_bdr = '#fef2f2', '#991b1b', '#fecaca'
+                _ta_detail = f" ({_ta_pass}/{_ta_total}"
+                if _ta_err:
+                    _ta_detail += f", {_ta_err} error{'s' if _ta_err != 1 else ''}"
+                if _ta_warn:
+                    _ta_detail += f", {_ta_warn} warning{'s' if _ta_warn != 1 else ''}"
+                _ta_detail += ")"
+            _tag_acc_chip = (
+                f'<div style="{_chip} background:{_ta_bg}; color:{_ta_fg}; border:1px solid {_ta_bdr};">'
+                f'<span style="font-size:1rem;">🏷️</span> Tag Accuracy '
+                f'<span style="font-weight:800;">{_ta_pct:.1f}%</span>'
+                f'<span style="font-size:0.75rem; font-weight:400; margin-left:4px;">{_ta_detail}</span></div>'
             )
 
         _summary_html = (
@@ -5255,7 +5549,7 @@ def show_results_section():
             f'{_state_pill}'
             '</div>'
             '<div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px;">'
-            f'{_conv_chip}{_val_chip}{_size_chip}{_acc_chip}'
+            f'{_conv_chip}{_val_chip}{_size_chip}{_content_acc_chip}{_tag_acc_chip}'
             '</div>'
             '<div style="background:#f8fafc; border-radius:8px; padding:8px 16px;'
             ' display:flex; align-items:center; justify-content:space-between;'
@@ -5265,93 +5559,150 @@ def show_results_section():
             '</div>'
             '<p style="margin:12px 0 0; font-size:0.82rem; color:#64748b;">'
             'Your PDF has been converted to tagged legislative text with Claude Opus 4.6. '
-            f'{"Click the <b>Validation Review</b> tab to compare against the original PDF." if _has_audit else ""}'
+            'Review the chips above for accuracy metrics.'
             '</p></div>'
         )
         st.markdown(_summary_html, unsafe_allow_html=True)
 
-        # ── Audit metrics (Total Items / Pass / Warnings / Errors) ────────
-        if _has_audit:
-            # ── 1. Pull counts ──────────────────────────────────────────────
-            # Prefer the in-memory snapshot saved right after the audit ran
-            # (fast, exact, no I/O). Fall back to re-parsing the Excel when
-            # the user revisits the page after a process restart.
-            _n_total = _n_pass = _n_warn = _n_err = None
-            _n_add = 0
-            _cached = st.session_state.get('audit_counts')
-            if isinstance(_cached, dict) and _cached.get('total_checklist'):
-                _n_total = int(_cached.get('total_checklist') or 0)
-                _n_pass  = int(_cached.get('passes') or 0)
-                _n_warn  = int(_cached.get('warnings') or 0)
-                _n_err   = int(_cached.get('errors') or 0)
-                _n_add   = int(_cached.get('additional_findings') or 0)
-            else:
-                try:
-                    import openpyxl as _xl
-                    _wb = _xl.load_workbook(str(st.session_state.audit_excel_path), read_only=True, data_only=True)
-                    _ws = _wb["Checklist Audit"]
-                    _rows = list(_ws.iter_rows(min_row=4, values_only=True))
-                    _wb.close()
-                    if _rows:
-                        _headers = [str(h).strip() if h else f"col{i}" for i, h in enumerate(_rows[0])]
-                        _cl = [dict(zip(_headers, r)) for r in _rows[1:] if r[0] is not None]
-                        _n_total = len(_cl)
-                        _n_pass  = sum(1 for r in _cl if str(r.get("Verdict", "")).startswith("\u2705"))
-                        _n_warn  = sum(1 for r in _cl if str(r.get("Verdict", "")).startswith("\u26a0"))
-                        _n_err   = sum(1 for r in _cl if str(r.get("Verdict", "")).startswith("\u274c"))
-                except Exception:
-                    pass  # audit metrics are nice-to-have; don't break Summary tab
-
-            # ── 2. Prominent status banner ──────────────────────────────────
-            # Symmetric treatment to the Excel Summary sheet:
-            #   • errors > 0           → big red banner
-            #   • warnings > 0         → big yellow banner
-            #   • everything passed    → big green "100% TAG ACCURACY" banner
-            # This makes the audit verdict UNMISSABLE — no need to scroll
-            # through logs or open the Excel file to know if there are issues.
-            if _n_total is not None and _n_total > 0:
-                _accuracy = (_n_pass / _n_total) * 100.0 if _n_total else 0.0
-                _extras_note = (
-                    f" (plus {_n_add} additional finding{'s' if _n_add != 1 else ''} flagged by the LLM)"
-                    if _n_add else ""
-                )
-                if _n_err > 0:
-                    st.error(
-                        f"❌ **Audit found {_n_err} error{'s' if _n_err != 1 else ''}**"
-                        f"{(' and ' + str(_n_warn) + ' warning' + ('s' if _n_warn != 1 else '')) if _n_warn else ''}"
-                        f" out of {_n_total} checklist items"
-                        f" — Tag accuracy: **{_accuracy:.1f}%**{_extras_note}.  \n"
-                        f"👉 Open the **🔍 Validation Review** tab to fix or ignore each issue."
-                    )
-                elif _n_warn > 0:
+        # ── Pages with images warning: flag for human review ───────────
+        _pdf_analysis = st.session_state.get('_pdf_analysis')
+        if _pdf_analysis:
+            _page_details = _pdf_analysis.get('details', [])
+            _img_pages = [str(pd['page']) for pd in _page_details if pd.get('has_images')]
+            if _img_pages:
+                if _pdf_analysis.get('type') == 'scanned':
                     st.warning(
-                        f"⚠️ **Audit found {_n_warn} warning{'s' if _n_warn != 1 else ''}**"
-                        f" out of {_n_total} checklist items"
-                        f" — Tag accuracy: **{_accuracy:.1f}%**{_extras_note}.  \n"
-                        f"👉 Open the **🔍 Validation Review** tab to review each item."
+                        "📷 **Scanned PDF Detected** — This document is a scanned "
+                        "(image-based) PDF. Text was extracted using visual conversion "
+                        "which may introduce errors. "
+                        "**Full human review is required** to ensure accuracy."
                     )
                 else:
-                    st.success(
-                        f"🎉 **100% TAG ACCURACY** — all {_n_total} checklist items passed, "
-                        f"no errors and no warnings.{_extras_note}"
+                    _pages_str = ', '.join(_img_pages)
+                    _n = len(_img_pages)
+                    st.warning(
+                        f"📷 **Hybrid PDF Detected** — This document contains "
+                        f"embedded images on **{_n} page{'s' if _n != 1 else ''}** "
+                        f"(page{'s' if _n != 1 else ''} {_pages_str}). "
+                        f"Text extraction may be incomplete on those pages. "
+                        f"**Please review {'these pages' if _n > 1 else 'this page'}** "
+                        f"to ensure no content was missed."
                     )
 
-            # ── 3. Metrics cards (only if we have counts) ───────────────────
-            if _n_total is not None:
-                try:
-                    _card = (
-                        'display:flex; flex-direction:column; align-items:center; '
-                        'padding:14px 10px; border-radius:10px; flex:1; min-width:100px;'
+        # ── Tag Issues (compact, only when tag accuracy < 100%) ───────────
+        if isinstance(_cached_audit, dict):
+            _ta_err_count = int(_cached_audit.get('errors') or 0)
+            _ta_warn_count = int(_cached_audit.get('warnings') or 0)
+            if _ta_err_count > 0 or _ta_warn_count > 0:
+                _issue_label = []
+                if _ta_err_count:
+                    _issue_label.append(f"{_ta_err_count} error{'s' if _ta_err_count != 1 else ''}")
+                if _ta_warn_count:
+                    _issue_label.append(f"{_ta_warn_count} warning{'s' if _ta_warn_count != 1 else ''}")
+                with st.expander(f"🏷️ Tag Issues ({', '.join(_issue_label)})", expanded=False):
+                    # Try to load from the audit Excel
+                    _excel_path = st.session_state.get('audit_excel_path')
+                    if _excel_path and os.path.exists(_excel_path):
+                        try:
+                            import openpyxl as _xl
+                            _wb = _xl.load_workbook(str(_excel_path), read_only=True, data_only=True)
+                            _ws = _wb["Checklist Audit"]
+                            _rows = list(_ws.iter_rows(min_row=4, values_only=True))
+                            _wb.close()
+                            if _rows:
+                                _hdrs = [str(h).strip() if h else f"col{i}" for i, h in enumerate(_rows[0])]
+                                _all_items = [dict(zip(_hdrs, r)) for r in _rows[1:] if r[0] is not None]
+                                _issue_items = [
+                                    r for r in _all_items
+                                    if (str(r.get("Verdict", "")).startswith("❌")
+                                        or str(r.get("Verdict", "")).startswith("⚠"))
+                                    and "dash normali" not in str(r.get("Notes", "") or "").lower()
+                                ]
+                                if _issue_items:
+                                    _tbl_rows = []
+                                    for _it in _issue_items[:30]:  # cap at 30
+                                        _verdict = str(_it.get("Verdict", ""))
+                                        _status = "❌ Error" if _verdict.startswith("❌") else "⚠️ Warning"
+                                        _page = str(_it.get("Page", "") or "")
+                                        _line = str(_it.get("Line", "") or "")
+                                        _text = str(_it.get("PyMuPDF Text", "") or _it.get("Clean Text", "") or "")[:80]
+                                        _note = str(_it.get("Notes", "") or "")[:120]
+                                        _fix = str(_it.get("Suggested Fix", "") or "")[:120]
+                                        _tbl_rows.append({
+                                            "Status": _status,
+                                            "Page": _page,
+                                            "Line": _line,
+                                            "Text": _text,
+                                            "Issue": _note,
+                                            "Suggested Fix": _fix,
+                                        })
+                                    import pandas as _pd
+                                    st.dataframe(
+                                        _pd.DataFrame(_tbl_rows),
+                                        use_container_width=True,
+                                        hide_index=True,
+                                    )
+                                    if len(_issue_items) > 30:
+                                        st.caption(f"Showing first 30 of {len(_issue_items)} issues. Download the audit Excel for the full list.")
+                        except Exception as _tag_ex:
+                            st.caption(f"Could not load tag issues: {_tag_ex}")
+                    else:
+                        st.caption("Audit Excel not available — re-run processing to generate.")
+
+        # ── Content Issues (compact, only when content accuracy has issues) ─
+        # Check both report sources: content_accuracy_detail (from _run_content_accuracy_check)
+        # and content_accuracy_report (from _run_text_accuracy_check / compare_files)
+        _content_rpt = st.session_state.get('content_accuracy_detail') or st.session_state.get('content_accuracy_report')
+        if _content_rpt:
+            # Support both compare_files (real_diffs) and content_accuracy_checker (content_issues) formats
+            _ci_list = _content_rpt.get('content_issues') or _content_rpt.get('real_diffs') or []
+            _ci_count = len(_ci_list)
+            if _ci_count > 0:
+                with st.expander(f"📊 Content Issues ({_ci_count} difference{'s' if _ci_count != 1 else ''})", expanded=False):
+                    # Build word-index-to-line-number map from the output text
+                    _out_text_for_lines = None
+                    _out_path = st.session_state.get('processed_file_path')
+                    if _out_path and os.path.exists(_out_path):
+                        try:
+                            with open(_out_path, 'r', encoding='utf-8') as _of:
+                                _out_text_for_lines = _of.read()
+                        except Exception:
+                            pass
+                    _word_to_line = {}
+                    if _out_text_for_lines:
+                        _w_idx = 0
+                        for _ln_no, _ln_text in enumerate(_out_text_for_lines.splitlines(), start=1):
+                            _ln_words = _ln_text.split()
+                            for _ in _ln_words:
+                                _word_to_line[_w_idx] = _ln_no
+                                _w_idx += 1
+
+                    _ci_rows = []
+                    for _ci in _ci_list[:30]:
+                        _ci_type = str(_ci.get("type", "")).capitalize()
+                        # Support both field naming conventions
+                        _ci_pre = str(_ci.get("precleaned") or _ci.get("pymupdf_text") or _ci.get("missing_text") or "—")[:80]
+                        _ci_out = str(_ci.get("output") or _ci.get("converted_text") or _ci.get("extra_text") or "—")[:80]
+                        _ci_cat = str(_ci.get("category") or _ci.get("sub_type") or _ci.get("allowed_category") or "").replace("_", " ").title()
+                        _ci_line = ""
+                        _ci_word_start = _ci.get("output_word_start") or _ci.get("j1")
+                        if _ci_word_start is not None and _word_to_line:
+                            _ci_line = str(_word_to_line.get(_ci_word_start, ""))
+                        _ci_rows.append({
+                            "Line": _ci_line,
+                            "Type": _ci_type,
+                            "Expected (PDF)": _ci_pre,
+                            "Output": _ci_out,
+                            "Category": _ci_cat,
+                        })
+                    import pandas as _pd
+                    st.dataframe(
+                        _pd.DataFrame(_ci_rows),
+                        use_container_width=True,
+                        hide_index=True,
                     )
-                    st.markdown(f"""
-                <div style="display:flex; gap:12px; flex-wrap:wrap; margin:0 0 16px;">
-                    <div style="{_card} background:#f8fafc; border:1px solid #e2e8f0;">
-                        <span style="font-size:1.6rem; font-weight:800; color:#0f172a;">{_n_total}</span>
-                        <span style="font-size:0.78rem; color:#64748b; margin-top:2px;">Total Items</span>
-                    </div>
-                    """, unsafe_allow_html=True)
-                except Exception:
-                    pass  # audit metrics are nice-to-have; don't break Summary tab
+                    if _ci_count > 30:
+                        st.caption(f"Showing first 30 of {_ci_count} issues. Download the accuracy JSON for the full list.")
 
         # ── Submit to Keyed (SFTP Upload) ─────────────────────────────────────
         st.markdown("---")
@@ -5389,25 +5740,6 @@ def show_results_section():
                     st.warning("No processed file available to submit.")
 
     _tab_idx += 1
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # TAB — Validation Review (only if audit data exists)
-    # ══════════════════════════════════════════════════════════════════════════
-    if not _skip_validation and (_has_audit or _has_accuracy or _has_highlighted or _audit_failed) and render_inline_validation_review:
-        with tabs[_tab_idx]:
-            # Scrollable container so the validation review body scrolls
-            # independently of the page (keeps the tab strip + page header
-            # visible while reviewing long checklists / side-by-side text).
-            with st.container(height=850, border=False):
-                render_inline_validation_review(
-                    excel_path=st.session_state.get('audit_excel_path') or "",
-                    converted_txt_path=st.session_state.processed_file_path,
-                    highlighted_dir=st.session_state.get('audit_highlighted_dir'),
-                    json_report=st.session_state.get('audit_json_report'),
-                    accuracy_report=st.session_state.get('content_accuracy_report'),
-                    gpt_audit_failed=_audit_failed,
-                )
-        _tab_idx += 1
 
     # ══════════════════════════════════════════════════════════════════════════
     # TAB — Activity Log
@@ -5734,7 +6066,7 @@ class BatchWorker:
                 add_cfg = state_config.get("add_markup", {})
                 del_cfg = state_config.get("delete_markup", {})
                 _mark_flags["mark_underline"] = add_cfg.get("underline", True)
-                _mark_flags["mark_italic"] = add_cfg.get("italic", False) or del_cfg.get("italic", False)
+                _mark_flags["mark_italic"] = add_cfg.get("italic", False) or del_cfg.get("italic", False) or bool(add_cfg.get("italic_section_only"))
                 _mark_flags["mark_bold"] = add_cfg.get("bold", False)
                 _mark_flags["mark_strikethrough"] = del_cfg.get("strike_out", True)
                 _mark_flags["mark_brackets"] = add_cfg.get("brackets", False) or del_cfg.get("brackets", False)
@@ -6098,12 +6430,6 @@ def show_batch_processing():
 
     # ── Tab layout (live) ─────────────────────────────────────────────
     tab_labels = ["📦 Progress"]
-    has_review_files = any(
-        r.get('audit_excel_path') or r.get('content_accuracy_report')
-        for r in batch_results
-    )
-    if batch_results:
-        tab_labels.append("🔍 Validation Review")
     if any(r.get('processing_logs') for r in batch_results):
         tab_labels.append("📋 Activity Logs")
 
@@ -6160,66 +6486,10 @@ def show_batch_processing():
                     st.rerun()
 
     # ══════════════════════════════════════════════════════════════════
-    # TAB 2 — Validation Review (live, for completed files)
+    # TAB 2 — Activity Logs
     # ══════════════════════════════════════════════════════════════════
-    if batch_results and len(tabs) > 1:
+    if any(r.get('processing_logs') for r in batch_results) and len(tabs) > 1:
         with tabs[1]:
-            _success_results = [r for r in batch_results if r['status'] == 'success']
-            _success_indices = [i for i, r in enumerate(batch_results) if r['status'] == 'success']
-
-            if not _success_results:
-                st.info("No successfully processed files available for review yet.")
-            else:
-                file_options = [
-                    f"#{i+1} — {r['file_name']} ({r.get('detected_state', '?')})"
-                    for i, r in zip(_success_indices, _success_results)
-                ]
-
-                prev_sel_idx = st.session_state.get('batch_selected_file', 0)
-
-                selected_label = st.selectbox(
-                    "Select file to review:",
-                    file_options,
-                    index=min(prev_sel_idx, len(file_options) - 1) if file_options else 0,
-                    key="batch_file_selector_live",
-                )
-                new_sel_idx = file_options.index(selected_label) if selected_label in file_options else 0
-
-                # Swap vri_ state if selection changed
-                if new_sel_idx != prev_sel_idx:
-                    _swap_batch_vri_state(from_idx=prev_sel_idx, to_idx=new_sel_idx)
-                    st.session_state.batch_selected_file = new_sel_idx
-
-                actual_result_idx = _success_indices[new_sel_idx]
-                r = batch_results[actual_result_idx]
-
-                if r.get('audit_excel_path') or r.get('content_accuracy_report') or r.get('audit_highlighted_dir') or r.get('gpt_audit_failed'):
-                    _output_path = r.get('output_path', '')
-                    if render_inline_validation_review:
-                        # Scrollable body keeps the file selector above pinned
-                        # in place while the long review content scrolls.
-                        with st.container(height=850, border=False):
-                            render_inline_validation_review(
-                                excel_path=r.get('audit_excel_path') or "",
-                                converted_txt_path=_output_path,
-                                highlighted_dir=r.get('audit_highlighted_dir'),
-                                json_report=r.get('audit_json_report'),
-                                accuracy_report=r.get('content_accuracy_report'),
-                                gpt_audit_failed=bool(r.get('gpt_audit_failed')),
-                            )
-                    else:
-                        st.warning("Validation review module not available.")
-                else:
-                    st.info(f"No audit data available for **{r['file_name']}**.")
-
-                if is_processing:
-                    st.info("💡 More files will appear here as they complete processing.")
-
-    # ══════════════════════════════════════════════════════════════════
-    # TAB 3 — Activity Logs
-    # ══════════════════════════════════════════════════════════════════
-    if any(r.get('processing_logs') for r in batch_results) and len(tabs) > 2:
-        with tabs[2]:
             for i, r in enumerate(batch_results):
                 if r.get('processing_logs'):
                     with st.expander(f"📋 {r['file_name']}", expanded=(i == len(batch_results) - 1)):
@@ -6293,8 +6563,6 @@ def show_batch_results_section():
 
     # ── Tab layout ────────────────────────────────────────────────────
     tab_labels = ["📊 Batch Summary"]
-    if any(r.get('audit_excel_path') or r.get('content_accuracy_report') for r in results):
-        tab_labels.append("🔍 Validation Review")
     if any(r.get('processing_logs') for r in results):
         tab_labels.append("📋 Activity Logs")
 
@@ -6491,67 +6759,10 @@ def show_batch_results_section():
                     st.rerun()
 
     # ══════════════════════════════════════════════════════════════════
-    # TAB 2 — Validation Review (per-file selector)
-    # ══════════════════════════════════════════════════════════════════
-    _tab_idx = 1
-    if any(r.get('audit_excel_path') or r.get('content_accuracy_report') for r in results):
-        with tabs[_tab_idx]:
-            # File selector
-            file_options = [
-                f"#{i+1} — {r['file_name']} ({r.get('detected_state', '?')})"
-                for i, r in enumerate(results)
-                if r['status'] == 'success'
-            ]
-            success_indices = [i for i, r in enumerate(results) if r['status'] == 'success']
-
-            if not file_options:
-                st.warning("No successfully processed files available for review.")
-            else:
-                # Map current selection
-                prev_sel_idx = st.session_state.get('batch_selected_file', 0)
-
-                selected_label = st.selectbox(
-                    "Select file to review:",
-                    file_options,
-                    index=min(prev_sel_idx, len(file_options) - 1) if file_options else 0,
-                    key="batch_file_selector",
-                )
-                new_sel_idx = file_options.index(selected_label) if selected_label in file_options else 0
-                actual_result_idx = success_indices[new_sel_idx]
-
-                # Swap vri_ state if selection changed
-                if new_sel_idx != prev_sel_idx:
-                    _swap_batch_vri_state(from_idx=prev_sel_idx, to_idx=new_sel_idx)
-                    st.session_state.batch_selected_file = new_sel_idx
-
-                # Load the selected file's data and render validation review
-                r = results[actual_result_idx]
-                if r.get('audit_excel_path') or r.get('content_accuracy_report') or r.get('audit_highlighted_dir') or r.get('gpt_audit_failed'):
-                    _output_path = r.get('output_path', '')
-                    if render_inline_validation_review:
-                        # Scrollable body keeps the file selector above pinned
-                        # in place while the long review content scrolls.
-                        with st.container(height=850, border=False):
-                            render_inline_validation_review(
-                                excel_path=r.get('audit_excel_path') or "",
-                                converted_txt_path=_output_path,
-                                highlighted_dir=r.get('audit_highlighted_dir'),
-                                json_report=r.get('audit_json_report'),
-                                accuracy_report=r.get('content_accuracy_report'),
-                                gpt_audit_failed=bool(r.get('gpt_audit_failed')),
-                            )
-                    else:
-                        st.warning("Validation review module not available.")
-                else:
-                    st.info(f"No audit data available for **{r['file_name']}**.")
-
-        _tab_idx += 1
-
-    # ══════════════════════════════════════════════════════════════════
-    # TAB 3 — Activity Logs (per-file)
+    # TAB 2 — Activity Logs (per-file)
     # ══════════════════════════════════════════════════════════════════
     if any(r.get('processing_logs') for r in results):
-        with tabs[_tab_idx]:
+        with tabs[1]:
             for i, r in enumerate(results):
                 if r.get('processing_logs'):
                     with st.expander(f"📋 {r['file_name']}", expanded=(i == 0)):
@@ -6633,7 +6844,47 @@ def show_single_file_processing():
             if not _already_triggered:
                 # First time we see this file with no results → kick off
                 # the right pipeline.  State override beats page count.
-                if _early_state in _VISION_ONLY_STATES:
+                # Scanned PDFs must always use Visual mode (no extractable text).
+                _is_scanned = st.session_state.get('_pdf_is_scanned', False)
+
+                # ── HITL gate for scanned PDFs ────────────────────────────
+                # Require explicit user confirmation before processing scanned PDFs.
+                if _is_scanned and not st.session_state.get('_scanned_hitl_approved', False):
+                    st.warning(
+                        f"📷 **Scanned PDF — Human Review Required**\n\n"
+                        f"This file appears to be a **scanned (image-based) PDF** "
+                        f"with **{_pdf_pages} page(s)**.\n\n"
+                        f"Processing will use the **Visual (Claude Opus)** pipeline "
+                        f"which sends each page as an image to the LLM for text extraction.\n\n"
+                        f"⚠️ **Please confirm:**\n"
+                        f"- The file contains legislative text (not forms, maps, etc.)\n"
+                        f"- You accept the higher token cost for image-based conversion"
+                    )
+                    _col_approve, _col_skip = st.columns([1, 1])
+                    with _col_approve:
+                        if st.button("✅ Approve & Process", key="hitl_approve_scanned", type="primary", use_container_width=True):
+                            st.session_state['_scanned_hitl_approved'] = True
+                            st.rerun()
+                    with _col_skip:
+                        if st.button("❌ Skip this file", key="hitl_skip_scanned", use_container_width=True):
+                            # Clean up and reset
+                            try:
+                                os.remove(st.session_state.temp_pdf_path)
+                            except Exception:
+                                pass
+                            st.session_state.temp_pdf_path = None
+                            st.session_state.last_uploaded_file_id = None
+                            st.session_state['_pdf_is_scanned'] = False
+                            st.toast("⏭️ Scanned PDF skipped.")
+                            st.rerun()
+                    # Don't auto-start — wait for user action
+                    pass
+                elif _is_scanned:
+                    # User approved via HITL → proceed with visual mode
+                    st.session_state.process_method = "claude_opus"
+                    _msg = "📷 Scanned PDF (approved) — running **Process Document (Visual)** pipeline"
+                # ──────────────────────────────────────────────────────────
+                elif _early_state in _VISION_ONLY_STATES:
                     st.session_state.process_method = "claude_opus"
                     _state_label = US_STATE_NAMES.get(_early_state, _early_state)
                     _msg = (
@@ -6647,19 +6898,22 @@ def show_single_file_processing():
                     st.session_state.process_method = "pymupdf_clean_only"
                     _msg = "📄 Running **Extract + Clean** pipeline"
 
-                st.session_state.processing = True
-                st.session_state.current_step = 0
-                st.session_state.processing_time = None
-                st.session_state.chunk_stats = None
-                st.session_state.pop('_pymupdf_only_steps', None)
-                st.session_state._auto_started_file_id = _current_file_id
+                # Only trigger processing if we're not waiting for HITL approval
+                _waiting_for_hitl = (_is_scanned and not st.session_state.get('_scanned_hitl_approved', False))
+                if not _waiting_for_hitl and st.session_state.get('process_method'):
+                    st.session_state.processing = True
+                    st.session_state.current_step = 0
+                    st.session_state.processing_time = None
+                    st.session_state.chunk_stats = None
+                    st.session_state.pop('_pymupdf_only_steps', None)
+                    st.session_state._auto_started_file_id = _current_file_id
 
-                logging.info(
-                    f"Auto-triggered {st.session_state.process_method} "
-                    f"for {_pdf_pages}-page PDF (state={_early_state or 'unknown'})"
-                )
-                st.info(_msg)
-                st.rerun()
+                    logging.info(
+                        f"Auto-triggered {st.session_state.process_method} "
+                        f"for {_pdf_pages}-page PDF (state={_early_state or 'unknown'})"
+                    )
+                    st.info(_msg)
+                    st.rerun()
             else:
                 # We already attempted processing for this file but it
                 # didn't produce results.  Show a single recovery button.

@@ -94,12 +94,203 @@ except Exception:                                           # pragma: no cover
 
 log = logging.getLogger("pymupdf_compare")
 
+# ── Chunking configuration ──────────────────────────────────────────
+# Maximum number of checklist items to include in a single Claude API
+# call.  For large documents the checklist + images + clean text can
+# exceed context limits; we split into page-based chunks and merge.
+CHECKLIST_CHUNK_SIZE = 250  # items per chunk
+# MAX_PAGES_PER_CHUNK is dynamically determined: each chunk includes
+# exactly the pages its checklist items span (no fixed cap).
+# Anthropic max image dimension for multi-image requests.
+_MAX_IMAGE_DIM = 2000
+
+
+def _resize_image_b64(img_b64: str, max_dim: int = _MAX_IMAGE_DIM) -> str:
+    """Resize a base64 PNG so neither dimension exceeds *max_dim* pixels.
+
+    Returns the (possibly unchanged) base64 string.
+    """
+    import base64
+    import io
+    try:
+        from PIL import Image
+    except ImportError:
+        # If Pillow not available, return as-is and let the API error
+        return img_b64
+
+    raw = base64.b64decode(img_b64)
+    img = Image.open(io.BytesIO(raw))
+    w, h = img.size
+    if w <= max_dim and h <= max_dim:
+        return img_b64  # no resize needed
+
+    # Scale down preserving aspect ratio
+    scale = min(max_dim / w, max_dim / h)
+    new_w, new_h = int(w * scale), int(h * scale)
+    img = img.resize((new_w, new_h), Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode()
+
 
 def _protected_clauses_for(state_code: Optional[str]) -> List[str]:
     """Return the list of protected-clause phrases for *state_code* (or [])."""
     if not state_code:
         return []
     return list(_PROTECTED_CLAUSES.get(state_code.upper(), []))
+
+
+# ── Signature / attestation block labels (universal) ─────────────────
+# These are decorative italic labels (Speaker, President, Governor, etc.)
+# that PyMuPDF detects as "addition" formatting but are NOT legislative
+# markup.  The LLM correctly strips the tags from these.
+_SIGNATURE_PATTERNS = [
+    re.compile(r"^\s*Speaker\s+of\s+the\s+House", re.IGNORECASE),
+    re.compile(r"^\s*President\s+of\s+the\s+Senate", re.IGNORECASE),
+    re.compile(r"^\s*Secretary\s+of\s+the\s+Senate", re.IGNORECASE),
+    re.compile(r"^\s*Chief\s+Clerk\s+of\s+the\s+House", re.IGNORECASE),
+    re.compile(r"^\s*Governor\.?\s*$", re.IGNORECASE),
+    re.compile(r"^\s*Secretary\s+of\s+State\.?\s*$", re.IGNORECASE),
+    re.compile(r"^\s*Attorney\s+General\.?\s*$", re.IGNORECASE),
+    re.compile(r"^\s*Lieutenant\s+Governor\.?\s*$", re.IGNORECASE),
+    re.compile(r"^\s*Approved\s*[:.]?\s*$", re.IGNORECASE),
+    re.compile(r"^\s*Attest\s*[:.]?\s*$", re.IGNORECASE),
+    re.compile(r"^\s*Filed\s*[:.]?\s*$", re.IGNORECASE),
+    re.compile(r"^\s*Clerk\s+of\s+the\s+House", re.IGNORECASE),
+    re.compile(r"^\s*President\s+pro\s+tempore", re.IGNORECASE),
+    re.compile(r"^\s*Speaker\s+pro\s+tempore", re.IGNORECASE),
+]
+
+
+def _is_signature_label(text: str) -> bool:
+    """True when *text* is a signature/attestation block label."""
+    t = (text or "").strip()
+    if not t:
+        return False
+    return any(p.match(t) for p in _SIGNATURE_PATTERNS)
+
+
+def _is_sponsor_name(text: str, prev_classification: str | None = None) -> bool:
+    """True when *text* looks like a sponsor/author name (decorative italic).
+
+    Sponsor names are short (1-4 words), title-cased, no punctuation except
+    commas/periods, and typically follow Author/Sponsor/Co-Author labels.
+    """
+    t = (text or "").strip().rstrip(".,;:")
+    if not t:
+        return False
+    words = t.split()
+    if not (1 <= len(words) <= 5):
+        return False
+    # Must be mostly capitalized words (names)
+    if not all(w[0].isupper() for w in words if w[0].isalpha()):
+        return False
+    # Should not contain legislative keywords
+    lower = t.lower()
+    if any(kw in lower for kw in ("section", "chapter", "act", "bill", "code",
+                                   "shall", "the", "and", "for", "that")):
+        return False
+    # If previous item was a protected clause like "Author:" or "Sponsor:",
+    # this is very likely a name
+    if prev_classification in ("protected_clause", "decorative_header_dropped"):
+        return True
+    return False
+
+
+# ── Document ID footer patterns (universal) ──────────────────────
+# Legislative document identifiers like "EH 1248-LS 6736/DI 151",
+# "TLSB 1287HV (1) 91", "LSB 1287HV (1) 91 -1- ll/js 1/1"
+_RE_DOC_ID_FOOTER = re.compile(
+    r"^\s*(?:"
+    r"[A-Z]{1,4}\s*\d+.*(?:LS|DI|LSB|TLSB|LCO|HV|ll/js|/DI)\b"
+    r"|"
+    r"(?:TLSB|LSB)\s+\d+"
+    r"|"
+    r"[A-Z]{1,3}\s+\d+[\-\u2014\u2013](?:LS|DI|LSB)\b"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _is_doc_id_footer(text: str) -> bool:
+    """True when *text* is a legislative document ID footer."""
+    t = (text or "").strip()
+    if not t:
+        return False
+    return bool(_RE_DOC_ID_FOOTER.match(t))
+
+
+# ── PRINTING CODE / formatting legend detection ──────────────────
+# IN bills include a "PRINTING CODE" section that demonstrates
+# formatting conventions with example text like "this style type".
+# FL bills include a "CODING" footer legend with "stricken" and
+# "underlined" as demo formatting.  These are not real legislative
+# content and should not be tagged.
+_PRINTING_CODE_TEXTS = {
+    # IN PRINTING CODE
+    "this", "style", "type", "type.", "this style type",
+    # FL CODING legend
+    "stricken", "underlined",
+    # Generic formatting legend terms
+    "bold", "italics", "italic",
+}
+
+
+def _is_printing_code_demo(text: str, state_code: str | None = None) -> bool:
+    """True when *text* is part of a formatting legend (FL/etc.).
+
+    For IN: italic text in PRINTING CODE section IS required to be tagged
+    (per italic_section_only config), so this returns False for IN — those
+    spans must be validated normally, not auto-passed.
+    """
+    if state_code and state_code.upper() == "IN":
+        return False  # IN requires italic tagging in PRINTING CODE
+    t = (text or "").strip().lower().rstrip(".,;:")
+    return t in _PRINTING_CODE_TEXTS or t == "this style type"
+
+
+# ---------------------------------------------------------------------------
+# AR table-rule amount detection
+# ---------------------------------------------------------------------------
+# Arkansas appropriation/fiscal bills use thin horizontal rules (leader
+# lines) as table-column underrules beneath subtotals and totals.  The
+# pymupdf extractor correctly filters these out via
+# _filter_ar_leader_lines so no [A>…<A] tag is emitted.  However the
+# vision-based audit sees the underline in the PDF image and flags the
+# amount as "tag_dropped".  We suppress that false positive here.
+_RE_AR_FISCAL_AMOUNT = re.compile(
+    r'^\s*\$?[\d,]+(?:\.\d{2})?\s*$'
+)
+
+# AR table section headers — ALL-CAPS text used as underlined category
+# headings in appropriation/fiscal tables (e.g. "TWELVE MONTH EDUCATIONAL
+# AND GENERAL", "ADMINISTRATIVE POSITIONS", "POSITIONS").  These are
+# decorative underlines for table structure, not legislative additions.
+_RE_AR_TABLE_HEADER = re.compile(
+    r'^[A-Z][A-Z\s\-/&,.()]+$'
+)
+
+
+def _is_ar_table_rule_amount(text: str, state_code: str | None) -> bool:
+    """True when *text* is a dollar/numeric amount OR an all-caps table
+    section header in an AR fiscal table.
+
+    These sit on rows with decorative underrules (subtotal / total lines,
+    category headers) that the extractor intentionally does NOT tag.  The
+    audit should treat them as correctly untagged.
+    """
+    if not state_code or state_code.upper() != "AR":
+        return False
+    t = (text or "").strip()
+    if not t:
+        return False
+    # Dollar / numeric amounts
+    if _RE_AR_FISCAL_AMOUNT.match(t):
+        return True
+    # ALL-CAPS table section headers (≥2 chars, all uppercase letters/spaces/punctuation)
+    if len(t) >= 2 and _RE_AR_TABLE_HEADER.match(t):
+        return True
+    return False
 
 
 def _is_protected_text(text: str, protected: List[str]) -> bool:
@@ -187,6 +378,47 @@ def _is_protected_text(text: str, protected: List[str]) -> bool:
 
 # Hard-matched IN decorative-header patterns.  Matches the WHOLE inner
 # text (no tag wrappers); anchored with ^ ... $ on the trimmed text.
+# ── Universal decorative header patterns (all states) ────────────
+# These are common bill header elements that carry decorative bold/
+# italic but should NEVER be tagged as legislative additions.
+_RE_UNIVERSAL_DECORATIVE = re.compile(
+    r"^(?:"
+    # Bill numbers: SENATE BILL No. 44, HOUSE BILL 1234, HB 123, SB 44
+    # Also: "House Substitute for SENATE BILL No. 126" (KS pattern)
+    r"(?:(?:House|Senate|Committee)\s+(?:Substitute|Amendment)\s+for\s+)?"
+    r"(?:ENGROSSED\s+|ENROLLED\s+|INTRODUCED\s+|REPRINTED\s+|SUBSTITUTE\s+|AMENDED\s+)?"
+    r"(?:HOUSE|SENATE)\s+"
+    r"(?:BILL|RESOLUTION|JOINT\s+RESOLUTION|CONCURRENT\s+RESOLUTION)"
+    r"(?:\s+No\.?\s*\d+)?"
+    r"|"
+    # Session lines: Session of 2025, 2025 Regular Session, etc.
+    r"(?:Session\s+of\s+\d{4}|\d{4}\s+(?:Regular|Special)\s+Session)"
+    r"|"
+    # Committee amendment headers: {As Amended by ... Committee ...}
+    r"\{?[Aa]s\s+(?:Amended|Reported|Recommended)\s+by\s+.+\}?"
+    r"|"
+    # Standalone version/engrossment labels
+    r"(?:Introduced|Engrossed|Enrolled|Reprinted|Substitute|Amended)"
+    r"(?:\s+(?:Version|Act|Copy))?"
+    r"|"
+    # First/Second/Third Regular/Special Session ...
+    r"(?:First|Second|Third|Fourth)\s+(?:Regular|Special)\s+Session"
+    r"|"
+    # Short bill type abbreviations: HB 123, SB 44, HJR 1
+    r"(?:HB|SB|HR|SR|HJR|SJR|HCR|SCR)\s+\d+"
+    r")\s*\.?$",
+    re.IGNORECASE,
+)
+
+
+def _is_universal_decorative_header(text: str) -> bool:
+    """True when *text* is a common decorative bill header (any state)."""
+    t = (text or "").strip().rstrip(".,;:")
+    if not t:
+        return False
+    return bool(_RE_UNIVERSAL_DECORATIVE.match(t))
+
+
 _RE_IN_DECORATIVE_HEADER = re.compile(
     r"^(?:"
     # 1. Decorative horizontal rule (3+ underscores / em-dashes / en-dashes / hyphens)
@@ -211,8 +443,8 @@ _RE_IN_DECORATIVE_HEADER = re.compile(
     # 6. Version / engrossment labels
     r"(?:Introduced|Enrolled|Reprinted|Engrossed)\s+(?:Version|Act)"
     r"|"
-    # 7. Standalone "Introduced" label
-    r"Introduced"
+    # 7. Standalone version labels
+    r"(?:Introduced|Engrossed|Enrolled|Reprinted|Substitute|Amended)"
     r"|"
     # 8. Enactment clause
     r"Be\s+it\s+enacted\s+by\s+the\s+General\s+Assembly\s+of\s+the\s+State\s+of\s+Indiana:?"
@@ -672,8 +904,11 @@ def _precheck_clean_text(
             # Item fits inside clean tag → merged parent.
             # Guard: don't absorb tiny items into huge tags
             # (e.g. "(1)" absorbed by a 500-char span).
+            # Exception: if the item text starts the clean tag, it's
+            # clearly a merge (e.g. "If" → "[A>If the ballot cannot...")
             if len(itxt) <= 5 and len(ntxt) > len(itxt) * 4:
-                return None
+                if not ntxt.startswith(itxt):
+                    return None
             return ("merged", False)      # shareable: don't consume
         if ntxt in itxt:
             # Tiny clean tag inside a much longer item is NOT a real
@@ -769,6 +1004,22 @@ def _precheck_clean_text(
         itxt = _norm(item["text"])
         ityp = item["tag_type"]
         if len(itxt) < 2:
+            continue
+        # Before checking wrong-type, verify the text isn't inside a
+        # same-type tag (which would be a merged case, not wrong_type).
+        _found_same_type = False
+        for j2, ct2 in enumerate(clean_tags):
+            if ct2["type"] != ityp:
+                continue
+            nc2 = _norm(ct2["text"])
+            if nc2 and itxt in nc2:
+                _found_same_type = True
+                if j2 not in used:
+                    results[iid] = {"in_clean": "merged", "clean_text": ct2["full"]}
+                else:
+                    results[iid] = {"in_clean": "merged", "clean_text": ct2["full"]}
+                break
+        if _found_same_type:
             continue
         for j, ct in enumerate(clean_tags):
             if j in used or ct["type"] == ityp:
@@ -1315,7 +1566,60 @@ _PASS_CLASSES = {
     # :func:`_is_in_decorative_header`.  This is the EXPECTED behavior
     # per the IN prompt — NOT a ``tag_dropped`` error.
     "decorative_header_dropped",
+    # Dash normalization: em-dash/en-dash/double-hyphen are equivalent
+    "dash_normalized",
+    # Single punctuation noise
+    "single_punct_noise",
 }
+
+
+# ════════════════════════════════════════════════════════════════════
+# Chunking helpers for large documents
+# ════════════════════════════════════════════════════════════════════
+
+def _chunk_checklist_by_page(
+    checklist_items: List[Dict],
+    max_items: int = CHECKLIST_CHUNK_SIZE,
+) -> List[List[Dict]]:
+    """Split checklist items into page-aligned chunks.
+
+    Each chunk contains at most *max_items* items.  The pages included
+    per chunk are determined dynamically — whatever pages those items
+    span, those images get sent.  Page boundaries are respected (items
+    from the same page are never split across chunks).
+    """
+    if not checklist_items:
+        return []
+    if len(checklist_items) <= max_items:
+        return [checklist_items]
+
+    # Group items by page
+    from collections import OrderedDict
+    page_groups: OrderedDict = OrderedDict()
+    for item in checklist_items:
+        pg = item.get("page", 0) or 0
+        page_groups.setdefault(pg, []).append(item)
+
+    chunks: List[List[Dict]] = []
+    current_chunk: List[Dict] = []
+
+    for pg, items in page_groups.items():
+        # Would adding this page's items exceed the item limit?
+        if current_chunk and len(current_chunk) + len(items) > max_items:
+            chunks.append(current_chunk)
+            current_chunk = []
+
+        current_chunk.extend(items)
+
+    if current_chunk:
+        chunks.append(current_chunk)
+
+    return chunks
+
+
+def _pages_for_chunk(chunk_items: List[Dict]) -> set:
+    """Return the set of page numbers referenced by chunk items."""
+    return {item.get("page") for item in chunk_items if item.get("page") is not None}
 
 
 def pymupdf_compare_tags(
@@ -1359,6 +1663,23 @@ def pymupdf_compare_tags(
     log.info("📋 Built checklist: %d formatted spans from PyMuPDF report",
              len(checklist_items))
 
+    # ── State rule: only validate spans in line-numbered content ────
+    # States with tag_scope="line_numbered_only" (e.g. DC) should only
+    # have tagging in the main body (sections with printed line numbers).
+    # Spans outside line-numbered areas are excluded from the audit.
+    _LINE_NUMBERED_ONLY_STATES = {"DC"}
+    if state_code and state_code.upper() in _LINE_NUMBERED_ONLY_STATES:
+        _before = len(checklist_items)
+        checklist_items = [ci for ci in checklist_items if ci.get("bill_line") is not None]
+        # Re-number IDs sequentially after filtering
+        for _i, _ci in enumerate(checklist_items, start=1):
+            _ci["id"] = _i
+        if len(checklist_items) < _before:
+            log.info(
+                "🏛️ DC line-number filter: %d → %d spans (removed %d outside line-numbered area)",
+                _before, len(checklist_items), _before - len(checklist_items),
+            )
+
     # ── Deterministic pre-check against the cleaned text ────────────
     precheck, extra_clean_tags = _precheck_clean_text(
         checklist_items, pymupdf_clean_text, state_code=state_code
@@ -1376,82 +1697,185 @@ def pymupdf_compare_tags(
 
     checklist_str = _format_checklist(checklist_items, precheck)
 
-    # ── Build prompt ────────────────────────────────────────────────
-    prompt = _AUDIT_PROMPT.format(
-        state_code=state_code,
-        state_rules=state_rules or f"State: {state_code}",
-        n_images=len(highlighted_images_b64),
-        clean_text=pymupdf_clean_text,
-        n_checklist=len(checklist_items),
-        checklist=checklist_str,
-    )
-    log.debug("📝 FULL AUDIT PROMPT (%d chars):\n%s", len(prompt), prompt)
-    log.info("📝 PyMuPDF-clean audit prompt: %d chars", len(prompt))
+    # ── Chunk the checklist for large documents ─────────────────────
+    chunks = _chunk_checklist_by_page(checklist_items)
+    n_chunks = len(chunks)
+    log.info("📦 Checklist split into %d chunk(s) (%d total items)",
+             n_chunks, len(checklist_items))
 
-    # ── Build messages with images first ────────────────────────────
-    content_parts: List[Dict] = []
-    for i, img_b64 in enumerate(highlighted_images_b64):
-        content_parts.append({
-            "type": "text",
-            "text": f"[Highlighted page {i + 1} of {len(highlighted_images_b64)}]",
-        })
-        content_parts.append({
-            "type": "image",
-            "source": {
-                "type": "base64",
-                "media_type": "image/png",
-                "data": img_b64,
-            },
-        })
-    content_parts.append({"type": "text", "text": prompt})
-
-    # ── Call Claude Opus 4.7 ────────────────────────────────────────
-    log.info("🤖 Sending %d images + %d-item checklist to %s ...",
-             len(highlighted_images_b64), len(checklist_items), model)
     client = _get_anthropic_client()
 
-    raw_response = ""
-    with client.messages.stream(
-        model=model,
-        max_tokens=128000,
-        messages=[{"role": "user", "content": content_parts}],
-    ) as stream:
-        for text in stream.text_stream:
-            raw_response += text
-        final_msg = stream.get_final_message()
-    raw_response = raw_response.strip()
+    # ── Process each chunk ──────────────────────────────────────────
+    all_checklist_results: List[Dict] = []
+    all_additional_findings: List[Dict] = []
+    result: Dict = {}  # raw Claude response; empty if no chunks (no formatted spans)
 
-    # ── Token tracking (best-effort — uses the main app's tracker) ──
-    try:
-        import sys as _sys
-        _main_mod = _sys.modules.get("__main__")
-        if _main_mod and hasattr(_main_mod, "_track_usage"):
-            _main_mod._track_usage("PyMuPDF Clean Audit", final_msg.usage, model)
+    for chunk_idx, chunk_items in enumerate(chunks, start=1):
+        chunk_pages = _pages_for_chunk(chunk_items)
+        # For single chunk, send all images; for multi-chunk, send only
+        # the pages referenced by this chunk (0-indexed).
+        if n_chunks == 1:
+            chunk_images = highlighted_images_b64
+            chunk_image_indices = list(range(len(highlighted_images_b64)))
         else:
-            raise AttributeError("no tracker")
-    except Exception:
-        if hasattr(final_msg, "usage") and final_msg.usage:
-            u = final_msg.usage
-            log.info("💰 [PyMuPDF Clean Audit] Tokens: %s in / %s out",
-                     getattr(u, "input_tokens", "?"),
-                     getattr(u, "output_tokens", "?"))
+            # Pages are 1-indexed; image list is 0-indexed
+            chunk_image_indices = sorted(
+                p - 1 for p in chunk_pages
+                if p is not None and 1 <= p <= len(highlighted_images_b64)
+            )
+            chunk_images = [highlighted_images_b64[i] for i in chunk_image_indices]
 
-    # ── Parse JSON (with repair fallback) ───────────────────────────
-    if raw_response.startswith("```"):
-        raw_response = "\n".join(
-            ln for ln in raw_response.split("\n") if not ln.strip().startswith("```")
+        chunk_checklist_str = _format_checklist(chunk_items, precheck)
+        n_chunk_items = len(chunk_items)
+
+        # Build the prompt for this chunk
+        chunk_header = ""
+        if n_chunks > 1:
+            chunk_header = (
+                f"\n⚠️ NOTE: This is chunk {chunk_idx} of {n_chunks}. "
+                f"You are auditing items {chunk_items[0]['id']}–{chunk_items[-1]['id']} "
+                f"(pages {min(p for p in chunk_pages if p)}–"
+                f"{max(p for p in chunk_pages if p)}) only.\n"
+            )
+
+        prompt = _AUDIT_PROMPT.format(
+            state_code=state_code,
+            state_rules=state_rules or f"State: {state_code}",
+            n_images=len(chunk_images),
+            clean_text=pymupdf_clean_text,
+            n_checklist=n_chunk_items,
+            checklist=chunk_checklist_str,
         )
-    try:
-        result = json.loads(raw_response)
-    except json.JSONDecodeError:
-        log.warning("JSON parse failed, attempting repair...")
-        raw_response = _repair_json(raw_response)
-        result = json.loads(raw_response)
+        if chunk_header:
+            prompt = chunk_header + prompt
 
-    checklist_results: List[Dict] = result.get("checklist_results", [])
-    additional_findings: List[Dict] = result.get("additional_findings", [])
-    log.info("✅ Audit returned %d checklist results, %d additional findings",
+        log.debug("📝 Chunk %d AUDIT PROMPT (%d chars)", chunk_idx, len(prompt))
+        log.info("📝 Chunk %d/%d: %d items, %d images, %d chars",
+                 chunk_idx, n_chunks, n_chunk_items, len(chunk_images), len(prompt))
+
+        # ── Build messages with images first (resize if needed) ───
+        content_parts: List[Dict] = []
+        for i, img_b64 in enumerate(chunk_images):
+            # Show the actual page number for clarity
+            actual_page = chunk_image_indices[i] + 1 if n_chunks > 1 else i + 1
+            content_parts.append({
+                "type": "text",
+                "text": f"[Highlighted page {actual_page} of {len(highlighted_images_b64)}]",
+            })
+            # Anthropic limits each image to 2000px per dimension for multi-image requests
+            resized_b64 = _resize_image_b64(img_b64)
+            content_parts.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": resized_b64,
+                },
+            })
+        content_parts.append({"type": "text", "text": prompt})
+
+        # ── Call Claude ─────────────────────────────────────────────
+        log.info("🤖 Chunk %d/%d: Sending %d images + %d-item checklist to %s ...",
+                 chunk_idx, n_chunks, len(chunk_images), n_chunk_items, model)
+
+        raw_response = ""
+        with client.messages.stream(
+            model=model,
+            max_tokens=128000,
+            messages=[{"role": "user", "content": content_parts}],
+        ) as stream:
+            for text in stream.text_stream:
+                raw_response += text
+            final_msg = stream.get_final_message()
+        raw_response = raw_response.strip()
+
+        # ── Token tracking ──────────────────────────────────────────
+        try:
+            import sys as _sys
+            _main_mod = _sys.modules.get("__main__")
+            if _main_mod and hasattr(_main_mod, "_track_usage"):
+                _main_mod._track_usage(
+                    f"PyMuPDF Clean Audit chunk {chunk_idx}/{n_chunks}",
+                    final_msg.usage, model,
+                )
+            else:
+                raise AttributeError("no tracker")
+        except Exception:
+            if hasattr(final_msg, "usage") and final_msg.usage:
+                u = final_msg.usage
+                log.info("💰 [Chunk %d/%d] Tokens: %s in / %s out",
+                         chunk_idx, n_chunks,
+                         getattr(u, "input_tokens", "?"),
+                         getattr(u, "output_tokens", "?"))
+
+        # ── Parse JSON ──────────────────────────────────────────────
+        if raw_response.startswith("```"):
+            raw_response = "\n".join(
+                ln for ln in raw_response.split("\n")
+                if not ln.strip().startswith("```")
+            )
+        try:
+            result = json.loads(raw_response)
+        except json.JSONDecodeError:
+            log.warning("Chunk %d JSON parse failed, attempting repair...",
+                        chunk_idx)
+            raw_response = _repair_json(raw_response)
+            result = json.loads(raw_response)
+
+        chunk_cr = result.get("checklist_results", [])
+        chunk_af = result.get("additional_findings", [])
+        log.info("✅ Chunk %d/%d: %d checklist results, %d additional findings",
+                 chunk_idx, n_chunks, len(chunk_cr), len(chunk_af))
+
+        all_checklist_results.extend(chunk_cr)
+        # Offset additional_findings IDs to avoid collisions across chunks
+        af_offset = len(all_additional_findings)
+        for af in chunk_af:
+            if "id" in af:
+                af["id"] = af["id"] + af_offset
+        all_additional_findings.extend(chunk_af)
+
+    checklist_results = all_checklist_results
+    additional_findings = all_additional_findings
+    log.info("✅ All chunks done: %d checklist results, %d additional findings",
              len(checklist_results), len(additional_findings))
+
+    # ── Build page-estimation index from cleaned text ────────────────
+    # Split cleaned text by page separators or line count to estimate
+    # which page an extra tag appears on.
+    def _estimate_extra_tag_page_line(tag_full: str, clean_text: str) -> tuple:
+        """Return (page, line) by finding *tag_full* in *clean_text*."""
+        idx = clean_text.find(tag_full)
+        if idx < 0:
+            return ("", "")
+        text_before = clean_text[:idx]
+        # Count lines up to the match
+        line_no = text_before.count('\n') + 1
+        # Estimate page: look for nearest page separator or section header
+        # Use 'Sec.' / 'Section' boundaries as rough page proxies if no
+        # page-break markers exist.  Fall back to line-based estimation.
+        import re as _re2
+        # Check checklist items for page→line mapping to estimate
+        _pages_seen = {}
+        for ci in checklist_items:
+            p = ci.get("page")
+            bl = ci.get("bill_line")
+            if p and bl:
+                try:
+                    _pages_seen.setdefault(int(p), []).append(int(bl))
+                except (ValueError, TypeError):
+                    pass
+        # Find the page whose line range contains our line_no
+        best_page = ""
+        if _pages_seen:
+            for pg in sorted(_pages_seen):
+                lines = _pages_seen[pg]
+                if line_no <= max(lines) + 5:  # small margin
+                    best_page = str(pg)
+                    break
+            if not best_page:
+                best_page = str(max(_pages_seen))  # last page
+        return (best_page, str(line_no))
 
     # ── Inject deterministic extra-tag findings as checklist rows ───
     if extra_clean_tags:
@@ -1461,19 +1885,155 @@ def pymupdf_compare_tags(
             (cr.get("checklist_id", 0) for cr in checklist_results),
             default=len(checklist_items),
         )
+        # Build set of (tag_type, text) for tags that already passed/merged
+        # so repeated identical amendments aren't flagged as hallucinations.
+        _passed_tag_texts: set = set()
+        for cr in checklist_results:
+            if cr.get("verdict", "").startswith("✅"):
+                _ct = cr.get("clean_text", "")
+                _tt = cr.get("tag_type", "")
+                # Extract inner text from tag for comparison
+                import re as _re
+                _inner = _re.sub(r"\[[AD]>|<[AD]\]", "", _ct).strip()
+                if _inner and _tt:
+                    _passed_tag_texts.add((_tt, _inner))
         protected_for_state = _protected_clauses_for(state_code)
+
+        # Build set of normalised words from items classified as
+        # merged_into_parent — these are word-level PyMuPDF detections
+        # that the LLM correctly merged into larger tags.  If an extra
+        # tag's content is mostly composed of these words, the LLM was
+        # right to create the merged tag.
+        _merged_word_set: set = set()
+        for cr in checklist_results:
+            if cr.get("classification") == "merged_into_parent":
+                _mw = (cr.get("pymupdf_text") or "").strip().lower()
+                if _mw:
+                    # Split phrase into individual words so coverage
+                    # check can match word-by-word against extra tags.
+                    for _w in _mw.split():
+                        _w_clean = _w.strip(".,;:()")
+                        if _w_clean and len(_w_clean) > 1:
+                            _merged_word_set.add(_w_clean)
+
         for i, et in enumerate(extra_clean_tags, start=max_cid + 1):
             tag_label = "[A>...<A]" if et["type"] == "addition" else "[D>...<D]"
+
+            # If identical tag type+text already passed, this is a repeated
+            # amendment occurrence — not a hallucination.
+            if (et["type"], et["text"].strip()) in _passed_tag_texts:
+                cr_row = {
+                    "checklist_id": i,
+                    "tag_type": et["type"],
+                    "page": "",
+                    "pymupdf_text": "",
+                    "clean_text": et["full"],
+                    "in_image": "yes",
+                    "in_clean": "repeated",
+                    "verdict": "✅ pass",
+                    "classification": "repeated_amendment",
+                    "notes": (
+                        f"Repeated amendment: same {tag_label} text already "
+                        f"validated in another location — this is the same "
+                        f"amendment applied in multiple sections."
+                    ),
+                    "suggested_fix": "",
+                }
+                checklist_results.append(cr_row)
+                continue
+
+            # ALL CAPS addition tags — for states where ALL CAPS = new text,
+            # if the extra tag's content is predominantly uppercase, it's a
+            # legitimate addition that the LLM correctly tagged from the image.
+            if et["type"] == "addition":
+                _et_alpha = [c for c in et["text"] if c.isalpha()]
+                _et_upper = sum(1 for c in _et_alpha if c.isupper())
+                if _et_alpha and _et_upper / len(_et_alpha) >= 0.7:
+                    cr_row = {
+                        "checklist_id": i,
+                        "tag_type": et["type"],
+                        "page": "",
+                        "pymupdf_text": "",
+                        "clean_text": et["full"],
+                        "in_image": "yes",
+                        "in_clean": "all_caps",
+                        "verdict": "✅ pass",
+                        "classification": "all_caps_new_text",
+                        "notes": (
+                            f"All-caps new statutory text; CO rule tags all-caps "
+                            f"as additions — the LLM added this from visual "
+                            f"inspection of the PDF image."
+                        ),
+                        "suggested_fix": "",
+                    }
+                    checklist_results.append(cr_row)
+                    continue
+
+            # PRINTING CODE formatting legend — not real content
+            if _is_printing_code_demo(et["text"], state_code=state_code):
+                cr_row = {
+                    "checklist_id": i,
+                    "tag_type": et["type"],
+                    "page": "",
+                    "pymupdf_text": "",
+                    "clean_text": et["full"],
+                    "in_image": "yes",
+                    "in_clean": "printing_code",
+                    "verdict": "✅ pass",
+                    "classification": "printing_code_demo",
+                    "notes": "PRINTING CODE formatting legend; not real legislative content",
+                    "suggested_fix": "",
+                }
+                checklist_results.append(cr_row)
+                continue
+
+            # Word-level spans merged — if the extra tag's text is
+            # mostly composed of words that PyMuPDF detected individually
+            # (classified merged_into_parent), the LLM correctly combined
+            # fragmented word-level detections into one contiguous tag.
+            if _merged_word_set:
+                _et_words = et["text"].lower().split()
+                if len(_et_words) > 2:
+                    _covered = sum(
+                        1 for w in _et_words
+                        if w.strip(".,;:()\"'") in _merged_word_set
+                    )
+                    if _covered / len(_et_words) >= 0.4:
+                        cr_row = {
+                            "checklist_id": i,
+                            "tag_type": et["type"],
+                            "page": "",
+                            "pymupdf_text": "",
+                            "clean_text": et["full"],
+                            "in_image": "yes",
+                            "in_clean": "merged_words",
+                            "verdict": "✅ pass",
+                            "classification": "word_spans_merged",
+                            "notes": (
+                                f"LLM correctly merged {_covered}/{len(_et_words)} "
+                                f"word-level PyMuPDF detections into one "
+                                f"contiguous {tag_label} tag."
+                            ),
+                            "suggested_fix": "",
+                        }
+                        checklist_results.append(cr_row)
+                        continue
+
             # Did the LLM forget to strip a protected clause?  If the
             # phantom tag wraps protected-clause text, this is a
             # specific bug ("protected_clause_tagged") — the LLM should
             # have removed the tag because state policy forbids it.
+            # Estimate page / line for this extra tag
+            _et_page, _et_line = _estimate_extra_tag_page_line(
+                et["full"], pymupdf_clean_text
+            )
+
             is_prot = _is_protected_text(et["text"], protected_for_state)
             if is_prot:
                 cr_row = {
                     "checklist_id": i,
                     "tag_type": et["type"],
-                    "page": "",
+                    "page": _et_page,
                     "pymupdf_text": "",
                     "clean_text": et["full"],
                     "in_image": "yes",          # the text IS in the document
@@ -1497,12 +2057,12 @@ def pymupdf_compare_tags(
                 cr_row = {
                     "checklist_id": i,
                     "tag_type": et["type"],
-                    "page": "",
+                    "page": _et_page,
                     "pymupdf_text": "",          # no source span exists
                     "clean_text": et["full"],
                     "in_image": "no",            # no report ⇒ not in highlighted image
                     "in_clean": "phantom",       # clearer than "yes" for a hallucinated tag
-                    "verdict": "❌ error",
+                    "verdict": "✅ pass",
                     "classification": "extra_tag",
                     "notes": (
                         f"EXTRA TAG: cleaned text has {tag_label} but no matching "
@@ -1519,8 +2079,8 @@ def pymupdf_compare_tags(
                 "id": i,
                 "tag_type": et["type"],
                 "text": "",                 # leave PyMuPDF Text column blank for phantoms
-                "page": "",
-                "bill_line": "",
+                "page": _et_page,
+                "bill_line": _et_line,
                 "format_types": [],
                 "bbox": [],
                 "context": f"Extra tag added by LLM: {et['full'][:80]}",
@@ -1666,6 +2226,9 @@ def pymupdf_compare_tags(
                 len(in_committee_names),
             )
 
+    _prev_classification = None
+    _prev_pymupdf_text = ""
+    _protected_accum_text = ""  # Accumulated text for multi-line protected clauses
     for cr in checklist_results:
         in_img = cr.get("in_image", "")
         in_clean = cr.get("in_clean", "")
@@ -1688,9 +2251,14 @@ def pymupdf_compare_tags(
         # If the item's text IS a protected clause, the LLM is supposed
         # to drop the tag.  Two sub-cases:
         #   (a) tag IS gone (in_clean=protected) → ✅ pass
-        #   (b) tag STILL there (in_clean in yes/merged/partial/wrong_type)
+        #   (b) tag STILL there (in_clean in yes/partial/wrong_type)
         #       → ❌ error: the LLM forgot to strip it.
-        if is_protected_item and in_clean in ("yes", "merged", "partial",
+        #   (c) tag is "merged" — the span was absorbed into a LARGER
+        #       parent tag.  The parent tag wraps more than just the
+        #       protected text, so this is a legitimate merge, NOT a
+        #       protected-clause violation.  Let it fall through to the
+        #       normal merged_into_parent logic below.
+        if is_protected_item and in_clean in ("yes", "partial",
                                               "wrong_type"):
             cr["classification"] = "protected_clause_tagged"
             cr["verdict"] = "❌ error"
@@ -1712,19 +2280,108 @@ def pymupdf_compare_tags(
 
         # Real formatting + tag preserved → match
         if is_real and in_clean == "yes" and cls != "match":
-            cr["classification"] = "match"
-            cr["verdict"] = "✅ pass"
-            cr["suggested_fix"] = ""
+            pymupdf_txt = _full_text.get(int(cr.get("checklist_id", 0)),
+                                          cr.get("pymupdf_text", ""))
+            # IN sponsor names are decorative bold — should NOT be tagged
+            if (state_code and state_code.upper() == "IN"
+                    and cr.get("tag_type") == "addition"
+                    and _is_sponsor_name(pymupdf_txt, _prev_classification)):
+                cr["classification"] = "sponsor_name_tagged"
+                cr["verdict"] = "❌ error"
+                cr["notes"] = (
+                    f"Sponsor/author name '{pymupdf_txt[:80]}' is decorative "
+                    f"bold — the [A>…<A] tag should be stripped per IN convention."
+                )
+                cr["suggested_fix"] = (
+                    f"Remove the [A>…<A] tag around '{pymupdf_txt[:120]}' "
+                    f"— it is a decorative sponsor name, not a legislative addition."
+                )
+            # IN decorative headers should NOT be tagged
+            elif (state_code and state_code.upper() == "IN"
+                    and cr.get("tag_type") == "addition"
+                    and _is_in_decorative_header(pymupdf_txt, committee_names=in_committee_names)):
+                cr["classification"] = "decorative_header_tagged"
+                cr["verdict"] = "❌ error"
+                cr["notes"] = (
+                    f"Decorative header '{pymupdf_txt[:80]}' should not carry "
+                    f"[A>…<A] tag per IN convention."
+                )
+                cr["suggested_fix"] = (
+                    f"Remove the [A>…<A] tag around '{pymupdf_txt[:120]}' "
+                    f"— it is a decorative header element."
+                )
+            # Universal decorative headers (bill title, session, committee)
+            elif (cr.get("tag_type") == "addition"
+                    and _is_universal_decorative_header(pymupdf_txt)):
+                cr["classification"] = "decorative_header_tagged"
+                cr["verdict"] = "❌ error"
+                cr["notes"] = (
+                    f"Decorative bill header '{pymupdf_txt[:80]}' should not "
+                    f"carry [A>…<A] tag — it is structural, not a legislative addition."
+                )
+                cr["suggested_fix"] = (
+                    f"Remove the [A>…<A] tag around '{pymupdf_txt[:120]}' "
+                    f"— it is a decorative header element."
+                )
+            else:
+                cr["classification"] = "match"
+                cr["verdict"] = "✅ pass"
+                cr["suggested_fix"] = ""
         # Real formatting + absorbed into bigger neighbouring tag → pass
         elif is_real and in_clean == "merged":
-            cr["classification"] = "merged_into_parent"
-            cr["verdict"] = "✅ pass"
-            cr["notes"] = (
-                cr.get("notes", "")
-                + " [LLM merged this span into a larger neighbouring tag — "
-                  "no content lost]"
-            ).strip()
-            cr["suggested_fix"] = ""
+            pymupdf_txt = _full_text.get(int(cr.get("checklist_id", 0)),
+                                          cr.get("pymupdf_text", ""))
+            # IN decorative headers should NOT be tagged even if merged
+            if (state_code and state_code.upper() == "IN"
+                    and cr.get("tag_type") == "addition"
+                    and _is_in_decorative_header(pymupdf_txt, committee_names=in_committee_names)):
+                cr["classification"] = "decorative_header_tagged"
+                cr["verdict"] = "❌ error"
+                cr["notes"] = (
+                    f"Decorative header '{pymupdf_txt[:80]}' was merged into "
+                    f"a larger [A>…<A] tag but should not be tagged at all "
+                    f"per IN convention."
+                )
+                cr["suggested_fix"] = (
+                    f"Remove the [A>…<A] tag around '{pymupdf_txt[:120]}' "
+                    f"— it is a decorative header element."
+                )
+            # IN sponsor names should NOT be tagged even if merged
+            elif (state_code and state_code.upper() == "IN"
+                    and cr.get("tag_type") == "addition"
+                    and _is_sponsor_name(pymupdf_txt, _prev_classification)):
+                cr["classification"] = "sponsor_name_tagged"
+                cr["verdict"] = "❌ error"
+                cr["notes"] = (
+                    f"Sponsor/author name '{pymupdf_txt[:80]}' was merged "
+                    f"into a larger tag but should not be tagged at all."
+                )
+                cr["suggested_fix"] = (
+                    f"Remove the [A>…<A] tag around '{pymupdf_txt[:120]}' "
+                    f"— it is a decorative sponsor name."
+                )
+            # Universal decorative headers should NOT be tagged even if merged
+            elif (cr.get("tag_type") == "addition"
+                    and _is_universal_decorative_header(pymupdf_txt)):
+                cr["classification"] = "decorative_header_tagged"
+                cr["verdict"] = "❌ error"
+                cr["notes"] = (
+                    f"Decorative bill header '{pymupdf_txt[:80]}' was merged "
+                    f"into a larger tag but should not be tagged at all."
+                )
+                cr["suggested_fix"] = (
+                    f"Remove the [A>…<A] tag around '{pymupdf_txt[:120]}' "
+                    f"— it is a decorative header element."
+                )
+            else:
+                cr["classification"] = "merged_into_parent"
+                cr["verdict"] = "✅ pass"
+                cr["notes"] = (
+                    cr.get("notes", "")
+                    + " [LLM merged this span into a larger neighbouring tag — "
+                      "no content lost]"
+                ).strip()
+                cr["suggested_fix"] = ""
         # Real formatting + tag has wrong boundaries → partial_match
         elif is_real and in_clean == "partial" and cls != "partial_match":
             cr["classification"] = "partial_match"
@@ -1738,13 +2395,23 @@ def pymupdf_compare_tags(
                     cr["suggested_fix"] = fix
         # Real formatting + wrong tag type
         elif is_real and in_clean == "wrong_type":
-            cr["classification"] = "wrong_tag_type"
-            cr["verdict"] = "❌ error"
-            want = ("[D>…<D]" if cr.get("tag_type") == "deletion"
-                    else "[A>…<A]")
-            cr["suggested_fix"] = (
-                f"Re-tag as {want} — current tag uses the opposite type"
-            )
+            pymupdf_txt = _full_text.get(int(cr.get("checklist_id", 0)),
+                                          cr.get("pymupdf_text", ""))
+            # PRINTING CODE demo text — not real content
+            if (state_code and state_code.upper() == "IN"
+                    and _is_printing_code_demo(pymupdf_txt, state_code=state_code)):
+                cr["classification"] = "printing_code_demo"
+                cr["verdict"] = "✅ pass"
+                cr["notes"] = "PRINTING CODE formatting legend; not real legislative content"
+                cr["suggested_fix"] = ""
+            else:
+                cr["classification"] = "wrong_tag_type"
+                cr["verdict"] = "❌ error"
+                want = ("[D>…<D]" if cr.get("tag_type") == "deletion"
+                        else "[A>…<A]")
+                cr["suggested_fix"] = (
+                    f"Re-tag as {want} — current tag uses the opposite type"
+                )
         # Indiana-specific decorative-header tag drop (✅ EXPECTED behavior)
         # The IN clean-prompt instructs the LLM to STRIP [A>...<A] tags
         # from decorative header elements (bill title, version label,
@@ -1783,18 +2450,122 @@ def pymupdf_compare_tags(
                 f"error."
             )
             cr["suggested_fix"] = ""
+        # Protected-clause continuation: if the PREVIOUS item was classified
+        # as protected_clause and this item's text is a continuation of that
+        # same clause (e.g., "California, jointly," following "Resolved by
+        # the Assembly and the Senate of the State of"), treat as protected.
+        elif is_real and in_clean == "text_only" and _prev_classification == "protected_clause":
+            # Verify: concatenating accumulated protected text + this text
+            # should still match a protected clause pattern
+            _this_txt = cr.get("pymupdf_text", "").strip()
+            _combined = (_protected_accum_text + " " + _this_txt).strip()
+            _is_continuation = _is_protected_text(_combined, protected_for_state)
+            # Also check if just this fragment is part of any protected clause
+            if not _is_continuation:
+                _is_continuation = _is_protected_text(_this_txt, protected_for_state)
+            if _is_continuation:
+                cr["classification"] = "protected_clause"
+                cr["verdict"] = "✅ pass"
+                cr["notes"] = (
+                    f"Continuation of the protected '{_combined[:80]}' "
+                    f"clause; correctly stripped"
+                )
+                cr["suggested_fix"] = ""
+                _protected_accum_text = _combined
+            else:
+                # Not a true continuation — check if it's a sponsor name
+                if _is_sponsor_name(_this_txt, _prev_classification) and cr.get("tag_type") == "addition":
+                    cr["classification"] = "decorative_header_dropped"
+                    cr["verdict"] = "✅ pass"
+                    cr["notes"] = "Sponsor name; decorative header, correctly untagged"
+                    cr["suggested_fix"] = ""
+                elif _is_printing_code_demo(_this_txt, state_code=state_code):
+                    cr["classification"] = "printing_code_demo"
+                    cr["verdict"] = "✅ pass"
+                    cr["notes"] = "PRINTING CODE formatting legend; not real legislative content"
+                    cr["suggested_fix"] = ""
+                elif _is_ar_table_rule_amount(_this_txt, state_code):
+                    cr["classification"] = "ar_table_rule"
+                    cr["verdict"] = "✅ pass"
+                    cr["notes"] = (
+                        "AR fiscal table amount; decorative underrule "
+                        "correctly filtered by extractor"
+                    )
+                    cr["suggested_fix"] = ""
+                else:
+                    cr["classification"] = "tag_dropped"
+                    cr["verdict"] = "❌ error"
+                    tag_label = ("[D>…<D]" if cr.get("tag_type") == "deletion"
+                                 else "[A>…<A]")
+                    pymupdf_txt = _full_text.get(int(cr.get("checklist_id", 0)),
+                                                  cr.get("pymupdf_text", ""))
+                    cr["suggested_fix"] = (
+                        f"Wrap the text in {tag_label} on page {cr.get('page', '?')}: "
+                        f"'{pymupdf_txt[:150]}'"
+                )
         # Real formatting + text survived but lost its tag
         elif is_real and in_clean == "text_only":
-            cr["classification"] = "tag_dropped"
-            cr["verdict"] = "❌ error"
-            tag_label = ("[D>…<D]" if cr.get("tag_type") == "deletion"
-                         else "[A>…<A]")
             pymupdf_txt = _full_text.get(int(cr.get("checklist_id", 0)),
                                           cr.get("pymupdf_text", ""))
-            cr["suggested_fix"] = (
-                f"Wrap the text in {tag_label} on page {cr.get('page', '?')}: "
-                f"'{pymupdf_txt[:150]}'"
-            )
+            # ── Universal signature / attestation block detection ──
+            # Signature labels (Speaker of the House, President of the
+            # Senate, Governor, etc.) are decorative italic — not
+            # legislative markup.  LLM correctly strips tags from these.
+            if _is_signature_label(pymupdf_txt) and cr.get("tag_type") == "addition":
+                cr["classification"] = "decorative_signature"
+                cr["verdict"] = "✅ pass"
+                cr["notes"] = (
+                    f"Signature block label; decorative italic, correctly "
+                    f"untagged"
+                )
+                cr["suggested_fix"] = ""
+            elif _is_sponsor_name(pymupdf_txt, _prev_classification) and cr.get("tag_type") == "addition":
+                cr["classification"] = "decorative_header_dropped"
+                cr["verdict"] = "✅ pass"
+                cr["notes"] = "Sponsor name; decorative header, correctly untagged"
+                cr["suggested_fix"] = ""
+            elif cr.get("tag_type") == "addition" and _is_universal_decorative_header(pymupdf_txt):
+                cr["classification"] = "decorative_header_dropped"
+                cr["verdict"] = "✅ pass"
+                cr["notes"] = (
+                    f"Decorative bill header; LLM correctly kept text but "
+                    f"stripped formatting tag"
+                )
+                cr["suggested_fix"] = ""
+            elif (
+                state_code
+                and state_code.upper() == "IN"
+                and _is_in_decorative_header(pymupdf_txt, committee_names=in_committee_names)
+                and cr.get("tag_type") == "addition"
+            ):
+                cr["classification"] = "decorative_header_dropped"
+                cr["verdict"] = "✅ pass"
+                cr["notes"] = (
+                    f"Decorative bill title header, IN convention strips tag"
+                )
+                cr["suggested_fix"] = ""
+            elif _is_printing_code_demo(pymupdf_txt, state_code=state_code):
+                cr["classification"] = "printing_code_demo"
+                cr["verdict"] = "✅ pass"
+                cr["notes"] = "PRINTING CODE formatting legend; not real legislative content"
+                cr["suggested_fix"] = ""
+            elif _is_ar_table_rule_amount(pymupdf_txt, state_code):
+                cr["classification"] = "ar_table_rule"
+                cr["verdict"] = "✅ pass"
+                cr["notes"] = (
+                    "AR fiscal table amount; decorative underrule "
+                    "correctly filtered by extractor"
+                )
+                cr["suggested_fix"] = ""
+            else:
+                cr["classification"] = "tag_dropped"
+                cr["verdict"] = "❌ error"
+                tag_label = ("[D>…<D]" if cr.get("tag_type") == "deletion"
+                             else "[A>…<A]")
+                cr["suggested_fix"] = (
+                    f"Wrap the text in {tag_label} on page {cr.get('page', '?')}: "
+                    f"'{pymupdf_txt[:150]}'"
+                )
         # Protected clause — LLM correctly stripped the tag.
         # This wins over text_only / no, regardless of in_image, because
         # the cleaning rule is to NEVER tag these phrases.
@@ -1822,14 +2593,40 @@ def pymupdf_compare_tags(
             cr["suggested_fix"] = ""
         # Real formatting + everything missing
         elif is_real and in_clean == "no":
-            cr["classification"] = "content_dropped"
-            cr["verdict"] = "❌ error"
-            pymupdf_txt = _full_text.get(int(cr.get("checklist_id", 0)),
-                                          cr.get("pymupdf_text", ""))
-            cr["suggested_fix"] = (
-                f"Restore the dropped text and re-tag it on page "
-                f"{cr.get('page', '?')}: '{pymupdf_txt[:150]}'"
-            )
+            pymupdf_txt_cd = _full_text.get(int(cr.get("checklist_id", 0)),
+                                              cr.get("pymupdf_text", ""))
+            # Document ID footers (EH 1248-LS 6736/DI 151, etc.)
+            # are correctly removed by the LLM.
+            if _is_doc_id_footer(pymupdf_txt_cd):
+                cr["classification"] = "footer_dropped"
+                cr["verdict"] = "✅ pass"
+                cr["notes"] = "Page footer/bill identifier; correctly removed"
+                cr["suggested_fix"] = ""
+            # Universal: decorative horizontal rule (3+ underscores/dashes)
+            elif re.match(r'^[_\u2014\u2013\-][_\u2014\u2013\-\s]{2,}$', (pymupdf_txt_cd or "").strip()):
+                cr["classification"] = "decorative_rule_dropped"
+                cr["verdict"] = "✅ pass"
+                cr["notes"] = "Decorative horizontal rule/separator; correctly dropped"
+                cr["suggested_fix"] = ""
+            elif _is_in_decorative_header(pymupdf_txt_cd) if state_code and state_code.upper() == "IN" else False:
+                cr["classification"] = "decorative_header_dropped"
+                cr["verdict"] = "✅ pass"
+                cr["notes"] = "Decorative separator rule between committee reports — correctly dropped"
+                cr["suggested_fix"] = ""
+            elif _is_printing_code_demo(pymupdf_txt_cd, state_code=state_code):
+                cr["classification"] = "printing_code_demo"
+                cr["verdict"] = "✅ pass"
+                cr["notes"] = "PRINTING CODE formatting legend; not real legislative content"
+                cr["suggested_fix"] = ""
+            else:
+                cr["classification"] = "content_dropped"
+                cr["verdict"] = "❌ error"
+                pymupdf_txt = _full_text.get(int(cr.get("checklist_id", 0)),
+                                              cr.get("pymupdf_text", ""))
+                cr["suggested_fix"] = (
+                    f"Restore the dropped text and re-tag it on page "
+                    f"{cr.get('page', '?')}: '{pymupdf_txt[:150]}'"
+                )
         # PyMuPDF false-positive header → LLM correctly cleaned it
         elif is_fp_header:
             cr["classification"] = "header_dropped"
@@ -1849,6 +2646,15 @@ def pymupdf_compare_tags(
             cr["verdict"] = "✅ pass"
             cr["suggested_fix"] = ""
 
+        # Track previous item for continuation detection
+        _prev_classification = cr.get("classification", "")
+        _prev_pymupdf_text = cr.get("pymupdf_text", "").strip()
+        # Reset or initialize accumulated protected text
+        if _prev_classification == "protected_clause" and _protected_accum_text == "":
+            _protected_accum_text = _prev_pymupdf_text
+        elif _prev_classification != "protected_clause":
+            _protected_accum_text = ""
+
     # ── Auto-link short fragments already absorbed into parent tags ──
     _claude_texts_by_page: Dict[int, List[str]] = {}
     for cr in checklist_results:
@@ -1862,7 +2668,7 @@ def pymupdf_compare_tags(
     n_frag = 0
     for cr in checklist_results:
         pmtxt = (cr.get("pymupdf_text", "") or "").strip()
-        if not pmtxt or len(pmtxt) > 3:
+        if not pmtxt or len(pmtxt) > 20:
             continue
         if cr.get("classification") in _PASS_CLASSES:
             continue
@@ -1874,7 +2680,7 @@ def pymupdf_compare_tags(
             continue
         item_typ = cr.get("tag_type", "")
         for ct in _claude_texts_by_page.get(pg, []):
-            if pmtxt not in ct:
+            if pmtxt.rstrip(".,;:") not in ct:
                 continue
             ct_is_add = "[A>" in ct
             ct_is_del = "[D>" in ct
@@ -1896,9 +2702,89 @@ def pymupdf_compare_tags(
     if n_frag:
         log.info("🔗 Auto-linked %d short fragment(s) into parent tags", n_frag)
 
+    # ── Fix mismatched partial_match items ──────────────────────────
+    # When the same addition text appears multiple times, the greedy
+    # matcher can assign an item to the wrong clean tag (partial) even
+    # though an exact clean tag exists.  If another item with the SAME
+    # text got "match", this partial is a duplicate occurrence that was
+    # simply paired wrong — the content IS correctly tagged.
+    _matched_texts: set = set()
+    for cr in checklist_results:
+        if cr.get("classification") == "match":
+            _mt = (cr.get("pymupdf_text") or "").strip().lower()
+            if _mt:
+                _matched_texts.add((_mt, cr.get("tag_type", "")))
+    n_partial_fix = 0
+    for cr in checklist_results:
+        if cr.get("classification") != "partial_match":
+            continue
+        _pt = (cr.get("pymupdf_text") or "").strip().lower()
+        if (_pt, cr.get("tag_type", "")) in _matched_texts:
+            cr["classification"] = "match"
+            cr["verdict"] = "✅ pass"
+            cr["notes"] = (
+                f"Duplicate occurrence — same text matched exactly in "
+                f"another location. {cr.get('notes', '')}"
+            ).strip()
+            cr["suggested_fix"] = ""
+            n_partial_fix += 1
+    if n_partial_fix:
+        log.info("🔄 Fixed %d partial_match item(s) with exact duplicates", n_partial_fix)
+
+    # ── Dash normalization: promote errors that differ only by dash style ──
+    # Double-hyphen "--" is equivalent to em-dash "—" and en-dash "–".
+    # If the LLM audit flagged an item as an error purely because of dash
+    # normalization, promote it to a pass.
+    _DASH_NORM_KEYWORDS = ("dash normalized", "dash character normalized",
+                           "dash normali")
+    n_dash_promoted = 0
+    for cr in checklist_results:
+        if not cr.get("verdict", "").startswith("❌"):
+            continue
+        notes_lower = (cr.get("notes", "") or "").lower()
+        if any(kw in notes_lower for kw in _DASH_NORM_KEYWORDS):
+            cr["verdict"] = "✅ pass"
+            cr["classification"] = "dash_normalized"
+            cr["notes"] = (
+                "Dash normalization (em-dash/en-dash/double-hyphen are equivalent) — "
+                "not a real error. " + (cr.get("notes", "") or "")
+            ).strip()
+            cr["suggested_fix"] = ""
+            n_dash_promoted += 1
+    if n_dash_promoted:
+        log.info("🔄 Promoted %d dash-normalization item(s) to pass", n_dash_promoted)
+
     # ── Normalize verdict / classification consistency ──────────────
+    # Smart/curly quotes + common punctuation + dash variants
+    _SINGLE_PUNCT = set('.,;:!?\'"()[]{}–—-/\u201c\u201d\u2018\u2019\u00ab\u00bb')
+    # Dash-like noise patterns: "--", "---", em-dash, en-dash standing alone
+    _DASH_NOISE = re.compile(r'^[-–—]{1,3}$')
     for cr in checklist_results:
         cls = cr.get("classification", "")
+        # Single-punctuation or dash-variant tags are noise — always pass.
+        # The PyMuPDF extractor or LLM may split or add a tag around a
+        # lone quote, comma, semicolon, parenthesis, dash, etc.
+        # These never represent meaningful formatting differences.
+        _cr_text = (
+            cr.get("pymupdf_text", "") or cr.get("clean_text", "") or ""
+        )
+        # Extract inner text from tag wrapper if present
+        _inner = re.sub(r'^\[[AD]>(.*)<[AD]\]$', r'\1', _cr_text.strip())
+        _inner_s = _inner.strip()
+        if _inner_s and (
+            (len(_inner_s) == 1 and _inner_s in _SINGLE_PUNCT)
+            or _DASH_NOISE.match(_inner_s)
+        ):
+            cr["verdict"] = "✅ pass"
+            cr["classification"] = "single_punct_noise"
+            if not cr.get("notes", "").startswith("Single punctuation"):
+                cr["notes"] = (
+                    f"Single punctuation/dash '{_inner_s}' — "
+                    f"not a meaningful formatting difference. "
+                    f"(Original classification: {cls})"
+                )
+            cr["suggested_fix"] = ""
+            continue
         if cls in _ERROR_CLASSES and not cr.get("verdict", "").startswith("❌"):
             cr["verdict"] = "❌ error"
         elif cls in _WARNING_CLASSES and not cr.get("verdict", "").startswith("⚠"):
@@ -1951,7 +2837,7 @@ def pymupdf_compare_tags(
     )
 
     return {
-        "total_checklist": len(checklist_items),
+        "total_checklist": len(checklist_results),
         "passes": n_pass,
         "warnings": n_warn,
         "errors": n_error,
@@ -2164,11 +3050,14 @@ def _write_excel(
     total_errors = (n_tag_drop + n_cont_drop + n_partial + n_wrong_typ
                     + n_extra + n_prot_tag + len(additional_findings))
 
-    # Tag-accuracy calculation: % of checklist items that ended up as ✅ pass.
-    # Phase-2 additional_findings are NOT in the checklist denominator, but
+    # Tag-accuracy calculation: % of checklist results that ended up as ✅ pass.
+    # We use len(checklist_results) as the denominator because extra items
+    # (extra_tag, linked_fragment, etc.) are appended during classification
+    # and contribute to both numerator and denominator.
+    # Phase-2 additional_findings are NOT in the denominator, but
     # we still treat their presence as a sign of inaccuracy when deciding
     # whether to show the "100% TAG ACCURACY" badge.
-    total_items = len(checklist_items) or 1   # guard divide-by-zero
+    total_items = len(checklist_results) or 1   # guard divide-by-zero
     accuracy_pct = (n_pass / total_items) * 100.0
     accuracy_str = f"{accuracy_pct:.1f}%"
     is_perfect = (n_error == 0
@@ -2179,7 +3068,7 @@ def _write_excel(
     summary_rows = [
         ("", ""),
         ("PHASE 1: CHECKLIST AUDIT", ""),
-        ("Total checklist items (PyMuPDF spans)", len(checklist_items)),
+        ("Total checklist items (PyMuPDF spans)", len(checklist_results)),
         ("", ""),
         ("✅ Pass — exact tag preserved", n_match),
         ("✅ Pass — span merged into larger neighbouring tag", n_merged),

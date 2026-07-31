@@ -47,6 +47,16 @@ import io
 import logging
 from pathlib import Path
 from datetime import datetime
+
+try:
+    from paragraph_break_detector import strip_table_markers, pdf_unwrap_paragraphs
+except ImportError:
+    # Optional in CI/test environments where runtime-only helpers are absent.
+    def strip_table_markers(text):
+        return text
+
+    def pdf_unwrap_paragraphs(text, *args, **kwargs):
+        return text
  
 import pypdfium2 as pdfium
 from PIL import Image
@@ -87,7 +97,7 @@ try:
         _inject_ks_signature_lines,
         _strip_ca_signature_block_tags,
         _strip_fl_repeated_headers,
-        pre_merge_paragraph_tags,
+        pre_merge_paragraph_tags, _clean_tagged_text,
         remove_nested_tags, merge_split_tags, split_tagged_subsections,
         split_renumber_paragraph_breaks, split_numbered_item_paragraph_welds,
         rejoin_amendment_intro_breaks,
@@ -689,6 +699,9 @@ def get_conversion_prompt(state_config=None):
         "CORRECT: [D>old-adj<D] [D>old-noun<D] [A>NEW-ADJ<A] [A>NEW-NOUN<A] "
         "(preserves the visual left-to-right order from the page). "
         "Output only the converted text with markup tags, nothing else. "
+        "IMPORTANT: Extract ALL text from EVERY page, including cover letters, "
+        "transmittal letters, certification pages, and signature blocks. "
+        "Do NOT skip or omit any pages — the cleaning step will handle removals. "
         "Combine all pages into one continuous document."
     )
  
@@ -1257,6 +1270,53 @@ def self_correction_pass(client, converted_text, page_images, state_config=None)
         return converted_text  # Fall back to original
 
 
+def _strip_repeating_page_artifacts(text: str) -> str:
+    """Remove short lines that repeat across multiple pages.
+
+    Splits text on ``--- Page N ---`` markers, collects short lines
+    (≤10 words) from the first 3 and last 3 lines of each page, and
+    removes any that appear on ≥2 pages.  This catches repeating headers
+    like "ENROLLED ORIGINAL", footer stamps, bill numbers, etc.
+    """
+    import re as _re
+    _PAGE_SEP = _re.compile(r"^---\s*Page\s+\d+\s*---$", _re.MULTILINE)
+    pages = _PAGE_SEP.split(text)
+    if len(pages) < 2:
+        return text
+
+    # Collect candidate artifact lines from top/bottom of each page
+    from collections import Counter
+    _candidate_counts: Counter = Counter()
+    _SCAN_LINES = 4  # lines from top/bottom of each page to inspect
+
+    for page in pages:
+        lines = [l.strip() for l in page.strip().split('\n') if l.strip()]
+        if not lines:
+            continue
+        candidates = set()
+        for line in lines[:_SCAN_LINES] + lines[-_SCAN_LINES:]:
+            # Only short lines (≤10 words) — long lines are real content
+            if len(line.split()) <= 10:
+                candidates.add(line)
+        for c in candidates:
+            _candidate_counts[c] += 1
+
+    # Lines appearing on ≥2 pages are artifacts
+    artifacts = {line for line, count in _candidate_counts.items() if count >= 2 and len(line) >= 3}
+    if not artifacts:
+        return text
+
+    logging.info(f"   🧹 Detected {len(artifacts)} repeating page artifact(s): {list(artifacts)[:5]}")
+
+    # Remove all occurrences (entire lines) from text
+    out_lines = []
+    for line in text.split('\n'):
+        if line.strip() in artifacts:
+            continue
+        out_lines.append(line)
+    return '\n'.join(out_lines)
+
+
 def _split_text_into_chunks(text, max_chars=40000, overlap_chars=2000):
     """
     Split extracted text into chunks at section/paragraph boundaries.
@@ -1323,7 +1383,7 @@ def _split_text_into_chunks(text, max_chars=40000, overlap_chars=2000):
     return chunks
 
 
-def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None):
+def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None, raw_text=None):
     """
     Hybrid conversion: PyMuPDF text extraction + LLM cleaning in chunks.
     
@@ -1340,6 +1400,8 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         pdf_path (str): Path to PDF file
         state_config (dict): State config from template, or None
         state_code (str): Two-letter state code, or None
+        raw_text (str): Pre-extracted PyMuPDF text.  When provided, skips
+            the internal extraction step (avoids duplicate processing).
     
     Returns:
         str: Converted and cleaned text, or None if failed
@@ -1361,7 +1423,10 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         active = [k.replace("mark_", "") for k, v in flags.items() if v and k.startswith("mark_")]
         logging.info(f"   Detecting formats: {', '.join(active) if active else 'none'}")
 
-        raw_text = extract_pdf_with_pymupdf(pdf_path, join_pages=True, state_code=state_code, **flags)
+        if raw_text:
+            logging.info(f"   ⏩ Using pre-extracted PyMuPDF text ({len(raw_text):,} chars) — skipping re-extraction")
+        else:
+            raw_text = extract_pdf_with_pymupdf(pdf_path, join_pages=True, state_code=state_code, **flags)
         if not raw_text or len(raw_text.strip()) < 50:
             logging.error("❌ PyMuPDF extraction returned empty/minimal text")
             return None
@@ -1393,8 +1458,86 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
             raw_text = pre_merge_paragraph_tags(raw_text)
             logging.info(f"   ✅ Pre-merged FL to paragraph-level tags: {len(raw_text):,} chars")
 
+        # ── Step 1b: Pre-cleaning (line number stripping) ────────────
+        # Same deterministic pre-cleaning that clean_extracted_text() does:
+        # strip trailing, leading, and bare-block line numbers before LLM.
+        raw_text = _clean_tagged_text(raw_text, strip_line_numbers=True)
+        try:
+            from text_accuracy_helpers import (
+                strip_trailing_line_numbers,
+                strip_leading_line_numbers,
+                strip_bare_line_number_blocks,
+            )
+            _before = len(raw_text)
+            raw_text = strip_trailing_line_numbers(raw_text, state_code=state_code)
+            raw_text = strip_leading_line_numbers(raw_text, state_code=state_code)
+            raw_text = strip_bare_line_number_blocks(raw_text, state_code=state_code)
+            _after = len(raw_text)
+            if _after < _before:
+                logging.info(
+                    f"   🧹 Pre-clean stripped line numbers: {_before:,} → {_after:,} chars"
+                )
+        except ImportError:
+            pass
+
+        # ── Step 1c: PDF-based paragraph unwrapping — DISABLED ──────
+        # Previously joined continuation lines using PDF layout boundaries
+        # and added TABLE markers.  Removed because it was causing false
+        # positives and the LLM handles paragraph structure correctly
+        # without pre-unwrapping.
+
+        # ── Step 1d: Strip repeating page headers/footers ────────────
+        # DISABLED: _strip_repeating_page_artifacts was too aggressive —
+        # it removed legitimate single-word content like "section." that
+        # appears at page breaks.  Header/footer detection is now handled
+        # by the content_accuracy_checker at comparison time instead.
+        # raw_text = _strip_repeating_page_artifacts(raw_text)
+
+        # Save pre-cleaned text for accuracy comparison
+        _llm_text = strip_table_markers(raw_text)
+        pre_cleaned_path = str(Path(pdf_path).with_suffix('')) + "_hybrid_precleaned.txt"
+        with open(pre_cleaned_path, "w", encoding="utf-8") as f:
+            f.write(_llm_text)
+        logging.info(f"   💾 Pre-cleaned text saved to: {pre_cleaned_path}")
+
+        # ── Save metadata (headers/footers detected from page structure) ──
+        # Detect repeating short lines across page boundaries and save as
+        # metadata.json so the content_accuracy_checker can ignore them.
+        try:
+            import json as _json_meta
+            _PAGE_SEP_META = re.compile(r"^---\s*Page\s+\d+\s*---$", re.MULTILINE)
+            _meta_pages = _PAGE_SEP_META.split(_llm_text)
+            if len(_meta_pages) >= 2:
+                from collections import Counter as _Counter_meta
+                _hf_counts: _Counter_meta = _Counter_meta()
+                _SCAN = 4
+                for _pg in _meta_pages:
+                    _pg_lines = [l.strip() for l in _pg.strip().split('\n') if l.strip()]
+                    if not _pg_lines:
+                        continue
+                    _candidates = set()
+                    for _ln in _pg_lines[:_SCAN] + _pg_lines[-_SCAN:]:
+                        if len(_ln.split()) <= 10 and len(_ln) >= 3:
+                            _candidates.add(_ln)
+                    for _c in _candidates:
+                        _hf_counts[_c] += 1
+                # Lines appearing on ≥2 pages with ≥2 words = headers/footers
+                _hf_texts = {t for t, cnt in _hf_counts.items() if cnt >= 2 and len(t.split()) >= 2}
+                if _hf_texts:
+                    _meta_path = str(Path(pdf_path).with_suffix('')) + "_metadata.json"
+                    _meta_dict = {
+                        "headers": {str(i): t for i, t in enumerate(_hf_texts)},
+                        "footers": {},
+                    }
+                    with open(_meta_path, "w", encoding="utf-8") as _mf:
+                        _json_meta.dump(_meta_dict, _mf, indent=2)
+                    logging.info(f"   💾 Metadata saved ({len(_hf_texts)} header/footer patterns): {_meta_path}")
+        except Exception as _meta_err:
+            logging.warning(f"   ⚠️ Metadata generation failed: {_meta_err}")
+
         # ── Step 2: Split into chunks ────────────────────────────────
-        chunks = _split_text_into_chunks(raw_text, max_chars=40000, overlap_chars=2000)
+        # _llm_text already has TABLE markers stripped
+        chunks = _split_text_into_chunks(_llm_text, max_chars=40000, overlap_chars=2000)
         total_chunks = len(chunks)
         logging.info(f"   📐 Split into {total_chunks} chunk(s)")
 
@@ -1482,6 +1625,41 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
                     f"{len(chunk):,} chars). Possible silent truncation "
                     f"or unwanted summarisation."
                 )
+                # Retry with explicit anti-summarisation nudge
+                if attempt < max_retries:
+                    logging.info(f"   🔄 Retrying chunk {i} with anti-truncation prompt...")
+                    anti_trunc_prefix = (
+                        "[CRITICAL: Your previous attempt only produced "
+                        f"{len(cleaned):,} chars from {len(chunk):,} chars of input. "
+                        "You MUST output the COMPLETE cleaned text — do NOT summarise, "
+                        "abbreviate, or skip any sections. Output every single line.]\n\n"
+                    )
+                    user_message_retry = anti_trunc_prefix + user_message
+                    try:
+                        cleaned = ""
+                        final_msg = None
+                        with client.messages.stream(
+                            model="claude-opus-4-6",
+                            max_tokens=64000,
+                            timeout=600.0,
+                            system=system_prompt,
+                            messages=[{"role": "user", "content": user_message_retry}],
+                        ) as stream:
+                            for text in stream.text_stream:
+                                cleaned += text
+                            final_msg = stream.get_final_message()
+                            _track_usage(f"Hybrid Chunk {i}/{total_chunks} (retry)", final_msg.usage)
+                        retry_ratio = len(cleaned) / max(1, len(chunk))
+                        logging.info(
+                            f"   🔄 Retry result: {len(cleaned):,} chars "
+                            f"({retry_ratio:.0%} of raw). "
+                            f"{'✅ Accepted' if retry_ratio >= 0.70 else '⚠️ Still short'}"
+                        )
+                        if retry_ratio > ratio:
+                            # Use retry result if it's better
+                            cleaned_chunks[-1] = cleaned.strip()
+                    except Exception as retry_err:
+                        logging.warning(f"   ⚠️ Retry failed: {retry_err}")
             logging.info(f"   ✅ Chunk {i}: {len(chunk):,} → {len(cleaned):,} chars")
 
         # ── Step 4: Merge cleaned chunks ─────────────────────────────
@@ -1536,8 +1714,9 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
             ])
         convert_pdf_hybrid_text._last_chunks_report = "\n".join(_chunks_report_lines)
 
-        # Bracket tagging runs AFTER LLM to avoid confusing it with
-        # nested [D>[…]<D] structures.
+        # Bracket tagging runs AFTER LLM and AFTER CT-specific fixes to avoid
+        # confusing the LLM with nested [D>[…]<D] structures, and to ensure
+        # CT analysis-section tag-stripping doesn't remove bracket [D> tags.
         if flags.get("mark_brackets"):
             merged = _tag_brackets(merged)
 
@@ -1551,6 +1730,9 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
             merged = _strip_ct_analysis_section_tags(merged)
             merged = _strip_false_subsection_d_tags(merged)
             merged = _restructure_ct_header(merged)
+            # Re-run bracket tagging after analysis-section stripping
+            # removed [D> tags from legitimate bracket deletions
+            merged = _tag_brackets(merged)
 
         # IN-specific: strip false headers, footers, barcodes, year lines
         if state_code and state_code.upper() == "IN":
@@ -2212,17 +2394,26 @@ def _merge_cleaned_chunks(chunks):
         return ""
 
     merged = chunks[0]
+    any_fallback = False
     for i in range(1, len(chunks)):
-        merged = _stitch_two_chunks(merged, chunks[i], chunk_index=i + 1)
+        merged, used_fallback = _stitch_two_chunks(merged, chunks[i], chunk_index=i + 1)
+        if used_fallback:
+            any_fallback = True
 
-    # Final defensive pass: drop any consecutive duplicate paragraph runs.
-    deduped = _dedupe_consecutive_duplicate_blocks(merged)
-    if deduped != merged:
-        logging.info(
-            f"   🧹 Post-merge dedup removed {len(merged) - len(deduped):,} "
-            f"chars of duplicate paragraph runs"
-        )
-    return deduped
+    # Only run the dedup pass when Strategy 4 (raw concatenation) was used.
+    # Strategies 1-3 already handle overlap precisely — running dedup after
+    # them risks removing LEGITIMATE duplicate content that appears in the
+    # source PDF (e.g. identical boilerplate subsections across different
+    # numbered sections in legislation).
+    if any_fallback:
+        deduped = _dedupe_consecutive_duplicate_blocks(merged)
+        if deduped != merged:
+            logging.info(
+                f"   🧹 Post-merge dedup removed {len(merged) - len(deduped):,} "
+                f"chars of duplicate paragraph runs"
+            )
+        return deduped
+    return merged
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -2270,8 +2461,9 @@ def _section_anchors(text):
 def _stitch_two_chunks(merged, next_chunk, *, chunk_index, window=4000):
     """Stitch ``next_chunk`` onto ``merged``, deduplicating any overlap.
 
-    Returns the new merged string.  See ``_merge_cleaned_chunks`` for the
-    strategy hierarchy.
+    Returns a tuple ``(merged_string, used_fallback)`` where
+    ``used_fallback`` is True only when Strategy 4 (raw concatenation)
+    was used.  See ``_merge_cleaned_chunks`` for the strategy hierarchy.
     """
     # ── Strategy 1: section-anchor merge ────────────────────────────────
     tail_window = merged[-window:]
@@ -2292,12 +2484,32 @@ def _stitch_two_chunks(merged, next_chunk, *, chunk_index, window=4000):
             if label in head_anchor_first:
                 head_pos = head_anchor_first[label]
                 global_tail_pos = tail_offset + tail_pos
+
+                # ── Sanity check: verify the merge doesn't drop content ──
+                # The overlap region is ~2K chars.  If this anchor match
+                # would cut MORE than the overlap + a generous margin from
+                # the tail, it's a false match (e.g. an effectiveness table
+                # "Sec. 3" matching the actual Section 3 body).  Skip it
+                # and try the next anchor.
+                tail_chars_dropped = len(merged) - global_tail_pos
+                head_chars_skipped = head_pos
+                expected_overlap = 6000  # generous upper bound for real overlap
+                if tail_chars_dropped + head_chars_skipped > expected_overlap:
+                    logging.warning(
+                        f"   ⚠️  Chunk {chunk_index}: skipping section-anchor "
+                        f"'{label}' — would drop {tail_chars_dropped:,} tail + "
+                        f"{head_chars_skipped:,} head chars "
+                        f"(>{expected_overlap:,} expected overlap). "
+                        f"Likely a false match (e.g. effectiveness table)."
+                    )
+                    continue
+
                 logging.info(
                     f"   🔗 Chunk {chunk_index}: section-anchor merge at "
                     f"'{label}' (tail offset {global_tail_pos:,}, "
                     f"head offset {head_pos:,})"
                 )
-                return merged[:global_tail_pos].rstrip() + '\n\n' + next_chunk[head_pos:]
+                return merged[:global_tail_pos].rstrip() + '\n\n' + next_chunk[head_pos:], False
 
     # ── Strategy 2: exact suffix-prefix ─────────────────────────────────
     # Whitespace-normalised character match.  Cheaper to compute than the
@@ -2340,7 +2552,7 @@ def _stitch_two_chunks(merged, next_chunk, *, chunk_index, window=4000):
                 f"   🔗 Chunk {chunk_index}: exact suffix-prefix overlap "
                 f"({best_overlap} normalised chars, {raw_cut} raw chars)"
             )
-            return merged + next_chunk[raw_cut:]
+            return merged + next_chunk[raw_cut:], False
 
     # ── Strategy 2b: tail-probe overlap ─────────────────────────────────
     # When the LLM starts the head mid-sentence (e.g. "n section 10-264s,
@@ -2395,7 +2607,7 @@ def _stitch_two_chunks(merged, next_chunk, *, chunk_index, window=4000):
                         f"({actual_probe_len} probe chars matched at norm "
                         f"offset {probe_hit}, raw cut at {raw_cut_2b})"
                     )
-                    return candidate
+                    return candidate, False
                 else:
                     logging.warning(
                         f"   ⚠️  Chunk {chunk_index}: tail-probe cut would "
@@ -2463,7 +2675,7 @@ def _stitch_two_chunks(merged, next_chunk, *, chunk_index, window=4000):
                         f"({actual_2c_len} probe chars matched at stripped "
                         f"offset {probe_2c_hit}, raw cut at {raw_cut_2c})"
                     )
-                    return candidate_2c
+                    return candidate_2c, False
                 else:
                     logging.warning(
                         f"   ⚠️  Chunk {chunk_index}: tag-stripped cut "
@@ -2525,7 +2737,7 @@ def _stitch_two_chunks(merged, next_chunk, *, chunk_index, window=4000):
                 f"tail cut at -{len(tail_win_2d) - t_cut_pos}, "
                 f"head cut at {h_cut_pos})"
             )
-            return candidate_2d
+            return candidate_2d, False
         else:
             logging.warning(
                 f"   ⚠️  Chunk {chunk_index}: paragraph-level cut would "
@@ -2595,7 +2807,7 @@ def _stitch_two_chunks(merged, next_chunk, *, chunk_index, window=4000):
                 break  # fall through to Strategy 4
             # Use the version from `merged` (cleaner because earlier pipeline
             # state) and append the rest of next_chunk after the match.
-            return merged[:global_tail_end].rstrip() + '\n\n' + next_chunk[cut_offset_in_head:].lstrip('\n')
+            return merged[:global_tail_end].rstrip() + '\n\n' + next_chunk[cut_offset_in_head:].lstrip('\n'), False
 
     # ── Strategy 4: concatenate with separator (last resort) ────────────
     # When no overlap is found, the LLM likely truncated content at the
@@ -2658,7 +2870,7 @@ def _stitch_two_chunks(merged, next_chunk, *, chunk_index, window=4000):
             )
             _head_stripped = _head_paras[1].lstrip()
 
-    return _merged_stripped.rstrip() + '\n\n' + _head_stripped.lstrip()
+    return _merged_stripped.rstrip() + '\n\n' + _head_stripped.lstrip(), True
 
 
 def _dedupe_consecutive_duplicate_blocks(text, *, min_run_chars=200):
@@ -2767,6 +2979,25 @@ def _dedupe_consecutive_duplicate_blocks(text, *, min_run_chars=200):
                     continue
                 run2 = norms[j : j + run_len]
                 if run1 == run2:
+                    # ── Guard: don't remove if the gap contains a section
+                    # anchor.  In legislation, identical subsection text
+                    # (e.g. "(a) File an application...") legitimately
+                    # repeats across different numbered sections.  If the
+                    # gap has "Sec. N" it's a new section, not a duplicate.
+                    gap_raw = '\n'.join(
+                        paras[k] for k in range(i + run_len, j)
+                    )
+                    if _RE_SECTION_ANCHOR.search('\n' + gap_raw):
+                        i += 1
+                        break  # skip this gap, try next i
+
+                    # Also require higher char threshold for gapped dedup
+                    # to avoid false positives on short repeated phrases
+                    # common in legislation.
+                    if total_chars < 500:
+                        i += 1
+                        break
+
                     # Drop the gap paragraphs and the second run
                     for k in range(i + run_len, j + run_len):
                         keep[k] = False
@@ -2979,7 +3210,330 @@ def restore_special_symbols(claude_text, pymupdf_text):
     return claude_text
 
 
-def deterministic_cleanup(text, state_config=None, state_code=None):
+def _reformat_ia_signature_block(text: str, state_code: str | None = None) -> str:
+    """Reformat Iowa signature block into proper two-column layout.
+
+    Iowa enrolled bills have a two-column signature block:
+        ______________________________      ______________________________
+        PAT GRASSLEY                        AMY SINCLAIR
+        Speaker of the House                President of the Senate
+
+        I hereby certify that this bill originated in the House and is known as
+        House File 472, Ninety-first General Assembly.
+
+                                            ______________________________
+                                            MEGHAN NELSON
+                                            Chief Clerk of the House
+
+        Approved _______________, 2025      ______________________________
+                                             KIM REYNOLDS
+                                             Governor
+
+    Claude often outputs this as single-column (no indentation). This function
+    detects and reformats it.
+    """
+    if not text:
+        return text
+    if state_code and state_code.upper() != "IA":
+        return text
+
+    # Column position for right-side elements
+    COL2 = 40
+
+    # Pattern: Speaker/President block on separate lines or same line without spacing
+    # Look for the signature block by finding "Speaker of the House"
+    lines = text.split('\n')
+    result_lines = []
+    i = 0
+
+    while i < len(lines):
+        line = lines[i]
+
+        # Detect signature line separator (______ ______) — already correct, pass through
+        # Detect: NAME1 (spaces) NAME2 on one line (Speaker/President names)
+        # e.g. "PAT GRASSLEY         AMY SINCLAIR"
+        if (i + 1 < len(lines)
+            and re.match(r'^[A-Z][A-Z .]+\s{2,}[A-Z][A-Z .]+\s*$', line)
+            and ('Speaker' in lines[i + 1] or 'President' in lines[i + 1])):
+            # Split into two names
+            parts = re.split(r'\s{2,}', line.strip())
+            if len(parts) == 2:
+                name1 = parts[0].strip()
+                name2 = parts[1].strip()
+                result_lines.append(f"{name1:<{COL2}}{name2}")
+                i += 1
+                # Next line: titles
+                if i < len(lines):
+                    title_parts = re.split(r'\s{2,}', lines[i].strip())
+                    if len(title_parts) == 2:
+                        result_lines.append(f"{title_parts[0]:<{COL2}}{title_parts[1]}")
+                    else:
+                        result_lines.append(lines[i])
+                    i += 1
+                continue
+            
+        # Detect: "Speaker of the House" followed by "President of the Senate"
+        # on separate lines (bad layout — should be on same line)
+        if (re.match(r'^\s*Speaker of the House\s*$', line)
+            and i + 1 < len(lines)
+            and re.match(r'^\s*President of the Senate\s*$', lines[i + 1])):
+            result_lines.append(f"{'Speaker of the House':<{COL2}}President of the Senate")
+            i += 2
+            # Also fix the names above if we haven't already
+            continue
+
+        # Detect: "MEGHAN NELSON" (or similar) at col 0 followed by "Chief Clerk"
+        if (re.match(r'^[A-Z][A-Z ]+$', line.strip())
+            and i + 1 < len(lines)
+            and 'Chief Clerk' in lines[i + 1]
+            and not line.startswith(' ' * 8)):
+            # Indent to right column
+            name = line.strip()
+            result_lines.append(f"{'':<{COL2}}{name}")
+            i += 1
+            # Chief Clerk line
+            result_lines.append(f"{'':<{COL2}}{lines[i].strip()}")
+            i += 1
+            # Add blank line after if not present
+            if i < len(lines) and lines[i].strip():
+                result_lines.append("")
+            continue
+
+        # Detect: underscore line before Chief Clerk (indent it)
+        if (re.match(r'^\s*_{10,}\s*$', line)
+            and i + 1 < len(lines)
+            and re.match(r'^\s*[A-Z][A-Z ]+$', lines[i + 1].strip())
+            and i + 2 < len(lines)
+            and 'Chief Clerk' in lines[i + 2]
+            and not line.startswith(' ' * 8)):
+            result_lines.append(f"{'':<{COL2}}{'_' * 30}")
+            i += 1
+            continue
+
+        # Detect: "KIM REYNOLDS" (or similar) at col 0 followed by "Governor"
+        if (re.match(r'^[A-Z][A-Z ]+$', line.strip())
+            and i + 1 < len(lines)
+            and re.match(r'^\s*Governor\s*$', lines[i + 1])
+            and not line.startswith(' ' * 8)):
+            # Check if preceded by "Approved" line
+            name = line.strip()
+            result_lines.append(f"{'':<{COL2}} {name}")
+            i += 1
+            result_lines.append(f"{'':<{COL2}} {lines[i].strip()}")
+            i += 1
+            continue
+
+        # Detect: "I hereby certify" without preceding blank line
+        if 'I hereby certify' in line:
+            # Ensure blank line before
+            if result_lines and result_lines[-1].strip():
+                result_lines.append("")
+            result_lines.append(line)
+            i += 1
+            # Consume the rest of the certification paragraph.
+            # Stop at blank line OR underscore line (next sig block element).
+            while i < len(lines) and lines[i].strip() and not re.match(r'^\s*_{10,}', lines[i]):
+                result_lines.append(lines[i])
+                i += 1
+            # Add blank separator
+            result_lines.append("")
+            if i < len(lines) and not lines[i].strip():
+                i += 1  # skip existing blank line
+            continue
+
+        result_lines.append(line)
+        i += 1
+
+    return '\n'.join(result_lines)
+
+
+def _ensure_blank_line_spacing(text):
+    """Ensure every non-blank line is followed by a blank line.
+
+    Converts single line breaks between content lines to double line breaks
+    for consistent double-spaced output.  Already-blank lines are preserved
+    without creating triple+ blank lines.
+
+    Returns:
+        str: Text with uniform blank-line spacing.
+    """
+    if not text:
+        return text
+
+    lines = text.split('\n')
+    result = []
+    for i, line in enumerate(lines):
+        result.append(line)
+        # If this is a non-blank line and the next line is also non-blank,
+        # insert a blank line between them.
+        if (line.strip()
+                and i + 1 < len(lines)
+                and lines[i + 1].strip()):
+            result.append('')
+
+    # Collapse any triple+ blank lines that may result
+    text = '\n'.join(result)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text
+
+
+def _restore_merged_lines(text, reference_text):
+    """Restore line breaks the LLM incorrectly removed.
+
+    Compares each output line against the reference (precleaned) text.
+    If an output line appears to be two or more consecutive reference
+    lines concatenated with whitespace, it is split back to match the
+    reference layout.
+
+    This is a *general* fix — it works for any table format, header
+    block, or structured layout, not just specific patterns.
+
+    Only "structured" lines are restored — the algorithm skips lines
+    that look like intentional paragraph unwraps (prose sentences the
+    LLM correctly joined from hard-wrapped source lines).
+    """
+    if not reference_text:
+        return text
+
+    ref_lines = reference_text.split('\n')
+    # Build lookup: stripped line → list of original (index, line) pairs
+    # Use stripped versions for matching (LLM may trim whitespace)
+    ref_stripped = [l.rstrip() for l in ref_lines]
+
+    # Build a set of consecutive-pair signatures for fast lookup.
+    # Key = normalised merged form, Value = list of (line_a, line_b) originals
+    # We normalise by collapsing internal whitespace runs to single space
+    # for matching, since the LLM may change spacing when merging.
+    def _norm(s):
+        return re.sub(r'\s+', ' ', s.strip())
+
+    pair_map = {}  # norm(a + " " + b) → [(a, b), ...]
+    for i in range(len(ref_stripped) - 1):
+        a = ref_stripped[i]
+        b = ref_stripped[i + 1]
+        if not a.strip() or not b.strip():
+            continue  # skip pairs involving blank lines
+        # Also build triples and quads for multi-line merges
+        key2 = _norm(a + " " + b)
+        pair_map.setdefault(key2, []).append((a, b))
+
+    # Build triple map for 3-line merges
+    triple_map = {}
+    for i in range(len(ref_stripped) - 2):
+        a, b, c = ref_stripped[i], ref_stripped[i+1], ref_stripped[i+2]
+        if not a.strip() or not b.strip() or not c.strip():
+            continue
+        key3 = _norm(a + " " + b + " " + c)
+        triple_map.setdefault(key3, []).append((a, b, c))
+
+    # Build quad map for 4-line merges
+    quad_map = {}
+    for i in range(len(ref_stripped) - 3):
+        a, b, c, d = ref_stripped[i], ref_stripped[i+1], ref_stripped[i+2], ref_stripped[i+3]
+        if not a.strip() or not b.strip() or not c.strip() or not d.strip():
+            continue
+        key4 = _norm(a + " " + b + " " + c + " " + d)
+        quad_map.setdefault(key4, []).append((a, b, c, d))
+
+    # ── Helper: detect if a group of reference lines is just hard-wrapped
+    # prose that the LLM correctly unwrapped into a single paragraph.
+    # Structured lines (tables, headers, numbered items) should be split
+    # back; prose continuation lines should stay merged.
+    _RE_STRUCTURED = re.compile(
+        r'^\s*(?:'
+        r'\d+[\.\)]\s'               # numbered list: "1. " or "2) "
+        r'|[a-z][\.\)]\s'            # lettered list: "a. " or "b) "
+        r'|\([a-z0-9]+\)\s'          # parenthesised: "(a) " or "(1) "
+        r'|\[A>'                     # tag start
+        r'|---'                      # separator / page break
+        r'|SR \d|HB \d|SB \d'       # bill/resolution headers
+        r'|Number of members'        # table header
+        r')',
+        re.IGNORECASE,
+    )
+    # Lines that look like table data (multiple large whitespace gaps)
+    _RE_TABLE_DATA = re.compile(r'\S\s{3,}\S')
+
+    def _is_structured(line):
+        """True if a line looks like a structured/tabular element."""
+        s = line.strip()
+        if not s:
+            return False
+        if _RE_STRUCTURED.match(s):
+            return True
+        if _RE_TABLE_DATA.search(s):
+            return True
+        return False
+
+    def _is_prose_wrap(lines_tuple):
+        """True if the reference lines are just hard-wrapped prose continuation.
+
+        Heuristic: if NONE of the lines are structured (tags, numbered items,
+        table data), they're just hard-wrapped prose the LLM correctly merged.
+        If ANY line is structured, return False so the split is applied.
+        """
+        if len(lines_tuple) < 2:
+            return False
+        # If ANY line in the group is structured, it's NOT simple prose wrap
+        for ln in lines_tuple:
+            if _is_structured(ln):
+                return False  # structured → DO split
+        # All lines are plain prose continuations → LLM was right to merge
+        return True
+
+    out_lines = text.split('\n')
+    result = []
+    splits_done = 0
+
+    for line in out_lines:
+        norm_line = _norm(line)
+
+        # Skip short lines or blank lines — no merge possible
+        if len(norm_line) < 20:
+            result.append(line)
+            continue
+
+        # Try quad split first (most specific)
+        if norm_line in quad_map:
+            parts = quad_map[norm_line][0]
+            if _is_prose_wrap(parts):
+                result.append(line)  # prose — keep merged
+            else:
+                result.extend(parts)
+                splits_done += 1
+            continue
+
+        # Try triple split
+        if norm_line in triple_map:
+            parts = triple_map[norm_line][0]
+            if _is_prose_wrap(parts):
+                result.append(line)
+            else:
+                result.extend(parts)
+                splits_done += 1
+            continue
+
+        # Try pair split
+        if norm_line in pair_map:
+            parts = pair_map[norm_line][0]
+            if _is_prose_wrap(parts):
+                result.append(line)
+            else:
+                result.extend(parts)
+                splits_done += 1
+            continue
+
+        result.append(line)
+
+    if splits_done:
+        logging.info(
+            f"   🔧 Restored {splits_done} line-merge(s) using precleaned reference"
+        )
+
+    return '\n'.join(result)
+
+
+def deterministic_cleanup(text, state_config=None, state_code=None, reference_text=None):
     """
     Apply deterministic fixes for common Claude output inconsistencies.
     These are formatting errors that Claude makes intermittently regardless
@@ -3123,11 +3677,14 @@ def deterministic_cleanup(text, state_config=None, state_code=None):
         fix_log.append(f"Fixed {smart_quote_count} smart quotes → regular quotes")
 
     # ── Fix 6: Normalize whitespace inside tags ───────────────────
-    # [A> text <A] → [A>text<A]  (trim leading/trailing spaces inside tags)
-    text = re.sub(r'\[A>\s+', '[A>', text)
-    text = re.sub(r'\s+<A\]', '<A]', text)
-    text = re.sub(r'\[D>\s+', '[D>', text)
-    text = re.sub(r'\s+<D\]', '<D]', text)
+    # Trim trailing spaces before close tags: "text <A]" → "text<A]"
+    # Trim leading spaces only when followed by more spaces (excess indent):
+    #   [A>  text<A] → [A> text<A] — but preserve single leading space like [D> if<D]
+    # The single leading space is meaningful — it represents whitespace in the PDF.
+    text = re.sub(r'\[A> {2,}', '[A> ', text)   # collapse 2+ leading spaces to 1
+    text = re.sub(r' +<A\]', '<A]', text)        # trim trailing spaces before close
+    text = re.sub(r'\[D> {2,}', '[D> ', text)   # collapse 2+ leading spaces to 1
+    text = re.sub(r' +<D\]', '<D]', text)        # trim trailing spaces before close
 
     # ── Fix 7: Merge adjacent same-type tags ──────────────────────
     # [A>text1<A] [A>text2<A] → [A>text1 text2<A]  (if only spaces/tabs between, NOT newlines)
@@ -3423,6 +3980,19 @@ def deterministic_cleanup(text, state_config=None, state_code=None):
         text = _split_merged_grant_tag_rows(text)
         text = _split_tabular_header_from_data(text)
         text = _split_tabular_tag_at_dollar(text)
+
+    # ── Fix: Restore lines the LLM incorrectly merged ──────────
+    # Instead of pattern-matching specific table formats, compare against
+    # the precleaned reference text.  If an output line is a concatenation
+    # of 2+ consecutive reference lines, split it back.
+    if reference_text:
+        text = _restore_merged_lines(text, reference_text)
+
+    # ── Final: collapse double/triple spaces between words ────────
+    # Preserves 4+ space gaps (intentional table/column alignment)
+    text = re.sub(r'(?<=\S) {2,3}(?=\S)', ' ', text)
+    # Rejoin line-break hyphenations: "export- limiting" → "export-limiting"
+    text = re.sub(r'(\w)- (\w)', r'\1-\2', text)
 
     return text
 
@@ -3797,8 +4367,22 @@ def main():
         converted_text = self_correction_pass(client, converted_text, cached_page_images, state_config)
 
     # Post-process: deterministic cleanup of common Claude inconsistencies
+    # For hybrid mode, load the precleaned text as reference so merged lines
+    # can be restored generically (not just for specific table patterns).
+    _reference_text = None
+    if hybrid_mode:
+        _precleaned_path = str(Path(pdf_path).with_suffix('')) + "_hybrid_precleaned.txt"
+        if os.path.isfile(_precleaned_path):
+            with open(_precleaned_path, "r", encoding="utf-8") as _pf:
+                _reference_text = _pf.read()
     print(f"🔧 Running deterministic cleanup...")
-    converted_text = deterministic_cleanup(converted_text, state_config=state_config, state_code=state_code)
+    converted_text = deterministic_cleanup(
+        converted_text, state_config=state_config, state_code=state_code,
+        reference_text=_reference_text,
+    )
+
+    # Post-process: fix Iowa signature block layout
+    converted_text = _reformat_ia_signature_block(converted_text, state_code=state_code)
 
     # Post-process: strip tags from protected clauses (state-specific cleanup)
     if state_config:

@@ -303,6 +303,35 @@ _ANTI_PATTERNS: List[_AntiPattern] = [
             re.MULTILINE,
         ),
     ),
+
+    # ── 11b. Signature block layout problem ──────────────────────────
+    # Iowa (and similar states) have two-column signature blocks:
+    #   PAT GRASSLEY                        AMY SINCLAIR
+    #   Speaker of the House                President of the Senate
+    # If Speaker/President are on separate lines (not same line with gap),
+    # or Chief Clerk / Governor name is at col 0 instead of indented,
+    # the layout is broken.
+    _AntiPattern(
+        kind="signature_layout_problem",
+        severity="warning",
+        description=(
+            "Signature block layout problem detected. Two-column signature "
+            "elements (Speaker/President, Chief Clerk, Governor) appear "
+            "merged into single column instead of proper side-by-side layout."
+        ),
+        pattern=re.compile(
+            # Speaker and President on separate lines (should be same line)
+            r"^Speaker of the House\s*\n\s*President of the Senate"
+            r"|"
+            # Chief Clerk name at col 0 (should be indented to right column)
+            r"^[A-Z][A-Z ]+\nChief Clerk of the House"
+            r"|"
+            # Governor name at col 0 right after Approved line
+            r"^(?:Approved\b.+\n)[A-Z][A-Z ]+\nGovernor",
+            re.MULTILINE,
+        ),
+    ),
+
     # ── 12. Orphaned closer mid-line (no opener on same line) ─────────
     # A closing tag <A] or <D] appearing on a line that has NO opener.
     # Different from pattern 8 which only looks at start-of-line orphans.
@@ -339,6 +368,92 @@ _ANTI_PATTERNS: List[_AntiPattern] = [
         ),
     ),
 ]
+
+
+# ---------------------------------------------------------------------------
+# IN-specific: italic text in PRINTING CODE section must be tagged
+# ---------------------------------------------------------------------------
+# Indiana's PRINTING CODE section uses italic "this style type" as
+# demonstration text that MUST be tagged with [A>...<A].  This check
+# finds known italic phrases in the PRINTING CODE section that lack tags.
+
+_IN_PRINTING_CODE_ITALIC_PHRASES = [
+    "this style type",
+    "this style type.",
+]
+
+_RE_PRINTING_CODE_SECTION = re.compile(
+    r"PRINTING\s+CODE[:\s]*(.*?)(?=\nSECTION\s+1\b|\Z)",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _check_in_italic_section_tags(
+    text: str,
+    state_code: Optional[str],
+    pdf_basename: Optional[str],
+) -> List[ExtractionAnomaly]:
+    """For IN: verify italic phrases in PRINTING CODE section are tagged."""
+    if not state_code or state_code.upper() != "IN":
+        return []
+    if not text:
+        return []
+
+    m = _RE_PRINTING_CODE_SECTION.search(text)
+    if not m:
+        return []
+
+    section_text = m.group(0)
+    section_start = m.start()
+    anomalies: List[ExtractionAnomaly] = []
+
+    for phrase in _IN_PRINTING_CODE_ITALIC_PHRASES:
+        # Check if phrase exists untagged (not inside [A>...<A])
+        phrase_lower = phrase.lower()
+        section_lower = section_text.lower()
+        idx = 0
+        while True:
+            pos = section_lower.find(phrase_lower, idx)
+            if pos < 0:
+                break
+            idx = pos + 1
+            # Check if this occurrence is inside an [A>...<A] or [D>...<D] tag
+            # Look backwards for tag openers/closers
+            before = section_text[:pos]
+            after = section_text[pos:]
+            # Check [A>...<A]
+            last_a_open = before.rfind("[A>")
+            last_a_close = before.rfind("<A]")
+            if last_a_open > last_a_close:
+                continue  # properly tagged with [A>
+            # Check [D>...<D]
+            last_d_open = before.rfind("[D>")
+            last_d_close = before.rfind("<D]")
+            if last_d_open > last_d_close:
+                continue  # properly tagged with [D>
+            # Not inside any tag — flag it
+            abs_offset = section_start + pos
+            start_ctx = max(0, abs_offset - _CONTEXT_CHARS)
+            end_ctx = min(len(text), abs_offset + len(phrase) + _CONTEXT_CHARS)
+            snippet = text[start_ctx:end_ctx].replace("\n", "\\n")
+            anomalies.append(
+                ExtractionAnomaly(
+                    kind="in_italic_not_tagged_in_printing_code",
+                    severity="error",
+                    description=(
+                        f"IN PRINTING CODE section: italic phrase '{phrase}' "
+                        f"is not wrapped in [A>...<A] tags. Per italic_section_only "
+                        f"config, italic text in the PRINTING CODE section must be tagged."
+                    ),
+                    snippet=snippet,
+                    char_offset=abs_offset,
+                    page_number=_approximate_page_number(text, abs_offset),
+                    state_code=state_code,
+                    pdf_basename=pdf_basename,
+                )
+            )
+
+    return anomalies
 
 
 # ---------------------------------------------------------------------------
@@ -423,6 +538,8 @@ def validate_extraction(
                     )
                 )
                 break
+
+    out.sort(key=lambda a: a.char_offset)
 
     out.sort(key=lambda a: a.char_offset)
     return out

@@ -615,10 +615,13 @@ def _format_checklist(items: List[Dict],
 # ════════════════════════════════════════════════════════════════════
 
 def _norm(s: str) -> str:
-    """Collapse whitespace and normalise quotes for comparison."""
+    """Collapse whitespace and normalise quotes/dashes for comparison."""
     s = re.sub(r"\s+", " ", s.strip())
     s = s.replace("\u201c", '"').replace("\u201d", '"')   # \u201c \u201d
     s = s.replace("\u2018", "'").replace("\u2019", "'")   # \u2018 \u2019
+    # Normalize dashes: em-dash, en-dash, double-hyphen all → single hyphen
+    s = s.replace("\u2014", "-").replace("\u2013", "-")
+    s = re.sub(r"--+", "-", s)
     return s
 
 
@@ -627,6 +630,9 @@ def _norm_loose(s: str) -> str:
     s = s.replace("\u00a7", "")
     s = s.replace("\u201c", '"').replace("\u201d", '"')
     s = s.replace("\u2018", "'").replace("\u2019", "'")
+    # Normalize dashes: em-dash, en-dash, double-hyphen all → single hyphen
+    s = s.replace("\u2014", "-").replace("\u2013", "-")
+    s = re.sub(r"--+", "-", s)
     return re.sub(r"\s+", " ", s.strip())
 
 
@@ -669,6 +675,13 @@ def _word_diff_fix(pymupdf_text: str, claude_text: str) -> str:
     # Strip tag markers from claude_text for comparison
     ct_clean = re.sub(r'\[([AD])>', '', claude_text)
     ct_clean = re.sub(r'<([AD])\]', '', ct_clean).strip()
+
+    # Normalize curly quotes/apostrophes before comparison
+    # so 'Iowa\u2019s' vs 'Iowa's' aren't flagged as different
+    pymupdf_text = pymupdf_text.replace("\u2018", "'").replace("\u2019", "'")
+    pymupdf_text = pymupdf_text.replace("\u201c", '"').replace("\u201d", '"')
+    ct_clean = ct_clean.replace("\u2018", "'").replace("\u2019", "'")
+    ct_clean = ct_clean.replace("\u201c", '"').replace("\u201d", '"')
 
     pw = pymupdf_text.split()
     cw = ct_clean.split()

@@ -268,6 +268,26 @@ def _load_excel(xlsx_path: Path) -> tuple[list[dict], list[dict], dict]:
                     if existing_notes else promotion_tag
                 )
 
+    # ── Retroactive: dash normalization is NOT an error ─────────────
+    # Em-dash, en-dash, and double-hyphen are all equivalent in
+    # legislative text.  Older audits flagged these as errors; promote
+    # them to pass.
+    _DASH_NORM_KEYWORDS = ("dash normalized", "dash character normalized",
+                           "dash normali")
+    for r in checklist:
+        verd = str(r.get("Verdict", "") or "")
+        if not verd.startswith("❌"):
+            continue
+        notes_lower = str(r.get("Notes", "") or "").lower()
+        if any(kw in notes_lower for kw in _DASH_NORM_KEYWORDS):
+            r["Verdict"] = "✅ pass"
+            r["Classification"] = "dash_normalized"
+            existing_notes = str(r.get("Notes", "") or "").strip()
+            tag = "[Auto-promoted to pass: dash normalization is not an error.]"
+            if tag not in existing_notes:
+                r["Notes"] = f"{existing_notes}  {tag}".strip() if existing_notes else tag
+            r["Suggested Fix"] = ""
+
     # ── Retroactive: IN decorative-header tag drops are EXPECTED ────
     # The IN clean-prompt instructs the LLM to STRIP [A>...<A] tags
     # from decorative headers (bill title, version label, A BILL FOR AN
@@ -1552,7 +1572,7 @@ def render_inline_validation_review(
 
     # ── Load data ───────────────────────────────────────────────────
     checklist, findings, summary = [], [], {}
-    if excel_path.exists():
+    if str(excel_path) and excel_path.exists() and excel_path.is_file():
         try:
             checklist, findings, summary = _load_excel(excel_path)
         except Exception as _xl_err:
