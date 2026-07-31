@@ -683,8 +683,13 @@ def test_split_midline_items_no_false_positive() -> None:
 import importlib.util
 import builtins
 from pathlib import Path as _Path
+import sys as _sys
 
 _opus_path = _Path(__file__).resolve().parent.parent / "Opus4.6" / "Claude_Opus_4.6_Test.py"
+# Ensure Opus4.6 dir is on sys.path so transitive imports (paragraph_break_detector, etc.) resolve
+_opus_dir = str(_opus_path.parent)
+if _opus_dir not in _sys.path:
+    _sys.path.insert(0, _opus_dir)
 _opus_spec = importlib.util.spec_from_file_location(
     "claude_opus_converter", str(_opus_path)
 )
