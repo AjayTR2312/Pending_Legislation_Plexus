@@ -48,7 +48,6 @@ import logging
 from pathlib import Path
 from datetime import datetime
 
-from paragraph_break_detector import strip_table_markers, pdf_unwrap_paragraphs
 try:
     from paragraph_break_detector import strip_table_markers, pdf_unwrap_paragraphs
 except ImportError:
