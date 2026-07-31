@@ -48,7 +48,15 @@ import logging
 from pathlib import Path
 from datetime import datetime
 
-from paragraph_break_detector import strip_table_markers, pdf_unwrap_paragraphs
+try:
+    from paragraph_break_detector import strip_table_markers, pdf_unwrap_paragraphs
+except ImportError:
+    # Optional in CI/test environments where runtime-only helpers are absent.
+    def strip_table_markers(text):
+        return text
+
+    def pdf_unwrap_paragraphs(text, *args, **kwargs):
+        return text
  
 import pypdfium2 as pdfium
 from PIL import Image
