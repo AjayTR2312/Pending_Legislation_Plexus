@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+<script>
+// ── Streamlit Bidirectional Component Protocol ──────────────────
+function _sendMsg(type, data) {
+    window.parent.postMessage(
+        Object.assign({isStreamlitMessage: true, type: type}, data || {}),
+        "*"
+    );
+}
+function setComponentValue(value) {
+    _sendMsg("streamlit:setComponentValue", {value: value});
+}
+function setReady() {
+    _sendMsg("streamlit:componentReady", {apiVersion: 1});
+    _sendMsg("streamlit:setFrameHeight", {height: 0});
+}
+
+// ── Listen on the PARENT window for Save messages from the viewer iframe ──
+// The viewer iframe (srcdoc) sends: window.parent.postMessage({type:'pdfCompareSave', text:...}, '*')
+// That message event fires ON window.parent. Since this bridge is same-origin
+// with the parent (served from localhost:8501), we CAN add a listener there.
+var _listenerAttached = false;
+function attachListener(){
+    if(_listenerAttached) return;
+    _listenerAttached = true;
+    try {
+        window.parent.addEventListener('message', function(evt){
+            if(evt.data && evt.data.type === 'pdfCompareSave' && evt.data.text){
+                console.log('[pdf_save_bridge] Received save message, length:', evt.data.text.length);
+                // Append timestamp to ensure Streamlit sees it as a NEW value every time
+                setComponentValue(evt.data.text);
+            }
+        });
+        console.log('[pdf_save_bridge] Listener attached on window.parent');
+    } catch(e) {
+        // Fallback: listen on own window
+        console.log('[pdf_save_bridge] Fallback: listening on own window');
+        window.addEventListener('message', function(evt){
+            if(evt.data && evt.data.type === 'pdfCompareSave' && evt.data.text){
+                setComponentValue(evt.data.text);
+            }
+        });
+    }
+}
+
+setReady();
+attachListener();
+</script>
+</head>
+<body style="margin:0;padding:0;overflow:hidden;height:0;"></body>
+</html>

@@ -681,6 +681,7 @@ def test_split_midline_items_no_false_positive() -> None:
 # ── _merge_page_break_paragraph_splits ───────────────────────────────
 
 import importlib.util
+import builtins
 from pathlib import Path as _Path
 
 _opus_path = _Path(__file__).resolve().parent.parent / "Opus4.6" / "Claude_Opus_4.6_Test.py"
@@ -690,6 +691,24 @@ _opus_spec = importlib.util.spec_from_file_location(
 _opus_mod = importlib.util.module_from_spec(_opus_spec)
 _opus_spec.loader.exec_module(_opus_mod)
 _merge_page_break_paragraph_splits = _opus_mod._merge_page_break_paragraph_splits
+
+
+def test_opus_import_without_optional_paragraph_break_detector(monkeypatch) -> None:
+    """Importing Opus script should not fail if optional runtime helper is missing."""
+    real_import = builtins.__import__
+
+    def _import_with_missing_optional(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "paragraph_break_detector":
+            raise ImportError("simulated missing optional module")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", _import_with_missing_optional)
+    spec = importlib.util.spec_from_file_location("claude_opus_converter_optional_missing", str(_opus_path))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    assert mod.strip_table_markers("sample text") == "sample text"
+    assert mod.pdf_unwrap_paragraphs("sample text", state_code="FL") == "sample text"
 
 
 def test_fl_merge_no_merge_list_conclusion_clause() -> None:

@@ -1397,6 +1397,8 @@ def _render_twocol_view(
                     if st.button("💾 Save Changes", type="primary", key="vri_save_edit", width="stretch"):
                         if _edit_buffer != text:
                             converted_txt_path.write_text(_edit_buffer, encoding="utf-8")
+                            # Sync session cache so Submit to Keyed uses the updated text
+                            st.session_state["processed_file_data"] = _edit_buffer.encode("utf-8")
                             st.session_state["vri_edit_mode"] = False
                             st.session_state.pop("vri_edit_text_buffer", None)
                             st.success("✅ File saved successfully!")
@@ -2404,6 +2406,7 @@ def render_inline_validation_review(
                                     updated = text.replace(original_context, new_text, 1)
                                     if updated != text:
                                         converted_txt_path.write_text(updated, encoding="utf-8")
+                                        st.session_state["processed_file_data"] = updated.encode("utf-8")
                                         affected = _find_affected_items(
                                             checklist, fixed_ids,
                                             original_context, new_text, cid,
@@ -2466,6 +2469,7 @@ def render_inline_validation_review(
                                         updated = text.replace(original_context, new_text, 1)
                                         if updated != text:
                                             converted_txt_path.write_text(updated, encoding="utf-8")
+                                            st.session_state["processed_file_data"] = updated.encode("utf-8")
                                             _mark_fixed(cid)
                                             _save_undo_history(
                                                 [cid], original_context,

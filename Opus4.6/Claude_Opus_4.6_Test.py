@@ -49,6 +49,15 @@ from pathlib import Path
 from datetime import datetime
 
 from paragraph_break_detector import strip_table_markers, pdf_unwrap_paragraphs
+try:
+    from paragraph_break_detector import strip_table_markers, pdf_unwrap_paragraphs
+except ImportError:
+    # Optional in CI/test environments where runtime-only helpers are absent.
+    def strip_table_markers(text):
+        return text
+
+    def pdf_unwrap_paragraphs(text, *args, **kwargs):
+        return text
  
 import pypdfium2 as pdfium
 from PIL import Image
@@ -87,6 +96,7 @@ try:
         _split_in_midline_items, _split_in_section_heading_welds,
         _strip_ks_header_tags, _strip_ks_signature_block_tags,
         _inject_ks_signature_lines,
+        _strip_ca_signature_block_tags,
         _strip_fl_repeated_headers,
         pre_merge_paragraph_tags, _clean_tagged_text,
         remove_nested_tags, merge_split_tags, split_tagged_subsections,
@@ -1746,6 +1756,10 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
                 _doc.close()
             except Exception as _sig_err:
                 logging.warning("KS signature line re-injection failed: %s", _sig_err)
+
+        # CA-specific: strip false [A>…<A] tags from signature block
+        if state_code and state_code.upper() == "CA":
+            merged = _strip_ca_signature_block_tags(merged)
 
         # FL-specific: deterministically strip repeated page headers/footers.
         # Catches ALL bill-header variations (CS, CS for CS, engrossed,

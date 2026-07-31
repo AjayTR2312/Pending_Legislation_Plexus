@@ -108,7 +108,12 @@ def _submit_to_keyed_sftp(file_path: str, edited_text: str = None):
     """
     try:
         from dotenv import load_dotenv as _ld
-        _ld()
+        # .env may be in parent dir (project root) or cwd
+        _env_path = Path(__file__).resolve().parent.parent / ".env"
+        if _env_path.exists():
+            _ld(dotenv_path=str(_env_path))
+        else:
+            _ld()
     except ImportError:
         pass
     import paramiko
@@ -4321,13 +4326,12 @@ def show_simple_ui():
             if _file_to_submit and os.path.exists(_file_to_submit):
                 if st.button("🚀 Submit to Keyed", use_container_width=True, key="header_submit_keyed_btn"):
                     try:
-                        _edited_text = None
-                        _cached = st.session_state.get('processed_file_data')
-                        if _cached is not None:
-                            _edited_text = _cached.decode('utf-8', errors='replace') if isinstance(_cached, bytes) else _cached
-                        _submit_to_keyed_sftp(_file_to_submit, edited_text=_edited_text)
+                        _was_edited = st.session_state.get('_compare_already_saved', False)
+                        _submit_to_keyed_sftp(_file_to_submit)
                         st.session_state['_last_submitted_name'] = Path(_file_to_submit).name
-                        st.toast(f"Submitted to /ftp/keyed", icon="✅")
+                        _msg = "Submitted with edits" if _was_edited else "Submitted"
+                        st.toast(f"{_msg} → /ftp/keyed", icon="✅")
+                        logging.info(f"[Submit to Keyed] Uploaded {Path(_file_to_submit).name} (edited={_was_edited})")
                     except Exception as _upload_err:
                         st.error(f"❌ Upload failed: {_upload_err}")
         # Show submitted confirmation bar below file info (full width, matches info bar style)
@@ -5406,7 +5410,23 @@ def show_results_section():
             try:
                 with open(_pdf_path, 'rb') as _pf:
                     _pdf_bytes = _pf.read()
-                # Read the output text (prefer cached bytes)
+
+                # ── Pre-check: if bridge component returned a save value on the
+                # PREVIOUS rerun, apply it NOW before building the viewer so
+                # the viewer shows updated text on this render (no double-render).
+                _pending_save = st.session_state.get('pdf_save_bridge_v2')
+                if _pending_save and len(_pending_save) > 5:
+                    _current_data = st.session_state.get('processed_file_data')
+                    _current_text = _current_data.decode('utf-8', errors='replace') if isinstance(_current_data, bytes) else (_current_data or '')
+                    if _pending_save != _current_text:
+                        st.session_state['processed_file_data'] = _pending_save.encode('utf-8')
+                        with open(_txt_path, 'w', encoding='utf-8') as _wf:
+                            _wf.write(_pending_save)
+                        st.session_state['_compare_already_saved'] = True
+                        st.session_state['_show_save_success'] = True
+                        logging.info(f"[PDF Compare Save] Saved {len(_pending_save)} chars to {_txt_path}")
+
+                # Read the output text (prefer cached bytes — now includes any just-saved edits)
                 _txt_data = st.session_state.get('processed_file_data')
                 if _txt_data is None:
                     with open(_txt_path, 'r', encoding='utf-8') as _tf:
@@ -5439,6 +5459,21 @@ def show_results_section():
                 # iframe content area, the user can still scroll inside
                 # the iframe to reach the bottom.
                 st.components.v1.html(_viewer_html, height=1400, scrolling=True)
+
+                # ── Save bridge component (always rendered) ───────────────────
+                _save_component_dir = Path(__file__).parent / "pdf_save_component"
+                _pdf_save_comp = st.components.v1.declare_component("pdf_save_bridge", path=str(_save_component_dir))
+                _pdf_save_comp(key="pdf_save_bridge_v2", default=None)
+
+                # Show save confirmation after rerun
+                if st.session_state.pop('_show_save_success', False):
+                    st.toast("✅ Changes saved successfully!", icon="💾")
+                    st.success("✅ Changes saved! Click **Submit to Keyed** to upload with your edits.")
+
+                # Show persistent save indicator
+                if st.session_state.get('_compare_already_saved'):
+                    st.caption("💾 _Edits saved — Submit to Keyed will include your changes._")
+
             except Exception as _cmp_err:
                 st.error(f"❌ Could not render PDF ↔ Text Compare viewer: {_cmp_err}")
                 logging.error(f"PDF Compare viewer error: {_cmp_err}", exc_info=True)
@@ -5733,19 +5768,17 @@ def show_results_section():
                 _file_to_submit = st.session_state.processed_file_path
                 if _file_to_submit and os.path.exists(_file_to_submit):
                     try:
-                        # Get the latest text content (may have been edited by HITL)
-                        _edited_text = None
-                        _cached = st.session_state.get('processed_file_data')
-                        if _cached is not None:
-                            _edited_text = _cached.decode('utf-8', errors='replace') if isinstance(_cached, bytes) else _cached
-                        _submit_to_keyed_sftp(_file_to_submit, edited_text=_edited_text)
-                        st.toast(f"Submitted to /ftp/keyed", icon="✅")
+                        _was_edited = st.session_state.get('_compare_already_saved', False)
+                        _submit_to_keyed_sftp(_file_to_submit)
+                        _msg = "Submitted with edits" if _was_edited else "Submitted"
+                        st.toast(f"{_msg} → /ftp/keyed", icon="✅")
+                        logging.info(f"[Submit to Keyed] Uploaded {Path(_file_to_submit).name} (edited={_was_edited})")
                         st.markdown(
                             f'<div style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:10px; '
                             f'padding:12px 20px; display:flex; align-items:center; gap:12px; margin-bottom:8px; '
                             f'box-shadow:0 1px 4px rgba(0,0,0,.04);">'
                             f'<span style="font-size:1.2rem;">✅</span>'
-                            f'<span style="font-weight:600; color:#166534;">Submitted</span>'
+                            f'<span style="font-weight:600; color:#166534;">{_msg}</span>'
                             f'<span style="font-size:0.88rem; color:#1e293b; word-break:break-all;">{Path(_file_to_submit).name}</span>'
                             f'<span style="margin-left:auto; color:#64748b; font-size:0.85rem;">→ /ftp/keyed</span>'
                             f'</div>',
