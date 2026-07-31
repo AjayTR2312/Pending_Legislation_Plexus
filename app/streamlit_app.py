@@ -4590,6 +4590,37 @@ def show_simple_ui():
                                 _det_state = _selected_session.name.split("_")[0]
                                 st.session_state.detected_state = _det_state
                                 st.session_state.processing_time = "pipeline"
+
+                                # ── Run validation if reports don't exist yet ──────
+                                _acc_json = _chosen_file.parent / f"{_chosen_file.stem}_accuracy.json"
+                                if not _acc_json.exists() and _src_pdf.exists():
+                                    try:
+                                        import importlib.util as _ilu
+                                        _pr_spec = _ilu.spec_from_file_location(
+                                            "pipeline_runner",
+                                            str(Path(__file__).parent / "pipeline_runner.py"),
+                                        )
+                                        _pr_mod = _ilu.module_from_spec(_pr_spec)
+                                        _pr_spec.loader.exec_module(_pr_mod)
+                                        _converted_text = _chosen_file.read_text(encoding="utf-8")
+                                        _pr_mod.validate_output(
+                                            str(_chosen_file), str(_src_pdf),
+                                            _det_state, _converted_text,
+                                        )
+                                        logging.info(f"[Pipeline] Ran validation for existing file: {_chosen_file.name}")
+                                    except Exception as _val_err:
+                                        logging.warning(f"[Pipeline] Validation on load failed: {_val_err}")
+
+                                # Load accuracy report into session state if available
+                                if _acc_json.exists():
+                                    try:
+                                        import json as _json
+                                        st.session_state.content_accuracy_report = _json.loads(
+                                            _acc_json.read_text(encoding="utf-8")
+                                        )
+                                    except Exception:
+                                        pass
+
                                 st.success(f"Loaded: {_chosen_file.name}")
                                 st.rerun()
                         with _col_submit_one:
@@ -4651,7 +4682,8 @@ def show_simple_ui():
         # ── Validate all files ────────────────────────────────────────────
         MAX_TOTAL_SIZE = 5 * 1024 * 1024   # 5 MB total for all files combined
         MAX_BATCH = 20
-        MAX_PAGES = 15
+        MAX_PAGES = 15              # Default page limit for PyMuPDF/Hybrid modes
+        MAX_PAGES_VISION = 50       # Higher limit for Vision mode (scanned PDFs, CO state)
         valid_files = []
         skipped_names = []
         skipped_size_names = []
@@ -4669,8 +4701,26 @@ def show_simple_ui():
                 # Only enforce page limit for batch uploads (>1 file).
                 # Single files are allowed through — the UI shows Hybrid/Extract+Clean buttons instead.
                 if _pc > MAX_PAGES and len(uploaded_files) > 1:
-                    skipped_names.append(f"{uf.name} ({_pc} pages)")
-                    continue
+                    # Check if this file would use Vision mode (CO state or scanned PDF)
+                    # — if so, allow up to MAX_PAGES_VISION
+                    _is_vision_file = False
+                    try:
+                        import pymupdf as _pym
+                        _doc = _pym.open(stream=_bytes, filetype="pdf")
+                        _p1 = _doc[0].get_text("text")[:4000] if len(_doc) > 0 else ""
+                        _doc.close()
+                        # CO state detection
+                        if any(m in _p1.upper() for m in ("STATE OF COLORADO", "COLORADO GENERAL ASSEMBLY", "LLS NO.")):
+                            _is_vision_file = True
+                        # Scanned PDF detection (very little extractable text)
+                        elif len(_p1.strip()) < 50:
+                            _is_vision_file = True
+                    except Exception:
+                        pass
+                    _effective_limit = MAX_PAGES_VISION if _is_vision_file else MAX_PAGES
+                    if _pc > _effective_limit:
+                        skipped_names.append(f"{uf.name} ({_pc} pages)")
+                        continue
             except Exception:
                 pass  # if we can't check, let it through — batch upload will catch it
 

@@ -263,7 +263,102 @@ def convert_pdf(pdf_path: str, state_code: str, output_dir: Path) -> str | None:
         f.write(converted_text)
 
     log.info(f"    [OK] {output_filename} ({len(converted_text):,} chars)")
+
+    # ── Run validation checks ─────────────────────────────────────────────
+    validate_output(str(output_path), pdf_path, state_code, converted_text)
+
     return str(output_path)
+
+
+def validate_output(output_path: str, pdf_path: str, state_code: str, converted_text: str):
+    """Run validation checks on a converted file and save reports.
+
+    Matches the Streamlit UI validation flow:
+    1. Content Accuracy — word-level precleaned vs final output
+    2. Tag Validation — PyMuPDF formatting report vs tagged text (vision audit)
+
+    Reports are saved as JSON/XLSX siblings alongside the output file.
+    """
+    output = Path(output_path)
+    stem = output.stem
+
+    # ── Extract raw PyMuPDF text (needed as precleaned baseline) ───────────
+    raw_text = None
+    try:
+        sys.path.insert(0, str(Path(__file__).parent))
+        from pymupdf_extractor import extract_text_with_formatting
+        result = extract_text_with_formatting(pdf_path)
+        raw_text = result.get("text") if isinstance(result, dict) else result
+        log.info(f"    [VALIDATE] Raw extraction: {len(raw_text):,} chars")
+    except Exception as e:
+        log.warning(f"    [VALIDATE] Could not extract raw text: {e}")
+
+    # ── 1. Content Accuracy Check (precleaned vs final) ────────────────────
+    try:
+        from content_accuracy_checker import check_content_accuracy
+        if raw_text and converted_text:
+            content_report = check_content_accuracy(raw_text, converted_text)
+            c_acc = content_report.get("accuracy", 0)
+            c_icon = "✅" if c_acc >= 99 else "⚠️" if c_acc >= 95 else "❌"
+            log.info(f"    {c_icon} Content accuracy: {c_acc:.1f}%")
+
+            content_json_path = output.parent / f"{stem}_content_accuracy.json"
+            import json as _json
+            with open(content_json_path, "w", encoding="utf-8") as f:
+                _json.dump(content_report, f, indent=2, ensure_ascii=False, default=str)
+            log.info(f"    📊 Content accuracy report: {content_json_path.name}")
+    except ImportError:
+        log.warning("    [VALIDATE] content_accuracy_checker not available — skipping")
+    except Exception as e:
+        log.warning(f"    [VALIDATE] Content accuracy check failed: {e}")
+
+    # ── 2. Tag Validation (PyMuPDF report vs tagged text, vision audit) ────
+    try:
+        from pymupdf_extractor import extract_text_with_formatting, highlight_pdf_formatting
+        sys.path.insert(0, str(OPUS_DIR))
+        from pymupdf_compare import pymupdf_compare_tags
+
+        # Get the formatting report
+        report_result = extract_text_with_formatting(pdf_path, include_report=True)
+        pymupdf_report = report_result.get("report") if isinstance(report_result, dict) else None
+
+        if pymupdf_report:
+            # Render highlighted images
+            highlight_dir = output.parent / f"{Path(pdf_path).stem}_highlighted"
+            hi_imgs = highlight_pdf_formatting(pdf_path, report=pymupdf_report, output_dir=highlight_dir)
+
+            import base64
+            hi_images_b64 = []
+            for img_file in sorted(highlight_dir.glob("page_*.png")):
+                hi_images_b64.append(base64.b64encode(img_file.read_bytes()).decode())
+
+            if hi_images_b64:
+                audit_xlsx = str(output.parent / f"{stem}_tag_validation.xlsx")
+                audit_summary = pymupdf_compare_tags(
+                    highlighted_images_b64=hi_images_b64,
+                    pymupdf_report=pymupdf_report,
+                    pymupdf_clean_text=converted_text,
+                    state_code=state_code,
+                    state_rules=f"State: {state_code}",
+                    output_xlsx=audit_xlsx,
+                )
+                _passes = audit_summary.get("passes", 0)
+                _warns = audit_summary.get("warnings", 0)
+                log.info(f"    🔍 Tag validation: {_passes} pass, {_warns} warnings → {Path(audit_xlsx).name}")
+    except ImportError as ie:
+        log.warning(f"    [VALIDATE] Tag validation modules not available: {ie}")
+    except Exception as e:
+        log.warning(f"    [VALIDATE] Tag validation failed: {e}")
+
+    # Save a summary flag so the UI knows validation ran
+    try:
+        import json as _json
+        _acc_json = output.parent / f"{stem}_accuracy.json"
+        _summary = {"validated": True, "state_code": state_code, "checks": ["content_accuracy", "tag_validation"]}
+        with open(_acc_json, "w", encoding="utf-8") as f:
+            _json.dump(_summary, f, indent=2)
+    except Exception:
+        pass
 
 
 def convert_all(extracted_files: list[dict]) -> list[dict]:
