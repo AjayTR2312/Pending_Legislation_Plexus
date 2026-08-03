@@ -27,43 +27,43 @@ except ImportError:
     process_pdf_with_claude = save_to_text_file = remove_unwanted_tags = None
     AVAILABLE_STATES = {}
     read_file_content = verify_text_with_llm = save_verified_file = create_verification_report = None
-    logging.warning("⚠️ pdf_to_text_llm module not found — legacy pipeline disabled")
+    logging.warning("pdf_to_text_llm module not found - legacy pipeline disabled")
 try:
     from pdf_docx_analysis_pipeline import PDFToDocxAnalysisPipeline
 except ImportError:
     PDFToDocxAnalysisPipeline = None
-    logging.warning("⚠️ pdf_docx_analysis_pipeline module not found — DOCX analysis disabled")
+    logging.warning("pdf_docx_analysis_pipeline module not found - DOCX analysis disabled")
 try:
     from session_manager import get_session_manager
 except ImportError:
     get_session_manager = None
-    logging.critical("❌ session_manager module not found — app cannot function")
+    logging.critical("session_manager module not found - app cannot function")
 try:
     from pdf_plumber_extractor import extract_pdf_with_pdfplumber
 except ImportError:
     extract_pdf_with_pdfplumber = None
-    logging.warning("⚠️ pdf_plumber_extractor module not found — pdfplumber extraction disabled")
+    logging.warning("pdf_plumber_extractor module not found - pdfplumber extraction disabled")
 try:
     from text_to_clean_prompt import convert_pdfplumber_to_clean
 except ImportError:
     convert_pdfplumber_to_clean = None
-    logging.warning("⚠️ text_to_clean_prompt module not found — pdfplumber clean pipeline disabled")
+    logging.warning("text_to_clean_prompt module not found - pdfplumber clean pipeline disabled")
 try:
     from tag_then_clean_pipeline import tag_then_clean_pipeline
 except ImportError:
     tag_then_clean_pipeline = None
-    logging.warning("⚠️ tag_then_clean_pipeline module not found — tag-then-clean pipeline disabled")
+    logging.warning("tag_then_clean_pipeline module not found - tag-then-clean pipeline disabled")
 try:
     from validation_review_inline import render_inline_validation_review
 except ImportError:
     render_inline_validation_review = None
-    logging.warning("⚠️ validation_review_inline module not found — validation review disabled")
+    logging.warning("validation_review_inline module not found - validation review disabled")
 try:
     from state_id_lookup import detect_state_from_numerical_id, get_state_name as _id_state_name
 except ImportError:
     detect_state_from_numerical_id = None
     _id_state_name = None
-    logging.warning("⚠️ state_id_lookup module not found — numerical ID state detection disabled")
+    logging.warning("state_id_lookup module not found - numerical ID state detection disabled")
 try:
     # Ensure Opus4.6 dir is on path for compare_files
     _opus46 = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'Opus4.6'))
@@ -72,22 +72,22 @@ try:
     from compare_files import compare_texts
 except ImportError:
     compare_texts = None
-    logging.warning("⚠️ compare_files module not found — content accuracy check disabled")
+    logging.warning("compare_files module not found - content accuracy check disabled")
 try:
     from protected_clauses import strip_protected_tags
 except ImportError:
     strip_protected_tags = None
-    logging.warning("⚠️ protected_clauses module not found — protected clause stripping disabled")
+    logging.warning("protected_clauses module not found - protected clause stripping disabled")
 try:
     from pdf_type_detector import detect_pdf_type
 except ImportError:
     detect_pdf_type = None
-    logging.warning("⚠️ pdf_type_detector module not found — scanned PDF detection disabled")
+    logging.warning("pdf_type_detector module not found - scanned PDF detection disabled")
 try:
     from pdf_margin_cropper import auto_crop_if_needed
 except ImportError:
     auto_crop_if_needed = None
-    logging.warning("⚠️ pdf_margin_cropper module not found — broad-margin auto-crop disabled")
+    logging.warning("pdf_margin_cropper module not found - broad-margin auto-crop disabled")
 try:
     from pdf_compare_viewer import (
         render_pdf_pages as compare_render_pdf_pages,
@@ -98,7 +98,7 @@ try:
 except ImportError:
     compare_render_pdf_pages = compare_extract_word_bboxes = None
     compare_build_word_level_map = compare_build_viewer_html = None
-    logging.warning("⚠️ pdf_compare_viewer module not found — PDF↔Text compare viewer disabled")
+    logging.warning("pdf_compare_viewer module not found - PDF<->Text compare viewer disabled")
 
 # ── SFTP Submit to Keyed helper ────────────────────────────────────────────
 def _submit_to_keyed_sftp(file_path: str, edited_text: str = None):
