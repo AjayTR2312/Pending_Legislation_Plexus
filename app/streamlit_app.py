@@ -10,12 +10,11 @@ import logging
 import threading
 import copy
 
-# Configure logging early so module-level warnings don't hit a closed sys.stderr
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    stream=sys.stdout,
-)
+# Streamlit re-executes this script on every rerun; sys.stdout/stderr can be
+# replaced or closed between reruns, so avoid any stream-backed handler here.
+# setup_simple_logging() (called later in the script) installs real handlers.
+logging.getLogger().addHandler(logging.NullHandler())
+logging.raiseExceptions = False  # prevent handler I/O failures from crashing the app
 
 # Add the current directory and the project root to the Python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -535,29 +534,36 @@ except Exception as e:
 
 def setup_simple_logging():
     """Setup simple logging for the app with session-specific folder"""
-    # Clear any existing handlers to prevent duplicates
+    fmt = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+
+    # Close file handles before removing to avoid descriptor leaks across reruns
     for handler in logging.root.handlers[:]:
+        try:
+            handler.close()
+        except Exception:
+            pass
         logging.root.removeHandler(handler)
-        
+
+    logging.root.setLevel(logging.INFO)
+
     current_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     log_file_path = os.path.join(LOG_FOLDER, f'simple_app_{current_time}.log')
-    
-    import sys as _sys
-    try:
-        _stream = open(_sys.stderr.fileno(), mode='w', encoding='utf-8', closefd=False)
-    except (ValueError, OSError):
-        _stream = _sys.stdout
-    _stream_handler = logging.StreamHandler(_stream)
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(log_file_path, encoding="utf-8"),
-            _stream_handler,
-        ]
-    )
-    
+    try:
+        fh = logging.FileHandler(log_file_path, encoding="utf-8")
+        fh.setFormatter(fmt)
+        logging.root.addHandler(fh)
+    except Exception:
+        pass  # log folder unavailable; continue without file logging
+
+    try:
+        _stream = open(sys.stderr.fileno(), mode='w', encoding='utf-8', closefd=False)
+    except (ValueError, OSError):
+        _stream = sys.stdout
+    sh = logging.StreamHandler(_stream)
+    sh.setFormatter(fmt)
+    logging.root.addHandler(sh)
+
     logging.info(f"Session-specific logging configured. Logs saved to: {log_file_path}")
     logging.info(f"Session ID: {st.session_state.session_id}")
     return log_file_path
