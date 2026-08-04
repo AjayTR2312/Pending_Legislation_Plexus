@@ -2,7 +2,8 @@
 # Python 3.11+ required
 
 # Core Streamlit Framework
-streamlit>=1.51.0
+# Pin upper bound; 1.60.0 changed stderr handling and breaks logging on rerun
+streamlit>=1.51.0,<1.60.0
 
 # AI/LLM Integration
 anthropic>=0.73.0
