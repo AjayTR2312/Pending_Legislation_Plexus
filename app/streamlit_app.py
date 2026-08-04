@@ -10,6 +10,13 @@ import logging
 import threading
 import copy
 
+# Configure logging early so module-level warnings don't hit a closed sys.stderr
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    stream=sys.stdout,
+)
+
 # Add the current directory and the project root to the Python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -536,8 +543,11 @@ def setup_simple_logging():
     log_file_path = os.path.join(LOG_FOLDER, f'simple_app_{current_time}.log')
     
     import sys as _sys
-    _stream_handler = logging.StreamHandler()
-    _stream_handler.stream = open(_sys.stderr.fileno(), mode='w', encoding='utf-8', closefd=False)
+    try:
+        _stream = open(_sys.stderr.fileno(), mode='w', encoding='utf-8', closefd=False)
+    except (ValueError, OSError):
+        _stream = _sys.stdout
+    _stream_handler = logging.StreamHandler(_stream)
 
     logging.basicConfig(
         level=logging.INFO,
@@ -548,8 +558,8 @@ def setup_simple_logging():
         ]
     )
     
-    logging.info(f"✅ Session-specific logging configured. Logs saved to: {log_file_path}")
-    logging.info(f"📁 Session ID: {st.session_state.session_id}")
+    logging.info(f"Session-specific logging configured. Logs saved to: {log_file_path}")
+    logging.info(f"Session ID: {st.session_state.session_id}")
     return log_file_path
 
 # Utility functions
