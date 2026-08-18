@@ -99,6 +99,7 @@ try:
         _strip_fl_repeated_headers,
         pre_merge_paragraph_tags, _clean_tagged_text,
         remove_nested_tags, merge_split_tags, split_tagged_subsections,
+        split_ar_subsection_welds,
         split_renumber_paragraph_breaks, split_numbered_item_paragraph_welds,
         rejoin_amendment_intro_breaks,
         rejoin_inline_renumber_list_breaks,
@@ -1792,6 +1793,8 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         merged = consolidate_adjacent_tags(merged, state_code=state_code)
         merged = remove_nested_tags(merged)
         merged = merge_split_tags(merged)
+        if state_code and state_code.upper() == "AR":
+            merged = split_ar_subsection_welds(merged)
         if state_code and state_code.upper() == "IA":
             merged = _split_tagged_subsections_safe(merged)
         # Restore paragraph breaks at renumber-only [D>(N)<D] [A>(M)<A] /

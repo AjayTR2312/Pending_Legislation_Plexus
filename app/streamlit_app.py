@@ -2447,6 +2447,7 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
                     clean_extracted_text,
                     consolidate_adjacent_tags,
                     merge_cross_page_break_tags,
+                    split_ar_subsection_welds,
                 )
 
                 # Determine state-specific marking flags
@@ -2519,9 +2520,13 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
                     anthropic_client=client,
                     mark_brackets=_mark_flags.get("mark_brackets", False),
                 )
-                pymupdf_clean_text = consolidate_adjacent_tags(pymupdf_clean_text)
+                pymupdf_clean_text = consolidate_adjacent_tags(
+                    pymupdf_clean_text, state_code=detected_state
+                )
                 pymupdf_clean_text = opus.remove_nested_tags(pymupdf_clean_text)
                 pymupdf_clean_text = opus.merge_split_tags(pymupdf_clean_text)
+                if detected_state and detected_state.upper() == "AR":
+                    pymupdf_clean_text = split_ar_subsection_welds(pymupdf_clean_text)
                 # Merge same-paragraph tags split across a page break.
                 pymupdf_clean_text = merge_cross_page_break_tags(pymupdf_clean_text)
                 pymupdf_clean_text = opus.split_tagged_subsections(pymupdf_clean_text)
@@ -2545,6 +2550,20 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
                     with open(diff_path, "w", encoding="utf-8") as df:
                         df.write(_diff_report)
                     add_log(f"📋 LLM diff report saved: {diff_path}")
+
+                _preclean_guard = getattr(clean_extracted_text, '_last_preclean_guard', None)
+                if _preclean_guard:
+                    guard_path = pymupdf_clean_path.replace("_pymupdf_clean.txt", "_preclean_guard.txt")
+                    with open(guard_path, "w", encoding="utf-8") as gf:
+                        gf.write(_json.dumps(_preclean_guard, indent=2, ensure_ascii=False))
+                    if _preclean_guard.get("ok"):
+                        add_log("✅ Pre-clean guard passed (only line-number artifacts removed)")
+                    else:
+                        add_log(
+                            f"⚠️ Pre-clean guard failed: {_preclean_guard.get('unexpected_removed_count', 0)} unexpected removals",
+                            "warning",
+                        )
+                    add_log(f"📋 Pre-clean guard report saved: {guard_path}")
 
                 # Rebuild report context using cleaned text for better anchor matching
                 if pymupdf_report:
@@ -2866,6 +2885,7 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
             clean_extracted_text,
             consolidate_adjacent_tags,
             merge_cross_page_break_tags,
+            split_ar_subsection_welds,
         )
 
         # Determine state-specific marking flags
@@ -2938,9 +2958,13 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
                     self.output_tokens = d.get('output_tokens', 0)
             opus._track_usage("LLM Clean", _UsageObj(_clean_usage), _clean_usage.get('model', 'claude-opus-4-6'))
 
-        pymupdf_clean_text = consolidate_adjacent_tags(pymupdf_clean_text)
+        pymupdf_clean_text = consolidate_adjacent_tags(
+            pymupdf_clean_text, state_code=detected_state
+        )
         pymupdf_clean_text = opus.remove_nested_tags(pymupdf_clean_text)
         pymupdf_clean_text = opus.merge_split_tags(pymupdf_clean_text)
+        if detected_state and detected_state.upper() == "AR":
+            pymupdf_clean_text = split_ar_subsection_welds(pymupdf_clean_text)
         # Merge same-paragraph tags split across a page break.
         pymupdf_clean_text = merge_cross_page_break_tags(pymupdf_clean_text)
         pymupdf_clean_text = opus.split_tagged_subsections(pymupdf_clean_text)
@@ -2981,6 +3005,20 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
                 df.write(_diff_report)
             add_log(f"📋 LLM diff report saved")
 
+        _preclean_guard = getattr(clean_extracted_text, '_last_preclean_guard', None)
+        if _preclean_guard:
+            guard_path = output_path.replace(".txt", "_preclean_guard.txt")
+            with open(guard_path, "w", encoding="utf-8") as gf:
+                gf.write(_json.dumps(_preclean_guard, indent=2, ensure_ascii=False))
+            if _preclean_guard.get("ok"):
+                add_log("✅ Pre-clean guard passed (only line-number artifacts removed)")
+            else:
+                add_log(
+                    f"⚠️ Pre-clean guard failed: {_preclean_guard.get('unexpected_removed_count', 0)} unexpected removals",
+                    "warning",
+                )
+            add_log(f"📋 Pre-clean guard report saved")
+
         # Rebuild report context using cleaned text for better anchor matching
         if pymupdf_report:
             try:
@@ -3006,12 +3044,14 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
         update_progress()
 
         # ── Content Accuracy Check ─────────────────────────────────────
-        # Use pre-cleaned text as ground truth and pass LLM-removed lines
-        # so any content the LLM intentionally removed is not penalized.
+        # Use a dedicated accuracy reference text (artifact-stripped),
+        # while keeping saved _pre_cleaned as strict line-number-only
+        # cleanup + LLM input reference.
         st.session_state.content_accuracy_report = None
         _removals_json = output_path.replace(".txt", "_removals.json")
         _accuracy_json = output_path.replace(".txt", "_accuracy.json")
-        _accuracy_raw = _pre_cleaned if _pre_cleaned else pymupdf_text
+        _pre_cleaned_accuracy = getattr(clean_extracted_text, '_last_pre_cleaned_accuracy', None)
+        _accuracy_raw = _pre_cleaned_accuracy if _pre_cleaned_accuracy else (_pre_cleaned if _pre_cleaned else pymupdf_text)
         # Extract lines removed by LLM (in pre-cleaned but not in final output)
         _llm_removed = None
         if _pre_cleaned:
@@ -4445,7 +4485,7 @@ def show_simple_ui():
         if _input_mode == "📁 Upload PDF Files":
             # Full upload section — before processing
             st.header("📁 Upload PDF Files")
-            st.caption("Upload one file for single processing, or multiple files (up to 20, max 5 MB total) for serial batch processing.")
+            st.caption("Upload one file for single processing, or multiple files (up to 20, max 50 MB total) for serial batch processing.")
             _uploader_key = f"pdf_uploader_{st.session_state.uploader_key_counter}"
             uploaded_files = st.file_uploader(
                 "Choose PDF file(s) to process",
@@ -6124,6 +6164,7 @@ class BatchWorker:
                 clean_extracted_text,
                 consolidate_adjacent_tags,
                 merge_cross_page_break_tags,
+                split_ar_subsection_welds,
             )
 
             # Determine state-specific marking flags
@@ -6187,9 +6228,13 @@ class BatchWorker:
                     anthropic_client=client,
                     mark_brackets=_mark_flags.get("mark_brackets", False),
                 )
-                pymupdf_clean_text = consolidate_adjacent_tags(pymupdf_clean_text)
+                pymupdf_clean_text = consolidate_adjacent_tags(
+                    pymupdf_clean_text, state_code=detected_state
+                )
                 pymupdf_clean_text = opus.remove_nested_tags(pymupdf_clean_text)
                 pymupdf_clean_text = opus.merge_split_tags(pymupdf_clean_text)
+                if detected_state and detected_state.upper() == "AR":
+                    pymupdf_clean_text = split_ar_subsection_welds(pymupdf_clean_text)
                 # Merge same-paragraph tags split across a page break.
                 pymupdf_clean_text = merge_cross_page_break_tags(pymupdf_clean_text)
                 pymupdf_clean_text = opus.split_tagged_subsections(pymupdf_clean_text)
@@ -6214,6 +6259,20 @@ class BatchWorker:
                     with open(diff_path, "w", encoding="utf-8") as df:
                         df.write(_diff_report)
                     add_log(f"📋 LLM diff report saved")
+
+                _preclean_guard = getattr(clean_extracted_text, '_last_preclean_guard', None)
+                if _preclean_guard:
+                    guard_path = pymupdf_clean_path.replace("_pymupdf_clean.txt", "_preclean_guard.txt")
+                    with open(guard_path, "w", encoding="utf-8") as gf:
+                        gf.write(_json.dumps(_preclean_guard, indent=2, ensure_ascii=False))
+                    if _preclean_guard.get("ok"):
+                        add_log("✅ Pre-clean guard passed (only line-number artifacts removed)")
+                    else:
+                        add_log(
+                            f"⚠️ Pre-clean guard failed: {_preclean_guard.get('unexpected_removed_count', 0)} unexpected removals",
+                            "warning",
+                        )
+                    add_log(f"📋 Pre-clean guard report saved")
 
                 # Rebuild report context using cleaned text for better anchor matching
                 if pymupdf_report:

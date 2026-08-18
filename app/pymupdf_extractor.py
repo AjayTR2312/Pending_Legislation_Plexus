@@ -2249,12 +2249,15 @@ _RE_LINE_NUMBER_BETWEEN_TAGS = re.compile(
 _RE_CURRENCY_PADDING = re.compile(r"(\$)[ \t]{2,}(\d)")
 
 
-def _strip_repeating_page_artifacts(text: str) -> str:
+def _strip_repeating_page_artifacts(text: str, *, min_repeats: int = 3) -> str:
     """Remove short lines that repeat across multiple pages.
 
     Splits text on ``--- Page N ---`` markers, collects short lines
     (≤10 words) from the first/last few lines of each page, and removes
-    any that appear on ≥2 pages.  This catches repeating headers like
+    any that appear on enough pages to be confidently non-legislative
+    artifacts.  By default this requires ≥3 pages to avoid stripping
+    legitimate text that appears twice in amendment/duplicate sections.
+    This catches repeating headers like
     "ENROLLED ORIGINAL", footer stamps, bill numbers, etc.
     """
     _PAGE_SEP = re.compile(r"^---\s*Page\s+\d+\s*---$", re.MULTILINE)
@@ -2277,14 +2280,14 @@ def _strip_repeating_page_artifacts(text: str) -> str:
         for c in candidates:
             _candidate_counts[c] += 1
 
-    # Lines appearing on ≥2 pages are artifacts — but only if they have
+    # Lines appearing on multiple pages are artifacts — but only if they have
     # ≥2 words.  Single-word lines like "section." are often legitimate
     # legislative text split across a page boundary, not artifacts.
     # Also exclude lines >60 chars — long lines like
     # "repair, expansion, construction, equipping, renovation, purchase, improvement"
     # are real bill text that happens to repeat across sections, not artifacts.
     artifacts = {line for line, count in _candidate_counts.items()
-                 if count >= 2 and len(line) >= 3 and len(line.split()) >= 2
+                 if count >= max(2, min_repeats) and len(line) >= 3 and len(line.split()) >= 2
                  and len(line) <= 60}
     if not artifacts:
         return text
@@ -5317,6 +5320,72 @@ def _generate_clean_diff_report(
     return report
 
 
+def _strip_line_number_artifacts_from_line(line: str) -> str:
+    """Return *line* with common line-number artifacts removed.
+
+    This is used by the pre-clean guard to decide whether a removed raw
+    line can be explained purely by line-number stripping.
+    """
+    # CA-style margin marker line: "line 23"
+    s = re.sub(r"^\s*line\s+\d+\s*$", "", line, flags=re.IGNORECASE)
+    if not s:
+        return ""
+
+    # Bare line-number line
+    s = re.sub(r"^\s*\d{1,3}\s*$", "", s)
+    if not s:
+        return ""
+
+    # Leading line number: "12 AN ACT ..."
+    s = re.sub(r"^\s*\d{1,3}\s+(?=\S)", "", s)
+    # Trailing line number: "AN ACT ... 12"
+    s = re.sub(r"(?<=\S)\s+\d{1,3}\s*$", "", s)
+
+    # Number between tag boundaries: "<A] line 40 [A>"
+    s = re.sub(r"(<[AD]\])\s*line\s+\d+\s*(\[[AD]>)", r"\1 \2", s, flags=re.IGNORECASE)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def _build_preclean_guard_report(raw_text: str, pre_cleaned_text: str) -> dict[str, Any]:
+    """Build a guard report to verify pre-clean removed only line numbers.
+
+    The report is advisory (never blocks pipeline execution).
+    """
+    raw_lines = [ln.strip() for ln in raw_text.splitlines() if ln.strip()]
+    pre_lines_set = {ln.strip() for ln in pre_cleaned_text.splitlines() if ln.strip()}
+
+    unexpected_removed: list[str] = []
+    seen = set()
+
+    for line in raw_lines:
+        if line in pre_lines_set:
+            continue
+
+        stripped = _strip_line_number_artifacts_from_line(line)
+        if not stripped:
+            # Entire line was a line-number artifact; expected removal.
+            continue
+        if stripped in pre_lines_set:
+            # Line survived after stripping leading/trailing number artifact.
+            continue
+
+        # Not explainable by line-number-only cleanup.
+        if line not in seen:
+            unexpected_removed.append(line)
+            seen.add(line)
+
+    ok = len(unexpected_removed) == 0
+    report = {
+        "ok": ok,
+        "raw_nonblank_lines": len(raw_lines),
+        "preclean_nonblank_lines": len(pre_lines_set),
+        "unexpected_removed_count": len(unexpected_removed),
+        "unexpected_removed_samples": unexpected_removed[:50],
+    }
+    return report
+
+
 def clean_extracted_text(
     raw_text: str,
     *,
@@ -5430,23 +5499,36 @@ def clean_extracted_text(
     except ImportError:
         pass
 
-    # ── Repeating page headers/footers ─────────────────────────────────
-    # Strip repeating headers/footers from the precleaned text used for
-    # content-accuracy comparison.  This ensures headers the LLM correctly
-    # removes don't show up as false-positive "content drops".
-    # NOTE: The LLM pipeline (Claude_Opus_4.6_Test.py) has this DISABLED
-    # so the LLM still sees headers/footers and can decide what to keep.
-    pre_cleaned = _strip_repeating_page_artifacts(pre_cleaned)
+    # ── Repeating page headers/footers (accuracy-only reference) ───────
+    # IMPORTANT: pre_cleaned must remain line-number-only cleanup because
+    # it is persisted as "_pre_cleaned" and sent to the LLM as input.
+    # Repeating-artifact suppression is computed on a separate reference
+    # text used only by downstream accuracy checks.
+    accuracy_pre_cleaned = _strip_repeating_page_artifacts(pre_cleaned)
 
     # ── AR scan/print artifacts (barcode lines, timestamps) ─────────────
     if state_code and state_code.upper() == "AR":
         pre_cleaned = _strip_ar_artifacts(pre_cleaned)
+        accuracy_pre_cleaned = _strip_ar_artifacts(accuracy_pre_cleaned)
 
     if pre_cleaned != raw_text:
         logger.info(
             "🧹 Pre-cleaned raw text before LLM: %d → %d chars (line numbers stripped, split tags merged)",
             len(raw_text), len(pre_cleaned),
         )
+
+    # ── Pre-clean guard: only line-number artifacts should be removed ───
+    preclean_guard = _build_preclean_guard_report(raw_text, pre_cleaned)
+    clean_extracted_text._last_preclean_guard = preclean_guard
+    if preclean_guard["ok"]:
+        logger.info("✅ Pre-clean guard passed: only line-number artifacts removed")
+    else:
+        logger.warning(
+            "⚠️ Pre-clean guard failed: %d unexpected removed lines detected",
+            preclean_guard["unexpected_removed_count"],
+        )
+        for sample in preclean_guard["unexpected_removed_samples"][:10]:
+            logger.warning("   unexpected_removed: %s", sample[:180])
 
     # ── Save pre-cleaned text for reference (no unwrapping) ────────
     _unwrapped_text = None
@@ -5589,9 +5671,11 @@ def clean_extracted_text(
         cleaned = _strip_ca_signature_block_tags(cleaned)
 
     # ── consolidate, clean, and split tagged blocks ───────────────────
-    cleaned = consolidate_adjacent_tags(cleaned)
+    cleaned = consolidate_adjacent_tags(cleaned, state_code=state_code)
     cleaned = remove_nested_tags(cleaned)
     cleaned = merge_split_tags(cleaned)
+    if state_code and state_code.upper() == "AR":
+        cleaned = split_ar_subsection_welds(cleaned)
     cleaned = split_tagged_subsections(cleaned)
     # Restore paragraph breaks at renumber-only [D>(N)<D] [A>(M)<A] pairs
     # that the LLM tends to collapse onto a single line.  See the docstring
@@ -5673,6 +5757,7 @@ def clean_extracted_text(
 
     # Store the pre-cleaned text and diff report for the caller to retrieve and save
     clean_extracted_text._last_pre_cleaned = pre_cleaned
+    clean_extracted_text._last_pre_cleaned_accuracy = accuracy_pre_cleaned
     clean_extracted_text._last_unwrapped = _unwrapped_text  # With TABLE markers
     clean_extracted_text._last_diff_report = diff_report
 
@@ -5805,9 +5890,24 @@ def consolidate_adjacent_tags(text: str, state_code: str = None) -> str:
     # [\s<] instead of \s so standalone items in their own tag
     # (e.g. [D>2.<D], [A>(a)<A]) are also recognised — the close-tag
     # opener '<' immediately follows the marker in those cases.
-    _NO_MERGE = r'(?![a-cA-C1-9]\.[\s<]|\([a-zA-Z0-9]{1,4}\)[\s<]|Sec\.|SECTION\s|\d+-\d)'
-    # Strong section starters only (for same-line protection)
-    _NO_MERGE_INLINE = r'(?!Sec\.|SECTION\s)'
+    #
+    # AR-specific guard: keep chained markers like (2)(A), (b)(1),
+    # (a)(2)(A) as hard boundaries. Arkansas bills use these as true
+    # subsection starters; same-line merges were welding them into
+    # the previous paragraph.
+    _is_ar = bool(state_code and state_code.upper() == "AR")
+    if _is_ar:
+        _NO_MERGE = (
+            r'(?![a-cA-C1-9]\.[\s<]'
+            r'|\([a-zA-Z0-9]{1,4}\)[\s<]'
+            r'|(?:\([a-zA-Z0-9]{1,4}\)){2,3}[\s<]'
+            r'|Sec\.|SECTION\s|\d+-\d)'
+        )
+        _NO_MERGE_INLINE = r'(?!Sec\.|SECTION\s|(?:\([a-zA-Z0-9]{1,4}\)){2,3})'
+    else:
+        _NO_MERGE = r'(?![a-cA-C1-9]\.[\s<]|\([a-zA-Z0-9]{1,4}\)[\s<]|Sec\.|SECTION\s|\d+-\d)'
+        # Strong section starters only (for same-line protection)
+        _NO_MERGE_INLINE = r'(?!Sec\.|SECTION\s)'
 
     # ── Phase 0: fix orphaned "Sec." tags ─────────────────────────────
     # PyMuPDF sometimes splits "Sec." into its own tag ([A>Sec.<A])
@@ -5884,7 +5984,11 @@ def consolidate_adjacent_tags(text: str, state_code: str = None) -> str:
     # ── Phase 3: ensure blank line before subsection boundaries ───────
     # After merging, adjacent tags separated by a single \n that start
     # with a marker should have a blank line (\n\n) for readability.
-    _MARKER = r'(\([a-zA-Z0-9]{1,4}\)[\s<]|[a-cA-C1-9]\.[\s<]|Sec\.\s|SECTION\s|\d+-\d)'
+    _MARKER = (
+        r'(\([a-zA-Z0-9]{1,4}\)[\s<]'
+        r'|(?:\([a-zA-Z0-9]{1,4}\)){2,3}[\s<]'
+        r'|[a-cA-C1-9]\.[\s<]|Sec\.\s|SECTION\s|\d+-\d)'
+    )
     _gap_a = _re.compile(r'(<A\])\n(\[A>' + _MARKER + r')')
     text = _gap_a.sub(r'\1\n\n\2', text)
     _gap_d = _re.compile(r'(<D\])\n(\[D>' + _MARKER + r')')
@@ -6147,6 +6251,62 @@ def split_tagged_subsections(text: str) -> str:
     rather than re-enabling this regex-only approach.
     """
     return text
+
+
+def split_ar_subsection_welds(text: str) -> str:
+    """Split AR-only chained subsection markers welded into prior prose.
+
+    Targets cases like::
+
+        [A>... platform. (2)(A) In the case ...<A]
+
+    and restores a paragraph boundary before the chained marker::
+
+        [A>... platform.<A]
+
+        [A>(2)(A) In the case ...<A]
+
+    The split is conservative:
+    - marker must be a chained label: ``(2)(A)``, ``(b)(1)``, ``(a)(2)(A)``
+    - marker must be preceded by sentence/clause punctuation (``.``, ``:``, ``;``)
+    - marker must be followed by a likely paragraph start (capital/quote)
+
+    This avoids touching cross-references such as
+    ``under subdivision (a)(2)(A) of this section``.
+    """
+    tag_pat = re.compile(r'\[([AD])>(.*?)<\1\]', re.DOTALL)
+    split_pat = re.compile(
+        r'([.:;])\s+'
+        r'((?:\([A-Za-z0-9]{1,4}\)){2,3})'
+        r'(?=\s+(?:[A-Z\"\']))'
+    )
+
+    def _split_content(content: str) -> list[str]:
+        pieces = []
+        rest = content
+        while True:
+            m = split_pat.search(rest)
+            if not m:
+                tail = rest.strip()
+                if tail:
+                    pieces.append(tail)
+                break
+            left = rest[:m.end(1)].strip()
+            if left:
+                pieces.append(left)
+            # Keep the chained marker at the start of the next piece.
+            rest = rest[m.start(2):].lstrip()
+        return pieces if pieces else [content.strip()]
+
+    def _rewrite_tag(m: re.Match) -> str:
+        tag_type = m.group(1)
+        content = m.group(2)
+        parts = _split_content(content)
+        if len(parts) <= 1:
+            return m.group(0)
+        return '\n\n'.join(f'[{tag_type}>{p}<{tag_type}]' for p in parts)
+
+    return tag_pat.sub(_rewrite_tag, text)
 
 
 def _legacy_split_tagged_subsections_DISABLED(text: str) -> str:  # pragma: no cover

@@ -218,6 +218,53 @@ from pymupdf_extractor import _split_in_section_heading_welds
 from pymupdf_extractor import _split_in_merged_table_rows
 from pymupdf_extractor import _ensure_in_item_spacing
 from pymupdf_extractor import _split_in_midline_items
+from pymupdf_extractor import consolidate_adjacent_tags
+from pymupdf_extractor import split_ar_subsection_welds
+
+
+def test_consolidate_adjacent_tags_ar_keeps_chained_subsection_boundary() -> None:
+    """AR must not weld ...<A] [A>(2)(A) subsection starts into one tag."""
+    text = (
+        "[A>(C) Confirmation of receipt through the covered platform.<A] "
+        "[A>(2)(A) A covered platform shall establish an internal process.<A]"
+    )
+    result = consolidate_adjacent_tags(text, state_code="AR")
+    assert "<A] [A>(2)(A)" in result
+
+
+def test_consolidate_adjacent_tags_non_ar_still_merges_chained_marker() -> None:
+    """Keep legacy merge behavior outside AR to avoid cross-state regressions."""
+    text = (
+        "[A>(C) Confirmation of receipt through the covered platform.<A] "
+        "[A>(2)(A) A covered platform shall establish an internal process.<A]"
+    )
+    result = consolidate_adjacent_tags(text, state_code="IA")
+    assert "<A] [A>(2)(A)" not in result
+    assert result.startswith("[A>(C) Confirmation")
+
+
+def test_split_ar_subsection_welds_splits_punctuation_prefixed_chained_marker() -> None:
+    """AR repair pass should split welded chained markers after ./:/;."""
+    welded = (
+        "[A>(C) Notice regarding whether the covered platform uses a product. "
+        "(2)(A) In the case of an individual that is a child, the platform shall"
+        " provide information about parental tools.<A]"
+    )
+    result = split_ar_subsection_welds(welded)
+    lines = [l for l in result.split('\n') if l.strip()]
+    assert len(lines) == 2
+    assert lines[0].endswith("product.<A]")
+    assert lines[1].startswith("[A>(2)(A) In the case")
+
+
+def test_split_ar_subsection_welds_keeps_inline_cross_reference() -> None:
+    """Cross-references like subdivision (a)(2)(A) must remain inline."""
+    inline = (
+        "[A>The parent may exercise rights required under subdivision (a)(2)(A) "
+        "of this section if notice is provided.<A]"
+    )
+    result = split_ar_subsection_welds(inline)
+    assert result == inline
 
 
 def test_split_numbered_item_weld_basic() -> None:
