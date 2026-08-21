@@ -3152,6 +3152,7 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
                 state_code=detected_state or "XX",
                 state_rules=state_rules_str,
                 output_xlsx=audit_xlsx,
+                anthropic_client=client,
             )
 
             st.session_state.audit_excel_path = audit_xlsx
@@ -4740,7 +4741,15 @@ def show_simple_ui():
 
     if uploaded_files:
         # ── Validate all files ────────────────────────────────────────────
-        MAX_TOTAL_SIZE = 5 * 1024 * 1024   # 5 MB total for all files combined
+        # Batch-total cap is app-level (separate from Streamlit's per-file
+        # server.maxUploadSize). Default is 50 MB; override with env var
+        # BATCH_MAX_TOTAL_SIZE_MB if needed.
+        try:
+            _max_total_size_mb = int(os.environ.get("BATCH_MAX_TOTAL_SIZE_MB", "50"))
+        except Exception:
+            _max_total_size_mb = 50
+        _max_total_size_mb = max(1, _max_total_size_mb)
+        MAX_TOTAL_SIZE = _max_total_size_mb * 1024 * 1024
         MAX_BATCH = 20
         MAX_PAGES = 15              # Default page limit for PyMuPDF/Hybrid modes
         MAX_PAGES_VISION = 50       # Higher limit for Vision mode (scanned PDFs, CO state)
@@ -4784,7 +4793,7 @@ def show_simple_ui():
             except Exception:
                 pass  # if we can't check, let it through — batch upload will catch it
 
-            # Check if adding this file would exceed the 5 MB total limit
+            # Check if adding this file would exceed the batch total limit
             if _running_size + uf.size > MAX_TOTAL_SIZE:
                 skipped_size_names.append(f"{uf.name} ({format_file_size(uf.size)})")
                 continue

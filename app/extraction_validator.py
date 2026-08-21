@@ -456,6 +456,69 @@ def _check_in_italic_section_tags(
     return anomalies
 
 
+def _check_in_italic_tags_outside_printing_code(
+    text: str,
+    state_code: Optional[str],
+    pdf_basename: Optional[str],
+    *,
+    max_hits: int = 50,
+) -> List[ExtractionAnomaly]:
+    """For IN: flag [A>...<A] tags that appear outside PRINTING CODE.
+
+    Indiana policy scopes italic/addition tagging to the PRINTING CODE
+    section only. Any surviving addition tag outside that section should be
+    surfaced in validation as a tag-accuracy error.
+    """
+    if not state_code or state_code.upper() != "IN":
+        return []
+    if not text:
+        return []
+
+    m = _RE_PRINTING_CODE_SECTION.search(text)
+    if m:
+        scope_start, scope_end = m.span(0)
+    else:
+        scope_start, scope_end = -1, -1
+
+    anomalies: List[ExtractionAnomaly] = []
+    for tag_m in re.finditer(r"\[A>(.*?)<A\]", text, flags=re.DOTALL):
+        s = tag_m.start()
+        in_scope = (
+            scope_start >= 0
+            and scope_end >= 0
+            and scope_start <= s < scope_end
+        )
+        if in_scope:
+            continue
+        inner = (tag_m.group(1) or "").strip()
+        if not inner:
+            continue
+
+        start_ctx = max(0, s - _CONTEXT_CHARS)
+        end_ctx = min(len(text), tag_m.end() + _CONTEXT_CHARS)
+        snippet = text[start_ctx:end_ctx].replace("\n", "\\n")
+        anomalies.append(
+            ExtractionAnomaly(
+                kind="in_italic_tag_outside_printing_code",
+                severity="error",
+                description=(
+                    "IN policy violation: [A>...<A] tag appears outside the "
+                    "PRINTING CODE section. Italic/addition tagging must be "
+                    "scoped to PRINTING CODE only."
+                ),
+                snippet=snippet,
+                char_offset=s,
+                page_number=_approximate_page_number(text, s),
+                state_code=state_code,
+                pdf_basename=pdf_basename,
+            )
+        )
+        if len(anomalies) >= max_hits:
+            break
+
+    return anomalies
+
+
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
@@ -539,7 +602,22 @@ def validate_extraction(
                 )
                 break
 
-    out.sort(key=lambda a: a.char_offset)
+    # IN policy checks: both sides of italic_section_only enforcement.
+    # 1) Required tags inside PRINTING CODE.
+    # 2) Forbidden [A>...<A] tags outside PRINTING CODE.
+    out.extend(
+        _check_in_italic_section_tags(
+            text, state_code=state_code, pdf_basename=pdf_basename,
+        )
+    )
+    out.extend(
+        _check_in_italic_tags_outside_printing_code(
+            text,
+            state_code=state_code,
+            pdf_basename=pdf_basename,
+            max_hits=max_per_kind,
+        )
+    )
 
     out.sort(key=lambda a: a.char_offset)
     return out

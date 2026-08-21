@@ -328,6 +328,64 @@ def _extract_hlines_from_drawings(page: fitz.Page) -> List[HLine]:
     return hlines
 
 
+def _extract_small_box_rects_from_drawings(page: fitz.Page) -> List[fitz.Rect]:
+    """Return small near-square rectangles drawn on *page*.
+
+    Kansas bills sometimes render amendment markers as boxed glyphs
+    (e.g., a boxed "4"). These are visual markers, not statutory text.
+    We capture candidate box rectangles from vector drawings so extraction
+    can skip text that falls inside those boxes.
+    """
+    boxes: List[fitz.Rect] = []
+    try:
+        drawings = page.get_drawings()
+    except Exception:
+        return boxes
+
+    for path in drawings:
+        for item in path.get("items", []):
+            if not item or item[0] != "re":
+                continue
+            try:
+                rect = fitz.Rect(item[1])
+            except Exception:
+                continue
+            w = rect.width
+            h = rect.height
+            if w < 3 or h < 3:
+                continue
+            if w > 24 or h > 24:
+                continue
+            aspect = (w / h) if h else 0
+            if aspect < 0.5 or aspect > 2.0:
+                continue
+            # Ignore large decorative rectangles; keep marker-sized boxes.
+            if (w * h) > 350:
+                continue
+            boxes.append(rect)
+    return boxes
+
+
+def _bbox_overlaps_any_box(
+    bbox: Tuple[float, float, float, float],
+    boxes: List[fitz.Rect],
+    min_overlap_ratio: float = 0.6,
+) -> bool:
+    """True when *bbox* significantly overlaps a candidate marker box."""
+    bx = fitz.Rect(bbox)
+    if bx.width <= 0 or bx.height <= 0:
+        return False
+    b_area = bx.width * bx.height
+    for r in boxes:
+        inter = bx & r
+        if inter.is_empty:
+            continue
+        i_area = inter.width * inter.height
+        if (i_area / b_area) >= min_overlap_ratio:
+            return True
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Table detection — identify table regions to avoid false underline tags
 # ---------------------------------------------------------------------------
@@ -1041,6 +1099,60 @@ _FOOTNOTE_REF_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Superscript glyphs used for converted footnote references.
+# KS PDFs sometimes render boxed/reference markers that OCR/extraction
+# turns into inline superscripts (e.g. "para⁴"). These are not part of
+# legislative wording and should be stripped for KS outputs.
+_RE_SUPERSCRIPT_MARKER = re.compile(
+    r"[⁰¹²³⁴⁵⁶⁷⁸⁹ᵃᵇᶜᵈᵉᶠᵍʰⁱʲᵏˡᵐⁿᵒᵖʳˢᵗᵘᵛʷˣʸᶻ⁺⁻⁼⁽⁾]{1,3}"
+)
+_RE_BOXED_MARKER_TEXT = re.compile(r"^[A-Za-z0-9*†‡§¶#∗]{1,3}$")
+
+
+def _strip_ks_superscript_markers(text: str) -> str:
+    """Strip inline superscript marker artifacts from Kansas text.
+
+    Example:
+      "supervision⁴" -> "supervision"
+      "speech para⁴" -> "speech para"
+
+    We only remove short superscript runs (1-3 chars) that are attached to
+    an adjacent word token. Standalone superscript tokens are preserved so
+    potential real footnote lines are not dropped.
+
+    This is scoped to KS processing because these markers are a known
+    extraction artifact in Kansas source PDFs.
+    """
+    if not text:
+        return text
+
+    # Remove markers attached to a preceding word token.
+    # Example: "para⁴" -> "para"
+    text = re.sub(
+        r"(?<=[A-Za-z\)\]\"'])" + _RE_SUPERSCRIPT_MARKER.pattern + r"(?=$|[\s\]\[\)\(\"'.,;:!?])",
+        "",
+        text,
+    )
+    # Fallback for boxed-marker extraction artifacts that arrive as
+    # plain digits after a closing quote, e.g. "SLPA"4 or para"4.
+    # Keep scope tight: only one digit immediately after quote and at
+    # a token boundary.
+    text = re.sub(
+        r"(?<=[A-Za-z][\"'])\d(?=(?:$|\s|[\]\[\)\(\"'.,;:!?]))",
+        "",
+        text,
+    )
+    # Fallback for merged box-marker artifacts inside quoted terms:
+    # "C-SLPA4" -> "C-SLPA", "SLPA4" -> "SLPA".
+    # Keep scope narrow to KS glossary-like quoted terms: letters/hyphen,
+    # length >= 3, and exactly one trailing digit before closing quote.
+    text = re.sub(
+        r"([\"'][A-Za-z][A-Za-z\-]{1,}[A-Za-z])\d([\"'])",
+        r"\1\2",
+        text,
+    )
+    return text
+
 
 def _to_superscript(s: str) -> str:
     """Convert digits / lowercase letters / +-=() in *s* to Unicode
@@ -1507,6 +1619,9 @@ def _extract_page_tagged_text(
         ul_rects, so_rects = [], []
 
     hlines = _extract_hlines_from_drawings(page)
+    boxed_marker_rects: List[fitz.Rect] = []
+    if state_code and state_code.upper() == "KS":
+        boxed_marker_rects = _extract_small_box_rects_from_drawings(page)
 
     # -- 1b. CT-only: PRE-STRIP footer/header separator rules by stroke width.
     # This runs FIRST — before table-border filtering and everything else —
@@ -1905,6 +2020,23 @@ def _extract_page_tagged_text(
                 font_name  = span.get("font", "")
                 span_text  = span.get("text", "")
 
+                # KS-only: span-level fast path for boxed markers when the
+                # span itself is just a short marker token.
+                span_bbox = tuple(span.get("bbox", (0, 0, 0, 0)))
+                span_plain_text = (
+                    "".join(ch.get("c", "") for ch in chars_data)
+                    if chars_data else span_text
+                )
+                if (boxed_marker_rects
+                        and span_plain_text
+                        and _RE_BOXED_MARKER_TEXT.match(span_plain_text.strip())
+                        and _bbox_overlaps_any_box(span_bbox, boxed_marker_rects)):
+                    if in_add:
+                        output.append(ADD_CLOSE); in_add = False
+                    if in_del:
+                        output.append(DEL_CLOSE); in_del = False
+                    continue
+
                 # --- Skip hidden OCR text (e.g. HiddenHorzOCR) ---
                 # Scanned PDFs embed invisible OCR layers whose text
                 # is garbage ("~", "/", etc.) from signature images.
@@ -1980,6 +2112,19 @@ def _extract_page_tagged_text(
                     c = ch_info.get("c", "")
                     if not c:
                         continue
+
+                    # KS-only: drop boxed marker digits at character level.
+                    # Some PDFs merge surrounding word + boxed marker into
+                    # one span (e.g. '"SLPA"4'), so span-level filtering
+                    # misses it. Char-level bbox overlap catches this.
+                    if boxed_marker_rects:
+                        cbbox = tuple(ch_info.get("bbox", (0, 0, 0, 0)))
+                        if c.isdigit() and _bbox_overlaps_any_box(cbbox, boxed_marker_rects):
+                            if in_add:
+                                output.append(ADD_CLOSE); in_add = False
+                            if in_del:
+                                output.append(DEL_CLOSE); in_del = False
+                            continue
 
                     # Uppercase chars from small-caps fonts
                     if span_is_smallcaps:
@@ -3050,6 +3195,58 @@ def _strip_dc_link_underline_tags(text: str) -> str:
     return new_text
 
 
+# DC title/header lines that may be visually underlined/embellished but
+# must NOT carry legislative [A>/<D] tags even on line-numbered pages.
+# IMPORTANT: we detect header lines by their plain text and then unwrap
+# tags in-place. We do NOT delete matched content.
+_RE_DC_TITLE_HEADER_LINE = re.compile(
+    r"^\s*(?:"
+    r"[_\-=~*.]{3,}"                                  # divider line
+    r"|A\s+BILL"
+    r"|A\s+PROPOSED\s+(?:RESOLUTION|BILL|ACT)"
+    r"|IN\s+THE\s+COUNCIL\s+OF\s+THE\s+DISTRICT\s+OF\s+COLUMBIA"
+    r"|COUNCILMEMBER\b.*"
+    r"|\d{1,3}-\d{1,4}[A-Z]?"                       # bill/resolution number
+    r")\s*$",
+    re.IGNORECASE,
+)
+
+
+def _strip_dc_title_header_tags(text: str) -> str:
+    """Strip false [A>/<D] tags from DC title/header lines.
+
+    DC pages can have printed line numbers in the main body while still
+    containing decorative title/heading lines at the top that should not be
+    tagged as legislative additions/deletions.
+
+    For safety, this only scans the first ~35 lines (header/title zone).
+    """
+    lines = text.split("\n")
+    header_end = min(35, len(lines))
+    changed = False
+
+    def _unwrap_add_del_tags(line: str) -> str:
+        return (
+            line.replace(ADD_OPEN, "")
+                .replace(ADD_CLOSE, "")
+                .replace(DEL_OPEN, "")
+                .replace(DEL_CLOSE, "")
+        )
+
+    for i in range(header_end):
+        original = lines[i]
+        unwrapped = _unwrap_add_del_tags(original)
+        if original == unwrapped:
+            continue
+        if _RE_DC_TITLE_HEADER_LINE.match(unwrapped.strip()):
+            lines[i] = unwrapped
+            changed = True
+    if changed:
+        logger.debug("Stripped DC false title/header tags in first %d lines", header_end)
+        return "\n".join(lines)
+    return text
+
+
 # ---------------------------------------------------------------------------
 # DC chairman-signature OCR recovery
 # ---------------------------------------------------------------------------
@@ -3813,6 +4010,38 @@ def _strip_in_header_tags(text: str) -> str:
             changed = True
     if changed:
         logger.debug("Stripped false [A> tags from IN header lines")
+        return "\n".join(lines)
+    return text
+
+
+# IN boilerplate clause lines can be italicized in source PDFs, but they are
+# structural language and must never carry add/delete tags.
+_RE_IN_ENACT_RESOLVE_CLAUSE = re.compile(
+    r"^\s*(?:\[([AD])>)?\s*"
+    r"(Be\s+it\s+(?:enacted|resolved)\s+by\s+the\s+General\s+Assembly\s+"
+    r"of\s+the\s+State\s+of\s+Indiana:)"
+    r"\s*(?:<\1\])?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _strip_in_enacting_clause_tags(text: str) -> str:
+    """Remove false [A>/<D] tags from IN enact/resolve boilerplate lines.
+
+    Indiana formatting can render these clause lines in italics, which the
+    extractor maps to [A>...<A] when italic detection is enabled. Per IN
+    rules, this boilerplate must remain plain text (untagged).
+    """
+    lines = text.split("\n")
+    changed = False
+    for i, line in enumerate(lines):
+        m = _RE_IN_ENACT_RESOLVE_CLAUSE.match(line)
+        if not m:
+            continue
+        lines[i] = m.group(2)
+        changed = True
+    if changed:
+        logger.debug("Stripped false tags from IN enact/resolve clause line(s)")
         return "\n".join(lines)
     return text
 
@@ -4923,11 +5152,16 @@ def extract_pdf_with_pymupdf(
             clean = _strip_dc_wilson_building_footer(clean)
             clean = _strip_dc_letterhead_footer(clean)
             clean = _strip_dc_link_underline_tags(clean)
+            clean = _strip_dc_title_header_tags(clean)
 
         # KS-only: inject underscore text for vector-drawn signature lines
         # on pages that contain the certification/signing block.
         if state_code and state_code.upper() == "KS":
             clean = _inject_ks_signature_lines(page, clean)
+            clean = _strip_ks_superscript_markers(clean)
+
+        if state_code and state_code.upper() == "IN":
+            clean = _strip_in_enacting_clause_tags(clean)
 
         results.append(clean)
 
@@ -5620,10 +5854,12 @@ def clean_extracted_text(
         cleaned = _strip_dc_letterhead_footer(cleaned)
         cleaned = _strip_dc_link_underline_tags(cleaned)
         cleaned = _strip_dc_wilson_building_footer(cleaned)
+        cleaned = _strip_dc_title_header_tags(cleaned)
 
     # ── strip IN-specific artifacts (footers, barcodes, false headers) ─
     if state_code and state_code.upper() == "IN":
         cleaned = _strip_in_header_tags(cleaned)
+        cleaned = _strip_in_enacting_clause_tags(cleaned)
         cleaned = _strip_in_artifacts(cleaned)
 
     # ── strip AR-specific artifacts (barcode, timestamp footer, bill-ID
@@ -5647,6 +5883,7 @@ def clean_extracted_text(
     # ── strip KS-specific false header tags ────────────────────────
     if state_code and state_code.upper() == "KS":
         cleaned = _strip_ks_header_tags(cleaned)
+        cleaned = _strip_ks_superscript_markers(cleaned)
         # Strip false [A>…<A] tags from enacting / resolving clauses
         # ("Be it enacted by …", "Be it resolved by …", "Be it further
         # resolved …").  These are document boilerplate and must never

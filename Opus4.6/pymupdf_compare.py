@@ -1528,6 +1528,7 @@ _ERROR_CLASSES = {
     "content_dropped",
     "extra_tag",
     "protected_clause_tagged",
+    "in_italic_tag_outside_printing_code",
     # Same-paragraph span split into two separate same-type tags across a
     # page break.  Detected by :func:`_find_unmerged_split_tags`.  The
     # deterministic merger ``merge_cross_page_break_tags`` should have
@@ -1630,6 +1631,7 @@ def pymupdf_compare_tags(
     state_rules: str = "",
     output_xlsx: str = "pymupdf_clean_audit.xlsx",
     model: str = "claude-opus-4-7",
+    anthropic_client=None,
 ) -> Dict:
     """
     Audit the LLM-cleaned PyMuPDF text using Claude Opus 4.7 vision.
@@ -1652,6 +1654,9 @@ def pymupdf_compare_tags(
         Path of the Excel report to write.
     model
         Anthropic model id (default ``claude-opus-4-7``).
+    anthropic_client
+        Optional pre-authenticated Anthropic client. When provided, the audit
+        reuses it instead of requesting a fresh gateway token.
 
     Returns
     -------
@@ -1703,7 +1708,7 @@ def pymupdf_compare_tags(
     log.info("📦 Checklist split into %d chunk(s) (%d total items)",
              n_chunks, len(checklist_items))
 
-    client = _get_anthropic_client()
+    client = anthropic_client or _get_anthropic_client()
 
     # ── Process each chunk ──────────────────────────────────────────
     all_checklist_results: List[Dict] = []
@@ -2027,9 +2032,37 @@ def pymupdf_compare_tags(
             _et_page, _et_line = _estimate_extra_tag_page_line(
                 et["full"], pymupdf_clean_text
             )
+            _et_pos = _locate_in_clean(et.get("full", ""), et.get("text", ""))
 
             is_prot = _is_protected_text(et["text"], protected_for_state)
-            if is_prot:
+            if (
+                state_code and state_code.upper() == "IN"
+                and et.get("type") == "addition"
+                and not _is_printing_code_demo(
+                    et.get("text", ""), state_code=state_code,
+                )
+                and not _in_printing_code_scope(_et_pos)
+            ):
+                cr_row = {
+                    "checklist_id": i,
+                    "tag_type": et["type"],
+                    "page": _et_page,
+                    "pymupdf_text": "",
+                    "clean_text": et["full"],
+                    "in_image": "yes",
+                    "in_clean": "tagged",
+                    "verdict": "❌ error",
+                    "classification": "in_italic_tag_outside_printing_code",
+                    "notes": (
+                        "IN policy violation: extra [A>...<A] appears outside "
+                        "PRINTING CODE."
+                    ),
+                    "suggested_fix": (
+                        f"Remove [A>...<A] around '{et.get('text', '')[:120]}' "
+                        "outside PRINTING CODE."
+                    ),
+                }
+            elif is_prot:
                 cr_row = {
                     "checklist_id": i,
                     "tag_type": et["type"],
@@ -2226,6 +2259,33 @@ def pymupdf_compare_tags(
                 len(in_committee_names),
             )
 
+    # Indiana scope for italic_section_only policy.
+    _in_printing_scope_start = -1
+    _in_printing_scope_end = -1
+    if state_code and state_code.upper() == "IN":
+        _m_pc = re.search(
+            r"PRINTING\s+CODE[:\s]*.*?(?=\nSECTION\s+1\b|\Z)",
+            pymupdf_clean_text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if _m_pc:
+            _in_printing_scope_start, _in_printing_scope_end = _m_pc.span(0)
+
+    def _in_printing_code_scope(offset: int) -> bool:
+        if offset < 0:
+            return False
+        if _in_printing_scope_start < 0 or _in_printing_scope_end < 0:
+            return False
+        return _in_printing_scope_start <= offset < _in_printing_scope_end
+
+    def _locate_in_clean(tag_text: str, plain_text: str) -> int:
+        pos = -1
+        if tag_text:
+            pos = pymupdf_clean_text.find(tag_text)
+        if pos < 0 and plain_text:
+            pos = pymupdf_clean_text.find(plain_text)
+        return pos
+
     _prev_classification = None
     _prev_pymupdf_text = ""
     _protected_accum_text = ""  # Accumulated text for multi-line protected clauses
@@ -2282,6 +2342,9 @@ def pymupdf_compare_tags(
         if is_real and in_clean == "yes" and cls != "match":
             pymupdf_txt = _full_text.get(int(cr.get("checklist_id", 0)),
                                           cr.get("pymupdf_text", ""))
+            _clean_pos = _locate_in_clean(
+                cr.get("clean_text", "") or "", pymupdf_txt,
+            )
             # IN sponsor names are decorative bold — should NOT be tagged
             if (state_code and state_code.upper() == "IN"
                     and cr.get("tag_type") == "addition"
@@ -2310,6 +2373,24 @@ def pymupdf_compare_tags(
                     f"Remove the [A>…<A] tag around '{pymupdf_txt[:120]}' "
                     f"— it is a decorative header element."
                 )
+            elif (
+                state_code and state_code.upper() == "IN"
+                and cr.get("tag_type") == "addition"
+                and not _is_printing_code_demo(
+                    pymupdf_txt, state_code=state_code,
+                )
+                and not _in_printing_code_scope(_clean_pos)
+            ):
+                cr["classification"] = "in_italic_tag_outside_printing_code"
+                cr["verdict"] = "❌ error"
+                cr["notes"] = (
+                    "IN policy violation: [A>...<A] appears outside "
+                    "PRINTING CODE."
+                )
+                cr["suggested_fix"] = (
+                    f"Remove [A>…<A] around '{pymupdf_txt[:120]}' — IN allows "
+                    "italic/addition tags only in PRINTING CODE."
+                )
             # Universal decorative headers (bill title, session, committee)
             elif (cr.get("tag_type") == "addition"
                     and _is_universal_decorative_header(pymupdf_txt)):
@@ -2331,6 +2412,9 @@ def pymupdf_compare_tags(
         elif is_real and in_clean == "merged":
             pymupdf_txt = _full_text.get(int(cr.get("checklist_id", 0)),
                                           cr.get("pymupdf_text", ""))
+            _clean_pos = _locate_in_clean(
+                cr.get("clean_text", "") or "", pymupdf_txt,
+            )
             # IN decorative headers should NOT be tagged even if merged
             if (state_code and state_code.upper() == "IN"
                     and cr.get("tag_type") == "addition"
@@ -2359,6 +2443,24 @@ def pymupdf_compare_tags(
                 cr["suggested_fix"] = (
                     f"Remove the [A>…<A] tag around '{pymupdf_txt[:120]}' "
                     f"— it is a decorative sponsor name."
+                )
+            elif (
+                state_code and state_code.upper() == "IN"
+                and cr.get("tag_type") == "addition"
+                and not _is_printing_code_demo(
+                    pymupdf_txt, state_code=state_code,
+                )
+                and not _in_printing_code_scope(_clean_pos)
+            ):
+                cr["classification"] = "in_italic_tag_outside_printing_code"
+                cr["verdict"] = "❌ error"
+                cr["notes"] = (
+                    "IN policy violation: merged [A>...<A] appears outside "
+                    "PRINTING CODE."
+                )
+                cr["suggested_fix"] = (
+                    f"Remove [A>…<A] around '{pymupdf_txt[:120]}' — IN allows "
+                    "italic/addition tags only in PRINTING CODE."
                 )
             # Universal decorative headers should NOT be tagged even if merged
             elif (cr.get("tag_type") == "addition"

@@ -211,6 +211,35 @@ def test_vote_fraction_split_clean() -> None:
     assert not any(a.kind == "vote_fraction_split" for a in anomalies)
 
 
+# ── IN italic_section_only policy checks ────────────────────────────
+
+
+def test_in_out_of_scope_add_tag_is_flagged() -> None:
+    text = (
+        "PRINTING CODE:\n"
+        "[A>this style type.<A]\n"
+        "SECTION 1.\n"
+        "[A>Be it resolved by the General Assembly of the State of Indiana:<A]\n"
+    )
+    anomalies = validate_extraction(text, state_code="IN")
+    kinds = {a.kind for a in anomalies}
+    assert "in_italic_tag_outside_printing_code" in kinds
+
+
+def test_in_add_tag_inside_printing_code_not_flagged_out_of_scope() -> None:
+    text = (
+        "PRINTING CODE:\n"
+        "[A>this style type.<A]\n"
+        "SECTION 1.\n"
+        "Be it resolved by the General Assembly of the State of Indiana:\n"
+    )
+    anomalies = validate_extraction(text, state_code="IN")
+    assert not any(
+        a.kind == "in_italic_tag_outside_printing_code"
+        for a in anomalies
+    )
+
+
 # ── split_numbered_item_paragraph_welds ──────────────────────────────
 
 from pymupdf_extractor import split_numbered_item_paragraph_welds

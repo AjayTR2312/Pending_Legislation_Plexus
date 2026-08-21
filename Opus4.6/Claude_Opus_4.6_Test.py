@@ -935,7 +935,10 @@ def pdf_pages_to_images(pdf_path, dpi=400, trim_borders=True, border_percent=5, 
 def convert_pdf_to_text(client, pdf_path, prompt, batch_size=None, dpi=400):
     """
     Convert PDF to text using Claude API with visual interpretation.
-    Processes all pages in a single API call for maximum consistency.
+
+    Pages are processed in chunks (default 15 pages per request) to avoid
+    Anthropic payload-size failures (HTTP 413). If a chunk still exceeds the
+    request size, the chunk is automatically retried with a smaller size.
  
     Args:
         client: Anthropic client instance
@@ -959,71 +962,135 @@ def convert_pdf_to_text(client, pdf_path, prompt, batch_size=None, dpi=400):
  
         total_pages = len(page_images)
        
-        # Build content array with ALL pages
-        content = []
-        for img_b64 in page_images:
-            content.append({
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": "image/png",
-                    "data": img_b64,
-                },
-            })
- 
-        # Add prompt
-        content.append({
-            "type": "text",
-            "text": prompt
-        })
-
         # Log full prompt for debugging
         logging.info(f"📝 FULL CONVERSION PROMPT ({len(prompt)} chars):\n{prompt}")
- 
-        messages = [{"role": "user", "content": content}]
- 
-        # Call Claude API with streaming - ALL PAGES AT ONCE
-        logging.info(f"🤖 Processing all {total_pages} pages in single API call...")
- 
-        # Retry loop for transient overload / server errors
-        max_retries = 5
-        retry_delays = [10, 30, 60, 120, 180]  # seconds between retries
-        converted_text = ""
-        for attempt in range(max_retries):
-            try:
-                converted_text = ""
-                with client.messages.stream(
-                    model="claude-opus-4-6",
-                    max_tokens=128000,
-                    temperature=0,
-                    messages=messages
-                ) as stream:
-                    for text in stream.text_stream:
-                        converted_text += text
-                    final_msg = stream.get_final_message()
-                    _track_usage("Visual Conversion", final_msg.usage)
-                break  # success — exit retry loop
-            except Exception as e:
-                err_str = str(e).lower()
-                is_retryable = (
-                    "overloaded" in err_str
-                    or "timed out" in err_str
-                    or "timeout" in err_str
-                    or "connection" in err_str
-                    or "disconnected" in err_str
-                    or "529" in err_str
-                    or "500" in err_str
-                    or "502" in err_str
-                    or "503" in err_str
-                    or "504" in err_str
+
+        # Start at 15 pages/chunk by default (can override with env var).
+        # If a chunk hits HTTP 413/request_too_large, we automatically shrink.
+        try:
+            initial_chunk_pages = int(os.environ.get("VISUAL_CHUNK_PAGES", "15"))
+        except Exception:
+            initial_chunk_pages = 15
+        initial_chunk_pages = max(1, initial_chunk_pages)
+
+        def _is_413_payload_error(exc: Exception) -> bool:
+            s = str(exc).lower()
+            return (
+                "413" in s
+                or "request_too_large" in s
+                or "payload too large" in s
+                or "request exceeds the maximum size" in s
+            )
+
+        def _run_chunk(page_start_idx: int, page_end_idx_exclusive: int, chunk_no: int, total_chunks_est: int) -> str:
+            chunk_images = page_images[page_start_idx:page_end_idx_exclusive]
+            page_start_1 = page_start_idx + 1
+            page_end_1 = page_end_idx_exclusive
+
+            chunk_prompt = (
+                f"[Chunk {chunk_no}/{total_chunks_est}: pages {page_start_1}-{page_end_1} of {total_pages}. "
+                f"Convert only these pages in order. Preserve exact text and formatting tags.]\n\n"
+                f"{prompt}"
+            )
+
+            content = []
+            for img_b64 in chunk_images:
+                content.append({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": img_b64,
+                    },
+                })
+            content.append({"type": "text", "text": chunk_prompt})
+            messages = [{"role": "user", "content": content}]
+
+            # Retry loop for transient overload / server errors
+            max_retries = 5
+            retry_delays = [10, 30, 60, 120, 180]
+            chunk_text = ""
+            for attempt in range(max_retries):
+                try:
+                    chunk_text = ""
+                    with client.messages.stream(
+                        model="claude-opus-4-6",
+                        max_tokens=128000,
+                        temperature=0,
+                        messages=messages
+                    ) as stream:
+                        for text in stream.text_stream:
+                            chunk_text += text
+                        final_msg = stream.get_final_message()
+                        _track_usage(f"Visual Conversion Chunk {chunk_no}", final_msg.usage)
+                    return chunk_text
+                except Exception as e:
+                    err_str = str(e).lower()
+                    is_retryable = (
+                        "overloaded" in err_str
+                        or "timed out" in err_str
+                        or "timeout" in err_str
+                        or "connection" in err_str
+                        or "disconnected" in err_str
+                        or "529" in err_str
+                        or "500" in err_str
+                        or "502" in err_str
+                        or "503" in err_str
+                        or "504" in err_str
+                    )
+                    if is_retryable and attempt < max_retries - 1:
+                        delay = retry_delays[attempt]
+                        logging.warning(
+                            f"  ⚠️  API error (chunk {chunk_no}, attempt {attempt+1}/{max_retries}): "
+                            f"{err_str[:120]}. Retrying in {delay}s..."
+                        )
+                        print(
+                            f"  ⚠️  API error — retrying in {delay}s "
+                            f"(chunk {chunk_no}, attempt {attempt+1}/{max_retries})..."
+                        )
+                        time.sleep(delay)
+                    else:
+                        raise
+
+        logging.info(
+            f"🤖 Processing {total_pages} pages in chunked visual mode "
+            f"(start chunk size={initial_chunk_pages})..."
+        )
+
+        converted_parts = []
+        page_idx = 0
+        chunk_no = 0
+        est_total_chunks = max(1, (total_pages + initial_chunk_pages - 1) // initial_chunk_pages)
+
+        while page_idx < total_pages:
+            remaining = total_pages - page_idx
+            chunk_size = min(initial_chunk_pages, remaining)
+
+            while True:
+                chunk_no += 1
+                end_idx = page_idx + chunk_size
+                logging.info(
+                    f"📦 Visual chunk {chunk_no}: pages {page_idx + 1}-{end_idx} "
+                    f"(size={chunk_size})"
                 )
-                if is_retryable and attempt < max_retries - 1:
-                    delay = retry_delays[attempt]
-                    logging.warning(f"  ⚠️  API error (attempt {attempt+1}/{max_retries}): {err_str[:120]}. Retrying in {delay}s...")
-                    print(f"  ⚠️  API error — retrying in {delay}s (attempt {attempt+1}/{max_retries})...")
-                    time.sleep(delay)
-                else:
-                    raise  # non-retryable or out of retries
+                try:
+                    part = _run_chunk(page_idx, end_idx, chunk_no, est_total_chunks)
+                    converted_parts.append(part.strip())
+                    page_idx = end_idx
+                    break
+                except Exception as e:
+                    if _is_413_payload_error(e) and chunk_size > 1:
+                        new_chunk_size = max(1, chunk_size // 2)
+                        logging.warning(
+                            f"⚠️ Chunk {chunk_no} exceeded request size (413). "
+                            f"Reducing chunk size {chunk_size} -> {new_chunk_size} and retrying."
+                        )
+                        chunk_no -= 1  # retry same logical chunk number
+                        chunk_size = new_chunk_size
+                        continue
+                    raise
+
+        converted_text = "\n\n".join(p for p in converted_parts if p)
 
         # Log total runtime
         total_time = time.time() - start_time
