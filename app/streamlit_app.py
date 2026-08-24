@@ -468,6 +468,8 @@ try:
         st.session_state.content_accuracy_report = None
     if 'content_accuracy_detail' not in st.session_state:
         st.session_state.content_accuracy_detail = None
+    if 'layout_accuracy_report' not in st.session_state:
+        st.session_state.layout_accuracy_report = None
     if 'gpt_audit_failed' not in st.session_state:
         st.session_state.gpt_audit_failed = False
     if 'last_uploaded_file_id' not in st.session_state:
@@ -1914,6 +1916,7 @@ def _run_content_accuracy_check(
     save_to: str | None = None,
     pdf_metadata: dict | None = None,
     pdf_path: str | None = None,
+    state_code: str | None = None,
 ):
     """Run word-level content accuracy check (precleaned vs final output).
 
@@ -1978,6 +1981,102 @@ def _run_content_accuracy_check(
 
     try:
         report = check_content_accuracy(precleaned_text, output_text, metadata=pdf_metadata, detected_artifacts=_detected_artifacts)
+
+        # Attach extraction-anomaly watchdog findings to the same report so
+        # validation artifacts include sentence-break/layout regressions.
+        _anomalies_serialized = []
+        _anomaly_kind_counts = {}
+        _sentence_break_count = 0
+        try:
+            from extraction_validator import validate_extraction as _validate_extraction
+            _pdf_basename = Path(pdf_path).name if pdf_path else None
+            _anomalies = _validate_extraction(
+                output_text,
+                state_code=state_code,
+                pdf_basename=_pdf_basename,
+                max_per_kind=2000,
+            )
+            for _a in _anomalies:
+                _line_no = int(output_text.count("\n", 0, _a.char_offset)) + 1
+                _line_start = output_text.rfind("\n", 0, _a.char_offset)
+                _line_start = 0 if _line_start < 0 else (_line_start + 1)
+                _line_end = output_text.find("\n", _a.char_offset)
+                if _line_end < 0:
+                    _line_end = len(output_text)
+                _line_text = output_text[_line_start:_line_end].strip()
+                _anomaly_kind_counts[_a.kind] = _anomaly_kind_counts.get(_a.kind, 0) + 1
+                if _a.kind == "mid_sentence_line_break":
+                    _sentence_break_count += 1
+                _anomalies_serialized.append(
+                    {
+                        "kind": _a.kind,
+                        "severity": _a.severity,
+                        "description": _a.description,
+                        "snippet": _a.snippet,
+                        "char_offset": _a.char_offset,
+                        "line_number": _line_no,
+                        "line_text": _line_text,
+                        "page_number": _a.page_number,
+                    }
+                )
+        except Exception as _anom_err:
+            logging.warning(f"Extraction anomaly scan failed (non-critical): {_anom_err}")
+
+        report["extraction_anomaly_count"] = len(_anomalies_serialized)
+        report["extraction_anomaly_kinds"] = _anomaly_kind_counts
+        report["extraction_anomalies"] = _anomalies_serialized
+        report["sentence_break_issue_count"] = _sentence_break_count
+
+        # Save a dedicated artifact with ONLY sentence-break issues so QA can
+        # review each hit quickly without scanning the full accuracy report.
+        _sentence_break_issues = [
+            a for a in _anomalies_serialized
+            if a.get("kind") == "mid_sentence_line_break"
+        ]
+        report["sentence_break_issues"] = _sentence_break_issues
+
+        if save_to:
+            try:
+                _issues_json = save_to.replace(
+                    "_content_accuracy.json", "_sentence_break_issues.json"
+                )
+                _issues_txt = save_to.replace(
+                    "_content_accuracy.json", "_sentence_break_issues.txt"
+                )
+
+                with open(_issues_json, "w", encoding="utf-8") as _ijf:
+                    _json.dump(
+                        {
+                            "issue_kind": "mid_sentence_line_break",
+                            "issue_count": len(_sentence_break_issues),
+                            "issues": _sentence_break_issues,
+                        },
+                        _ijf,
+                        indent=2,
+                        ensure_ascii=False,
+                    )
+
+                with open(_issues_txt, "w", encoding="utf-8") as _itf:
+                    _itf.write(
+                        f"Sentence-break issues: {len(_sentence_break_issues)}\\n"
+                        f"Kind: mid_sentence_line_break\\n\\n"
+                    )
+                    for _idx, _issue in enumerate(_sentence_break_issues, 1):
+                        _page = _issue.get("page_number")
+                        _offset = _issue.get("char_offset")
+                        _line_no = _issue.get("line_number")
+                        _snippet = (_issue.get("snippet") or "").replace("\\n", " ")
+                        _line_text = (_issue.get("line_text") or "").replace("\\n", " ")
+                        _itf.write(
+                            f"{_idx}. page={_page if _page is not None else '?'} "
+                            f"line={_line_no if _line_no is not None else '?'} "
+                            f"offset={_offset}\\n"
+                            f"   snippet: {_snippet}\\n"
+                            f"   line_text: {_line_text}\\n\\n"
+                        )
+            except Exception as _sbf_err:
+                logging.warning(f"Failed to save sentence-break issues file: {_sbf_err}")
+
         st.session_state.content_accuracy_detail = report
 
         _acc = report["accuracy_pct"]
@@ -2015,6 +2114,17 @@ def _run_content_accuracy_check(
             if _issues > 5:
                 add_log(f"  ... and {_issues - 5} more issue(s)")
 
+        if _sentence_break_count > 0:
+            add_log(
+                f"⚠️ Sentence-break issue(s): {_sentence_break_count} "
+                f"(kind=mid_sentence_line_break)"
+            )
+            if save_to:
+                add_log(
+                    "📋 Sentence-break details saved: "
+                    f"{Path(save_to).name.replace('_content_accuracy.json', '_sentence_break_issues.json')}"
+                )
+
         # Save JSON report
         if save_to:
             import json as _json
@@ -2028,6 +2138,90 @@ def _run_content_accuracy_check(
     except Exception as e:
         add_log(f"⚠️ Content accuracy check failed: {e}", "warning")
         logging.error(f"Content accuracy error: {e}", exc_info=True)
+        return None
+
+
+def _run_layout_accuracy_check(
+    output_text: str | None,
+    add_log,
+    *,
+    pdf_path: str | None = None,
+    state_code: str | None = None,
+    save_to: str | None = None,
+    precomputed_report: dict | None = None,
+):
+    """Run layout/paragraph-boundary accuracy check and persist report.
+
+    Detects two structural issue classes against PDF-derived boundaries:
+    - split-needed: output merged two paragraphs that should be separate
+    - merge-needed: output over-split a paragraph across lines
+    """
+    if not output_text or not pdf_path:
+        return None
+    if not Path(pdf_path).exists():
+        return None
+
+    try:
+        from paragraph_accuracy_checker import check_paragraph_accuracy
+    except ImportError:
+        logging.warning("paragraph_accuracy_checker not available")
+        return None
+
+    try:
+        report = precomputed_report if precomputed_report is not None else check_paragraph_accuracy(pdf_path, output_text, state_code=state_code)
+        st.session_state.layout_accuracy_report = report
+
+        _acc = report.get("accuracy_pct", 100.0)
+        _total = report.get("total_boundaries", 0)
+        _splits = len(report.get("splits_needed", []))
+        _merges = len(report.get("merges_needed", []))
+        _icon = "✅" if _acc >= 98 and _splits == 0 and _merges == 0 else "⚠️"
+
+        add_log(
+            f"{_icon} Layout accuracy: {_acc:.1f}% "
+            f"({_total} boundaries — {_splits} split-needed, {_merges} merge-needed)"
+        )
+
+        if save_to:
+            try:
+                import json as _json
+                _layout_json = save_to.replace("_content_accuracy.json", "_layout_accuracy.json")
+                _layout_txt = save_to.replace("_content_accuracy.json", "_layout_accuracy.txt")
+
+                with open(_layout_json, "w", encoding="utf-8") as _lf:
+                    _json.dump(report, _lf, indent=2, ensure_ascii=False, default=str)
+
+                with open(_layout_txt, "w", encoding="utf-8") as _tf:
+                    _tf.write(
+                        f"Layout accuracy: {_acc:.1f}%\\n"
+                        f"Total boundaries: {_total}\\n"
+                        f"Split-needed: {_splits}\\n"
+                        f"Merge-needed: {_merges}\\n\\n"
+                    )
+                    if _splits:
+                        _tf.write("SPLIT-NEEDED ISSUES\\n")
+                        for i, s in enumerate(report.get("splits_needed", [])[:500], 1):
+                            _tf.write(
+                                f"{i}. line={s.get('line')} pos={s.get('char_position')} "
+                                f"signal={s.get('signal')} pdf_page={s.get('pdf_page')}\\n"
+                                f"   after_split: {s.get('text_after_split', '')}\\n\\n"
+                            )
+                    if _merges:
+                        _tf.write("MERGE-NEEDED ISSUES\\n")
+                        for i, m in enumerate(report.get("merges_needed", [])[:500], 1):
+                            _tf.write(
+                                f"{i}. line={m.get('line')} with_line={m.get('merge_with_line')}\\n"
+                                f"   desc: {m.get('description', '')}\\n\\n"
+                            )
+
+                add_log(f"📋 Layout accuracy report saved: {Path(_layout_json).name}")
+            except Exception as _save_err:
+                logging.warning(f"Failed to save layout accuracy report: {_save_err}")
+
+        return report
+    except Exception as e:
+        add_log(f"⚠️ Layout accuracy check failed: {e}", "warning")
+        logging.error(f"Layout accuracy error: {e}", exc_info=True)
         return None
 
 
@@ -2334,6 +2528,16 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
             if converted_text != _before_strip:
                 add_log(f"🛡️ Stripped tags from protected clauses for {detected_state}")
 
+        # Rejoin residual single-line soft wraps in final output text.
+        try:
+            from pymupdf_extractor import rejoin_mid_sentence_line_breaks as _rejoin_soft_wraps
+            _before_rejoin = converted_text
+            converted_text = _rejoin_soft_wraps(converted_text)
+            if converted_text != _before_rejoin:
+                add_log("🔗 Rejoined mid-sentence soft line wraps")
+        except Exception:
+            pass
+
         # ── Step 4d: Merge paragraphs split at page breaks ──────────────────────
         # Claude's visual conversion sometimes splits a paragraph into two
         # when text wraps across a page boundary (e.g. a sentence that starts
@@ -2348,6 +2552,16 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
         )
         if converted_text != _before_merge:
             add_log("🔗 Merged paragraphs split at page breaks")
+
+        # Rejoin residual single-line soft wraps in final output text.
+        try:
+            from pymupdf_extractor import rejoin_mid_sentence_line_breaks as _rejoin_soft_wraps
+            _before_rejoin = converted_text
+            converted_text = _rejoin_soft_wraps(converted_text)
+            if converted_text != _before_rejoin:
+                add_log("🔗 Rejoined mid-sentence soft line wraps")
+        except Exception:
+            pass
 
         # ── Step 5: Save output ──────────────────────────────────────────────────
         st.session_state.current_step = 4
@@ -2446,6 +2660,7 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
                     highlight_pdf_formatting,
                     clean_extracted_text,
                     consolidate_adjacent_tags,
+                    enforce_tag_integrity_gate,
                     merge_cross_page_break_tags,
                     split_ar_subsection_welds,
                 )
@@ -2529,7 +2744,6 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
                     pymupdf_clean_text = split_ar_subsection_welds(pymupdf_clean_text)
                 # Merge same-paragraph tags split across a page break.
                 pymupdf_clean_text = merge_cross_page_break_tags(pymupdf_clean_text)
-                pymupdf_clean_text = opus.split_tagged_subsections(pymupdf_clean_text)
 
                 # ── Post-process: strip tags from state-specific protected clauses ──
                 if strip_protected_tags and detected_state:
@@ -2537,6 +2751,16 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
                     pymupdf_clean_text = strip_protected_tags(pymupdf_clean_text, detected_state)
                     if pymupdf_clean_text != _before_strip:
                         add_log(f"🛡️ Stripped tags from protected clauses for state {detected_state}")
+
+                pymupdf_clean_text = enforce_tag_integrity_gate(
+                    pymupdf_clean_text, state_code=detected_state
+                )
+                _gate_report = getattr(enforce_tag_integrity_gate, "_last_report", None)
+                if _gate_report and _gate_report.get("changed"):
+                    add_log(
+                        "🧯 Tag integrity gate repaired output: "
+                        + "; ".join((_gate_report.get("issues") or [])[:4])
+                    )
 
                 pymupdf_clean_path = output_path.replace(".txt", "_pymupdf_clean.txt") if isinstance(output_path, str) else str(output_path).replace(".txt", "_pymupdf_clean.txt")
                 with open(pymupdf_clean_path, "w", encoding="utf-8") as cf:
@@ -2584,6 +2808,11 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
                 converted_before = converted_text
                 converted_text = opus.restore_special_symbols(converted_text, pymupdf_clean_text)
                 if converted_text != converted_before:
+                    try:
+                        from pymupdf_extractor import rejoin_mid_sentence_line_breaks as _rejoin_soft_wraps
+                        converted_text = _rejoin_soft_wraps(converted_text)
+                    except Exception:
+                        pass
                     add_log("🔧 Restored special symbols (§ etc.) from PyMuPDF reference")
                     with open(output_path, "w", encoding="utf-8") as f:
                         f.write(converted_text)
@@ -2619,6 +2848,7 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
             add_log=add_log,
             save_to=_content_acc_json,
             pdf_path=st.session_state.get('temp_pdf_path'),
+            state_code=detected_state,
         )
 
         # Paragraph accuracy (if future was submitted earlier)
@@ -2644,6 +2874,15 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
                 import json as _json
                 with open(_para_json, "w", encoding="utf-8") as _pf:
                     _json.dump(_para_report, _pf, indent=2, default=str)
+
+        _run_layout_accuracy_check(
+            output_text=converted_text,
+            add_log=add_log,
+            pdf_path=st.session_state.get('temp_pdf_path'),
+            state_code=detected_state,
+            save_to=_content_acc_json,
+            precomputed_report=_para_report if _para_report else None,
+        )
 
         # ── Step 8: Tag Validation Audit (pymupdf_compare) ─────────────────────
         if pymupdf_clean_text and pymupdf_report and highlight_dir and Path(highlight_dir).exists():
@@ -2883,7 +3122,9 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
             extract_pdf_json_report,
             extract_pdf_with_pymupdf,
             clean_extracted_text,
+            build_tag_integrity_report,
             consolidate_adjacent_tags,
+            enforce_tag_integrity_gate,
             merge_cross_page_break_tags,
             split_ar_subsection_welds,
         )
@@ -2967,7 +3208,6 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
             pymupdf_clean_text = split_ar_subsection_welds(pymupdf_clean_text)
         # Merge same-paragraph tags split across a page break.
         pymupdf_clean_text = merge_cross_page_break_tags(pymupdf_clean_text)
-        pymupdf_clean_text = opus.split_tagged_subsections(pymupdf_clean_text)
 
         # Strip tags from protected clauses
         if strip_protected_tags and detected_state:
@@ -2975,6 +3215,19 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
             pymupdf_clean_text = strip_protected_tags(pymupdf_clean_text, detected_state)
             if pymupdf_clean_text != _before:
                 add_log(f"🛡️ Stripped tags from protected clauses for {detected_state}")
+
+        # Final conversion gate: no-op for valid files, conservative repair
+        # only when malformed tag structure is detected.
+        _before_gate = pymupdf_clean_text
+        pymupdf_clean_text = enforce_tag_integrity_gate(
+            pymupdf_clean_text, state_code=detected_state
+        )
+        _gate_report = getattr(enforce_tag_integrity_gate, "_last_report", None)
+        if _gate_report and _gate_report.get("changed"):
+            add_log(
+                "🧯 Tag integrity gate repaired output: "
+                + "; ".join(_gate_report.get("issues", [])[:4])
+            )
 
         st.session_state.step_status[3] = "✅"
         update_progress()
@@ -3036,9 +3289,37 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
         st.session_state.step_status[4] = "🔄"
         update_progress()
 
+        try:
+            from pymupdf_extractor import rejoin_mid_sentence_line_breaks as _rejoin_soft_wraps
+            _before_rejoin = pymupdf_clean_text
+            pymupdf_clean_text = _rejoin_soft_wraps(pymupdf_clean_text)
+            if pymupdf_clean_text != _before_rejoin:
+                add_log("🔗 Rejoined mid-sentence soft line wraps")
+        except Exception:
+            pass
+
         with open(output_path, "w", encoding="utf-8") as cf:
             cf.write(pymupdf_clean_text)
         add_log(f"💾 Output saved: {output_path}")
+
+        # Deterministic fallback validation: always run, even if vision audit
+        # later under-reports issues.
+        _integrity = build_tag_integrity_report(
+            pymupdf_clean_text,
+            state_code=detected_state,
+            reference_text=_pre_cleaned,
+        )
+        _integrity_path = output_path.replace(".txt", "_integrity_validation.json")
+        with open(_integrity_path, "w", encoding="utf-8") as _if:
+            _if.write(_json.dumps(_integrity, indent=2, ensure_ascii=False))
+        if _integrity.get("issues"):
+            add_log(
+                "⚠️ Deterministic integrity validation flagged issues: "
+                + "; ".join(_integrity.get("issues", [])[:4]),
+                "warning",
+            )
+        else:
+            add_log("✅ Deterministic integrity validation passed")
 
         st.session_state.step_status[4] = "✅"
         update_progress()
@@ -3068,6 +3349,15 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
             add_log=add_log,
             save_to=_content_acc_json,
             pdf_path=st.session_state.get('temp_pdf_path'),
+            state_code=detected_state,
+        )
+
+        _run_layout_accuracy_check(
+            output_text=pymupdf_clean_text,
+            add_log=add_log,
+            pdf_path=st.session_state.get('temp_pdf_path'),
+            state_code=detected_state,
+            save_to=_content_acc_json,
         )
 
         # ── Step 6: Tag Validation (PyMuPDF report → clean text) ────────────
@@ -3439,6 +3729,7 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
         converted_text = opus.deterministic_cleanup(
             converted_text, state_config=state_config, state_code=detected_state,
             reference_text=_precleaned_text,
+            apply_structural_passes=False,
         )
         add_log("🔧 Deterministic cleanup applied")
 
@@ -3450,6 +3741,54 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
             converted_text = strip_protected_tags(converted_text, detected_state)
             if converted_text != _before_strip:
                 add_log(f"🛡️ Stripped tags from protected clauses for {detected_state}")
+
+        # Rejoin residual single-line soft wraps in final output text.
+        try:
+            from pymupdf_extractor import (
+                rejoin_mid_sentence_line_breaks as _rejoin_soft_wraps,
+                build_tag_integrity_report,
+                enforce_tag_integrity_gate,
+            )
+            _before_rejoin = converted_text
+            converted_text = _rejoin_soft_wraps(converted_text)
+            if converted_text != _before_rejoin:
+                add_log("🔗 Rejoined mid-sentence soft line wraps")
+
+            # Final conversion gate: preserve valid output unchanged;
+            # repair malformed delimiters / CT literal bracket deletions.
+            _before_gate = converted_text
+            converted_text = enforce_tag_integrity_gate(
+                converted_text, state_code=detected_state
+            )
+            _gate_report = getattr(enforce_tag_integrity_gate, "_last_report", None)
+            if _gate_report and _gate_report.get("changed"):
+                add_log(
+                    "🧯 Tag integrity gate repaired output: "
+                    + "; ".join(_gate_report.get("issues", [])[:4])
+                )
+
+            _integrity = build_tag_integrity_report(
+                converted_text,
+                state_code=detected_state,
+                reference_text=_precleaned_text,
+            )
+            import json as _json_local
+            _integrity_path = os.path.join(
+                session_folders['output_folder'],
+                Path(pdf_path).stem + "_integrity_validation.json",
+            )
+            with open(_integrity_path, "w", encoding="utf-8") as _if:
+                _if.write(_json_local.dumps(_integrity, indent=2, ensure_ascii=False))
+            if _integrity.get("issues"):
+                add_log(
+                    "⚠️ Deterministic integrity validation flagged issues: "
+                    + "; ".join(_integrity.get("issues", [])[:4]),
+                    "warning",
+                )
+            else:
+                add_log("✅ Deterministic integrity validation passed")
+        except Exception:
+            pass
 
         st.session_state.step_status[3] = "✅"
         update_progress()
@@ -3529,6 +3868,15 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
             add_log=add_log,
             save_to=_content_acc_json,
             pdf_path=st.session_state.get('temp_pdf_path'),
+            state_code=detected_state,
+        )
+
+        _run_layout_accuracy_check(
+            output_text=converted_text,
+            add_log=add_log,
+            pdf_path=st.session_state.get('temp_pdf_path'),
+            state_code=detected_state,
+            save_to=_content_acc_json,
         )
 
         # ── Step 6: Claude Opus 4.7 Audit (Validation Report) ─────────────
@@ -4682,6 +5030,19 @@ def show_simple_ui():
                                     except Exception:
                                         pass
 
+                                # Load layout accuracy report into session state if available
+                                try:
+                                    import json as _json
+                                    _layout_json = _chosen_file.parent / f"{_chosen_file.stem}_layout_accuracy.json"
+                                    if _layout_json.exists():
+                                        st.session_state.layout_accuracy_report = _json.loads(
+                                            _layout_json.read_text(encoding="utf-8")
+                                        )
+                                    else:
+                                        st.session_state.layout_accuracy_report = None
+                                except Exception:
+                                    st.session_state.layout_accuracy_report = None
+
                                 st.success(f"Loaded: {_chosen_file.name}")
                                 st.rerun()
                         with _col_submit_one:
@@ -5655,6 +6016,32 @@ def show_results_section():
                 f'<span style="font-size:0.75rem; font-weight:400; margin-left:4px;">{_ta_detail}</span></div>'
             )
 
+        # Layout accuracy chip (paragraph boundary fidelity)
+        _layout_acc_chip = ""
+        _layout_rpt = st.session_state.get('layout_accuracy_report')
+        if isinstance(_layout_rpt, dict):
+            _la_acc = float(_layout_rpt.get('accuracy_pct', 100.0) or 100.0)
+            _la_total = int(_layout_rpt.get('total_boundaries', 0) or 0)
+            _la_splits = len(_layout_rpt.get('splits_needed', []) or [])
+            _la_merges = len(_layout_rpt.get('merges_needed', []) or [])
+            _la_issues = _la_splits + _la_merges
+            if _la_issues == 0:
+                _la_bg, _la_fg, _la_bdr = '#f0fdf4', '#166534', '#bbf7d0'
+            elif _la_acc >= 95:
+                _la_bg, _la_fg, _la_bdr = '#fefce8', '#854d0e', '#fde68a'
+            else:
+                _la_bg, _la_fg, _la_bdr = '#fef2f2', '#991b1b', '#fecaca'
+            _la_detail = (
+                f" ({_la_total} boundaries, {_la_splits} split-needed, "
+                f"{_la_merges} merge-needed)"
+            )
+            _layout_acc_chip = (
+                f'<div style="{_chip} background:{_la_bg}; color:{_la_fg}; border:1px solid {_la_bdr};">'
+                f'<span style="font-size:1rem;">📐</span> Layout Accuracy '
+                f'<span style="font-weight:800;">{_la_acc:.1f}%</span>'
+                f'<span style="font-size:0.75rem; font-weight:400; margin-left:4px;">{_la_detail}</span></div>'
+            )
+
         _summary_html = (
             '<div style="background:#ffffff; border-radius:14px; padding:24px 28px; margin:8px 0 20px;'
             ' border:1px solid #e2e8f0; box-shadow:0 2px 12px rgba(0,0,0,.05);">'
@@ -5664,7 +6051,7 @@ def show_results_section():
             f'{_state_pill}'
             '</div>'
             '<div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px;">'
-            f'{_conv_chip}{_val_chip}{_size_chip}{_content_acc_chip}{_tag_acc_chip}'
+            f'{_conv_chip}{_val_chip}{_size_chip}{_content_acc_chip}{_layout_acc_chip}{_tag_acc_chip}'
             '</div>'
             '<div style="background:#f8fafc; border-radius:8px; padding:8px 16px;'
             ' display:flex; align-items:center; justify-content:space-between;'
@@ -5763,6 +6150,42 @@ def show_results_section():
                             st.caption(f"Could not load tag issues: {_tag_ex}")
                     else:
                         st.caption("Audit Excel not available — re-run processing to generate.")
+
+        # ── Layout Issues (split-needed / merge-needed) ───────────────────
+        _layout_rpt = st.session_state.get('layout_accuracy_report')
+        if isinstance(_layout_rpt, dict):
+            _splits = _layout_rpt.get('splits_needed', []) or []
+            _merges = _layout_rpt.get('merges_needed', []) or []
+            _layout_issue_count = len(_splits) + len(_merges)
+            if _layout_issue_count > 0:
+                with st.expander(f"📐 Layout Issues ({_layout_issue_count})", expanded=False):
+                    _rows = []
+                    for _s in _splits[:200]:
+                        _rows.append({
+                            "Type": "SPLIT-NEEDED",
+                            "Line": _s.get("line", ""),
+                            "Related Line": "",
+                            "Signal": _s.get("signal", ""),
+                            "PDF Page": _s.get("pdf_page", ""),
+                            "Context": _s.get("text_after_split", ""),
+                            "Description": _s.get("description", ""),
+                        })
+                    for _m in _merges[:200]:
+                        _rows.append({
+                            "Type": "MERGE-NEEDED",
+                            "Line": _m.get("line", ""),
+                            "Related Line": _m.get("merge_with_line", ""),
+                            "Signal": "",
+                            "PDF Page": "",
+                            "Context": _m.get("next_line_text", ""),
+                            "Description": _m.get("description", ""),
+                        })
+
+                    if _rows:
+                        import pandas as _pd
+                        st.dataframe(_pd.DataFrame(_rows), use_container_width=True, hide_index=True)
+                    if _layout_issue_count > 200:
+                        st.caption(f"Showing first 200 of {_layout_issue_count} layout issues. See _layout_accuracy.json for full details.")
 
         # ── Content Issues (compact, only when content accuracy has issues) ─
         # Check both report sources: content_accuracy_detail (from _run_content_accuracy_check)
@@ -6129,16 +6552,62 @@ class BatchWorker:
                 add_log("🔧 Post-processing: stripped tags from protected clauses (if any)")
             except Exception:
                 pass
-            # Second: strip protected clauses from protected_clauses.py (hardcoded list)
-            try:
-                from protected_clauses import strip_protected_tags as _strip
-                if _strip and detected_state:
-                    _before_strip = converted_text
-                    converted_text = _strip(converted_text, detected_state)
-                    if converted_text != _before_strip:
-                        add_log(f"🛡️ Stripped tags from protected clauses for {detected_state}")
-            except Exception:
-                pass
+
+        # Second: strip protected clauses from protected_clauses.py (hardcoded list)
+        try:
+            from protected_clauses import strip_protected_tags as _strip
+            if _strip and detected_state:
+                _before_strip = converted_text
+                converted_text = _strip(converted_text, detected_state)
+                if converted_text != _before_strip:
+                    add_log(f"🛡️ Stripped tags from protected clauses for {detected_state}")
+        except Exception:
+            pass
+
+        # Rejoin residual single-line soft wraps in final output text.
+        try:
+            from pymupdf_extractor import (
+                rejoin_mid_sentence_line_breaks as _rejoin_soft_wraps,
+                build_tag_integrity_report,
+                enforce_tag_integrity_gate,
+            )
+            _before_rejoin = converted_text
+            converted_text = _rejoin_soft_wraps(converted_text)
+            if converted_text != _before_rejoin:
+                add_log("🔗 Rejoined mid-sentence soft line wraps")
+
+            converted_text = enforce_tag_integrity_gate(
+                converted_text, state_code=detected_state
+            )
+            _gate_report = getattr(enforce_tag_integrity_gate, "_last_report", None)
+            if _gate_report and _gate_report.get("changed"):
+                add_log(
+                    "🧯 Tag integrity gate repaired output: "
+                    + "; ".join((_gate_report.get("issues") or [])[:4])
+                )
+
+            _integrity = build_tag_integrity_report(
+                converted_text,
+                state_code=detected_state,
+                reference_text=None,
+            )
+            import json as _json_local
+            _integrity_path = os.path.join(
+                session_folders['output_folder'],
+                Path(pdf_path).stem + "_integrity_validation.json",
+            )
+            with open(_integrity_path, "w", encoding="utf-8") as _if:
+                _if.write(_json_local.dumps(_integrity, indent=2, ensure_ascii=False))
+            if _integrity.get("issues"):
+                add_log(
+                    "⚠️ Deterministic integrity validation flagged issues: "
+                    + "; ".join((_integrity.get("issues") or [])[:4]),
+                    "warning",
+                )
+            else:
+                add_log("✅ Deterministic integrity validation passed")
+        except Exception:
+            pass
 
         # Step 5: Save output
         conversion_elapsed = time.time() - start_time
@@ -6172,6 +6641,7 @@ class BatchWorker:
                 highlight_pdf_formatting,
                 clean_extracted_text,
                 consolidate_adjacent_tags,
+                enforce_tag_integrity_gate,
                 merge_cross_page_break_tags,
                 split_ar_subsection_welds,
             )
@@ -6246,7 +6716,6 @@ class BatchWorker:
                     pymupdf_clean_text = split_ar_subsection_welds(pymupdf_clean_text)
                 # Merge same-paragraph tags split across a page break.
                 pymupdf_clean_text = merge_cross_page_break_tags(pymupdf_clean_text)
-                pymupdf_clean_text = opus.split_tagged_subsections(pymupdf_clean_text)
 
                 # Strip tags from protected clauses
                 try:
@@ -6255,6 +6724,16 @@ class BatchWorker:
                         pymupdf_clean_text = _strip_prot(pymupdf_clean_text, detected_state)
                 except Exception:
                     pass
+
+                pymupdf_clean_text = enforce_tag_integrity_gate(
+                    pymupdf_clean_text, state_code=detected_state
+                )
+                _gate_report = getattr(enforce_tag_integrity_gate, "_last_report", None)
+                if _gate_report and _gate_report.get("changed"):
+                    add_log(
+                        "🧯 Tag integrity gate repaired output: "
+                        + "; ".join((_gate_report.get("issues") or [])[:4])
+                    )
 
                 pymupdf_clean_path = output_path.replace(".txt", "_pymupdf_clean.txt")
                 with open(pymupdf_clean_path, "w", encoding="utf-8") as cf:
@@ -6299,6 +6778,11 @@ class BatchWorker:
                 converted_before = converted_text
                 converted_text = opus.restore_special_symbols(converted_text, pymupdf_clean_text)
                 if converted_text != converted_before:
+                    try:
+                        from pymupdf_extractor import rejoin_mid_sentence_line_breaks as _rejoin_soft_wraps
+                        converted_text = _rejoin_soft_wraps(converted_text)
+                    except Exception:
+                        pass
                     add_log("🔧 Restored special symbols (§ etc.) from PyMuPDF reference")
                     with open(output_path, "w", encoding="utf-8") as f:
                         f.write(converted_text)

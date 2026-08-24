@@ -84,6 +84,7 @@ try:
         extract_pdf_json_report, extract_pdf_with_pymupdf,
         highlight_pdf_formatting, clean_extracted_text,
         consolidate_adjacent_tags, _load_state_clean_prompt,
+        enforce_tag_integrity_gate,
         _tag_brackets, _generate_clean_diff_report,
         _strip_ct_header_tags, _strip_ct_compact_designator,
         _strip_ct_false_underline_headings, _fix_midword_page_break_tags,
@@ -1514,6 +1515,14 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         # are handled post-LLM by _strip_false_footer_line_underline instead.
         # if state_code and state_code.upper() == "CT":
         #     raw_text = _strip_ct_raw_footer_line_tags(raw_text)
+        if flags.get("mark_brackets") and state_code and state_code.upper() == "CT":
+            _before_ct_bracket_tag = len(raw_text)
+            raw_text = _tag_brackets(raw_text)
+            if len(raw_text) != _before_ct_bracket_tag:
+                logging.info(
+                    f"   🏷️  CT bracket deletions tagged pre-LLM: "
+                    f"{_before_ct_bracket_tag:,} → {len(raw_text):,} chars"
+                )
 
         # ── Pre-merge per-line tags into paragraph-level tags (FL only) ─
         # Uses the PDF’s own \n vs \n\n signals as ground truth:
@@ -1782,10 +1791,10 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
             ])
         convert_pdf_hybrid_text._last_chunks_report = "\n".join(_chunks_report_lines)
 
-        # Bracket tagging runs AFTER LLM and AFTER CT-specific fixes to avoid
-        # confusing the LLM with nested [D>[…]<D] structures, and to ensure
-        # CT analysis-section tag-stripping doesn't remove bracket [D> tags.
-        if flags.get("mark_brackets"):
+        # Bracket tagging remains post-LLM for non-CT states.
+        # CT bracket tagging now runs pre-LLM (above) to keep boundaries
+        # stable and avoid misplaced tag reconstruction.
+        if flags.get("mark_brackets") and not (state_code and state_code.upper() == "CT"):
             merged = _tag_brackets(merged)
 
         # CT-specific deterministic fixes
@@ -1798,9 +1807,8 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
             merged = _strip_ct_analysis_section_tags(merged)
             merged = _strip_false_subsection_d_tags(merged)
             merged = _restructure_ct_header(merged)
-            # Re-run bracket tagging after analysis-section stripping
-            # removed [D> tags from legitimate bracket deletions
-            merged = _tag_brackets(merged)
+            # CT bracket-tagging is intentionally not re-run post-LLM.
+            # Tags are injected pre-LLM so cleanup preserves boundaries.
 
         # IN-specific: strip false headers, footers, barcodes, year lines
         if state_code and state_code.upper() == "IN":
@@ -1929,6 +1937,16 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         # heading lines (e.g. "ECONOMIC DEVELOPMENT PROGRAMS\n
         # CONFORMING CHANGES") with only \n instead of \n\n.
         merged = _split_consecutive_caps_heading_lines(merged)
+
+        # Final integrity gate: no-op for already-valid text; deterministic
+        # repair only when malformed delimiters or CT literal brackets exist.
+        merged = enforce_tag_integrity_gate(merged, state_code=state_code)
+        _gate_report = getattr(enforce_tag_integrity_gate, "_last_report", None)
+        if _gate_report and _gate_report.get("changed"):
+            logging.warning(
+                "Hybrid integrity gate repaired output: %s",
+                "; ".join((_gate_report.get("issues") or [])[:4]),
+            )
 
         total_time = time.time() - start_time
         minutes = int(total_time // 60)
@@ -3603,7 +3621,13 @@ def _restore_merged_lines(text, reference_text):
     return '\n'.join(result)
 
 
-def deterministic_cleanup(text, state_config=None, state_code=None, reference_text=None):
+def deterministic_cleanup(
+    text,
+    state_config=None,
+    state_code=None,
+    reference_text=None,
+    apply_structural_passes=True,
+):
     """
     Apply deterministic fixes for common Claude output inconsistencies.
     These are formatting errors that Claude makes intermittently regardless
@@ -4032,11 +4056,15 @@ def deterministic_cleanup(text, state_config=None, state_code=None, reference_te
                 fix_log.append(f"ALL-CAPS enforcement: split mixed tags into {n_now - n_orig + n_orig} CAPS-only segments")
             logging.info(f"🔧 ALL-CAPS tag enforcement: {n_orig} → {n_now} [A>] tags")
 
-    # ── Final: Fix cross-type overlaps, remove nested tags, merge mid-sentence splits, then split at subsection boundaries ──
-    text = fix_overlapping_cross_tags(text)
-    text = remove_nested_tags(text)
-    text = merge_split_tags(text)
-    text = split_tagged_subsections(text)
+    # ── Final structural passes (optional) ─────────────────────────────
+    # Hybrid conversion already runs a full structural chain inside
+    # convert_pdf_hybrid_text. Re-running the same operations here can
+    # over-shape tags, so callers may disable this pass.
+    if apply_structural_passes:
+        text = fix_overlapping_cross_tags(text)
+        text = remove_nested_tags(text)
+        text = merge_split_tags(text)
+        text = split_tagged_subsections(text)
 
     # ── Absolute last step: split tabular tags at column boundaries ──
     # DE-specific: re-split multi-row merged tags, then split single
@@ -4046,7 +4074,7 @@ def deterministic_cleanup(text, state_config=None, state_code=None, reference_te
     # _split_tabular_tag_at_dollar then handles remaining single-dollar
     # "Label $ Amount" tags (e.g. [A>TOTAL - Secretary $ 3,880,543<A]).
     # Scoped to DE + IN so prose tags in other states are never split.
-    if _HAS_PYMUPDF and state_code and state_code.upper() in ("DE", "IN"):
+    if apply_structural_passes and _HAS_PYMUPDF and state_code and state_code.upper() in ("DE", "IN"):
         text = _split_merged_grant_tag_rows(text)
         text = _split_tabular_header_from_data(text)
         text = _split_tabular_tag_at_dollar(text)
@@ -4449,6 +4477,7 @@ def main():
     converted_text = deterministic_cleanup(
         converted_text, state_config=state_config, state_code=state_code,
         reference_text=_reference_text,
+        apply_structural_passes=not hybrid_mode,
     )
 
     # Post-process: fix Iowa signature block layout

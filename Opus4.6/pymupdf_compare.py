@@ -113,24 +113,39 @@ def _resize_image_b64(img_b64: str, max_dim: int = _MAX_IMAGE_DIM) -> str:
     import base64
     import io
     try:
-        from PIL import Image
+        from PIL import Image, ImageFile
     except ImportError:
         # If Pillow not available, return as-is and let the API error
         return img_b64
 
     raw = base64.b64decode(img_b64)
-    img = Image.open(io.BytesIO(raw))
-    w, h = img.size
-    if w <= max_dim and h <= max_dim:
-        return img_b64  # no resize needed
 
-    # Scale down preserving aspect ratio
-    scale = min(max_dim / w, max_dim / h)
-    new_w, new_h = int(w * scale), int(h * scale)
-    img = img.resize((new_w, new_h), Image.LANCZOS)
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return base64.b64encode(buf.getvalue()).decode()
+    def _open_and_resize(allow_truncated: bool) -> str:
+        old_flag = ImageFile.LOAD_TRUNCATED_IMAGES
+        ImageFile.LOAD_TRUNCATED_IMAGES = allow_truncated
+        try:
+            with Image.open(io.BytesIO(raw)) as img:
+                img.load()
+                w, h = img.size
+                if w <= max_dim and h <= max_dim:
+                    return img_b64  # no resize needed
+
+                # Scale down preserving aspect ratio
+                scale = min(max_dim / w, max_dim / h)
+                new_w, new_h = int(w * scale), int(h * scale)
+                resized = img.resize((new_w, new_h), Image.LANCZOS)
+                buf = io.BytesIO()
+                resized.save(buf, format="PNG")
+                return base64.b64encode(buf.getvalue()).decode()
+        finally:
+            ImageFile.LOAD_TRUNCATED_IMAGES = old_flag
+
+    try:
+        return _open_and_resize(False)
+    except Exception:
+        # Some highlighted pages can be partially written/corrupted.
+        # Retry with truncated-image support before giving up.
+        return _open_and_resize(True)
 
 
 def _protected_clauses_for(state_code: Optional[str]) -> List[str]:
@@ -1123,8 +1138,8 @@ def _precheck_clean_text(
             results[item["id"]] = {"in_clean": "no", "clean_text": ""}
 
     # ── Bracket-deletion convention reclassification ──────────────
-    # For states whose deletion convention is square brackets (CT, MD,
-    # KY, etc.) PyMuPDF reports the bracketed span (e.g. ``[having]``)
+    # For states whose deletion convention is square brackets (e.g. MD,
+    # KY), PyMuPDF reports the bracketed span (e.g. ``[having]``)
     # with ``format_types=['brackets']``.  The LLM cleaning step
     # typically preserves the LITERAL bracketed text in the output
     # rather than wrapping it in a ``[D>…<D]`` tag — the brackets ARE
@@ -1132,6 +1147,10 @@ def _precheck_clean_text(
     # flag the item as ``tag_dropped`` / ``partial_match``; it is a ✅
     # pass.  We override the in_clean status to ``brackets_preserved``
     # so the post-processing layer surfaces it correctly.
+    #
+    # CT is intentionally excluded: CT pipeline now normalizes bracket
+    # deletions to [D>...<D] before LLM, so literal [ ... ] in clean text
+    # should be treated as a tagging miss, not a pass.
     #
     # NORMALISATION: in CT bills (and any state with line-numbered
     # body text) PyMuPDF embeds the body line numbers INSIDE the
@@ -1205,8 +1224,11 @@ def _precheck_clean_text(
     ]
 
     n_bracket_pass = 0
+    _allow_literal_brackets = not (state_code and state_code.upper() == "CT")
     for item in checklist_items:
         if "brackets" not in (item.get("format_types") or []):
+            continue
+        if not _allow_literal_brackets:
             continue
         iid = item["id"]
         cur = results[iid]["in_clean"]
@@ -1763,12 +1785,21 @@ def pymupdf_compare_tags(
         for i, img_b64 in enumerate(chunk_images):
             # Show the actual page number for clarity
             actual_page = chunk_image_indices[i] + 1 if n_chunks > 1 else i + 1
+            try:
+                # Anthropic limits each image to 2000px per dimension for multi-image requests
+                resized_b64 = _resize_image_b64(img_b64)
+            except Exception as img_err:
+                log.warning(
+                    "Skipping highlighted page %d due to image decode/resize error: %s",
+                    actual_page,
+                    img_err,
+                )
+                continue
+
             content_parts.append({
                 "type": "text",
                 "text": f"[Highlighted page {actual_page} of {len(highlighted_images_b64)}]",
             })
-            # Anthropic limits each image to 2000px per dimension for multi-image requests
-            resized_b64 = _resize_image_b64(img_b64)
             content_parts.append({
                 "type": "image",
                 "source": {
@@ -1883,6 +1914,34 @@ def pymupdf_compare_tags(
         return (best_page, str(line_no))
 
     # ── Inject deterministic extra-tag findings as checklist rows ───
+    # Indiana scope and clean-text locator helpers are needed by the
+    # extra-tag loop below, so define them before first use.
+    _in_printing_scope_start = -1
+    _in_printing_scope_end = -1
+    if state_code and state_code.upper() == "IN":
+        _m_pc = re.search(
+            r"PRINTING\s+CODE[:\s]*.*?(?=\nSECTION\s+1\b|\Z)",
+            pymupdf_clean_text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if _m_pc:
+            _in_printing_scope_start, _in_printing_scope_end = _m_pc.span(0)
+
+    def _in_printing_code_scope(offset: int) -> bool:
+        if offset < 0:
+            return False
+        if _in_printing_scope_start < 0 or _in_printing_scope_end < 0:
+            return False
+        return _in_printing_scope_start <= offset < _in_printing_scope_end
+
+    def _locate_in_clean(tag_text: str, plain_text: str) -> int:
+        pos = -1
+        if tag_text:
+            pos = pymupdf_clean_text.find(tag_text)
+        if pos < 0 and plain_text:
+            pos = pymupdf_clean_text.find(plain_text)
+        return pos
+
     if extra_clean_tags:
         log.info("➕ Injecting %d extra clean tags as checklist rows",
                  len(extra_clean_tags))
@@ -2185,6 +2244,142 @@ def pymupdf_compare_tags(
                 ),
             })
 
+    # ── Deterministic structural tag findings ──────────────────────
+    # The checklist walk focuses on known PyMuPDF spans, so malformed
+    # delimiter structure can slip through. Add deterministic findings
+    # for unmatched tag delimiters and (CT) literal bracket deletions
+    # left unwrapped.
+    def _snippet_at(pos: int, radius: int = 90) -> str:
+        s = max(0, pos - radius)
+        e = min(len(pymupdf_clean_text), pos + radius)
+        return pymupdf_clean_text[s:e].replace("\n", " ")
+
+    _existing_clean_texts = {
+        str(af.get("clean_text", "") or "").strip()
+        for af in additional_findings
+    }
+    _next_af_id = max([af.get("id", 0) for af in additional_findings] + [0]) + 1
+
+    _stack_a: List[int] = []
+    _stack_d: List[int] = []
+    for _m in re.finditer(r"\[A>|<A\]|\[D>|<D\]", pymupdf_clean_text):
+        _tok = _m.group(0)
+        _pos = _m.start()
+        if _tok == "[A>":
+            _stack_a.append(_pos)
+        elif _tok == "<A]":
+            if _stack_a:
+                _stack_a.pop()
+            else:
+                _ctx = _snippet_at(_pos)
+                if _ctx not in _existing_clean_texts:
+                    _pg, _ln = _estimate_extra_tag_page_line("<A]", pymupdf_clean_text)
+                    additional_findings.append({
+                        "id": _next_af_id,
+                        "page": _pg,
+                        "issue_type": "extra_tag",
+                        "description": (
+                            "Unmatched closing <A] found in cleaned text "
+                            "(no corresponding [A> opener)."
+                        ),
+                        "clean_text": _ctx,
+                        "image_text": "",
+                        "suggested_fix": "Insert missing [A> opener or remove stray <A] so A-tags are balanced.",
+                    })
+                    _existing_clean_texts.add(_ctx)
+                    _next_af_id += 1
+        elif _tok == "[D>":
+            _stack_d.append(_pos)
+        elif _tok == "<D]":
+            if _stack_d:
+                _stack_d.pop()
+            else:
+                _ctx = _snippet_at(_pos)
+                if _ctx not in _existing_clean_texts:
+                    _pg, _ln = _estimate_extra_tag_page_line("<D]", pymupdf_clean_text)
+                    additional_findings.append({
+                        "id": _next_af_id,
+                        "page": _pg,
+                        "issue_type": "extra_tag",
+                        "description": (
+                            "Unmatched closing <D] found in cleaned text "
+                            "(no corresponding [D> opener)."
+                        ),
+                        "clean_text": _ctx,
+                        "image_text": "",
+                        "suggested_fix": "Insert missing [D> opener or remove stray <D] so D-tags are balanced.",
+                    })
+                    _existing_clean_texts.add(_ctx)
+                    _next_af_id += 1
+
+    for _pos in _stack_a:
+        _ctx = _snippet_at(_pos)
+        if _ctx in _existing_clean_texts:
+            continue
+        _pg, _ln = _estimate_extra_tag_page_line("[A>", pymupdf_clean_text)
+        additional_findings.append({
+            "id": _next_af_id,
+            "page": _pg,
+            "issue_type": "extra_tag",
+            "description": "Unclosed [A> opener found in cleaned text.",
+            "clean_text": _ctx,
+            "image_text": "",
+            "suggested_fix": "Add missing <A] closer at the correct boundary.",
+        })
+        _existing_clean_texts.add(_ctx)
+        _next_af_id += 1
+
+    for _pos in _stack_d:
+        _ctx = _snippet_at(_pos)
+        if _ctx in _existing_clean_texts:
+            continue
+        _pg, _ln = _estimate_extra_tag_page_line("[D>", pymupdf_clean_text)
+        additional_findings.append({
+            "id": _next_af_id,
+            "page": _pg,
+            "issue_type": "extra_tag",
+            "description": "Unclosed [D> opener found in cleaned text.",
+            "clean_text": _ctx,
+            "image_text": "",
+            "suggested_fix": "Add missing <D] closer at the correct boundary.",
+        })
+        _existing_clean_texts.add(_ctx)
+        _next_af_id += 1
+
+    if state_code and state_code.upper() == "CT":
+        _tag_span_re = re.compile(r"\[([AD])>(.*?)<\1\]", re.DOTALL)
+        _untagged_parts: List[str] = []
+        _last = 0
+        for _m in _tag_span_re.finditer(pymupdf_clean_text):
+            _untagged_parts.append(pymupdf_clean_text[_last:_m.start()])
+            _last = _m.end()
+        _untagged_parts.append(pymupdf_clean_text[_last:])
+        _untagged_text = "".join(_untagged_parts)
+
+        for _m in re.finditer(r"\[(?![AD]>)([^\]]+)\]", _untagged_text):
+            _raw = _m.group(0).strip()
+            if len(_raw) < 4:
+                continue
+            if _raw in _existing_clean_texts:
+                continue
+            additional_findings.append({
+                "id": _next_af_id,
+                "page": "",
+                "issue_type": "extra_tag",
+                "description": (
+                    "CT bracket deletion left as literal [ ... ] in cleaned text; "
+                    "expected [D>[...]<D]."
+                ),
+                "clean_text": _raw[:240],
+                "image_text": _raw[:240],
+                "suggested_fix": "Wrap this bracketed deletion as [D>[...]<D].",
+            })
+            _existing_clean_texts.add(_raw)
+            _next_af_id += 1
+            # Keep the findings list focused; one representative sample
+            # is enough to signal a systemic CT bracket-wrapper miss.
+            break
+
     # ── Lookups from the deterministic checklist ────────────────────
     _full_text = {ci["id"]: ci["text"]      for ci in checklist_items}
     _item_page = {ci["id"]: ci["page"]      for ci in checklist_items}
@@ -2258,33 +2453,6 @@ def pymupdf_compare_tags(
                 "decorative-header cross-validation",
                 len(in_committee_names),
             )
-
-    # Indiana scope for italic_section_only policy.
-    _in_printing_scope_start = -1
-    _in_printing_scope_end = -1
-    if state_code and state_code.upper() == "IN":
-        _m_pc = re.search(
-            r"PRINTING\s+CODE[:\s]*.*?(?=\nSECTION\s+1\b|\Z)",
-            pymupdf_clean_text,
-            flags=re.IGNORECASE | re.DOTALL,
-        )
-        if _m_pc:
-            _in_printing_scope_start, _in_printing_scope_end = _m_pc.span(0)
-
-    def _in_printing_code_scope(offset: int) -> bool:
-        if offset < 0:
-            return False
-        if _in_printing_scope_start < 0 or _in_printing_scope_end < 0:
-            return False
-        return _in_printing_scope_start <= offset < _in_printing_scope_end
-
-    def _locate_in_clean(tag_text: str, plain_text: str) -> int:
-        pos = -1
-        if tag_text:
-            pos = pymupdf_clean_text.find(tag_text)
-        if pos < 0 and plain_text:
-            pos = pymupdf_clean_text.find(plain_text)
-        return pos
 
     _prev_classification = None
     _prev_pymupdf_text = ""

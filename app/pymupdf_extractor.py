@@ -4923,6 +4923,176 @@ def _tag_brackets(text: str) -> str:
     return "".join(parts)
 
 
+def enforce_tag_integrity_gate(text: str, state_code: Optional[str] = None) -> str:
+    """Conservatively enforce tag integrity on converted output.
+
+    Design goals:
+    - No-op for already-valid files.
+    - Deterministic minimal repair for malformed delimiters.
+
+    The function records a small report on
+    ``enforce_tag_integrity_gate._last_report`` with fields:
+    ``changed`` (bool), ``issues`` (list[str]), ``before`` (dict),
+    ``after`` (dict).
+    """
+    if not text:
+        enforce_tag_integrity_gate._last_report = {
+            "changed": False,
+            "issues": [],
+            "before": {"open_a": 0, "close_a": 0, "open_d": 0, "close_d": 0},
+            "after": {"open_a": 0, "close_a": 0, "open_d": 0, "close_d": 0},
+        }
+        return text
+
+    def _counts(s: str) -> dict:
+        return {
+            "open_a": s.count("[A>"),
+            "close_a": s.count("<A]"),
+            "open_d": s.count("[D>"),
+            "close_d": s.count("<D]"),
+        }
+
+    before = _counts(text)
+    issues: List[str] = []
+    repaired = text
+
+    # Pass 1: remove unmatched closers and strip unmatched openers.
+    token_re = re.compile(r"\[A>|<A\]|\[D>|<D\]")
+    parts: List[str] = []
+    stack_a: List[int] = []  # indices in parts where opener token was inserted
+    stack_d: List[int] = []
+    last = 0
+
+    for m in token_re.finditer(repaired):
+        tok = m.group(0)
+        parts.append(repaired[last:m.start()])
+        if tok == "[A>":
+            parts.append(tok)
+            stack_a.append(len(parts) - 1)
+        elif tok == "[D>":
+            parts.append(tok)
+            stack_d.append(len(parts) - 1)
+        elif tok == "<A]":
+            if stack_a:
+                parts.append(tok)
+                stack_a.pop()
+            else:
+                issues.append("Removed unmatched <A] closer")
+                parts.append("")
+        elif tok == "<D]":
+            if stack_d:
+                parts.append(tok)
+                stack_d.pop()
+            else:
+                issues.append("Removed unmatched <D] closer")
+                parts.append("")
+        last = m.end()
+    parts.append(repaired[last:])
+
+    # Any openers left on stack are unmatched; strip marker only.
+    for idx in stack_a:
+        if parts[idx] == "[A>":
+            parts[idx] = ""
+            issues.append("Removed unmatched [A> opener")
+    for idx in stack_d:
+        if parts[idx] == "[D>":
+            parts[idx] = ""
+            issues.append("Removed unmatched [D> opener")
+
+    repaired = "".join(parts)
+
+    after = _counts(repaired)
+    changed = repaired != text
+    enforce_tag_integrity_gate._last_report = {
+        "changed": changed,
+        "issues": issues,
+        "before": before,
+        "after": after,
+    }
+    return repaired
+
+
+def build_tag_integrity_report(
+    text: str,
+    *,
+    state_code: Optional[str] = None,
+    reference_text: Optional[str] = None,
+) -> dict:
+    """Build a deterministic integrity report for tagged legislative text.
+
+    This is read-only and intended as a validation fallback when LLM/vision
+    audits under-report structural issues.
+    """
+    def _counts(s: str) -> dict:
+        return {
+            "open_a": s.count("[A>"),
+            "close_a": s.count("<A]"),
+            "open_d": s.count("[D>"),
+            "close_d": s.count("<D]"),
+        }
+
+    def _extract_tags(s: str) -> list[tuple[str, str]]:
+        return [
+            (m.group(1), re.sub(r"\s+", " ", m.group(2)).strip())
+            for m in re.finditer(r"\[([AD])>(.*?)<\1\]", s, flags=re.DOTALL)
+        ]
+
+    issues: list[str] = []
+    severity = "pass"
+
+    counts = _counts(text or "")
+    if counts["open_a"] != counts["close_a"]:
+        issues.append(
+            f"Mismatched A delimiters: {counts['open_a']} open vs {counts['close_a']} close"
+        )
+    if counts["open_d"] != counts["close_d"]:
+        issues.append(
+            f"Mismatched D delimiters: {counts['open_d']} open vs {counts['close_d']} close"
+        )
+
+    malformed_close_a = len(re.findall(r"<A>", text or ""))
+    malformed_close_d = len(re.findall(r"<D>", text or ""))
+    if malformed_close_a:
+        issues.append(f"Malformed A close tags found: {malformed_close_a}")
+    if malformed_close_d:
+        issues.append(f"Malformed D close tags found: {malformed_close_d}")
+
+    long_tags = []
+    for m in re.finditer(r"\[([AD])>(.*?)<\1\]", text or "", flags=re.DOTALL):
+        inner = re.sub(r"\s+", " ", m.group(2)).strip()
+        if len(inner) >= 180:
+            long_tags.append((m.group(1), inner[:120]))
+    if long_tags:
+        issues.append(f"Suspiciously long tags found: {len(long_tags)}")
+
+    ref_delta = None
+    if reference_text:
+        from collections import Counter
+
+        out_tags = Counter(_extract_tags(text or ""))
+        ref_tags = Counter(_extract_tags(reference_text))
+        missing = list((ref_tags - out_tags).elements())
+        added = list((out_tags - ref_tags).elements())
+        ref_delta = {
+            "missing_reference_tags": len(missing),
+            "added_nonreference_tags": len(added),
+        }
+        if missing:
+            issues.append(f"Missing reference tags vs pre-cleaned input: {len(missing)}")
+        if added:
+            issues.append(f"New tag payloads not in pre-cleaned input: {len(added)}")
+
+    if issues:
+        severity = "error"
+
+    return {
+        "severity": severity,
+        "issues": issues,
+        "counts": counts,
+        "reference_delta": ref_delta,
+    }
+
+
 # ---------------------------------------------------------------------------
 # KS signature-line injection — recover vector-drawn horizontal rules
 # ---------------------------------------------------------------------------
@@ -5991,6 +6161,11 @@ def clean_extracted_text(
     #    start at the left margin — no leading spaces or tabs.
     if state_code and state_code.upper() == "IN":
         cleaned = _strip_in_leading_indent(cleaned)
+
+    # ── Generic: rejoin stray single-line wraps that split a sentence
+    #    mid-clause. Keep this near the end so state-specific split/rejoin
+    #    passes run first, and only obvious prose wraps are flattened.
+    cleaned = rejoin_mid_sentence_line_breaks(cleaned)
 
     # Store the pre-cleaned text and diff report for the caller to retrieve and save
     clean_extracted_text._last_pre_cleaned = pre_cleaned
@@ -7454,6 +7629,80 @@ def rejoin_inline_renumber_list_breaks(text: str) -> str:
         r'(?=[ \t]+\S)',                      # lookahead: inline whitespace + content
     )
     return pattern.sub(r'\1 \2', text)
+
+
+def rejoin_mid_sentence_line_breaks(text: str) -> str:
+        """Rejoin single newlines that split a flowing sentence mid-clause.
+
+        This targets extraction/cleanup cases where a wrapped prose line survives
+        as a hard line break in the final text, e.g.:
+
+            "... purpose of agency work or\noperations."
+
+        Safety constraints:
+        - Only single newlines are touched (double-newline paragraph breaks stay).
+        - The character before the newline must look like running prose
+            (lowercase, digit, comma, or right parenthesis).
+        - The next line can begin with lowercase, numeric continuations
+            (e.g. "2019.", "10 units"), legal citation/month tokens, or
+            uppercase words when they are not list/section markers.
+          This preserves real paragraph starts such as "(Q) ...", "(IV) ...",
+          "1) ...", "2. ...".
+        """
+        if not text:
+                return text
+        # Also join legal citation continuations that start uppercase, e.g.:
+        #   "... consistent with\nSection 54226."
+        # We intentionally scope uppercase joins to citation/month tokens to avoid
+        # collapsing real paragraph starts.
+        _continuation = (
+            r"(?:"
+            r"[a-z]"
+            r"|\d"
+            r"|Section\b|Sections\b|Chapter\b|Part\b|Division\b|Article\b|Subdivision\b"
+            r"|January\b|February\b|March\b|April\b|May\b|June\b|July\b|August\b"
+            r"|September\b|October\b|November\b|December\b"
+            r"|[A-Z]"
+            r")"
+        )
+
+        # Guard against list/section marker starts that represent real
+        # paragraph boundaries, not wrapped continuations.
+        _not_list_marker = (
+            r"(?!"
+            r"\(?[A-Za-z0-9ivxlcdmIVXLCDM]{1,6}\)[ \t]"
+            r"|[A-Za-z0-9ivxlcdmIVXLCDM]{1,6}\)[ \t]"
+            r"|\d+\.[ \t]"
+            r")"
+        )
+
+        text = re.sub(
+            rf"(?<=[a-z0-9,\)])[ \t]*\n(?=[ \t]*(?:\[[AD]>[ \t]*)?{_not_list_marker}{_continuation})",
+            " ",
+            text,
+        )
+
+        # Parenthetical continuation lines that are still part of the same
+        # sentence, e.g.:
+        #   "... Chapter 10\n(commencing with Section 18900) ..."
+        text = re.sub(
+            r"(?<=[A-Za-z0-9,\)])[ \t]*\n(?=[ \t]*\((?:commencing|including|pursuant|under|as|with)\b)",
+            " ",
+            text,
+            flags=re.IGNORECASE,
+        )
+
+        # Cross-tag continuation wraps where a replacement tag starts the next
+        # line but semantically continues the same sentence, e.g.:
+        #   "... a[D> third party<D]\n[A>third-party<A] review entity."
+        text = re.sub(
+            r"([a-z0-9])(<[AD]\])[ \t]*\n(?=[ \t]*\[[AD]>[a-z0-9])",
+            r"\1\2 ",
+            text,
+            flags=re.IGNORECASE,
+        )
+
+        return text
 
 
 # ---------------------------------------------------------------------------

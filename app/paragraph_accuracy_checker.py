@@ -261,6 +261,17 @@ def _find_text_in_output(needle: str, output_lines: List[str], output_text_norm:
     return None, False, -1
 
 
+def _is_list_marker_prefix(prefix: str) -> bool:
+    """Return True if *prefix* looks like a list/enumeration marker.
+
+    Examples: "(v)", "(IV)", "1.", "12)", "(a)", "A."
+    """
+    p = (prefix or "").strip()
+    if not p:
+        return False
+    return bool(re.match(r"^(?:\(?[ivxlcdmIVXLCDM]+\)?[\.)]?|\(?\d+[A-Za-z]?\)?[\.)]?|\(?[A-Za-z]\)?[\.)]?)$", p))
+
+
 @dataclass
 class MergeError:
     """A paragraph that should start on a new line but was merged."""
@@ -350,7 +361,10 @@ def check_paragraph_accuracy(
             skipped += 1
             continue
 
-        if line_idx == 0 or starts_at_beginning:
+        line_norm_for_pos = _normalize_for_matching(output_lines[line_idx])
+        prefix_before = line_norm_for_pos[:char_pos].strip() if char_pos > 0 else ""
+
+        if line_idx == 0 or starts_at_beginning or _is_list_marker_prefix(prefix_before):
             correct += 1
         else:
             # SPLIT needed — paragraph text is merged mid-line
@@ -362,6 +376,21 @@ def check_paragraph_accuracy(
             if raw_pos < 0:
                 # Try without tag interference
                 raw_pos = char_pos  # fallback to normalized position
+
+            # False-positive guard: many PDF wraps get detected as boundaries
+            # by indentation, but in output they appear as lowercase clause
+            # continuations inside the same sentence. Do not flag these as
+            # split-needed.
+            first_token = _normalize_for_matching(boundary.first_words).split(' ', 1)[0].strip()
+            looks_lowercase_continuation = bool(first_token) and first_token[0].islower()
+            if looks_lowercase_continuation and raw_pos > 0:
+                left_text = raw_line[:raw_pos].rstrip()
+                left_tail = left_text[-1:] if left_text else ""
+                # If left side does not end a sentence and the candidate
+                # boundary starts lowercase, this is almost always a wrap.
+                if left_tail and left_tail not in '.:;!?':
+                    correct += 1
+                    continue
 
             # Get the text BEFORE the split point (end of previous para)
             text_before = raw_line[:raw_pos].rstrip() if raw_pos > 0 else ""
@@ -432,10 +461,11 @@ def _detect_over_splits(
 ):
     """Detect lines that are over-split (broken mid-paragraph).
 
-    Heuristics for a false line break (merge needed):
-    - Line ends mid-sentence (no period, colon, or section marker)
-    - Next line starts with lowercase
-    - Line is very short compared to neighbors
+        Heuristics for a false line break (merge needed):
+        - Line ends mid-sentence (no period, colon, or section marker)
+        - Next line starts like a continuation (lowercase, number, or
+            uppercase word), but NOT like a new list/section marker
+        - Line is very short compared to neighbors
     """
     # Build set of expected paragraph-start texts for quick lookup
     boundary_starts = set()
@@ -465,15 +495,48 @@ def _detect_over_splits(
         if is_expected_boundary:
             continue
 
-        # Heuristic: line ends without sentence-ending punctuation AND
-        # next line starts with lowercase → likely an over-split
-        ends_mid_sentence = not line_norm.rstrip().endswith(('.', ':', ';', '"', ')', ']'))
-        next_starts_lower = next_norm[0].islower() if next_norm else False
+        def _is_list_marker_start(s: str) -> bool:
+            s = (s or "").strip()
+            if not s:
+                return False
+            # New item starts we should preserve as true boundaries:
+            #   (a) foo, (IV) foo, 1) foo, 2. foo, a) foo
+            return bool(re.match(r'^(?:\([A-Za-z0-9ivxlcdmIVXLCDM]{1,6}\)|[A-Za-z0-9ivxlcdmIVXLCDM]{1,6}[\.)])\s+', s))
 
-        if ends_mid_sentence and next_starts_lower:
+        def _is_continuation_start(s: str) -> bool:
+            s = (s or "").strip()
+            if not s:
+                return False
+
+            # Strip leading tag opener(s) when a continuation line starts
+            # with tagged text: [A>foo<A] or [D>bar<D].
+            s_for_check = re.sub(r'^(?:\[[AD]>\s*)+', '', s)
+            s_for_check = s_for_check.strip()
+            if not s_for_check or _is_list_marker_start(s_for_check):
+                return False
+            if re.match(r'^\((?:commencing|including|pursuant|under|as|with)\b', s_for_check, re.IGNORECASE):
+                return True
+            ch = s_for_check[0]
+            # Continuation-like starts we want to catch:
+            #   lowercase clause, numeric carryover ("2019." / "10 units"),
+            #   uppercase lexical continuation ("Administration", "Preservation")
+            return ch.islower() or ch.isdigit() or ch.isupper()
+
+        # Heuristic: line ends without sentence-ending punctuation AND
+        # next line starts like a continuation → likely an over-split
+        ends_mid_sentence = not line_norm.rstrip().endswith(('.', ':', ';', '"', ')', ']'))
+        next_is_continuation = _is_continuation_start(next_norm)
+
+        _next_raw = (next_line or "").strip()
+        _strong_continuation = bool(
+            re.match(r'^\((?:commencing|including|pursuant|under|as|with)\b', _next_raw, re.IGNORECASE)
+            or re.match(r'^\[[AD]>', _next_raw)
+        )
+
+        if ends_mid_sentence and next_is_continuation:
             # Additional check: skip if line is reasonably long (>100 chars)
             # Short broken lines are more suspicious
-            if len(line_norm) < 80:
+            if len(line_norm) < 80 or _strong_continuation:
                 merges_needed.append({
                     "line": i + 1,  # 1-based (first line)
                     "merge_with_line": i + 2,  # 1-based (second line)
@@ -482,7 +545,7 @@ def _detect_over_splits(
                     "next_line_text": next_norm[:50],
                     "description": (
                         f"Merge lines {i + 1} and {i + 2}: "
-                        f"line ends mid-sentence, next starts lowercase"
+                        f"line ends mid-sentence, next looks like continuation"
                     ),
                 })
 

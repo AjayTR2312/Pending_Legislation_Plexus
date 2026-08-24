@@ -48,6 +48,10 @@ from extraction_validator import (
         # Section header split from its number.
         ("split_section_header", "Sec.\n  123. The following shall apply"),
 
+        # Mid-sentence line break (false paragraph split).
+        ("mid_sentence_line_break", "the express purpose of agency work or\noperations."),
+        ("mid_sentence_line_break", "consistent with\nSection 54226."),
+
         # Orphan tag opener / closer on a line by itself.
         ("orphan_tag_opener", "previous line text\n[A>\nnext line text"),
         ("orphan_tag_closer", "previous line text\n<A]\nnext line text"),
@@ -247,8 +251,58 @@ from pymupdf_extractor import _split_in_section_heading_welds
 from pymupdf_extractor import _split_in_merged_table_rows
 from pymupdf_extractor import _ensure_in_item_spacing
 from pymupdf_extractor import _split_in_midline_items
+from pymupdf_extractor import rejoin_mid_sentence_line_breaks
 from pymupdf_extractor import consolidate_adjacent_tags
 from pymupdf_extractor import split_ar_subsection_welds
+
+
+def test_rejoin_mid_sentence_line_breaks_rejoins_soft_wrap() -> None:
+    text = "the express purpose of agency work or\noperations."
+    out = rejoin_mid_sentence_line_breaks(text)
+    assert out == "the express purpose of agency work or operations."
+
+
+def test_rejoin_mid_sentence_line_breaks_rejoins_legal_citation_wrap() -> None:
+    text = "fair market value consistent with\nSection 54226."
+    out = rejoin_mid_sentence_line_breaks(text)
+    assert out == "fair market value consistent with Section 54226."
+
+
+def test_rejoin_mid_sentence_line_breaks_keeps_section_break() -> None:
+    text = "Sec. 39. Section 65652 is added to the Food and Agricultural Code,\nto read:\n\n65652. Venue for actions"
+    out = rejoin_mid_sentence_line_breaks(text)
+    # The paragraph break before the section header must remain intact.
+    assert "\n\n65652." in out
+
+
+def test_rejoin_mid_sentence_line_breaks_rejoins_numeric_continuation() -> None:
+    text = "if the terms were agreed to prior to September 30,\n2019."
+    out = rejoin_mid_sentence_line_breaks(text)
+    assert out == "if the terms were agreed to prior to September 30, 2019."
+
+
+def test_rejoin_mid_sentence_line_breaks_rejoins_uppercase_continuation_word() -> None:
+    text = "pursuant to Federal Aviation\nAdministration Order 5190.6B"
+    out = rejoin_mid_sentence_line_breaks(text)
+    assert out == "pursuant to Federal Aviation Administration Order 5190.6B"
+
+
+def test_rejoin_mid_sentence_line_breaks_keeps_marker_start_boundary() -> None:
+    text = "January 1, 2034.\n\n(Q) Land that is owned by a California public-use airport"
+    out = rejoin_mid_sentence_line_breaks(text)
+    assert "\n\n(Q) Land" in out
+
+
+def test_rejoin_mid_sentence_line_breaks_rejoins_parenthetical_continuation() -> None:
+    text = "Chapter 10\n(commencing with Section 18900) of Part 6"
+    out = rejoin_mid_sentence_line_breaks(text)
+    assert out == "Chapter 10 (commencing with Section 18900) of Part 6"
+
+
+def test_rejoin_mid_sentence_line_breaks_rejoins_cross_tag_continuation() -> None:
+    text = "to a[D> third party<D]\n[A>third-party<A] review entity."
+    out = rejoin_mid_sentence_line_breaks(text)
+    assert out == "to a[D> third party<D] [A>third-party<A] review entity."
 
 
 def test_consolidate_adjacent_tags_ar_keeps_chained_subsection_boundary() -> None:
