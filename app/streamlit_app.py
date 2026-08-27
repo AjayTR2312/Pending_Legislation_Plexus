@@ -9,6 +9,7 @@ import time
 import logging
 import threading
 import copy
+import re
 
 # Streamlit re-executes this script on every rerun; sys.stdout/stderr can be
 # replaced or closed between reruns, so avoid any stream-backed handler here.
@@ -670,6 +671,14 @@ def process_single_pdf_simple(pdf_path, state_code, session_id, progress_placeho
                 for step in range(5):
                     st.session_state.step_status[step] = "❌"
                 return None
+
+            # Apply the AR page-1 layout normalizer after chunk stitching so
+            # the first-page title block stays vertical instead of flattening
+            # into the body text.
+            if state_code and state_code.upper() == "AR":
+                from pymupdf_extractor import _normalize_ar_page1_header
+
+                corrected_text = _normalize_ar_page1_header(corrected_text)
             
             # Mark all steps as complete
             for step in range(5):
@@ -2398,7 +2407,7 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
         # Live-update the log placeholder with styled activity feed
         if log_placeholder is not None:
             with log_placeholder.container():
-                st.markdown(_build_activity_feed_html(st.session_state.processing_logs), unsafe_allow_html=True)
+                st.markdown(_build_activity_feed_html(st.session_state.processing_logs, scrollable=True), unsafe_allow_html=True)
 
     def update_progress():
         if progress_placeholder:
@@ -2532,9 +2541,39 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
         try:
             from pymupdf_extractor import rejoin_mid_sentence_line_breaks as _rejoin_soft_wraps
             _before_rejoin = converted_text
-            converted_text = _rejoin_soft_wraps(converted_text)
+            if detected_state and detected_state.upper() in {"AR", "IA"}:
+                # Preserve AR/IA page-1 header-preamble layout: do not run the
+                # generic soft-wrap joiner above the enacting clause.
+                _enacting_patterns = {
+                    "AR": r"\n\s*BE IT ENACTED BY THE GENERAL ASSEMBLY OF THE STATE OF ARKANSAS:\s*\n",
+                    "IA": r"\n\s*BE IT ENACTED BY THE GENERAL ASSEMBLY OF THE STATE OF IOWA:\s*\n",
+                }
+                _enacting = re.search(
+                    _enacting_patterns[detected_state.upper()],
+                    converted_text,
+                    flags=re.IGNORECASE,
+                )
+                if _enacting:
+                    _prefix = converted_text[:_enacting.start()]
+                    _suffix = converted_text[_enacting.start():]
+                    _suffix = _rejoin_soft_wraps(_suffix)
+                    converted_text = _prefix + _suffix
+                else:
+                    converted_text = _rejoin_soft_wraps(converted_text)
+            else:
+                converted_text = _rejoin_soft_wraps(converted_text)
             if converted_text != _before_rejoin:
                 add_log("🔗 Rejoined mid-sentence soft line wraps")
+
+            # Defensive AR/IA pass: re-canonicalize page-1 header after any
+            # downstream text rewrites.
+            if detected_state and detected_state.upper() in {"AR", "IA"}:
+                if detected_state.upper() == "AR":
+                    from pymupdf_extractor import _normalize_ar_page1_header as _norm_page1_header
+                else:
+                    from pymupdf_extractor import _normalize_ia_page1_header as _norm_page1_header
+
+                converted_text = _norm_page1_header(converted_text)
         except Exception:
             pass
 
@@ -2557,9 +2596,28 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
         try:
             from pymupdf_extractor import rejoin_mid_sentence_line_breaks as _rejoin_soft_wraps
             _before_rejoin = converted_text
-            converted_text = _rejoin_soft_wraps(converted_text)
+            if detected_state and detected_state.upper() == "IA":
+                _enacting = re.search(
+                    r"\n\s*BE IT ENACTED BY THE GENERAL ASSEMBLY OF THE STATE OF IOWA:\s*\n",
+                    converted_text,
+                    flags=re.IGNORECASE,
+                )
+                if _enacting:
+                    _prefix = converted_text[:_enacting.start()]
+                    _suffix = converted_text[_enacting.start():]
+                    _suffix = _rejoin_soft_wraps(_suffix)
+                    converted_text = _prefix + _suffix
+                else:
+                    converted_text = _rejoin_soft_wraps(converted_text)
+            else:
+                converted_text = _rejoin_soft_wraps(converted_text)
             if converted_text != _before_rejoin:
                 add_log("🔗 Rejoined mid-sentence soft line wraps")
+
+            if detected_state and detected_state.upper() == "IA":
+                from pymupdf_extractor import _normalize_ia_page1_header as _norm_ia_header
+
+                converted_text = _norm_ia_header(converted_text)
         except Exception:
             pass
 
@@ -3026,7 +3084,7 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
         logging.info(message)
         if log_placeholder is not None:
             with log_placeholder.container():
-                st.markdown(_build_activity_feed_html(st.session_state.processing_logs), unsafe_allow_html=True)
+                st.markdown(_build_activity_feed_html(st.session_state.processing_logs, scrollable=True), unsafe_allow_html=True)
 
     def update_progress():
         if progress_placeholder:
@@ -3289,14 +3347,26 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
         st.session_state.step_status[4] = "🔄"
         update_progress()
 
-        try:
-            from pymupdf_extractor import rejoin_mid_sentence_line_breaks as _rejoin_soft_wraps
-            _before_rejoin = pymupdf_clean_text
-            pymupdf_clean_text = _rejoin_soft_wraps(pymupdf_clean_text)
-            if pymupdf_clean_text != _before_rejoin:
-                add_log("🔗 Rejoined mid-sentence soft line wraps")
-        except Exception:
-            pass
+        # Preserve LLM clean layout exactly in Extract+Clean output.
+        # `clean_extracted_text` already applies guarded rejoin logic; running a
+        # second global pass here can flatten structured headers/table-like lines.
+        add_log("🧾 Preserving clean layout (skip extra post-clean rejoin)")
+
+        # Defensive AR/IA pass at final write point.
+        # Keeps page-1 title/header elements on separate lines even if any
+        # upstream transform accidentally compacted them.
+        if detected_state and detected_state.upper() in {"AR", "IA"}:
+            try:
+                if detected_state.upper() == "AR":
+                    from pymupdf_extractor import _normalize_ar_page1_header as _norm_page1_header
+                else:
+                    from pymupdf_extractor import _normalize_ia_page1_header as _norm_page1_header
+                _before_page1_norm = pymupdf_clean_text
+                pymupdf_clean_text = _norm_page1_header(pymupdf_clean_text)
+                if pymupdf_clean_text != _before_page1_norm:
+                    add_log(f"🧩 Re-normalized {detected_state.upper()} page-1 header before save")
+            except Exception:
+                pass
 
         with open(output_path, "w", encoding="utf-8") as cf:
             cf.write(pymupdf_clean_text)
@@ -3530,7 +3600,7 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
         logging.info(message)
         if log_placeholder is not None:
             with log_placeholder.container():
-                st.markdown(_build_activity_feed_html(st.session_state.processing_logs), unsafe_allow_html=True)
+                st.markdown(_build_activity_feed_html(st.session_state.processing_logs, scrollable=True), unsafe_allow_html=True)
 
     def update_progress():
         if progress_placeholder:
@@ -3750,9 +3820,39 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
                 enforce_tag_integrity_gate,
             )
             _before_rejoin = converted_text
-            converted_text = _rejoin_soft_wraps(converted_text)
+            if detected_state and detected_state.upper() in {"AR", "IA"}:
+                # Preserve AR/IA page-1 header-preamble layout: do not run the
+                # generic soft-wrap joiner above the enacting clause.
+                _enacting_patterns = {
+                    "AR": r"\n\s*BE IT ENACTED BY THE GENERAL ASSEMBLY OF THE STATE OF ARKANSAS:\s*\n",
+                    "IA": r"\n\s*BE IT ENACTED BY THE GENERAL ASSEMBLY OF THE STATE OF IOWA:\s*\n",
+                }
+                _enacting = re.search(
+                    _enacting_patterns[detected_state.upper()],
+                    converted_text,
+                    flags=re.IGNORECASE,
+                )
+                if _enacting:
+                    _prefix = converted_text[:_enacting.start()]
+                    _suffix = converted_text[_enacting.start():]
+                    _suffix = _rejoin_soft_wraps(_suffix)
+                    converted_text = _prefix + _suffix
+                else:
+                    converted_text = _rejoin_soft_wraps(converted_text)
+            else:
+                converted_text = _rejoin_soft_wraps(converted_text)
             if converted_text != _before_rejoin:
                 add_log("🔗 Rejoined mid-sentence soft line wraps")
+
+            # Defensive AR/IA pass: re-canonicalize page-1 header after any
+            # downstream text rewrites.
+            if detected_state and detected_state.upper() in {"AR", "IA"}:
+                if detected_state.upper() == "AR":
+                    from pymupdf_extractor import _normalize_ar_page1_header as _norm_page1_header
+                else:
+                    from pymupdf_extractor import _normalize_ia_page1_header as _norm_page1_header
+
+                converted_text = _norm_page1_header(converted_text)
 
             # Final conversion gate: preserve valid output unchanged;
             # repair malformed delimiters / CT literal bracket deletions.
@@ -4048,7 +4148,8 @@ def show_simple_ui():
     # + file card) is just chrome — collapse padding so the PDF↔Text
     # comparator below gets nearly the full viewport height.  Keep enough
     # padding-top to clear the Streamlit toolbar (Deploy / menu) above.
-    _pad_top = '0.9rem' if _has_results else '2rem'
+    _is_processing = bool(st.session_state.get('processing'))
+    _pad_top = '0.08rem' if _is_processing else ('0.9rem' if _has_results else '2rem')
     _pad_bot = '0.3rem' if _has_results else '2rem'
 
     # Dynamic container width (must be f-string for variable)
@@ -4197,7 +4298,7 @@ def show_simple_ui():
             div[data-testid="stHorizontalBlock"] {
                 gap: 8px !important;
                 margin-top: 0 !important;
-                margin-bottom: 6px !important;
+                margin-bottom: 0 !important;
                 align-items: center !important;
                 flex-shrink: 0 !important;
                 min-height: 38px !important;
@@ -4205,7 +4306,7 @@ def show_simple_ui():
 
             /* ── Tabs: list at top, panel fills remaining space ──────── */
             .stTabs {
-                margin-top: -8px !important;
+                margin-top: -12px !important;
                 margin-bottom: 0 !important;
                 display: flex !important;
                 flex-direction: column !important;
@@ -4229,7 +4330,8 @@ def show_simple_ui():
                 flex-direction: column !important;
                 flex: 1 1 auto !important;
                 min-height: 0 !important;
-                overflow: hidden !important;
+                overflow-y: auto !important;
+                overflow-x: hidden !important;
                 padding: 0 !important;
                 margin: 0 !important;
                 /* Pull tab content up flush against the tab-list */
@@ -4552,9 +4654,199 @@ def show_simple_ui():
             '</div>',
             unsafe_allow_html=True,
         )
-    else:
+    elif not st.session_state.get('processing'):
         st.markdown('<h1 style="text-align: center;">📄 Pending Legislative Processor</h1>', unsafe_allow_html=True)
         st.markdown('<p class="subtitle" style="text-align: center;">AI-powered text extraction and verification for legislative documents</p>', unsafe_allow_html=True)
+
+    # Landing screen should be compact, centered, and responsive.
+    # Keep this scoped to pre-processing mode so results view remains unchanged.
+    if (not _has_results) and (not st.session_state.get('processing')):
+        st.markdown("""
+        <style>
+            /* Dynamic centered container: intentionally compact but still readable.
+               Apply on multiple selectors because Streamlit DOM can vary by version. */
+            .block-container,
+            .main .block-container,
+            section.main .block-container,
+            [data-testid="stAppViewContainer"] .block-container {
+                max-width: clamp(760px, 78vw, 980px) !important;
+                width: min(90vw, 980px) !important;
+                margin-left: auto !important;
+                margin-right: auto !important;
+                padding-top: 0 !important;
+                padding-bottom: 0.55rem !important;
+            }
+
+            /* Remove extra whitespace before the first heading/title block. */
+            .main .block-container > div:first-child,
+            .main .block-container > div:first-child [data-testid="stVerticalBlock"] {
+                margin-top: 0 !important;
+                padding-top: 0 !important;
+            }
+
+            /* Tighten landing-title spacing and scale smoothly by viewport. */
+            h1 {
+                font-size: clamp(2rem, 2.2vw, 2.8rem) !important;
+                margin-top: 0 !important;
+                margin-bottom: 0.12rem !important;
+            }
+            .subtitle {
+                margin-top: 0 !important;
+                margin-bottom: 0.42rem !important;
+                font-size: clamp(0.88rem, 0.92vw, 1.02rem) !important;
+            }
+
+            /* Make mode selector and uploader less bulky on landing page. */
+            div[data-testid="stRadio"] {
+                margin-top: 0 !important;
+                margin-bottom: 0.2rem !important;
+            }
+            div[role="radiogroup"] {
+                padding: 0.08rem 0.35rem !important;
+                border-radius: 8px !important;
+            }
+            div[role="radiogroup"] label {
+                font-size: 0.86rem !important;
+                padding-top: 0.15rem !important;
+                padding-bottom: 0.15rem !important;
+            }
+            div[data-testid="stFileUploader"] {
+                padding: 0.65rem !important;
+                margin-top: 0.1rem !important;
+                margin-bottom: 0.2rem !important;
+            }
+            div[data-testid="stFileUploader"] section {
+                padding-top: 0.2rem !important;
+                padding-bottom: 0.2rem !important;
+            }
+            h2 {
+                margin-top: 0.25rem !important;
+                margin-bottom: 0.22rem !important;
+                font-size: clamp(1.08rem, 1.05vw, 1.32rem) !important;
+            }
+
+            /* Global landing compaction for text/caption/alerts spacing. */
+            .main .block-container [data-testid="stVerticalBlock"] {
+                gap: 0.3rem !important;
+            }
+            .main .block-container [data-testid="stMarkdownContainer"] p {
+                margin-top: 0.12rem !important;
+                margin-bottom: 0.22rem !important;
+            }
+            .main .block-container [data-testid="stCaptionContainer"] {
+                margin-top: 0 !important;
+            }
+            .main .block-container [data-testid="stAlert"] {
+                margin-top: 0.2rem !important;
+                margin-bottom: 0.2rem !important;
+                padding-top: 0.65rem !important;
+                padding-bottom: 0.65rem !important;
+            }
+
+            /* Small laptop sizing: reduce fonts and boxes together. */
+            @media (max-width: 1366px) {
+                .block-container,
+                .main .block-container,
+                section.main .block-container,
+                [data-testid="stAppViewContainer"] .block-container {
+                    max-width: clamp(700px, 74vw, 900px) !important;
+                    width: min(88vw, 900px) !important;
+                }
+
+                h1 {
+                    font-size: clamp(1.75rem, 1.95vw, 2.25rem) !important;
+                }
+                .subtitle {
+                    font-size: clamp(0.8rem, 0.84vw, 0.92rem) !important;
+                }
+                h2 {
+                    font-size: clamp(0.98rem, 0.98vw, 1.15rem) !important;
+                }
+
+                div[role="radiogroup"] {
+                    padding: 0.05rem 0.3rem !important;
+                }
+                div[role="radiogroup"] label {
+                    font-size: 0.8rem !important;
+                    padding-top: 0.1rem !important;
+                    padding-bottom: 0.1rem !important;
+                }
+
+                div[data-testid="stFileUploader"] {
+                    padding: 0.5rem !important;
+                }
+                div[data-testid="stFileUploader"] section {
+                    padding-top: 0.12rem !important;
+                    padding-bottom: 0.12rem !important;
+                }
+
+                .main .block-container [data-testid="stMarkdownContainer"] p {
+                    font-size: 0.88rem !important;
+                }
+                .main .block-container [data-testid="stAlert"] {
+                    padding-top: 0.5rem !important;
+                    padding-bottom: 0.5rem !important;
+                }
+            }
+
+            /* Mobile/tablet: keep same centered compact feel as desktop. */
+            @media (max-width: 980px) {
+                .block-container,
+                .main .block-container,
+                section.main .block-container,
+                [data-testid="stAppViewContainer"] .block-container {
+                    width: min(92vw, 760px) !important;
+                    max-width: clamp(460px, 84vw, 760px) !important;
+                    margin-left: auto !important;
+                    margin-right: auto !important;
+                    padding-left: 0.5rem !important;
+                    padding-right: 0.5rem !important;
+                    padding-bottom: 0.45rem !important;
+                }
+
+                h1 {
+                    font-size: clamp(1.6rem, 4.2vw, 2rem) !important;
+                }
+                .subtitle {
+                    font-size: clamp(0.8rem, 2.1vw, 0.9rem) !important;
+                }
+                h2 {
+                    font-size: clamp(1rem, 2.6vw, 1.12rem) !important;
+                }
+
+                div[role="radiogroup"] label {
+                    font-size: 0.82rem !important;
+                }
+                div[data-testid="stFileUploader"] {
+                    padding: 0.5rem !important;
+                }
+                .main .block-container [data-testid="stAlert"] {
+                    padding-top: 0.5rem !important;
+                    padding-bottom: 0.5rem !important;
+                }
+            }
+
+            /* Very small phones: prevent edge-to-edge growth and keep compact balance. */
+            @media (max-width: 560px) {
+                .block-container,
+                .main .block-container,
+                section.main .block-container,
+                [data-testid="stAppViewContainer"] .block-container {
+                    width: 94vw !important;
+                    max-width: 94vw !important;
+                    padding-left: 0.35rem !important;
+                    padding-right: 0.35rem !important;
+                }
+
+                h1 {
+                    font-size: clamp(1.45rem, 6.1vw, 1.8rem) !important;
+                }
+                .subtitle {
+                    margin-bottom: 0.3rem !important;
+                }
+            }
+        </style>
+        """, unsafe_allow_html=True)
     
     # ── Sidebar ────────────────────────────────────────────────────────
     # Session info (Session ID, Status, Created, System Stats) is a
@@ -4688,6 +4980,32 @@ def show_simple_ui():
     )
 
     if _has_results and (_is_single_done or _is_batch_done):
+        st.markdown("""
+        <style>
+            /* Top action buttons: compact and aligned with file-info row height. */
+            div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"]:nth-child(2) .stButton > button,
+            div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"]:nth-child(3) .stButton > button {
+                min-height: 36px !important;
+                height: 36px !important;
+                padding: 4px 12px !important;
+                font-size: 0.82rem !important;
+                line-height: 1.05 !important;
+                border-radius: 10px !important;
+                font-weight: 600 !important;
+                white-space: nowrap !important;
+            }
+
+            /* Keep issue accordions compact and readable. */
+            div[data-testid="stExpander"] summary,
+            div[data-testid="stExpander"] summary p,
+            div[data-testid="stExpander"] details summary {
+                font-size: 0.82rem !important;
+                line-height: 1.2 !important;
+                font-weight: 600 !important;
+            }
+        </style>
+        """, unsafe_allow_html=True)
+
         # ── Clean results header — hide upload clutter ────────────────────
         _col_info, _col_submit_btn, _col_btn = st.columns([5, 1, 1])
         with _col_info:
@@ -5526,7 +5844,7 @@ def show_simple_ui():
 #  UI Helper: Styled Activity Feed & Pipeline Tracker
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _build_activity_feed_html(logs: list[dict]) -> str:
+def _build_activity_feed_html(logs: list[dict], scrollable: bool = False) -> str:
     """Build a modern styled activity-feed HTML for processing logs.
 
     Each log entry is rendered as a timeline row with a colored dot,
@@ -5537,21 +5855,23 @@ def _build_activity_feed_html(logs: list[dict]) -> str:
 
     _css = """
     <style>
-    .af-wrap{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
-             padding:4px 0;}
-    .af-row{display:flex;align-items:flex-start;gap:10px;padding:5px 0 5px 4px;
+        .af-wrap{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+                 padding:2px 0;}
+        .af-scroll{max-height:clamp(320px,72vh,760px);overflow-y:auto;overflow-x:hidden;
+                   padding-right:4px;scrollbar-gutter:stable;}
+        .af-row{display:flex;align-items:flex-start;gap:8px;padding:4px 0 4px 4px;
             border-left:2px solid #e2e8f0;margin-left:6px;position:relative;}
     .af-row:last-child{border-left-color:transparent;}
-    .af-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0;margin-top:5px;
+        .af-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0;margin-top:4px;
             position:relative;left:-10px;margin-right:-10px;}
     .af-dot-info{background:#3b82f6;}
     .af-dot-ok{background:#22c55e;}
     .af-dot-warn{background:#f59e0b;}
     .af-dot-err{background:#ef4444;}
     .af-time{font-family:'SF Mono',SFMono-Regular,Consolas,'Liberation Mono',Menlo,monospace;
-             font-size:0.72rem;background:#f1f5f9;color:#64748b;padding:2px 7px;
+             font-size:0.66rem;background:#f1f5f9;color:#64748b;padding:1px 6px;
              border-radius:4px;white-space:nowrap;flex-shrink:0;}
-    .af-msg{font-size:0.82rem;color:#334155;line-height:1.4;word-break:break-word;}
+    .af-msg{font-size:0.76rem;color:#334155;line-height:1.28;word-break:break-word;}
     .af-msg-warn{color:#92400e;}
     .af-msg-err{color:#991b1b;font-weight:600;}
     </style>"""
@@ -5580,6 +5900,8 @@ def _build_activity_feed_html(logs: list[dict]) -> str:
             f'</div>'
         )
 
+    if scrollable:
+        return _css + '<div class="af-scroll"><div class="af-wrap">' + "\n".join(rows) + '</div></div>'
     return _css + '<div class="af-wrap">' + "\n".join(rows) + '</div>'
 
 
@@ -5931,30 +6253,33 @@ def show_results_section():
 
         # Build state pill
         _state_pill = (
-            f'<span style="background:#e0e7ff; color:#3730a3; padding:3px 12px; '
-            f'border-radius:16px; font-size:0.82rem; font-weight:600;">'
-            f'🏛️ {_state_label}</span>'
+            f'<span class="sv2-state-pill">🏛️ {_state_label}</span>'
         ) if _state_label else ""
 
-        # Build time chips
-        _chip = (
-            'display:inline-flex; align-items:center; gap:6px; '
-            'padding:8px 16px; border-radius:10px; font-size:0.85rem; font-weight:600;'
+        def _mk_metric_card(icon: str, label: str, value: str, detail: str = "", *, bg: str, fg: str, border: str) -> str:
+            _detail_html = f'<div class="sv2-card-detail">{detail}</div>' if detail else ""
+            return (
+                f'<div class="sv2-card" style="--sv2-bg:{bg}; --sv2-fg:{fg}; --sv2-bd:{border};">'
+                f'<span class="sv2-card-icon">{icon}</span>'
+                f'<div class="sv2-card-body">'
+                f'<div class="sv2-card-label">{label}</div>'
+                f'<div class="sv2-card-value">{value}</div>'
+                f'{_detail_html}'
+                f'</div></div>'
+            )
+
+        # Build top metric cards
+        _conv_chip = _mk_metric_card(
+            "📝", "Conversion", _conv_time,
+            bg="#f0fdf4", fg="#166534", border="#bbf7d0"
         )
-        _conv_chip = (
-            f'<div style="{_chip} background:#f0fdf4; color:#166534; border:1px solid #bbf7d0;">'
-            f'<span style="font-size:1rem;">📝</span> Conversion '
-            f'<span style="font-weight:800;">{_conv_time}</span></div>'
-        )
-        _val_chip = (
-            f'<div style="{_chip} background:#eff6ff; color:#1e40af; border:1px solid #bfdbfe;">'
-            f'<span style="font-size:1rem;">🔍</span> Validation '
-            f'<span style="font-weight:800;">{_val_time}</span></div>'
+        _val_chip = _mk_metric_card(
+            "🔍", "Validation", _val_time,
+            bg="#eff6ff", fg="#1e40af", border="#bfdbfe"
         ) if _has_audit else ""
-        _size_chip = (
-            f'<div style="{_chip} background:#f5f3ff; color:#5b21b6; border:1px solid #ddd6fe;">'
-            f'<span style="font-size:1rem;">📄</span> Output '
-            f'<span style="font-weight:800;">{_size_label}</span></div>'
+        _size_chip = _mk_metric_card(
+            "📄", "Output", _size_label,
+            bg="#f5f3ff", fg="#5b21b6", border="#ddd6fe"
         )
 
         # Content accuracy chip (precleaned vs final output — word-level)
@@ -5971,15 +6296,9 @@ def show_results_section():
                 _ca_bg, _ca_fg, _ca_bdr = '#fefce8', '#854d0e', '#fde68a'
             else:
                 _ca_bg, _ca_fg, _ca_bdr = '#fef2f2', '#991b1b', '#fecaca'
-            _ca_detail = f" ({_content_words:,}/{_content_max:,} words"
-            if _content_issues:
-                _ca_detail += f", {_content_issues} issue{'s' if _content_issues != 1 else ''}"
-            _ca_detail += ")"
-            _content_acc_chip = (
-                f'<div style="{_chip} background:{_ca_bg}; color:{_ca_fg}; border:1px solid {_ca_bdr};">'
-                f'<span style="font-size:1rem;">📊</span> Content Accuracy '
-                f'<span style="font-weight:800;">{_content_val:.2f}%</span>'
-                f'<span style="font-size:0.75rem; font-weight:400; margin-left:4px;">{_ca_detail}</span></div>'
+            _content_acc_chip = _mk_metric_card(
+                "📊", "Content Accuracy", f"{_content_val:.2f}%", "",
+                bg=_ca_bg, fg=_ca_fg, border=_ca_bdr
             )
 
         # Tag accuracy chip (from audit counts)
@@ -5994,7 +6313,6 @@ def show_results_section():
                 # No formatted spans detected — nothing to tag
                 _ta_pct = 100.0
                 _ta_bg, _ta_fg, _ta_bdr = '#f0fdf4', '#166534', '#bbf7d0'
-                _ta_detail = " (No formatting modifications detected — no tagging required)"
             else:
                 _ta_pct = (_ta_pass / _ta_total * 100.0)
                 if _ta_pct >= 99:
@@ -6003,17 +6321,9 @@ def show_results_section():
                     _ta_bg, _ta_fg, _ta_bdr = '#fefce8', '#854d0e', '#fde68a'
                 else:
                     _ta_bg, _ta_fg, _ta_bdr = '#fef2f2', '#991b1b', '#fecaca'
-                _ta_detail = f" ({_ta_pass}/{_ta_total}"
-                if _ta_err:
-                    _ta_detail += f", {_ta_err} error{'s' if _ta_err != 1 else ''}"
-                if _ta_warn:
-                    _ta_detail += f", {_ta_warn} warning{'s' if _ta_warn != 1 else ''}"
-                _ta_detail += ")"
-            _tag_acc_chip = (
-                f'<div style="{_chip} background:{_ta_bg}; color:{_ta_fg}; border:1px solid {_ta_bdr};">'
-                f'<span style="font-size:1rem;">🏷️</span> Tag Accuracy '
-                f'<span style="font-weight:800;">{_ta_pct:.1f}%</span>'
-                f'<span style="font-size:0.75rem; font-weight:400; margin-left:4px;">{_ta_detail}</span></div>'
+            _tag_acc_chip = _mk_metric_card(
+                "🏷️", "Tag Accuracy", f"{_ta_pct:.1f}%", "",
+                bg=_ta_bg, fg=_ta_fg, border=_ta_bdr
             )
 
         # Layout accuracy chip (paragraph boundary fidelity)
@@ -6031,38 +6341,258 @@ def show_results_section():
                 _la_bg, _la_fg, _la_bdr = '#fefce8', '#854d0e', '#fde68a'
             else:
                 _la_bg, _la_fg, _la_bdr = '#fef2f2', '#991b1b', '#fecaca'
-            _la_detail = (
-                f" ({_la_total} boundaries, {_la_splits} split-needed, "
-                f"{_la_merges} merge-needed)"
-            )
-            _layout_acc_chip = (
-                f'<div style="{_chip} background:{_la_bg}; color:{_la_fg}; border:1px solid {_la_bdr};">'
-                f'<span style="font-size:1rem;">📐</span> Layout Accuracy '
-                f'<span style="font-weight:800;">{_la_acc:.1f}%</span>'
-                f'<span style="font-size:0.75rem; font-weight:400; margin-left:4px;">{_la_detail}</span></div>'
+            _layout_acc_chip = _mk_metric_card(
+                "📐", "Layout Accuracy", f"{_la_acc:.1f}%", "",
+                bg=_la_bg, fg=_la_fg, border=_la_bdr
             )
 
+        st.markdown("""
+        <style>
+            .summary-v2 {
+                border: 1px solid #e2e8f0;
+                border-radius: 12px;
+                background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+                box-shadow: 0 2px 10px rgba(15, 23, 42, 0.05);
+                padding: 12px 14px;
+                margin: 4px 0 10px;
+                font-size: 13px;
+                color: #1f2937;
+            }
+            .summary-v2-header {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 8px;
+                margin-bottom: 10px;
+                flex-wrap: wrap;
+            }
+            .summary-v2-title {
+                display: inline-flex;
+                align-items: center;
+                gap: 8px;
+                font-size: 12px;
+                font-weight: 600;
+                color: #166534;
+                letter-spacing: 0.02em;
+                text-transform: uppercase;
+            }
+            .summary-v2-title strong {
+                font-size: 1.6em;
+                line-height: 1;
+            }
+            .sv2-state-pill {
+                background: #e0e7ff;
+                color: #3730a3;
+                border: 1px solid #c7d2fe;
+                border-radius: 999px;
+                padding: 2px 9px;
+                font-size: 12px;
+                font-weight: 600;
+                line-height: 1.2;
+                white-space: nowrap;
+            }
+            .summary-v2-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+                gap: 8px;
+                margin-bottom: 10px;
+            }
+            .sv2-card {
+                background: var(--sv2-bg);
+                color: var(--sv2-fg);
+                border: 1px solid var(--sv2-bd);
+                border-radius: 10px;
+                padding: 7px 9px;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                min-height: 54px;
+            }
+            .sv2-card-icon {
+                font-size: 14px;
+                line-height: 1;
+                opacity: 0.95;
+                margin-top: 1px;
+            }
+            .sv2-card-body {
+                min-width: 0;
+                display: grid;
+                row-gap: 1px;
+            }
+            .sv2-card-label {
+                font-size: 11px;
+                font-weight: 600;
+                text-transform: uppercase;
+                letter-spacing: 0.03em;
+                opacity: 0.9;
+            }
+            .sv2-card-value {
+                font-size: 16px;
+                font-weight: 700;
+                line-height: 1.15;
+                white-space: nowrap;
+            }
+            .sv2-card-detail {
+                font-size: 11px;
+                line-height: 1.25;
+                opacity: 0.92;
+                word-break: break-word;
+            }
+            .summary-v2-time {
+                border: 1px solid #e2e8f0;
+                background: #f8fafc;
+                border-radius: 9px;
+                padding: 7px 10px;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 10px;
+            }
+            .summary-v2-time-label {
+                font-size: 12px;
+                color: #475569;
+                font-weight: 500;
+            }
+            .summary-v2-time-value {
+                font-size: 20px;
+                font-weight: 700;
+                color: #0f172a;
+                letter-spacing: 0.01em;
+                white-space: nowrap;
+            }
+            .summary-v2-note {
+                margin-top: 8px;
+                font-size: 11px;
+                color: #64748b;
+                line-height: 1.3;
+            }
+
+            /* Guarantee visual separation from issue accordions below. */
+            .summary-v2 {
+                margin-bottom: 14px;
+            }
+
+            div[data-testid="stExpander"] {
+                margin-top: 8px !important;
+            }
+
+            @media (max-width: 1366px) {
+                .summary-v2 {
+                    font-size: 12px;
+                    padding: 10px 12px;
+                    border-radius: 10px;
+                }
+                .summary-v2-header {
+                    margin-bottom: 8px;
+                    gap: 6px;
+                }
+                .summary-v2-title {
+                    font-size: 11px;
+                }
+                .sv2-state-pill {
+                    font-size: 11px;
+                    padding: 2px 8px;
+                }
+                .summary-v2-grid {
+                    grid-template-columns: repeat(auto-fit, minmax(165px, 1fr));
+                    gap: 7px;
+                    margin-bottom: 8px;
+                }
+                .sv2-card {
+                    min-height: 48px;
+                    padding: 6px 8px;
+                    border-radius: 9px;
+                    gap: 6px;
+                }
+                .sv2-card-icon {
+                    font-size: 13px;
+                }
+                .sv2-card-label {
+                    font-size: 10px;
+                }
+                .sv2-card-value {
+                    font-size: 13px;
+                }
+                .sv2-card-detail {
+                    font-size: 10px;
+                }
+                .summary-v2-time {
+                    padding: 6px 9px;
+                    border-radius: 8px;
+                }
+                .summary-v2-time-label {
+                    font-size: 11px;
+                }
+                .summary-v2-time-value {
+                    font-size: 16px;
+                }
+                .summary-v2-note {
+                    margin-top: 7px;
+                    font-size: 10px;
+                }
+            }
+
+            @media (max-width: 1200px) {
+                .summary-v2 {
+                    font-size: 12px;
+                    padding: 10px 12px;
+                }
+                .summary-v2-grid {
+                    grid-template-columns: repeat(auto-fit, minmax(175px, 1fr));
+                }
+                .sv2-card {
+                    min-height: 56px;
+                    padding: 7px 9px;
+                }
+                .sv2-card-value {
+                    font-size: 15px;
+                }
+                .summary-v2-time-value {
+                    font-size: 18px;
+                }
+            }
+
+            @media (max-width: 900px) {
+                .summary-v2-grid {
+                    grid-template-columns: 1fr;
+                }
+                .summary-v2-time-value {
+                    font-size: 16px;
+                }
+            }
+
+            /* Keep Summary tab controls neat and compact. */
+            .stExpander summary {
+                font-size: 0.9rem !important;
+            }
+            .stExpander summary p {
+                font-size: 0.9rem !important;
+            }
+            .stDownloadButton button,
+            .stButton button {
+                font-size: 0.9rem !important;
+            }
+        </style>
+        """, unsafe_allow_html=True)
+
         _summary_html = (
-            '<div style="background:#ffffff; border-radius:14px; padding:24px 28px; margin:8px 0 20px;'
-            ' border:1px solid #e2e8f0; box-shadow:0 2px 12px rgba(0,0,0,.05);">'
-            '<div style="display:flex; align-items:center; gap:12px; margin-bottom:16px; flex-wrap:wrap;">'
-            '<span style="font-size:1.5rem;">✅</span>'
-            '<span style="font-size:1.2rem; font-weight:700; color:#15803d;">Processing Complete</span>'
+            '<div class="summary-v2">'
+            '<div class="summary-v2-header">'
+            '<div class="summary-v2-title"><strong>✅</strong> Processing Complete</div>'
             f'{_state_pill}'
             '</div>'
-            '<div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px;">'
+            '<div class="summary-v2-grid">'
             f'{_conv_chip}{_val_chip}{_size_chip}{_content_acc_chip}{_layout_acc_chip}{_tag_acc_chip}'
             '</div>'
-            '<div style="background:#f8fafc; border-radius:8px; padding:8px 16px;'
-            ' display:flex; align-items:center; justify-content:space-between;'
-            ' border:1px solid #e2e8f0;">'
-            '<span style="font-size:0.84rem; color:#475569;">⏱️ Total processing time</span>'
-            f'<span style="font-size:1rem; font-weight:800; color:#0f172a;">{_total_time}</span>'
+            '<div class="summary-v2-time">'
+            '<span class="summary-v2-time-label">⏱️ Total processing time</span>'
+            f'<span class="summary-v2-time-value">{_total_time}</span>'
             '</div>'
-            '<p style="margin:12px 0 0; font-size:0.82rem; color:#64748b;">'
+            '<div class="summary-v2-note">'
             'Your PDF has been converted to tagged legislative text with Claude Opus 4.6. '
-            'Review the chips above for accuracy metrics.'
-            '</p></div>'
+            'Review the metrics above for validation confidence.'
+            '</div>'
+            '</div>'
         )
         st.markdown(_summary_html, unsafe_allow_html=True)
 
@@ -6122,7 +6652,7 @@ def show_results_section():
                                 ]
                                 if _issue_items:
                                     _tbl_rows = []
-                                    for _it in _issue_items[:30]:  # cap at 30
+                                    for _it in _issue_items:
                                         _verdict = str(_it.get("Verdict", ""))
                                         _status = "❌ Error" if _verdict.startswith("❌") else "⚠️ Warning"
                                         _page = str(_it.get("Page", "") or "")
@@ -6143,9 +6673,10 @@ def show_results_section():
                                         _pd.DataFrame(_tbl_rows),
                                         use_container_width=True,
                                         hide_index=True,
+                                        height=220,
+                                        row_height=28,
                                     )
-                                    if len(_issue_items) > 30:
-                                        st.caption(f"Showing first 30 of {len(_issue_items)} issues. Download the audit Excel for the full list.")
+
                         except Exception as _tag_ex:
                             st.caption(f"Could not load tag issues: {_tag_ex}")
                     else:
@@ -6183,7 +6714,48 @@ def show_results_section():
 
                     if _rows:
                         import pandas as _pd
-                        st.dataframe(_pd.DataFrame(_rows), use_container_width=True, hide_index=True)
+                        _split_cnt = len(_splits)
+                        _merge_cnt = len(_merges)
+                        st.markdown(
+                            (
+                                '<div style="display:flex; gap:8px; flex-wrap:wrap; margin:2px 0 8px;">'
+                                f'<span style="background:#eef2ff; color:#3730a3; border:1px solid #c7d2fe; '
+                                'padding:3px 10px; border-radius:999px; font-size:0.78rem; font-weight:600;">'
+                                f'Total {_layout_issue_count}</span>'
+                                f'<span style="background:#fff7ed; color:#9a3412; border:1px solid #fed7aa; '
+                                'padding:3px 10px; border-radius:999px; font-size:0.78rem; font-weight:600;">'
+                                f'Split-needed {_split_cnt}</span>'
+                                f'<span style="background:#fef2f2; color:#991b1b; border:1px solid #fecaca; '
+                                'padding:3px 10px; border-radius:999px; font-size:0.78rem; font-weight:600;">'
+                                f'Merge-needed {_merge_cnt}</span>'
+                                '</div>'
+                            ),
+                            unsafe_allow_html=True,
+                        )
+
+                        _preview_rows = _rows[:6]
+                        st.dataframe(
+                            _pd.DataFrame(_preview_rows),
+                            use_container_width=True,
+                            hide_index=True,
+                            height=140,
+                            row_height=28,
+                        )
+
+                        if _layout_issue_count > len(_preview_rows):
+                            _show_full = st.toggle(
+                                "Show full layout issue table",
+                                value=False,
+                                key=f"layout_full_table_{file_name}",
+                            )
+                            if _show_full:
+                                st.dataframe(
+                                    _pd.DataFrame(_rows),
+                                    use_container_width=True,
+                                    hide_index=True,
+                                    height=320,
+                                    row_height=28,
+                                )
                     if _layout_issue_count > 200:
                         st.caption(f"Showing first 200 of {_layout_issue_count} layout issues. See _layout_accuracy.json for full details.")
 
@@ -6216,7 +6788,7 @@ def show_results_section():
                                 _w_idx += 1
 
                     _ci_rows = []
-                    for _ci in _ci_list[:30]:
+                    for _ci in _ci_list:
                         _ci_type = str(_ci.get("type", "")).capitalize()
                         # Support both field naming conventions
                         _ci_pre = str(_ci.get("precleaned") or _ci.get("pymupdf_text") or _ci.get("missing_text") or "—")[:80]
@@ -6234,13 +6806,16 @@ def show_results_section():
                             "Category": _ci_cat,
                         })
                     import pandas as _pd
+                    _ci_rows_n = len(_ci_rows)
+                    _ci_height = min(260, max(78, 44 + (_ci_rows_n * 28)))
                     st.dataframe(
                         _pd.DataFrame(_ci_rows),
                         use_container_width=True,
                         hide_index=True,
+                        height=_ci_height,
+                        row_height=28,
                     )
-                    if _ci_count > 30:
-                        st.caption(f"Showing first 30 of {_ci_count} issues. Download the accuracy JSON for the full list.")
+
 
         # ── Submit to Keyed (SFTP Upload) ─────────────────────────────────────
         st.markdown("---")
@@ -6284,7 +6859,14 @@ def show_results_section():
     # ══════════════════════════════════════════════════════════════════════════
     if st.session_state.get('processing_logs'):
         with tabs[_tab_idx]:
-            st.markdown(_build_activity_feed_html(st.session_state.processing_logs), unsafe_allow_html=True)
+            st.markdown("""
+            <style>
+                .stTabs [data-baseweb="tab-panel"]:not([hidden]):has(.af-scroll) {
+                    overflow-y: hidden !important;
+                }
+            </style>
+            """, unsafe_allow_html=True)
+            st.markdown(_build_activity_feed_html(st.session_state.processing_logs, scrollable=True), unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -6572,9 +7154,39 @@ class BatchWorker:
                 enforce_tag_integrity_gate,
             )
             _before_rejoin = converted_text
-            converted_text = _rejoin_soft_wraps(converted_text)
+            if detected_state and detected_state.upper() in {"AR", "IA"}:
+                # Preserve AR/IA page-1 header-preamble layout: do not run the
+                # generic soft-wrap joiner above the enacting clause.
+                _enacting_patterns = {
+                    "AR": r"\n\s*BE IT ENACTED BY THE GENERAL ASSEMBLY OF THE STATE OF ARKANSAS:\s*\n",
+                    "IA": r"\n\s*BE IT ENACTED BY THE GENERAL ASSEMBLY OF THE STATE OF IOWA:\s*\n",
+                }
+                _enacting = re.search(
+                    _enacting_patterns[detected_state.upper()],
+                    converted_text,
+                    flags=re.IGNORECASE,
+                )
+                if _enacting:
+                    _prefix = converted_text[:_enacting.start()]
+                    _suffix = converted_text[_enacting.start():]
+                    _suffix = _rejoin_soft_wraps(_suffix)
+                    converted_text = _prefix + _suffix
+                else:
+                    converted_text = _rejoin_soft_wraps(converted_text)
+            else:
+                converted_text = _rejoin_soft_wraps(converted_text)
             if converted_text != _before_rejoin:
                 add_log("🔗 Rejoined mid-sentence soft line wraps")
+
+            # Defensive AR/IA pass: re-canonicalize page-1 header after any
+            # downstream text rewrites.
+            if detected_state and detected_state.upper() in {"AR", "IA"}:
+                if detected_state.upper() == "AR":
+                    from pymupdf_extractor import _normalize_ar_page1_header as _norm_page1_header
+                else:
+                    from pymupdf_extractor import _normalize_ia_page1_header as _norm_page1_header
+
+                converted_text = _norm_page1_header(converted_text)
 
             converted_text = enforce_tag_integrity_gate(
                 converted_text, state_code=detected_state
@@ -7138,7 +7750,7 @@ def _batch_live_log_fragment():
     _cur_logs = _progress.get('current_logs', [])
     if _cur_logs:
         with st.expander(f"📋 Live Log — {_cur_file}", expanded=True):
-            st.markdown(_build_activity_feed_html(_cur_logs), unsafe_allow_html=True)
+            st.markdown(_build_activity_feed_html(_cur_logs, scrollable=True), unsafe_allow_html=True)
     else:
         st.caption("⏳ Waiting for log output…")
 
@@ -7594,6 +8206,58 @@ def show_single_file_processing():
     
     # Processing progress
     if st.session_state.processing:
+        st.markdown("""
+        <style>
+            /* Processing view: remove excess top whitespace and slim status area. */
+            .main .block-container,
+            .block-container {
+                padding-top: 0.08rem !important;
+            }
+
+            /* Remove default first-row top offset and compress row gaps. */
+            .block-container > div:first-child,
+            .block-container > div:first-child [data-testid="stVerticalBlock"] {
+                margin-top: 0 !important;
+                padding-top: 0 !important;
+            }
+            .block-container [data-testid="stVerticalBlock"] {
+                gap: 0.26rem !important;
+            }
+            .block-container [data-testid="element-container"] {
+                margin-top: 0 !important;
+                margin-bottom: 0.22rem !important;
+                padding-top: 0 !important;
+                padding-bottom: 0 !important;
+            }
+
+            div[data-testid="stAlert"] {
+                border-radius: 8px !important;
+                padding: 0 !important;
+                margin: 0.08rem 0 0.24rem 0 !important;
+            }
+            div[data-testid="stAlert"] > div {
+                padding: 0.34rem 0.58rem !important;
+            }
+            div[data-testid="stAlert"] p,
+            div[data-testid="stAlert"] div,
+            div[data-testid="stAlert"] span {
+                font-size: 0.82rem !important;
+                line-height: 1.16 !important;
+                margin: 0 !important;
+            }
+
+            div[data-testid="stExpander"] summary,
+            div[data-testid="stExpander"] summary p,
+            div[data-testid="stExpander"] details summary {
+                font-size: 0.86rem !important;
+                line-height: 1.2 !important;
+            }
+            div[data-testid="stExpander"] {
+                margin-top: 0.12rem !important;
+            }
+        </style>
+        """, unsafe_allow_html=True)
+
         # No step-icon row / "Step N/M" progress bar at the top — the
         # Activity Log expander below already shows live, timestamped
         # progress with the same information.  Keep only the inline
@@ -7605,7 +8269,7 @@ def show_single_file_processing():
         # Display any logs already collected (e.g. from a previous partial run)
         with log_placeholder.container():
             if st.session_state.processing_logs:
-                st.markdown(_build_activity_feed_html(st.session_state.processing_logs), unsafe_allow_html=True)
+                st.markdown(_build_activity_feed_html(st.session_state.processing_logs, scrollable=True), unsafe_allow_html=True)
         
         # Choose processing method
         _state = st.session_state.get('detected_state', 'AUTO')

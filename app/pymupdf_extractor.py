@@ -4763,6 +4763,32 @@ def _normalize_ar_page1_header(text: str) -> str:
     return new_text
 
 
+def _normalize_ia_page1_header(text: str) -> str:
+    """Restore Iowa page-1 title layout when ``AN ACT`` gets flattened."""
+    end_m = re.search(
+        r"^\s*BE\s+IT\s+ENACTED\s+BY\s+THE\s+GENERAL\s+ASSEMBLY\s+OF\s+THE\s+STATE\s+OF\s+IOWA:?\s*$",
+        text,
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    if not end_m:
+        return text
+
+    header_block = text[:end_m.start()]
+    remainder = text[end_m.start():]
+
+    normalized = re.sub(
+        r"(?im)^(?P<indent>[ \t]*)AN\s+ACT\s+(?P<title>[A-Z][A-Z0-9,;:'()&/\.\- ]{20,})$",
+        lambda m: f"{m.group('indent')}AN ACT\n{m.group('indent')}{m.group('title').strip()}",
+        header_block,
+        count=1,
+    )
+
+    if normalized != header_block:
+        logger.debug("Normalized IA page-1 header/title block")
+        return normalized + remainder
+    return text
+
+
 # ---------------------------------------------------------------------------
 # Arkansas (AR) intra-tag paragraph splitter
 # ---------------------------------------------------------------------------
@@ -6049,6 +6075,8 @@ def clean_extracted_text(
         # in canonical order.  See `_normalize_ar_page1_header` for the
         # full algorithm and safety guarantees.
         cleaned = _normalize_ar_page1_header(cleaned)
+    if state_code and state_code.upper() == "IA":
+        cleaned = _normalize_ia_page1_header(cleaned)
 
     # ── strip KS-specific false header tags ────────────────────────
     if state_code and state_code.upper() == "KS":
@@ -6165,7 +6193,33 @@ def clean_extracted_text(
     # ── Generic: rejoin stray single-line wraps that split a sentence
     #    mid-clause. Keep this near the end so state-specific split/rejoin
     #    passes run first, and only obvious prose wraps are flattened.
-    cleaned = rejoin_mid_sentence_line_breaks(cleaned)
+    #    AR/IA exception: protect page-1 preamble above the enacting
+    #    clause from generic rejoin so title/header lines do not collapse.
+    if state_code and state_code.upper() in {"AR", "IA"}:
+        _enacting_patterns = {
+            "AR": r"\n\s*BE IT ENACTED BY THE GENERAL ASSEMBLY OF THE STATE OF ARKANSAS:\s*\n",
+            "IA": r"\n\s*BE IT ENACTED BY THE GENERAL ASSEMBLY OF THE STATE OF IOWA:\s*\n",
+        }
+        _enacting = re.search(
+            _enacting_patterns[state_code.upper()],
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+        if _enacting:
+            _prefix = cleaned[:_enacting.start()]
+            _suffix = cleaned[_enacting.start():]
+            _suffix = rejoin_mid_sentence_line_breaks(_suffix)
+            cleaned = _prefix + _suffix
+        else:
+            cleaned = rejoin_mid_sentence_line_breaks(cleaned)
+
+        # Defensive pass in case any prior step still altered page-1 layout.
+        if state_code.upper() == "AR":
+            cleaned = _normalize_ar_page1_header(cleaned)
+        else:
+            cleaned = _normalize_ia_page1_header(cleaned)
+    else:
+        cleaned = rejoin_mid_sentence_line_breaks(cleaned)
 
     # Store the pre-cleaned text and diff report for the caller to retrieve and save
     clean_extracted_text._last_pre_cleaned = pre_cleaned
@@ -7644,8 +7698,7 @@ def rejoin_mid_sentence_line_breaks(text: str) -> str:
         - The character before the newline must look like running prose
             (lowercase, digit, comma, or right parenthesis).
         - The next line can begin with lowercase, numeric continuations
-            (e.g. "2019.", "10 units"), legal citation/month tokens, or
-            uppercase words when they are not list/section markers.
+            (e.g. "2019.", "10 units"), or legal citation/month tokens.
           This preserves real paragraph starts such as "(Q) ...", "(IV) ...",
           "1) ...", "2. ...".
         """
@@ -7653,8 +7706,8 @@ def rejoin_mid_sentence_line_breaks(text: str) -> str:
                 return text
         # Also join legal citation continuations that start uppercase, e.g.:
         #   "... consistent with\nSection 54226."
-        # We intentionally scope uppercase joins to citation/month tokens to avoid
-        # collapsing real paragraph starts.
+        # We intentionally scope uppercase joins to citation/month tokens only
+        # to avoid collapsing headers/table rows/other structured lines.
         _continuation = (
             r"(?:"
             r"[a-z]"
@@ -7662,7 +7715,6 @@ def rejoin_mid_sentence_line_breaks(text: str) -> str:
             r"|Section\b|Sections\b|Chapter\b|Part\b|Division\b|Article\b|Subdivision\b"
             r"|January\b|February\b|March\b|April\b|May\b|June\b|July\b|August\b"
             r"|September\b|October\b|November\b|December\b"
-            r"|[A-Z]"
             r")"
         )
 

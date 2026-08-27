@@ -410,12 +410,21 @@ def check_paragraph_accuracy(
                 ),
             })
 
+    # AR/IA page-1 header rule:
+    # Treat the title/header block as intentionally line-oriented. Do not
+    # request MERGE for these lines; instead, raise SPLIT only when known
+    # header elements are compacted onto one line.
+    if state_code and state_code.upper() == "AR":
+        _detect_ar_page1_header_compaction(output_lines, splits_needed)
+    if state_code and state_code.upper() == "IA":
+        _detect_ia_page1_header_compaction(output_lines, splits_needed)
+
     # Step 4: Detect OVER-SPLITS (merges needed)
     # Find lines in output that have a break but the PDF says they should
     # be continuous (same paragraph).  Look for short lines followed by
     # continuation text that belongs to the same PDF paragraph.
     merges_needed: List[Dict] = []
-    _detect_over_splits(output_lines, boundaries, merges_needed)
+    _detect_over_splits(output_lines, boundaries, merges_needed, state_code=state_code)
 
     # ── Deduplicate splits that were detected on multiple PDF pages ──
     # When a paragraph spans a page break, the same text may be detected
@@ -458,6 +467,8 @@ def _detect_over_splits(
     output_lines: List[str],
     boundaries: List[ParagraphBoundary],
     merges_needed: List[Dict],
+    *,
+    state_code: Optional[str] = None,
 ):
     """Detect lines that are over-split (broken mid-paragraph).
 
@@ -487,6 +498,22 @@ def _detect_over_splits(
         next_norm = _normalize_for_matching(next_line)
 
         if not line_norm or not next_norm:
+            continue
+
+        # AR page-1 title/header block is expected to remain as separate lines.
+        # Suppress false MERGE recommendations there.
+        if (
+            state_code
+            and state_code.upper() == "AR"
+            and _is_ar_page1_header_line(line)
+            and _is_ar_page1_header_line(next_line)
+        ):
+            continue
+        if (
+            state_code
+            and state_code.upper() == "IA"
+            and _is_ia_page1_header_pair(line, next_line)
+        ):
             continue
 
         # Check if next_line is a known paragraph boundary — if so, the break is correct
@@ -548,6 +575,156 @@ def _detect_over_splits(
                         f"line ends mid-sentence, next looks like continuation"
                     ),
                 })
+
+
+def _is_ar_page1_header_line(text: str) -> bool:
+    """Return True for AR page-1 title/header lines that should stay split."""
+    s = _normalize_for_matching(text)
+    if not s:
+        return False
+
+    patterns = [
+        r'^Act\s+\d+\s+of\s+the\s+Regular\s+Session$',
+        r'^State\s+of\s+Arkansas\b',
+        r'^\d{1,3}(?:st|nd|rd|th)\s+General\s+Assembly\b',
+        r'^Regular\s+Session,\s*\d{4}$',
+        r'^As\s+Engrossed:\b',
+        r'^HOUSE\s+BILL\b',
+        r'^SENATE\s+BILL\b',
+        r'^A\s+Bill$',
+        r'^By:\b',
+        r'^For\s+An\s+Act\s+To\s+Be\s+Entitled\b',
+        r'^Subtitle\b',
+    ]
+    return any(re.search(p, s, flags=re.IGNORECASE) for p in patterns)
+
+
+def _detect_ar_page1_header_compaction(output_lines: List[str], splits_needed: List[Dict]) -> None:
+    """Add split-needed issues when AR page-1 header elements are merged."""
+    max_scan = min(len(output_lines), 120)
+    stop_idx = max_scan
+    for i in range(max_scan):
+        if re.search(r'\bBE\s+IT\s+ENACTED\s+BY\s+THE\s+GENERAL\s+ASSEMBLY\b', output_lines[i], re.IGNORECASE):
+            stop_idx = i
+            break
+
+    compact_markers = [
+        (r'\bHOUSE\s+BILL\s+\d+\b.*\bA\s+Bill\b', "HOUSE BILL line merged with 'A Bill'"),
+        (r'\bState\s+of\s+Arkansas\b.*\bGeneral\s+Assembly\b.*\bRegular\s+Session,\s*\d{4}\b', "State/Assembly/Session merged into one line"),
+        (r'\bBy:\b.*\bBy:\b', "Multiple sponsor lines merged into one line"),
+        (r'\bFor\s+An\s+Act\s+To\s+Be\s+Entitled\b.*\bCONCERNING\b', "Title preface merged with body title text"),
+        (r'\bSubtitle\b.*\bTO\s+AMEND\b', "Subtitle label merged with subtitle body"),
+    ]
+
+    existing_keys = {(sp.get("line"), sp.get("char_position"), sp.get("action")) for sp in splits_needed}
+
+    for idx in range(stop_idx):
+        raw = output_lines[idx].strip()
+        if not raw:
+            continue
+        norm = _normalize_for_matching(raw)
+        if not norm:
+            continue
+
+        for pattern, reason in compact_markers:
+            m = re.search(pattern, norm, flags=re.IGNORECASE)
+            if not m:
+                continue
+
+            # Choose split point near the second semantic token when possible.
+            split_at = -1
+            for tok in [" A Bill", " Regular Session", " By:", " CONCERNING", " TO AMEND"]:
+                split_at = norm.find(tok)
+                if split_at > 0:
+                    break
+            if split_at <= 0:
+                split_at = m.start() + max(1, len(m.group(0)) // 2)
+
+            key = (idx + 1, split_at, "SPLIT")
+            if key in existing_keys:
+                continue
+
+            splits_needed.append({
+                "line": idx + 1,
+                "char_position": split_at,
+                "action": "SPLIT",
+                "text_before_split": norm[max(0, split_at - 60):split_at].strip(),
+                "text_after_split": norm[split_at:split_at + 60].strip(),
+                "signal": "ar_page1_header",
+                "pdf_page": 1,
+                "description": (
+                    f"Split required at line {idx + 1}, position {split_at}: "
+                    f"AR page-1 header compaction detected ({reason})"
+                ),
+            })
+            existing_keys.add(key)
+            break
+
+
+def _is_ia_page1_header_pair(line: str, next_line: str) -> bool:
+    """Return True when an Iowa page-1 title pair should remain split."""
+    left = _normalize_for_matching(line)
+    right = _normalize_for_matching(next_line)
+    if not left or not right:
+        return False
+
+    if re.fullmatch(r'(?:Senate|House)\s+File\s+\d+(?:\s*[-–—]\s*Enrolled)?', left, re.IGNORECASE):
+        return True
+    if re.fullmatch(r'AN\s+ACT', left, re.IGNORECASE) and re.fullmatch(r'[A-Z][A-Z0-9,;:\-()&/\.\' ]{20,}', right):
+        return True
+    return False
+
+
+def _detect_ia_page1_header_compaction(output_lines: List[str], splits_needed: List[Dict]) -> None:
+    """Add split-needed issues when Iowa page-1 title lines are merged."""
+    max_scan = min(len(output_lines), 80)
+    stop_idx = max_scan
+    for i in range(max_scan):
+        if re.search(r'\bBE\s+IT\s+ENACTED\s+BY\s+THE\s+GENERAL\s+ASSEMBLY\s+OF\s+THE\s+STATE\s+OF\s+IOWA\b', output_lines[i], re.IGNORECASE):
+            stop_idx = i
+            break
+
+    existing_keys = {(sp.get("line"), sp.get("char_position"), sp.get("action")) for sp in splits_needed}
+
+    for idx in range(stop_idx):
+        raw = output_lines[idx].strip()
+        if not raw:
+            continue
+        norm = _normalize_for_matching(raw)
+        if not norm:
+            continue
+
+        m = re.search(r'\bAN\s+ACT\b\s+(?P<title>[A-Z][A-Z0-9,;:\-()&/\.\' ]{20,})$', norm, re.IGNORECASE)
+        if not m:
+            continue
+
+        split_at = norm.upper().find(" AN ACT ")
+        if split_at >= 0:
+            split_at += 1
+        else:
+            split_at = norm.upper().find("AN ACT ") + len("AN ACT")
+        if split_at <= 0:
+            continue
+
+        key = (idx + 1, split_at, "SPLIT")
+        if key in existing_keys:
+            continue
+
+        splits_needed.append({
+            "line": idx + 1,
+            "char_position": split_at,
+            "action": "SPLIT",
+            "text_before_split": norm[max(0, split_at - 60):split_at].strip(),
+            "text_after_split": norm[split_at:split_at + 60].strip(),
+            "signal": "ia_page1_header",
+            "pdf_page": 1,
+            "description": (
+                f"Split required at line {idx + 1}, position {split_at}: "
+                "Iowa page-1 title compaction detected (AN ACT merged with title)"
+            ),
+        })
+        existing_keys.add(key)
+        break
 
 
 # ═══════════════════════════════════════════════════════════════════

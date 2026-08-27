@@ -107,6 +107,7 @@ try:
         _split_merged_grant_tag_rows,
         _split_tabular_tag_at_dollar,
         _split_tabular_header_from_data,
+        _normalize_ar_page1_header,
     )
     _HAS_PYMUPDF = True
 except ImportError:
@@ -4086,11 +4087,22 @@ def deterministic_cleanup(
     if reference_text:
         text = _restore_merged_lines(text, reference_text)
 
-    # ── Final: collapse double/triple spaces between words ────────
-    # Preserves 4+ space gaps (intentional table/column alignment)
-    text = re.sub(r'(?<=\S) {2,3}(?=\S)', ' ', text)
-    # Rejoin line-break hyphenations: "export- limiting" → "export-limiting"
-    text = re.sub(r'(\w)- (\w)', r'\1-\2', text)
+    # ── AR page-1 layout normalization ─────────────────────────────
+    # Hybrid stitching can flatten the title/header block on Arkansas bills
+    # even when the extractor produced the correct line breaks. Reapply the
+    # canonical page-1 layout here so the final stitched output keeps the
+    # header as separate lines instead of collapsing it into the body text.
+    if state_code and state_code.upper() == 'AR':
+        text = _normalize_ar_page1_header(text)
+
+    # ── Final spacing normalization (visual/legacy only) ───────────
+    # In hybrid mode (apply_structural_passes=False), preserve the exact
+    # cleaned-chunk layout, including table spacing, in the final output.
+    if apply_structural_passes:
+        # Preserves 4+ space gaps (intentional table/column alignment)
+        text = re.sub(r'(?<=\S) {2,3}(?=\S)', ' ', text)
+        # Rejoin line-break hyphenations: "export- limiting" → "export-limiting"
+        text = re.sub(r'(\w)- (\w)', r'\1-\2', text)
 
     return text
 

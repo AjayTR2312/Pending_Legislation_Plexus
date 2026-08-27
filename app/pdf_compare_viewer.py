@@ -524,6 +524,83 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,san
   border:2px solid rgba(220,53,69,.5);border-radius:2px;
   pointer-events:none;z-index:5;
 }
+
+/* Laptop view: compact comparator so it looks like the cleaner large-screen layout */
+@media (max-width: 1440px) {
+  .top-bar{
+    height:40px;
+    padding:0 10px;
+    gap:7px;
+  }
+  .top-bar .logo{font-size:13px}
+  .top-bar .hint{font-size:11px}
+  .top-bar .stat{
+    font-size:10px;
+    padding:2px 8px;
+  }
+  .top-bar .btn{
+    margin-left:5px;
+    font-size:11px;
+    padding:3px 9px;
+    border-radius:5px;
+  }
+  .top-bar label,
+  .top-bar label *{
+    font-size:11px !important;
+    line-height:1.1 !important;
+  }
+
+  .panels{height:calc(100dvh - 40px);min-height:calc(100vh - 40px)}
+  .ph{
+    padding:6px 10px;
+    font-size:12px;
+  }
+  .pdf-wrap{padding:8px}
+  .page-lbl{font-size:9px;padding:3px 0}
+
+  .pdf-controls{
+    gap:5px;
+    padding:3px 7px;
+  }
+  .pdf-controls .zbtn{
+    width:26px;
+    height:26px;
+    font-size:12px;
+  }
+  .pdf-controls .zlbl,
+  .pdf-controls .page-nav .plbl{font-size:10px}
+
+  .text-toolbar{
+    gap:5px;
+    padding:3px 8px;
+    top:30px;
+  }
+  .text-toolbar .tbtn{
+    font-size:10px;
+    padding:2px 8px;
+    border-radius:4px;
+  }
+  .text-toolbar .tlbl{font-size:9px}
+
+  .tl{
+    font-size:12px;
+    line-height:1.58;
+    padding:0 10px 0 0;
+  }
+  .ln{
+    min-width:40px;
+    font-size:10px;
+    padding:0 8px 0 6px;
+    margin-right:8px;
+  }
+
+  .dev-strip{
+    padding:4px 10px;
+    font-size:11px;
+    gap:6px;
+  }
+  .dev-pill{font-size:10px;padding:1px 7px}
+}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
 </head>

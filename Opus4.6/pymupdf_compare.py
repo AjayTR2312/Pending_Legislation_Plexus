@@ -99,8 +99,8 @@ log = logging.getLogger("pymupdf_compare")
 # call.  For large documents the checklist + images + clean text can
 # exceed context limits; we split into page-based chunks and merge.
 CHECKLIST_CHUNK_SIZE = 250  # items per chunk
-# MAX_PAGES_PER_CHUNK is dynamically determined: each chunk includes
-# exactly the pages its checklist items span (no fixed cap).
+MAX_IMAGES_PER_CHUNK = 20   # max pages (images) per API call to avoid 413
+# Both limits are enforced: a new chunk starts when either is exceeded.
 # Anthropic max image dimension for multi-image requests.
 _MAX_IMAGE_DIM = 2000
 
@@ -1603,18 +1603,16 @@ _PASS_CLASSES = {
 def _chunk_checklist_by_page(
     checklist_items: List[Dict],
     max_items: int = CHECKLIST_CHUNK_SIZE,
+    max_pages: int = MAX_IMAGES_PER_CHUNK,
 ) -> List[List[Dict]]:
     """Split checklist items into page-aligned chunks.
 
-    Each chunk contains at most *max_items* items.  The pages included
-    per chunk are determined dynamically — whatever pages those items
-    span, those images get sent.  Page boundaries are respected (items
-    from the same page are never split across chunks).
+    Each chunk contains at most *max_items* items AND at most *max_pages*
+    distinct pages (images).  Page boundaries are respected (items from
+    the same page are never split across chunks).
     """
     if not checklist_items:
         return []
-    if len(checklist_items) <= max_items:
-        return [checklist_items]
 
     # Group items by page
     from collections import OrderedDict
@@ -1623,16 +1621,26 @@ def _chunk_checklist_by_page(
         pg = item.get("page", 0) or 0
         page_groups.setdefault(pg, []).append(item)
 
+    # Fast-path: single chunk only when both limits are satisfied
+    if len(checklist_items) <= max_items and len(page_groups) <= max_pages:
+        return [checklist_items]
+
     chunks: List[List[Dict]] = []
     current_chunk: List[Dict] = []
+    current_pages: set = set()
 
     for pg, items in page_groups.items():
-        # Would adding this page's items exceed the item limit?
-        if current_chunk and len(current_chunk) + len(items) > max_items:
+        # Start a new chunk if either limit would be exceeded
+        if current_chunk and (
+            len(current_chunk) + len(items) > max_items
+            or len(current_pages) >= max_pages
+        ):
             chunks.append(current_chunk)
             current_chunk = []
+            current_pages = set()
 
         current_chunk.extend(items)
+        current_pages.add(pg)
 
     if current_chunk:
         chunks.append(current_chunk)
@@ -1725,10 +1733,10 @@ def pymupdf_compare_tags(
     checklist_str = _format_checklist(checklist_items, precheck)
 
     # ── Chunk the checklist for large documents ─────────────────────
-    chunks = _chunk_checklist_by_page(checklist_items)
+    chunks = _chunk_checklist_by_page(checklist_items)  # respects CHECKLIST_CHUNK_SIZE + MAX_IMAGES_PER_CHUNK
     n_chunks = len(chunks)
-    log.info("📦 Checklist split into %d chunk(s) (%d total items)",
-             n_chunks, len(checklist_items))
+    log.info("📦 Checklist split into %d chunk(s) (%d total items, max %d images/chunk)",
+             n_chunks, len(checklist_items), MAX_IMAGES_PER_CHUNK)
 
     client = anthropic_client or _get_anthropic_client()
 
