@@ -56,6 +56,125 @@ class ParagraphBoundary:
     signal: str            # what triggered detection: "indent", "bold", "sec", "gap"
 
 
+# Vertical tolerance (points) for treating two text segments as the same row.
+_ROW_TOL = 3.0
+
+# One or more enumeration markers opening a line: "6. ", "a. (1) ", "(c) ", "127482. "
+_LIST_MARKER_START_RE = re.compile(
+    r'^(?:[0-9]{1,7}[A-Za-z]?\.|\([0-9A-Za-z]{1,4}\)|[A-Za-z]{1,4}\.)+\s'
+)
+
+
+def _page_content_rows(page) -> List[Dict[str, Any]]:
+    """Flatten a PDF page into y-ordered content rows, minus margin numbering.
+
+    Word-level geometry is used rather than the block/line tree because many
+    bill PDFs emit one block per physical line, and some (California) fuse the
+    margin line label into the same span as the body text
+    (``" line "`` + ``"21 shall not charge..."``), which corrupts both the
+    indentation analysis and the text used for matching.
+    """
+    words = page.get_text("words")  # (x0, y0, x1, y1, word, block, line, word_no)
+    if not words:
+        return []
+
+    words = sorted(words, key=lambda w: (w[1], w[0]))
+
+    raw_rows: List[List[Any]] = []
+    group: List[Any] = []
+    for w in words:
+        if group and w[1] - group[0][1] > _ROW_TOL:
+            raw_rows.append(sorted(group, key=lambda g: g[0]))
+            group = []
+        group.append(w)
+    if group:
+        raw_rows.append(sorted(group, key=lambda g: g[0]))
+
+    raw_rows = _strip_margin_numbering(raw_rows)
+
+    bold_starts = _bold_row_starts(page)
+
+    rows: List[Dict[str, Any]] = []
+    for row in raw_rows:
+        if not row:
+            continue
+        x0 = row[0][0]
+        y0 = min(w[1] for w in row)
+        y1 = max(w[3] for w in row)
+        is_bold = any(
+            abs(bx - x0) <= 2.0 and y0 - _ROW_TOL <= by <= y1 + _ROW_TOL
+            for bx, by in bold_starts
+        )
+        rows.append({
+            "x0": x0,
+            "x1": max(w[2] for w in row),
+            "y0": y0,
+            "y1": y1,
+            "text": " ".join(w[4] for w in row),
+            "font": "Bold" if is_bold else "",
+        })
+    return rows
+
+
+def _strip_margin_numbering(raw_rows: List[List[Any]]) -> List[List[Any]]:
+    """Drop left-margin line numbering, e.g. "76" or "line 21".
+
+    Detection is relative rather than positional: right-aligned numbering
+    shifts x0 by digit count, so a fixed margin threshold splits a page into
+    stripped and unstripped halves. A column is only removed when it prefixes
+    most rows and its numbers increase down the page, so a body row that
+    happens to start with a number ("127481.") is never truncated.
+    """
+    rows = [r for r in raw_rows if r]
+    if len(rows) < 5:
+        return raw_rows
+
+    label_rows = sum(1 for r in rows if r[0][4].lower().strip() == "line")
+    if label_rows >= len(rows) * 0.5:
+        out = []
+        for row in raw_rows:
+            if row and row[0][4].lower().strip() == "line":
+                row = row[1:]
+                if row and row[0][4].rstrip('.').isdigit():
+                    row = row[1:]
+            out.append(row)
+        return out
+
+    def _is_margin_number(row) -> bool:
+        # A bare number separated from the body by a visible gap.
+        return (
+            len(row) >= 2
+            and row[0][4].isdigit()
+            and len(row[0][4]) <= 4
+            and row[1][0] - row[0][2] >= 6.0
+        )
+
+    numbered = [r for r in rows if _is_margin_number(r)]
+    if len(numbered) < len(rows) * 0.5:
+        return raw_rows
+
+    values = [int(r[0][4]) for r in numbered]
+    ascending = sum(1 for a, b in zip(values, values[1:]) if b > a)
+    if len(values) > 1 and ascending < (len(values) - 1) * 0.8:
+        return raw_rows  # not a line-number column
+
+    return [row[1:] if row and _is_margin_number(row) else row for row in raw_rows]
+
+
+def _bold_row_starts(page) -> List[Tuple[float, float]]:
+    """(x0, y-centre) of every bold span, used to flag bold-leading rows."""
+    out: List[Tuple[float, float]] = []
+    for block in page.get_text("dict").get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                if "Bold" in span.get("font", "") and span["text"].strip():
+                    bbox = span["bbox"]
+                    out.append((bbox[0], (bbox[1] + bbox[3]) / 2))
+    return out
+
+
 def extract_paragraph_boundaries(
     pdf_path: str | Path,
     *,
@@ -97,77 +216,122 @@ def extract_paragraph_boundaries(
         if pg_idx < 0 or pg_idx >= len(doc):
             continue
         page = doc[pg_idx]
-        blocks = page.get_text("dict")["blocks"]
 
-        # Find body block (largest text block by height)
-        text_blocks = [b for b in blocks if b.get("type") == 0]
-        if not text_blocks:
-            continue
-        body_block = max(text_blocks, key=lambda b: b["bbox"][3] - b["bbox"][1])
-        lines = body_block["lines"]
-
-        # Filter out margin line numbers (x0 < 90, text is just digits)
-        content_lines = []
-        for line in lines:
-            spans = line.get("spans", [])
-            if not spans:
-                continue
-            txt = "".join(s["text"] for s in spans).strip()
-            x0 = line["bbox"][0]
-            if x0 < 90 and txt.isdigit():
-                continue
-            content_lines.append(line)
+        content_lines = _page_content_rows(page)
 
         # Analyze indentation patterns to find the two primary indent levels
-        x0_values = [line["bbox"][0] for line in content_lines]
-        if len(x0_values) < 3:
+        if len(content_lines) < 3:
             continue
 
-        # Determine the dominant indent levels for this page
+        # Determine the dominant indent levels for this page. Only rows with
+        # real body text vote, so running heads, page numbers and stray margin
+        # labels cannot outweigh the actual text column.
         from collections import Counter
-        x0_rounded = [round(x / 5) * 5 for x in x0_values]
-        x0_counts = Counter(x0_rounded)
-        most_common = x0_counts.most_common(5)
-        if len(most_common) < 2:
+        body_rows = [r for r in content_lines if len(r["text"].split()) >= 3]
+        if len(body_rows) < 3:
+            continue
+        x0_counts = Counter(round(r["x0"] / 5) * 5 for r in body_rows)
+        levels = sorted(x0 for x0, count in x0_counts.items() if count >= 2)
+        if len(levels) < 2:
             continue
 
-        # Identify continuation level (most common) and paragraph-start level
-        continuation_x0 = most_common[0][0]
-        paragraph_x0 = None
-        for x0_val, count in most_common[1:]:
-            if x0_val > continuation_x0:
-                paragraph_x0 = x0_val
-                break
-        if paragraph_x0 is None:
-            for x0_val, count in most_common:
-                if x0_val > continuation_x0 and count >= 3:
-                    paragraph_x0 = x0_val
-                    break
+        # The continuation level is the LEFTMOST well-supported level, not the
+        # most frequent one: a long indented title block can otherwise make the
+        # first-line indent look like the body column.
+        continuation_x0 = levels[0]
+        paragraph_x0 = next((x0 for x0 in levels[1:] if x0 - continuation_x0 >= 5), None)
         if paragraph_x0 is None:
             continue
 
-        INDENT_TOL = 8  # points tolerance
+        # Drop leftover margin numbering now that the body column is known.
+        content_lines = [
+            r for r in content_lines
+            if not (r["x0"] < continuation_x0 - 5 and r["text"].strip().isdigit())
+        ]
+        if len(content_lines) < 3:
+            continue
+
+        # A line counts as a paragraph start once it is indented meaningfully
+        # past the continuation level. A fixed tolerance is unusable because
+        # the indent step ranges from ~10pt (CA) to ~40pt (FL).
+        INDENT_STEP = max((paragraph_x0 - continuation_x0) * 0.6, 5.0)
+        # A rarer indent (e.g. a one-off "effective date" proviso sentence)
+        # is invisible to `levels` because it only occurs once on the page,
+        # so it never anchors INDENT_STEP. Recognize it too, but require the
+        # previous line to be a genuinely ended sentence sitting right at the
+        # continuation indent, so ordinary wraps are never misflagged.
+        MINOR_INDENT_STEP = max(INDENT_STEP * 0.35, 8.0)
+        RAGGED_TOL = 25  # points short of the right margin = forced break
+
+        # Right margin of the body text column. Running heads and page
+        # numbers sit outside the column and would inflate it.
+        _body_x1 = [
+            row["x1"] for row in content_lines
+            if continuation_x0 - 8 <= row["x0"] <= paragraph_x0 + 8
+        ]
+        right_margin = max(_body_x1) if _body_x1 else 0.0
+
+        # Vertical-gap threshold adapted to this page's line pitch, so that
+        # double-spaced bills do not report every wrapped line as a boundary.
+        _gaps = sorted(
+            content_lines[i]["y0"] - content_lines[i - 1]["y1"]
+            for i in range(1, len(content_lines))
+        )
+        _median_gap = _gaps[len(_gaps) // 2] if _gaps else 0.0
+        gap_threshold = max(_median_gap * 1.8, _median_gap + 6.0, 12.0)
 
         # Detect paragraph boundaries
-        prev_x0 = content_lines[0]["bbox"][0] if content_lines else 0
-        prev_bottom = content_lines[0]["bbox"][3] if content_lines else 0
+        prev_x0 = content_lines[0]["x0"]
+        prev_x1 = content_lines[0]["x1"]
+        prev_bottom = content_lines[0]["y1"]
+        prev_text = content_lines[0]["text"]
 
         for i, line in enumerate(content_lines[1:], 1):
-            x0 = line["bbox"][0]
-            y_top = line["bbox"][1]
-            spans = line.get("spans", [])
-            txt = "".join(s["text"] for s in spans).strip()
-            font_name = spans[0].get("font", "") if spans else ""
-            is_bold = "Bold" in font_name
+            x0 = line["x0"]
+            y_top = line["y0"]
+            txt = line["text"]
+            is_bold = "Bold" in line["font"]
 
             gap = y_top - prev_bottom
             signal = None
 
-            # Signal 1: First-line indent after continuation line
-            is_at_para_indent = abs(x0 - paragraph_x0) <= INDENT_TOL
-            prev_at_continuation = abs(prev_x0 - continuation_x0) <= INDENT_TOL
+            # Signal 1: First-line indent after a line that ended a paragraph.
+            # A wrapped line always returns to the continuation indent, so a
+            # previous line still at the first-line indent means two separate
+            # paragraphs — but only when it also *reads* like an ended one,
+            # otherwise every line of an indented title block gets flagged.
+            is_at_para_indent = x0 - continuation_x0 >= INDENT_STEP
+            prev_at_continuation = prev_x0 - continuation_x0 < INDENT_STEP
+            prev_is_ragged = prev_x1 < right_margin - RAGGED_TOL
+            paragraph_ended = (
+                prev_text.rstrip().endswith(('.', ':', ';', '!', '?', '—', '–'))
+                or bool(_LIST_MARKER_START_RE.match(txt))
+            )
+            # Minor-indent fallback for single-occurrence indent levels that
+            # `levels` excludes (see MINOR_INDENT_STEP above).
+            is_at_minor_indent = (
+                MINOR_INDENT_STEP <= (x0 - continuation_x0) < INDENT_STEP
+                and prev_at_continuation
+                and paragraph_ended
+            )
+            is_at_para_indent = is_at_para_indent or is_at_minor_indent
 
-            if is_at_para_indent and prev_at_continuation and len(txt) > 3:
+            # A title block set with a hanging indent runs several unmarked
+            # lines at the deeper level; those are wraps, not paragraph starts.
+            _next = content_lines[i + 1] if i + 1 < len(content_lines) else None
+            in_hanging_block = (
+                _next is not None
+                and _next["x0"] - continuation_x0 >= INDENT_STEP
+                and not _LIST_MARKER_START_RE.match(_next["text"])
+                and not txt.rstrip().endswith(('.', ':', ';'))
+            )
+
+            if (
+                is_at_para_indent
+                and not in_hanging_block
+                and (prev_at_continuation or ((prev_is_ragged or not prev_at_continuation) and paragraph_ended))
+                and len(txt) > 3
+            ):
                 _txt_stripped = txt.strip()
                 # Skip short section numbers (e.g. "89.9", "103.25") that are
                 # intentionally merged with their title on the same output line
@@ -198,14 +362,31 @@ def extract_paragraph_boundaries(
             # a bold title on the same y-coordinate are intentionally merged
             # into one line in output (e.g. "89.9 Disposal of fees.").
             # Only flag bold as a boundary if it's NOT a short section number.
-            elif is_bold and i > 0 and len(txt) > 10:
-                prev_spans = content_lines[i - 1].get("spans", [])
-                prev_font = prev_spans[0].get("font", "") if prev_spans else ""
+            elif is_bold and i > 0 and len(txt) > 10 and prev_is_ragged:
+                prev_font = content_lines[i - 1]["font"]
                 if "Bold" not in prev_font:
                     signal = "bold"
-            # Signal 3: Large vertical gap
-            elif gap > 12.0:
+            # Signal 3: Vertical gap noticeably larger than this page's line
+            # pitch, after a line that already ended short of the right margin.
+            # Requiring a ragged predecessor avoids flagging the first body
+            # line of a page, where the gap is just the running-header offset.
+            elif gap > gap_threshold and prev_is_ragged:
                 signal = "gap"
+            # Signal 4: previous line is a short, standalone all-caps heading
+            # (e.g. "NOTICE TO EMPLOYEES") sitting well short of the right
+            # margin, and the current line drops back down to the ordinary
+            # continuation indent (real body text resuming). Requiring the
+            # return to continuation_x0 keeps this from firing inside a
+            # wrapped all-caps title block, where every wrap stays at the
+            # SAME elevated indent as the heading itself.
+            elif (
+                prev_is_ragged
+                and prev_text.strip().isupper()
+                and 1 <= len(prev_text.split()) <= 8
+                and not bool(_LIST_MARKER_START_RE.match(prev_text))
+                and (x0 - continuation_x0) < INDENT_STEP
+            ):
+                signal = "heading_break"
 
             if signal:
                 boundaries.append(ParagraphBoundary(
@@ -218,7 +399,9 @@ def extract_paragraph_boundaries(
                 ))
 
             prev_x0 = x0
-            prev_bottom = line["bbox"][3]
+            prev_x1 = line["x1"]
+            prev_bottom = line["y1"]
+            prev_text = txt
 
     doc.close()
     return boundaries
@@ -235,8 +418,59 @@ def _normalize_for_matching(text: str) -> str:
     return text.strip()
 
 
-def _find_text_in_output(needle: str, output_lines: List[str], output_text_norm: str) -> Tuple[Optional[int], bool, int]:
+_TAG_DELIM_RE = re.compile(r'\[[AD]>|<[AD]\]')
+
+
+def _norm_offset_to_raw(raw_line: str, norm_pos: int) -> int:
+    """Map a character offset in the normalized line back to the raw line.
+
+    The normalized form drops [A>/<A] tag delimiters, collapses whitespace runs
+    to a single space and strips the leading whitespace, so offsets computed on
+    it cannot be used directly against the tagged output line.
+    """
+    if norm_pos <= 0:
+        return 0
+
+    count = 0          # normalized characters emitted so far
+    i = 0
+    pending_space = False
+    started = False
+    while i < len(raw_line):
+        m = _TAG_DELIM_RE.match(raw_line, i)
+        if m:
+            i = m.end()
+            continue
+        ch = raw_line[i]
+        if ch.isspace():
+            pending_space = started
+            i += 1
+            continue
+        if pending_space:
+            if count == norm_pos:
+                return i
+            count += 1
+            pending_space = False
+        if count == norm_pos:
+            return i
+        started = True
+        count += 1
+        i += 1
+    return len(raw_line)
+
+
+def _find_text_in_output(
+    needle: str, output_lines: List[str], output_text_norm: str,
+    *, prefer_long_key: bool = False,
+) -> Tuple[Optional[int], bool, int]:
     """Find which output line contains the needle text.
+
+    Parameters
+    ----------
+    prefer_long_key : bool
+        Try a longer (40-char) key before the default 25-char one. Only
+        needed for boundary text prone to short shared-phrase collisions
+        (e.g. "heading_break" signals); left off elsewhere so existing
+        signal matching is unaffected.
 
     Returns
     -------
@@ -246,17 +480,26 @@ def _find_text_in_output(needle: str, output_lines: List[str], output_text_norm:
         char_position: character offset within the line where needle starts
     """
     needle_norm = _normalize_for_matching(needle)
-    search_key = needle_norm[:25].lower()
-    if not search_key:
+    if not needle_norm:
         return None, False, -1
 
-    # Search line by line for more accurate position detection
-    for i, line in enumerate(output_lines):
-        line_norm = _normalize_for_matching(line).lower()
-        pos = line_norm.find(search_key)
-        if pos >= 0:
-            starts_at_beginning = pos <= 2
-            return i, starts_at_beginning, pos
+    key_lens = (40, 25) if prefer_long_key else (25,)
+    for key_len in key_lens:
+        search_key = needle_norm[:key_len].lower()
+        if not search_key:
+            continue
+
+        # Anchor on a word boundary so a fragment like "975, provides" cannot
+        # match inside "Act of 1975, provides".
+        key_re = re.compile(r'(?<![0-9A-Za-z])' + re.escape(search_key))
+
+        for i, line in enumerate(output_lines):
+            line_norm = _normalize_for_matching(line).lower()
+            m = key_re.search(line_norm)
+            if m:
+                pos = m.start()
+                starts_at_beginning = pos <= 2
+                return i, starts_at_beginning, pos
 
     return None, False, -1
 
@@ -265,11 +508,15 @@ def _is_list_marker_prefix(prefix: str) -> bool:
     """Return True if *prefix* looks like a list/enumeration marker.
 
     Examples: "(v)", "(IV)", "1.", "12)", "(a)", "A."
+
+    Numeric markers are capped at three digits so that a statute section
+    number left on its own PDF line (e.g. "127481.") is not excused as an
+    inline bullet when the output merges it into the following section.
     """
     p = (prefix or "").strip()
     if not p:
         return False
-    return bool(re.match(r"^(?:\(?[ivxlcdmIVXLCDM]+\)?[\.)]?|\(?\d+[A-Za-z]?\)?[\.)]?|\(?[A-Za-z]\)?[\.)]?)$", p))
+    return bool(re.match(r"^(?:\(?[ivxlcdmIVXLCDM]+\)?[\.)]?|\(?\d{1,3}[A-Za-z]?\)?[\.)]?|\(?[A-Za-z]\)?[\.)]?)$", p))
 
 
 @dataclass
@@ -332,6 +579,11 @@ def check_paragraph_accuracy(
     boundaries = extract_paragraph_boundaries(pdf_path, pages=pages)
 
     if not boundaries:
+        logger.warning(
+            "📐 Paragraph accuracy: no PDF paragraph boundaries detected for %s — "
+            "layout accuracy is unverified, not 100%%.",
+            Path(pdf_path).name,
+        )
         return {
             "accuracy_pct": 100.0,
             "total_boundaries": 0,
@@ -340,7 +592,9 @@ def check_paragraph_accuracy(
             "merges_needed": [],
             "merge_errors": [],  # backward compat
             "boundaries_checked": 0,
+            "merge_checkpoints": 0,
             "skipped": 0,
+            "boundary_detection_failed": True,
         }
 
     # Step 2: Split output into lines and build normalized version
@@ -354,7 +608,8 @@ def check_paragraph_accuracy(
 
     for boundary in boundaries:
         line_idx, starts_at_beginning, char_pos = _find_text_in_output(
-            boundary.first_words, output_lines, output_text_norm
+            boundary.first_words, output_lines, output_text_norm,
+            prefer_long_key=(boundary.signal == "heading_break"),
         )
 
         if line_idx is None:
@@ -374,17 +629,18 @@ def check_paragraph_accuracy(
             raw_search = boundary.first_words[:20]
             raw_pos = raw_line.find(raw_search)
             if raw_pos < 0:
-                # Try without tag interference
-                raw_pos = char_pos  # fallback to normalized position
+                # Tags interrupt the literal text — map the normalized offset
+                raw_pos = _norm_offset_to_raw(raw_line, char_pos)
 
             # False-positive guard: many PDF wraps get detected as boundaries
             # by indentation, but in output they appear as lowercase clause
             # continuations inside the same sentence. Do not flag these as
-            # split-needed.
+            # split-needed. The check runs on the normalized line so a tag
+            # delimiter ("...<A]") is not mistaken for the preceding text.
             first_token = _normalize_for_matching(boundary.first_words).split(' ', 1)[0].strip()
             looks_lowercase_continuation = bool(first_token) and first_token[0].islower()
-            if looks_lowercase_continuation and raw_pos > 0:
-                left_text = raw_line[:raw_pos].rstrip()
+            if looks_lowercase_continuation and char_pos > 0:
+                left_text = line_norm_for_pos[:char_pos].rstrip()
                 left_tail = left_text[-1:] if left_text else ""
                 # If left side does not end a sentence and the candidate
                 # boundary starts lowercase, this is almost always a wrap.
@@ -424,7 +680,9 @@ def check_paragraph_accuracy(
     # be continuous (same paragraph).  Look for short lines followed by
     # continuation text that belongs to the same PDF paragraph.
     merges_needed: List[Dict] = []
-    _detect_over_splits(output_lines, boundaries, merges_needed, state_code=state_code)
+    merge_checkpoints = _detect_over_splits(
+        output_lines, boundaries, merges_needed, state_code=state_code
+    )
 
     # ── Deduplicate splits that were detected on multiple PDF pages ──
     # When a paragraph spans a page break, the same text may be detected
@@ -438,11 +696,18 @@ def check_paragraph_accuracy(
             _deduped_splits.append(sp)
     splits_needed = _deduped_splits
 
-    # Calculate accuracy
+    # Calculate accuracy.
+    # Two independent populations are scored together:
+    #   - split checkpoints  = PDF boundaries actually located in the output
+    #   - merge checkpoints   = adjacent output line pairs examined for an
+    #                           over-split (i.e. every real break opportunity)
+    # Counting only the merge *failures* in the denominator used to make a
+    # single merge finding halve the score on documents with few boundaries.
     checked = len(boundaries) - skipped
     total_issues = len(splits_needed) + len(merges_needed)
-    total_checkpoints = checked + len(merges_needed)
+    total_checkpoints = checked + merge_checkpoints
     accuracy = ((total_checkpoints - total_issues) / total_checkpoints * 100) if total_checkpoints > 0 else 100.0
+    accuracy = max(0.0, accuracy)
 
     result = {
         "accuracy_pct": round(accuracy, 1),
@@ -452,7 +717,9 @@ def check_paragraph_accuracy(
         "merges_needed": merges_needed,
         "merge_errors": splits_needed,  # backward compat
         "boundaries_checked": checked,
+        "merge_checkpoints": merge_checkpoints,
         "skipped": skipped,
+        "boundary_detection_failed": False,
     }
 
     logger.info(
@@ -469,7 +736,7 @@ def _detect_over_splits(
     merges_needed: List[Dict],
     *,
     state_code: Optional[str] = None,
-):
+) -> int:
     """Detect lines that are over-split (broken mid-paragraph).
 
         Heuristics for a false line break (merge needed):
@@ -477,6 +744,9 @@ def _detect_over_splits(
         - Next line starts like a continuation (lowercase, number, or
             uppercase word), but NOT like a new list/section marker
         - Line is very short compared to neighbors
+
+    Returns the number of adjacent line pairs actually examined, which is the
+    denominator for the merge half of the accuracy score.
     """
     # Build set of expected paragraph-start texts for quick lookup
     boundary_starts = set()
@@ -484,6 +754,8 @@ def _detect_over_splits(
         norm = _normalize_for_matching(b.first_words[:20]).lower()
         if norm:
             boundary_starts.add(norm)
+
+    checkpoints = 0
 
     for i in range(len(output_lines) - 1):
         line = output_lines[i].strip()
@@ -499,6 +771,10 @@ def _detect_over_splits(
 
         if not line_norm or not next_norm:
             continue
+
+        # A genuine break opportunity — counts toward the merge denominator
+        # whether or not it turns out to be an over-split.
+        checkpoints += 1
 
         # AR page-1 title/header block is expected to remain as separate lines.
         # Suppress false MERGE recommendations there.
@@ -575,6 +851,8 @@ def _detect_over_splits(
                         f"line ends mid-sentence, next looks like continuation"
                     ),
                 })
+
+    return checkpoints
 
 
 def _is_ar_page1_header_line(text: str) -> bool:

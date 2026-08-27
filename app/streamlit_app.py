@@ -2202,25 +2202,28 @@ def _run_layout_accuracy_check(
 
                 with open(_layout_txt, "w", encoding="utf-8") as _tf:
                     _tf.write(
-                        f"Layout accuracy: {_acc:.1f}%\\n"
-                        f"Total boundaries: {_total}\\n"
-                        f"Split-needed: {_splits}\\n"
-                        f"Merge-needed: {_merges}\\n\\n"
+                        f"Layout accuracy: {_acc:.1f}%\n"
+                        f"Total boundaries: {_total}\n"
+                        f"Boundaries checked: {report.get('boundaries_checked', 0)}\n"
+                        f"Merge checkpoints: {report.get('merge_checkpoints', 0)}\n"
+                        f"Split-needed: {_splits}\n"
+                        f"Merge-needed: {_merges}\n\n"
                     )
                     if _splits:
-                        _tf.write("SPLIT-NEEDED ISSUES\\n")
+                        _tf.write("SPLIT-NEEDED ISSUES\n")
                         for i, s in enumerate(report.get("splits_needed", [])[:500], 1):
                             _tf.write(
                                 f"{i}. line={s.get('line')} pos={s.get('char_position')} "
-                                f"signal={s.get('signal')} pdf_page={s.get('pdf_page')}\\n"
-                                f"   after_split: {s.get('text_after_split', '')}\\n\\n"
+                                f"signal={s.get('signal')} pdf_page={s.get('pdf_page')}\n"
+                                f"   before_split: {s.get('text_before_split', '')}\n"
+                                f"   after_split : {s.get('text_after_split', '')}\n\n"
                             )
                     if _merges:
-                        _tf.write("MERGE-NEEDED ISSUES\\n")
+                        _tf.write("MERGE-NEEDED ISSUES\n")
                         for i, m in enumerate(report.get("merges_needed", [])[:500], 1):
                             _tf.write(
-                                f"{i}. line={m.get('line')} with_line={m.get('merge_with_line')}\\n"
-                                f"   desc: {m.get('description', '')}\\n\\n"
+                                f"{i}. line={m.get('line')} with_line={m.get('merge_with_line')}\n"
+                                f"   desc: {m.get('description', '')}\n\n"
                             )
 
                 add_log(f"📋 Layout accuracy report saved: {Path(_layout_json).name}")
@@ -6335,16 +6338,25 @@ def show_results_section():
             _la_splits = len(_layout_rpt.get('splits_needed', []) or [])
             _la_merges = len(_layout_rpt.get('merges_needed', []) or [])
             _la_issues = _la_splits + _la_merges
-            if _la_issues == 0:
+            if _la_total == 0:
+                # No PDF boundaries detected — the 100% is unverified, not clean
+                _la_bg, _la_fg, _la_bdr = '#fefce8', '#854d0e', '#fde68a'
+                _layout_acc_chip = _mk_metric_card(
+                    "📐", "Layout Accuracy", "n/a", "no boundaries detected",
+                    bg=_la_bg, fg=_la_fg, border=_la_bdr
+                )
+                _la_issues = -1  # skip the normal chip below
+            elif _la_issues == 0:
                 _la_bg, _la_fg, _la_bdr = '#f0fdf4', '#166534', '#bbf7d0'
             elif _la_acc >= 95:
                 _la_bg, _la_fg, _la_bdr = '#fefce8', '#854d0e', '#fde68a'
             else:
                 _la_bg, _la_fg, _la_bdr = '#fef2f2', '#991b1b', '#fecaca'
-            _layout_acc_chip = _mk_metric_card(
-                "📐", "Layout Accuracy", f"{_la_acc:.1f}%", "",
-                bg=_la_bg, fg=_la_fg, border=_la_bdr
-            )
+            if _la_issues >= 0:
+                _layout_acc_chip = _mk_metric_card(
+                    "📐", "Layout Accuracy", f"{_la_acc:.1f}%", "",
+                    bg=_la_bg, fg=_la_fg, border=_la_bdr
+                )
 
         st.markdown("""
         <style>

@@ -1747,18 +1747,18 @@ def pymupdf_compare_tags(
 
     for chunk_idx, chunk_items in enumerate(chunks, start=1):
         chunk_pages = _pages_for_chunk(chunk_items)
-        # For single chunk, send all images; for multi-chunk, send only
-        # the pages referenced by this chunk (0-indexed).
-        if n_chunks == 1:
-            chunk_images = highlighted_images_b64
-            chunk_image_indices = list(range(len(highlighted_images_b64)))
-        else:
-            # Pages are 1-indexed; image list is 0-indexed
-            chunk_image_indices = sorted(
-                p - 1 for p in chunk_pages
-                if p is not None and 1 <= p <= len(highlighted_images_b64)
-            )
-            chunk_images = [highlighted_images_b64[i] for i in chunk_image_indices]
+        # Only send pages the chunk actually references — even in the
+        # single-chunk case.  Sending the FULL document's image list
+        # here (as before) bypasses MAX_IMAGES_PER_CHUNK whenever the
+        # checklist happens to fit in one chunk but the document has
+        # many more pages than tagged spans (e.g. 90 items across ≤20
+        # tagged pages in a 57-page bill) — that mismatch is exactly
+        # what produced the 413 "request_too_large" failures.
+        chunk_image_indices = sorted(
+            p - 1 for p in chunk_pages
+            if p is not None and 1 <= p <= len(highlighted_images_b64)
+        )
+        chunk_images = [highlighted_images_b64[i] for i in chunk_image_indices]
 
         chunk_checklist_str = _format_checklist(chunk_items, precheck)
         n_chunk_items = len(chunk_items)
@@ -1792,7 +1792,7 @@ def pymupdf_compare_tags(
         content_parts: List[Dict] = []
         for i, img_b64 in enumerate(chunk_images):
             # Show the actual page number for clarity
-            actual_page = chunk_image_indices[i] + 1 if n_chunks > 1 else i + 1
+            actual_page = chunk_image_indices[i] + 1
             try:
                 # Anthropic limits each image to 2000px per dimension for multi-image requests
                 resized_b64 = _resize_image_b64(img_b64)

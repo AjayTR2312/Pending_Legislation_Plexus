@@ -3176,6 +3176,31 @@ def _strip_dc_wilson_building_footer(text: str) -> str:
     return text
 
 
+# ---------------------------------------------------------------------------
+# DC exhibit/attachment "Page N of M" footer removal
+# ---------------------------------------------------------------------------
+# DC confirmation resolutions attach exhibits (nominee resume, bio form,
+# legal-sufficiency memo) that are frequently scanned + OCR'd rather than
+# native digital pages. OCR page footers like "Page 1 of 2" survive
+# extraction as a standalone line, and OCR often misreads the digit "1"
+# as the capital letter "I" (e.g. "Page I of 2"). These are exhibit
+# pagination artifacts, never legislative text, so strip them outright.
+_RE_DC_PAGE_OF_FOOTER = re.compile(
+    r"^[ \t]*Page\s+[IVXLCDM0-9]+\s+of\s+[IVXLCDM0-9]+[ \t]*$\n?",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _strip_dc_page_of_footer(text: str) -> str:
+    """Remove standalone OCR 'Page N of M' exhibit-pagination footers."""
+    new_text = _RE_DC_PAGE_OF_FOOTER.sub("", text)
+    if new_text != text:
+        new_text = re.sub(r"\n{3,}", "\n\n", new_text)
+        logger.debug("Stripped DC 'Page N of M' exhibit footer")
+        return new_text
+    return text
+
+
 def _strip_dc_link_underline_tags(text: str) -> str:
     """Strip ``[A>…<A]`` tags whose content is an email address or URL.
 
@@ -5349,6 +5374,7 @@ def extract_pdf_with_pymupdf(
             clean = _strip_dc_letterhead_footer(clean)
             clean = _strip_dc_link_underline_tags(clean)
             clean = _strip_dc_title_header_tags(clean)
+            clean = _strip_dc_page_of_footer(clean)
 
         # KS-only: inject underscore text for vector-drawn signature lines
         # on pages that contain the certification/signing block.
@@ -6051,6 +6077,7 @@ def clean_extracted_text(
         cleaned = _strip_dc_link_underline_tags(cleaned)
         cleaned = _strip_dc_wilson_building_footer(cleaned)
         cleaned = _strip_dc_title_header_tags(cleaned)
+        cleaned = _strip_dc_page_of_footer(cleaned)
 
     # ── strip IN-specific artifacts (footers, barcodes, false headers) ─
     if state_code and state_code.upper() == "IN":

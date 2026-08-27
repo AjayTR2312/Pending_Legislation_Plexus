@@ -2247,6 +2247,13 @@ def _merge_page_break_paragraph_splits(text, state_code=None):
     """
     _is_fl = state_code and state_code.upper() == "FL"
     _is_ct = state_code and state_code.upper() == "CT"
+    # CO tags added text in ALL CAPS, so a page-break continuation almost
+    # always starts with an uppercase letter (e.g. "...INCLUDE<A]" /
+    # "[A>PRINCIPAL AND INTEREST...").  The default branch below requires
+    # B to start lowercase, which never matches CO's uppercase convention
+    # and leaves every such split unmerged.  Route CO through the same
+    # uppercase-tolerant merge logic used for FL.
+    _is_upper_continuation_state = _is_fl or (state_code and state_code.upper() == "CO")
 
     _BARE_SUBSEC = re.compile(r'^[a-z]\.\s')
     _TAG_STRIP   = re.compile(r'\[([AD])>|<([AD])\]')
@@ -2316,14 +2323,27 @@ def _merge_page_break_paragraph_splits(text, state_code=None):
                             re.search(r'\b(?:in|under|of|per|to|see)\s*$', text_before, re.IGNORECASE)
                             and re.match(r'[sS]\.\s+\d', inner)
                         )
+                    # CO-specific: text_before ends with "SUBSECTION" /
+                    # "SECTION" / "ARTICLE" (a dangling statute-reference
+                    # keyword) and inner opens with the reference number
+                    # itself, e.g. "…PURSUANT TO SUBSECTION" | "(11)(a)
+                    # OF THIS SECTION, THE STATE BOARD…".  That "(11)"
+                    # is the object of the reference, not a new
+                    # subsection heading, so it must not block the merge.
+                    elif (state_code and state_code.upper() == "CO"
+                            and _SUBSEC_OR_SECTION.match(inner)):
+                        _skip_subsec_guard = bool(
+                            re.search(r'\b(?:SUBSECTION|SECTION|ARTICLE)$', text_before)
+                        )
                     if _SUBSEC_OR_SECTION.match(inner) and not _skip_subsec_guard:
                         continue
                     # Guard: section-header delimiter (em/en dash)
                     if text_before[-1] in '\u2014\u2013':
                         continue
                     has_terminal = text_before[-1] in '.!?:;'
-                    if _is_fl:
-                        # ── FL-specific enhanced merging ──────────────
+                    if _is_upper_continuation_state:
+                        # ── FL/CO enhanced merging (tolerates uppercase
+                        # continuations) ───────────────────────────────
                         if not has_terminal:
                             # Guard: list-item conclusion pattern.
                             # When the paragraph starts with a letter
@@ -2337,8 +2357,14 @@ def _merge_page_break_paragraph_splits(text, state_code=None):
                             #    (c) …; or (d) …false information,
                             #
                             #    commits a felony …"
-                            # Do NOT merge.
-                            if (not _p1a_active
+                            # Do NOT merge.  FL-only: CO's all-caps
+                            # subsection items (e.g. "(h) ENTER INTO
+                            # CONTRACTS …OWNERSHIP,") legitimately wrap
+                            # a comma mid-clause across a page break and
+                            # must still merge — CO has no lowercase
+                            # "list conclusion" prose to guard against.
+                            if (_is_fl
+                                    and not _p1a_active
                                     and text_before.rstrip()[-1:] == ','
                                     and re.match(
                                         r'\([a-z]\)\s',
@@ -2362,6 +2388,24 @@ def _merge_page_break_paragraph_splits(text, state_code=None):
                         # complete unit and the next tag is genuinely
                         # separate (SB 1028 / SB 1332 regression guard).
                         if _p1a_active:
+                            curr = text_before + ' ' + nxt_s[len(open_tag):]
+                            i += 1
+                            merge_count += 1
+                            did_merge = True
+                            break
+                        # CO-only: a ";" is a clause separator, not a
+                        # sentence end, when the continuation opens
+                        # with a subordinating/qualifying conjunction
+                        # ("EXCEPT THAT the board may extend...").
+                        # Vision-mode CO output isn't LLM-assembled
+                        # into complete paragraph units the way FL's
+                        # hybrid text is, so the SB 1028/1332 guard
+                        # above doesn't apply here.
+                        if (state_code and state_code.upper() == "CO"
+                                and text_before[-1] == ';'
+                                and re.match(
+                                    r'(?:EXCEPT|PROVIDED|UNLESS|SUBJECT\s+TO)\b',
+                                    inner, re.IGNORECASE)):
                             curr = text_before + ' ' + nxt_s[len(open_tag):]
                             i += 1
                             merge_count += 1
@@ -2397,7 +2441,9 @@ def _merge_page_break_paragraph_splits(text, state_code=None):
                         and not nxt_s.startswith('[A>')
                         and not nxt_s.startswith('[D>')):
                     inner = nxt_s.lstrip()
-                    if not inner or not inner[0].islower():
+                    if not inner:
+                        continue
+                    if not inner[0].islower() and not _is_upper_continuation_state:
                         continue
                     if _BARE_SUBSEC.match(inner):
                         continue
@@ -2407,8 +2453,17 @@ def _merge_page_break_paragraph_splits(text, state_code=None):
                     # A's tag-stripped content must be substantial
                     if len(_TAG_STRIP.sub('', text_before).strip()) < 40:
                         continue
-                    # Merge: strip close tag from A, keep B as-is
-                    curr = text_before + ' ' + nxt_s
+                    if _is_upper_continuation_state and inner[0].isupper():
+                        # CO/FL: the vision/LLM pass dropped the tag
+                        # wrapper around a short trailing continuation
+                        # (e.g. a lone "AND" closing a list item) even
+                        # though it's genuinely part of the same added
+                        # span — pull it back inside the tag instead of
+                        # leaving it as untagged plain text.
+                        curr = text_before + ' ' + inner + close_tag
+                    else:
+                        # Merge: strip close tag from A, keep B as-is
+                        curr = text_before + ' ' + nxt_s
                     i += 1
                     merge_count += 1
                     did_merge = True
