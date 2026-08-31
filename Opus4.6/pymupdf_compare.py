@@ -99,8 +99,8 @@ log = logging.getLogger("pymupdf_compare")
 # call.  For large documents the checklist + images + clean text can
 # exceed context limits; we split into page-based chunks and merge.
 CHECKLIST_CHUNK_SIZE = 250  # items per chunk
-# MAX_PAGES_PER_CHUNK is dynamically determined: each chunk includes
-# exactly the pages its checklist items span (no fixed cap).
+MAX_IMAGES_PER_CHUNK = 20   # max pages (images) per API call to avoid 413
+# Both limits are enforced: a new chunk starts when either is exceeded.
 # Anthropic max image dimension for multi-image requests.
 _MAX_IMAGE_DIM = 2000
 
@@ -113,24 +113,39 @@ def _resize_image_b64(img_b64: str, max_dim: int = _MAX_IMAGE_DIM) -> str:
     import base64
     import io
     try:
-        from PIL import Image
+        from PIL import Image, ImageFile
     except ImportError:
         # If Pillow not available, return as-is and let the API error
         return img_b64
 
     raw = base64.b64decode(img_b64)
-    img = Image.open(io.BytesIO(raw))
-    w, h = img.size
-    if w <= max_dim and h <= max_dim:
-        return img_b64  # no resize needed
 
-    # Scale down preserving aspect ratio
-    scale = min(max_dim / w, max_dim / h)
-    new_w, new_h = int(w * scale), int(h * scale)
-    img = img.resize((new_w, new_h), Image.LANCZOS)
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return base64.b64encode(buf.getvalue()).decode()
+    def _open_and_resize(allow_truncated: bool) -> str:
+        old_flag = ImageFile.LOAD_TRUNCATED_IMAGES
+        ImageFile.LOAD_TRUNCATED_IMAGES = allow_truncated
+        try:
+            with Image.open(io.BytesIO(raw)) as img:
+                img.load()
+                w, h = img.size
+                if w <= max_dim and h <= max_dim:
+                    return img_b64  # no resize needed
+
+                # Scale down preserving aspect ratio
+                scale = min(max_dim / w, max_dim / h)
+                new_w, new_h = int(w * scale), int(h * scale)
+                resized = img.resize((new_w, new_h), Image.LANCZOS)
+                buf = io.BytesIO()
+                resized.save(buf, format="PNG")
+                return base64.b64encode(buf.getvalue()).decode()
+        finally:
+            ImageFile.LOAD_TRUNCATED_IMAGES = old_flag
+
+    try:
+        return _open_and_resize(False)
+    except Exception:
+        # Some highlighted pages can be partially written/corrupted.
+        # Retry with truncated-image support before giving up.
+        return _open_and_resize(True)
 
 
 def _protected_clauses_for(state_code: Optional[str]) -> List[str]:
@@ -972,7 +987,15 @@ def _precheck_clean_text(
 
         if match_j is None:
             # No forward match.  Don't advance the cursor (item didn't
-            # consume anything); move on to the next item.
+            # consume anything); move on to the next item.  KS-only:
+            # clear the stale active_parent — otherwise a later short,
+            # generic item (e.g. "Sec.") can spuriously re-attach to an
+            # old, unrelated merged tag from far earlier in the document
+            # via Strategy 1, instead of being correctly re-scanned from
+            # the cursor position. Scoped to KS since its heavy "Sec. N."
+            # renumbering is what triggers this collision.
+            if state_code and state_code.upper() == "KS":
+                active_parent = None
             continue
 
         ct = clean_tags[match_j]
@@ -1123,8 +1146,8 @@ def _precheck_clean_text(
             results[item["id"]] = {"in_clean": "no", "clean_text": ""}
 
     # ── Bracket-deletion convention reclassification ──────────────
-    # For states whose deletion convention is square brackets (CT, MD,
-    # KY, etc.) PyMuPDF reports the bracketed span (e.g. ``[having]``)
+    # For states whose deletion convention is square brackets (e.g. MD,
+    # KY), PyMuPDF reports the bracketed span (e.g. ``[having]``)
     # with ``format_types=['brackets']``.  The LLM cleaning step
     # typically preserves the LITERAL bracketed text in the output
     # rather than wrapping it in a ``[D>…<D]`` tag — the brackets ARE
@@ -1132,6 +1155,10 @@ def _precheck_clean_text(
     # flag the item as ``tag_dropped`` / ``partial_match``; it is a ✅
     # pass.  We override the in_clean status to ``brackets_preserved``
     # so the post-processing layer surfaces it correctly.
+    #
+    # CT is intentionally excluded: CT pipeline now normalizes bracket
+    # deletions to [D>...<D] before LLM, so literal [ ... ] in clean text
+    # should be treated as a tagging miss, not a pass.
     #
     # NORMALISATION: in CT bills (and any state with line-numbered
     # body text) PyMuPDF embeds the body line numbers INSIDE the
@@ -1205,8 +1232,11 @@ def _precheck_clean_text(
     ]
 
     n_bracket_pass = 0
+    _allow_literal_brackets = not (state_code and state_code.upper() == "CT")
     for item in checklist_items:
         if "brackets" not in (item.get("format_types") or []):
+            continue
+        if not _allow_literal_brackets:
             continue
         iid = item["id"]
         cur = results[iid]["in_clean"]
@@ -1528,12 +1558,17 @@ _ERROR_CLASSES = {
     "content_dropped",
     "extra_tag",
     "protected_clause_tagged",
+    "in_italic_tag_outside_printing_code",
     # Same-paragraph span split into two separate same-type tags across a
     # page break.  Detected by :func:`_find_unmerged_split_tags`.  The
     # deterministic merger ``merge_cross_page_break_tags`` should have
     # combined these into one tag; if the audit still sees the split it
     # means the merger missed an edge case.
     "unmerged_split_tag",
+    # A [D>…<D] span sitting inside an [A>…<A] span (or vice versa).  Never
+    # valid markup — it means the LLM expanded one tag's boundary across
+    # neighbouring content of the other type.
+    "nested_opposite_tag",
 }
 # Classifications that ALWAYS resolve to ⚠️ warning.
 #
@@ -1545,6 +1580,30 @@ _ERROR_CLASSES = {
 # repeatedly flagged even though the LLM did exactly the right thing by
 # omitting it).  They now resolve to ✅ pass — see ``_PASS_CLASSES`` below.
 _WARNING_CLASSES: set[str] = set()
+
+
+def _outer_tag_type(tagged_text: str) -> str:
+    """Return ``"A"``/``"D"`` for the first tag opener in *tagged_text*, else ``""``."""
+    m = re.search(r"\[([AD])>", tagged_text or "")
+    return m.group(1) if m else ""
+
+
+def _has_opposite_nesting(tagged_text: str) -> tuple[str, str, str]:
+    """Return ``(outer, inner, inner_text)`` for the first opposite-type nesting.
+
+    An ``[A>…<A]`` span containing a ``[D>…<D]`` span (or vice versa) is never
+    valid markup — it means a tag boundary was expanded across neighbouring
+    content.  Returns ``("", "", "")`` when the text is well formed.
+    """
+    for m in re.finditer(r"\[([AD])>(.*?)<\1\]", tagged_text or "", flags=re.DOTALL):
+        outer, inner = m.group(1), m.group(2)
+        other = "D" if outer == "A" else "A"
+        n = re.search(rf"\[{other}>(.*?)<{other}\]", inner, flags=re.DOTALL)
+        if n:
+            return outer, other, re.sub(r"\s+", " ", n.group(1)).strip()
+    return "", "", ""
+
+
 # Classifications that ALWAYS resolve to ✅ pass
 _PASS_CLASSES = {
     "match",
@@ -1580,18 +1639,16 @@ _PASS_CLASSES = {
 def _chunk_checklist_by_page(
     checklist_items: List[Dict],
     max_items: int = CHECKLIST_CHUNK_SIZE,
+    max_pages: int = MAX_IMAGES_PER_CHUNK,
 ) -> List[List[Dict]]:
     """Split checklist items into page-aligned chunks.
 
-    Each chunk contains at most *max_items* items.  The pages included
-    per chunk are determined dynamically — whatever pages those items
-    span, those images get sent.  Page boundaries are respected (items
-    from the same page are never split across chunks).
+    Each chunk contains at most *max_items* items AND at most *max_pages*
+    distinct pages (images).  Page boundaries are respected (items from
+    the same page are never split across chunks).
     """
     if not checklist_items:
         return []
-    if len(checklist_items) <= max_items:
-        return [checklist_items]
 
     # Group items by page
     from collections import OrderedDict
@@ -1600,16 +1657,26 @@ def _chunk_checklist_by_page(
         pg = item.get("page", 0) or 0
         page_groups.setdefault(pg, []).append(item)
 
+    # Fast-path: single chunk only when both limits are satisfied
+    if len(checklist_items) <= max_items and len(page_groups) <= max_pages:
+        return [checklist_items]
+
     chunks: List[List[Dict]] = []
     current_chunk: List[Dict] = []
+    current_pages: set = set()
 
     for pg, items in page_groups.items():
-        # Would adding this page's items exceed the item limit?
-        if current_chunk and len(current_chunk) + len(items) > max_items:
+        # Start a new chunk if either limit would be exceeded
+        if current_chunk and (
+            len(current_chunk) + len(items) > max_items
+            or len(current_pages) >= max_pages
+        ):
             chunks.append(current_chunk)
             current_chunk = []
+            current_pages = set()
 
         current_chunk.extend(items)
+        current_pages.add(pg)
 
     if current_chunk:
         chunks.append(current_chunk)
@@ -1630,6 +1697,7 @@ def pymupdf_compare_tags(
     state_rules: str = "",
     output_xlsx: str = "pymupdf_clean_audit.xlsx",
     model: str = "claude-opus-4-7",
+    anthropic_client=None,
 ) -> Dict:
     """
     Audit the LLM-cleaned PyMuPDF text using Claude Opus 4.7 vision.
@@ -1652,6 +1720,9 @@ def pymupdf_compare_tags(
         Path of the Excel report to write.
     model
         Anthropic model id (default ``claude-opus-4-7``).
+    anthropic_client
+        Optional pre-authenticated Anthropic client. When provided, the audit
+        reuses it instead of requesting a fresh gateway token.
 
     Returns
     -------
@@ -1698,12 +1769,12 @@ def pymupdf_compare_tags(
     checklist_str = _format_checklist(checklist_items, precheck)
 
     # ── Chunk the checklist for large documents ─────────────────────
-    chunks = _chunk_checklist_by_page(checklist_items)
+    chunks = _chunk_checklist_by_page(checklist_items)  # respects CHECKLIST_CHUNK_SIZE + MAX_IMAGES_PER_CHUNK
     n_chunks = len(chunks)
-    log.info("📦 Checklist split into %d chunk(s) (%d total items)",
-             n_chunks, len(checklist_items))
+    log.info("📦 Checklist split into %d chunk(s) (%d total items, max %d images/chunk)",
+             n_chunks, len(checklist_items), MAX_IMAGES_PER_CHUNK)
 
-    client = _get_anthropic_client()
+    client = anthropic_client or _get_anthropic_client()
 
     # ── Process each chunk ──────────────────────────────────────────
     all_checklist_results: List[Dict] = []
@@ -1712,18 +1783,18 @@ def pymupdf_compare_tags(
 
     for chunk_idx, chunk_items in enumerate(chunks, start=1):
         chunk_pages = _pages_for_chunk(chunk_items)
-        # For single chunk, send all images; for multi-chunk, send only
-        # the pages referenced by this chunk (0-indexed).
-        if n_chunks == 1:
-            chunk_images = highlighted_images_b64
-            chunk_image_indices = list(range(len(highlighted_images_b64)))
-        else:
-            # Pages are 1-indexed; image list is 0-indexed
-            chunk_image_indices = sorted(
-                p - 1 for p in chunk_pages
-                if p is not None and 1 <= p <= len(highlighted_images_b64)
-            )
-            chunk_images = [highlighted_images_b64[i] for i in chunk_image_indices]
+        # Only send pages the chunk actually references — even in the
+        # single-chunk case.  Sending the FULL document's image list
+        # here (as before) bypasses MAX_IMAGES_PER_CHUNK whenever the
+        # checklist happens to fit in one chunk but the document has
+        # many more pages than tagged spans (e.g. 90 items across ≤20
+        # tagged pages in a 57-page bill) — that mismatch is exactly
+        # what produced the 413 "request_too_large" failures.
+        chunk_image_indices = sorted(
+            p - 1 for p in chunk_pages
+            if p is not None and 1 <= p <= len(highlighted_images_b64)
+        )
+        chunk_images = [highlighted_images_b64[i] for i in chunk_image_indices]
 
         chunk_checklist_str = _format_checklist(chunk_items, precheck)
         n_chunk_items = len(chunk_items)
@@ -1757,13 +1828,22 @@ def pymupdf_compare_tags(
         content_parts: List[Dict] = []
         for i, img_b64 in enumerate(chunk_images):
             # Show the actual page number for clarity
-            actual_page = chunk_image_indices[i] + 1 if n_chunks > 1 else i + 1
+            actual_page = chunk_image_indices[i] + 1
+            try:
+                # Anthropic limits each image to 2000px per dimension for multi-image requests
+                resized_b64 = _resize_image_b64(img_b64)
+            except Exception as img_err:
+                log.warning(
+                    "Skipping highlighted page %d due to image decode/resize error: %s",
+                    actual_page,
+                    img_err,
+                )
+                continue
+
             content_parts.append({
                 "type": "text",
                 "text": f"[Highlighted page {actual_page} of {len(highlighted_images_b64)}]",
             })
-            # Anthropic limits each image to 2000px per dimension for multi-image requests
-            resized_b64 = _resize_image_b64(img_b64)
             content_parts.append({
                 "type": "image",
                 "source": {
@@ -1878,6 +1958,34 @@ def pymupdf_compare_tags(
         return (best_page, str(line_no))
 
     # ── Inject deterministic extra-tag findings as checklist rows ───
+    # Indiana scope and clean-text locator helpers are needed by the
+    # extra-tag loop below, so define them before first use.
+    _in_printing_scope_start = -1
+    _in_printing_scope_end = -1
+    if state_code and state_code.upper() == "IN":
+        _m_pc = re.search(
+            r"PRINTING\s+CODE[:\s]*.*?(?=\nSECTION\s+1\b|\Z)",
+            pymupdf_clean_text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if _m_pc:
+            _in_printing_scope_start, _in_printing_scope_end = _m_pc.span(0)
+
+    def _in_printing_code_scope(offset: int) -> bool:
+        if offset < 0:
+            return False
+        if _in_printing_scope_start < 0 or _in_printing_scope_end < 0:
+            return False
+        return _in_printing_scope_start <= offset < _in_printing_scope_end
+
+    def _locate_in_clean(tag_text: str, plain_text: str) -> int:
+        pos = -1
+        if tag_text:
+            pos = pymupdf_clean_text.find(tag_text)
+        if pos < 0 and plain_text:
+            pos = pymupdf_clean_text.find(plain_text)
+        return pos
+
     if extra_clean_tags:
         log.info("➕ Injecting %d extra clean tags as checklist rows",
                  len(extra_clean_tags))
@@ -2027,9 +2135,37 @@ def pymupdf_compare_tags(
             _et_page, _et_line = _estimate_extra_tag_page_line(
                 et["full"], pymupdf_clean_text
             )
+            _et_pos = _locate_in_clean(et.get("full", ""), et.get("text", ""))
 
             is_prot = _is_protected_text(et["text"], protected_for_state)
-            if is_prot:
+            if (
+                state_code and state_code.upper() == "IN"
+                and et.get("type") == "addition"
+                and not _is_printing_code_demo(
+                    et.get("text", ""), state_code=state_code,
+                )
+                and not _in_printing_code_scope(_et_pos)
+            ):
+                cr_row = {
+                    "checklist_id": i,
+                    "tag_type": et["type"],
+                    "page": _et_page,
+                    "pymupdf_text": "",
+                    "clean_text": et["full"],
+                    "in_image": "yes",
+                    "in_clean": "tagged",
+                    "verdict": "❌ error",
+                    "classification": "in_italic_tag_outside_printing_code",
+                    "notes": (
+                        "IN policy violation: extra [A>...<A] appears outside "
+                        "PRINTING CODE."
+                    ),
+                    "suggested_fix": (
+                        f"Remove [A>...<A] around '{et.get('text', '')[:120]}' "
+                        "outside PRINTING CODE."
+                    ),
+                }
+            elif is_prot:
                 cr_row = {
                     "checklist_id": i,
                     "tag_type": et["type"],
@@ -2151,6 +2287,142 @@ def pymupdf_compare_tags(
                     f"…{sp['second_full'][-40:]}"
                 ),
             })
+
+    # ── Deterministic structural tag findings ──────────────────────
+    # The checklist walk focuses on known PyMuPDF spans, so malformed
+    # delimiter structure can slip through. Add deterministic findings
+    # for unmatched tag delimiters and (CT) literal bracket deletions
+    # left unwrapped.
+    def _snippet_at(pos: int, radius: int = 90) -> str:
+        s = max(0, pos - radius)
+        e = min(len(pymupdf_clean_text), pos + radius)
+        return pymupdf_clean_text[s:e].replace("\n", " ")
+
+    _existing_clean_texts = {
+        str(af.get("clean_text", "") or "").strip()
+        for af in additional_findings
+    }
+    _next_af_id = max([af.get("id", 0) for af in additional_findings] + [0]) + 1
+
+    _stack_a: List[int] = []
+    _stack_d: List[int] = []
+    for _m in re.finditer(r"\[A>|<A\]|\[D>|<D\]", pymupdf_clean_text):
+        _tok = _m.group(0)
+        _pos = _m.start()
+        if _tok == "[A>":
+            _stack_a.append(_pos)
+        elif _tok == "<A]":
+            if _stack_a:
+                _stack_a.pop()
+            else:
+                _ctx = _snippet_at(_pos)
+                if _ctx not in _existing_clean_texts:
+                    _pg, _ln = _estimate_extra_tag_page_line("<A]", pymupdf_clean_text)
+                    additional_findings.append({
+                        "id": _next_af_id,
+                        "page": _pg,
+                        "issue_type": "extra_tag",
+                        "description": (
+                            "Unmatched closing <A] found in cleaned text "
+                            "(no corresponding [A> opener)."
+                        ),
+                        "clean_text": _ctx,
+                        "image_text": "",
+                        "suggested_fix": "Insert missing [A> opener or remove stray <A] so A-tags are balanced.",
+                    })
+                    _existing_clean_texts.add(_ctx)
+                    _next_af_id += 1
+        elif _tok == "[D>":
+            _stack_d.append(_pos)
+        elif _tok == "<D]":
+            if _stack_d:
+                _stack_d.pop()
+            else:
+                _ctx = _snippet_at(_pos)
+                if _ctx not in _existing_clean_texts:
+                    _pg, _ln = _estimate_extra_tag_page_line("<D]", pymupdf_clean_text)
+                    additional_findings.append({
+                        "id": _next_af_id,
+                        "page": _pg,
+                        "issue_type": "extra_tag",
+                        "description": (
+                            "Unmatched closing <D] found in cleaned text "
+                            "(no corresponding [D> opener)."
+                        ),
+                        "clean_text": _ctx,
+                        "image_text": "",
+                        "suggested_fix": "Insert missing [D> opener or remove stray <D] so D-tags are balanced.",
+                    })
+                    _existing_clean_texts.add(_ctx)
+                    _next_af_id += 1
+
+    for _pos in _stack_a:
+        _ctx = _snippet_at(_pos)
+        if _ctx in _existing_clean_texts:
+            continue
+        _pg, _ln = _estimate_extra_tag_page_line("[A>", pymupdf_clean_text)
+        additional_findings.append({
+            "id": _next_af_id,
+            "page": _pg,
+            "issue_type": "extra_tag",
+            "description": "Unclosed [A> opener found in cleaned text.",
+            "clean_text": _ctx,
+            "image_text": "",
+            "suggested_fix": "Add missing <A] closer at the correct boundary.",
+        })
+        _existing_clean_texts.add(_ctx)
+        _next_af_id += 1
+
+    for _pos in _stack_d:
+        _ctx = _snippet_at(_pos)
+        if _ctx in _existing_clean_texts:
+            continue
+        _pg, _ln = _estimate_extra_tag_page_line("[D>", pymupdf_clean_text)
+        additional_findings.append({
+            "id": _next_af_id,
+            "page": _pg,
+            "issue_type": "extra_tag",
+            "description": "Unclosed [D> opener found in cleaned text.",
+            "clean_text": _ctx,
+            "image_text": "",
+            "suggested_fix": "Add missing <D] closer at the correct boundary.",
+        })
+        _existing_clean_texts.add(_ctx)
+        _next_af_id += 1
+
+    if state_code and state_code.upper() == "CT":
+        _tag_span_re = re.compile(r"\[([AD])>(.*?)<\1\]", re.DOTALL)
+        _untagged_parts: List[str] = []
+        _last = 0
+        for _m in _tag_span_re.finditer(pymupdf_clean_text):
+            _untagged_parts.append(pymupdf_clean_text[_last:_m.start()])
+            _last = _m.end()
+        _untagged_parts.append(pymupdf_clean_text[_last:])
+        _untagged_text = "".join(_untagged_parts)
+
+        for _m in re.finditer(r"\[(?![AD]>)([^\]]+)\]", _untagged_text):
+            _raw = _m.group(0).strip()
+            if len(_raw) < 4:
+                continue
+            if _raw in _existing_clean_texts:
+                continue
+            additional_findings.append({
+                "id": _next_af_id,
+                "page": "",
+                "issue_type": "extra_tag",
+                "description": (
+                    "CT bracket deletion left as literal [ ... ] in cleaned text; "
+                    "expected [D>[...]<D]."
+                ),
+                "clean_text": _raw[:240],
+                "image_text": _raw[:240],
+                "suggested_fix": "Wrap this bracketed deletion as [D>[...]<D].",
+            })
+            _existing_clean_texts.add(_raw)
+            _next_af_id += 1
+            # Keep the findings list focused; one representative sample
+            # is enough to signal a systemic CT bracket-wrapper miss.
+            break
 
     # ── Lookups from the deterministic checklist ────────────────────
     _full_text = {ci["id"]: ci["text"]      for ci in checklist_items}
@@ -2282,6 +2554,9 @@ def pymupdf_compare_tags(
         if is_real and in_clean == "yes" and cls != "match":
             pymupdf_txt = _full_text.get(int(cr.get("checklist_id", 0)),
                                           cr.get("pymupdf_text", ""))
+            _clean_pos = _locate_in_clean(
+                cr.get("clean_text", "") or "", pymupdf_txt,
+            )
             # IN sponsor names are decorative bold — should NOT be tagged
             if (state_code and state_code.upper() == "IN"
                     and cr.get("tag_type") == "addition"
@@ -2310,6 +2585,24 @@ def pymupdf_compare_tags(
                     f"Remove the [A>…<A] tag around '{pymupdf_txt[:120]}' "
                     f"— it is a decorative header element."
                 )
+            elif (
+                state_code and state_code.upper() == "IN"
+                and cr.get("tag_type") == "addition"
+                and not _is_printing_code_demo(
+                    pymupdf_txt, state_code=state_code,
+                )
+                and not _in_printing_code_scope(_clean_pos)
+            ):
+                cr["classification"] = "in_italic_tag_outside_printing_code"
+                cr["verdict"] = "❌ error"
+                cr["notes"] = (
+                    "IN policy violation: [A>...<A] appears outside "
+                    "PRINTING CODE."
+                )
+                cr["suggested_fix"] = (
+                    f"Remove [A>…<A] around '{pymupdf_txt[:120]}' — IN allows "
+                    "italic/addition tags only in PRINTING CODE."
+                )
             # Universal decorative headers (bill title, session, committee)
             elif (cr.get("tag_type") == "addition"
                     and _is_universal_decorative_header(pymupdf_txt)):
@@ -2331,6 +2624,9 @@ def pymupdf_compare_tags(
         elif is_real and in_clean == "merged":
             pymupdf_txt = _full_text.get(int(cr.get("checklist_id", 0)),
                                           cr.get("pymupdf_text", ""))
+            _clean_pos = _locate_in_clean(
+                cr.get("clean_text", "") or "", pymupdf_txt,
+            )
             # IN decorative headers should NOT be tagged even if merged
             if (state_code and state_code.upper() == "IN"
                     and cr.get("tag_type") == "addition"
@@ -2359,6 +2655,24 @@ def pymupdf_compare_tags(
                 cr["suggested_fix"] = (
                     f"Remove the [A>…<A] tag around '{pymupdf_txt[:120]}' "
                     f"— it is a decorative sponsor name."
+                )
+            elif (
+                state_code and state_code.upper() == "IN"
+                and cr.get("tag_type") == "addition"
+                and not _is_printing_code_demo(
+                    pymupdf_txt, state_code=state_code,
+                )
+                and not _in_printing_code_scope(_clean_pos)
+            ):
+                cr["classification"] = "in_italic_tag_outside_printing_code"
+                cr["verdict"] = "❌ error"
+                cr["notes"] = (
+                    "IN policy violation: merged [A>...<A] appears outside "
+                    "PRINTING CODE."
+                )
+                cr["suggested_fix"] = (
+                    f"Remove [A>…<A] around '{pymupdf_txt[:120]}' — IN allows "
+                    "italic/addition tags only in PRINTING CODE."
                 )
             # Universal decorative headers should NOT be tagged even if merged
             elif (cr.get("tag_type") == "addition"
@@ -2688,6 +3002,28 @@ def pymupdf_compare_tags(
                 continue
             if item_typ == "deletion" and ct_is_add and not ct_is_del:
                 continue
+            # A fragment "captured within a parent tag" of the OPPOSITE type
+            # is not captured — it is swallowed.  A deletion cannot live
+            # inside an addition span (or vice versa), so this is an error,
+            # not a pass.
+            _want = "A" if item_typ == "addition" else "D"
+            _outer = _outer_tag_type(ct)
+            if _outer and _outer != _want and f"[{_want}>" in ct:
+                cr["classification"] = "nested_opposite_tag"
+                cr["verdict"] = "❌ error"
+                cr["in_clean"] = "yes"
+                cr["clean_text"] = ct[:200]
+                cr["notes"] = (
+                    f"'{pmtxt}' is tagged [{_want}>…<{_want}] but sits INSIDE an "
+                    f"[{_outer}>…<{_outer}] span — the LLM expanded the "
+                    f"[{_outer}>…<{_outer}] boundary and swallowed it. Nested "
+                    f"opposite-type tags are never valid."
+                )
+                cr["suggested_fix"] = (
+                    f"Close the [{_outer}>…<{_outer}] tag before '{pmtxt}' and "
+                    f"reopen it after, so the [{_want}>…<{_want}] span stands alone"
+                )
+                break
             cr["classification"] = "linked_fragment"
             cr["verdict"] = "✅ pass"
             cr["in_clean"] = "yes"
@@ -2791,6 +3127,36 @@ def pymupdf_compare_tags(
             cr["verdict"] = "⚠️ warning"
         elif cls in _PASS_CLASSES and not cr.get("verdict", "").startswith("✅"):
             cr["verdict"] = "✅ pass"
+
+    # ── Deterministic override: opposite-type nesting is always an error ──
+    # `merged_into_parent` / `word_spans_merged` / `linked_fragment` only ask
+    # "is the text still inside some tag?".  They cannot see a boundary that
+    # was expanded far enough to swallow a tag of the other type, which is
+    # structurally impossible markup.  This sweep runs last so no earlier
+    # classification can mask it.
+    _n_nested = 0
+    for cr in checklist_results:
+        _outer, _inner, _inner_txt = _has_opposite_nesting(cr.get("clean_text", "") or "")
+        if not _outer:
+            continue
+        cr["classification"] = "nested_opposite_tag"
+        cr["verdict"] = "❌ error"
+        cr["notes"] = (
+            f"[{_inner}>…<{_inner}] ('{_inner_txt[:60]}') is nested inside an "
+            f"[{_outer}>…<{_outer}] span — the LLM expanded the "
+            f"[{_outer}>…<{_outer}] boundary across it. Nested opposite-type "
+            f"tags are never valid markup."
+        )
+        cr["suggested_fix"] = (
+            f"Close [{_outer}>…<{_outer}] before '{_inner_txt[:40]}' and reopen "
+            f"it afterwards so each span covers only its own text"
+        )
+        _n_nested += 1
+    if _n_nested:
+        log.warning(
+            "❌ %d checklist item(s) have opposite-type nested tags "
+            "(LLM expanded a tag boundary)", _n_nested,
+        )
 
     # ── Counts for summary ──────────────────────────────────────────
     n_pass    = sum(1 for r in checklist_results if r.get("verdict", "").startswith("✅"))

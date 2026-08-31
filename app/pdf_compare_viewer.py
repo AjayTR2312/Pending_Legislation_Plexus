@@ -392,7 +392,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,san
   border-left:3px solid transparent;
   white-space:pre-wrap;word-wrap:break-word;display:flex;
   transition:background .08s;cursor:text;
-  content-visibility:auto;contain-intrinsic-size:auto 29px;
+  /* NOTE: previously used content-visibility:auto + contain-intrinsic-size
+     as a render-perf optimization, but the editor fully rebuilds ALL .tl
+     nodes on every edit (Enter/tag-wrap/auto-apply). Fresh nodes have no
+     "remembered" size, so they briefly render at the 29px placeholder
+     before snapping to their real (often taller, wrapped) height — this
+     is what caused the visible jump around the cursor after every edit. */
 }
 .tl:hover{background:var(--hover)}
 .tl.active{background:var(--hl)!important;border-left-color:var(--hl-border)}
@@ -523,6 +528,83 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,san
   position:absolute;background:rgba(220,53,69,.15);
   border:2px solid rgba(220,53,69,.5);border-radius:2px;
   pointer-events:none;z-index:5;
+}
+
+/* Laptop view: compact comparator so it looks like the cleaner large-screen layout */
+@media (max-width: 1440px) {
+  .top-bar{
+    height:40px;
+    padding:0 10px;
+    gap:7px;
+  }
+  .top-bar .logo{font-size:13px}
+  .top-bar .hint{font-size:11px}
+  .top-bar .stat{
+    font-size:10px;
+    padding:2px 8px;
+  }
+  .top-bar .btn{
+    margin-left:5px;
+    font-size:11px;
+    padding:3px 9px;
+    border-radius:5px;
+  }
+  .top-bar label,
+  .top-bar label *{
+    font-size:11px !important;
+    line-height:1.1 !important;
+  }
+
+  .panels{height:calc(100dvh - 40px);min-height:calc(100vh - 40px)}
+  .ph{
+    padding:6px 10px;
+    font-size:12px;
+  }
+  .pdf-wrap{padding:8px}
+  .page-lbl{font-size:9px;padding:3px 0}
+
+  .pdf-controls{
+    gap:5px;
+    padding:3px 7px;
+  }
+  .pdf-controls .zbtn{
+    width:26px;
+    height:26px;
+    font-size:12px;
+  }
+  .pdf-controls .zlbl,
+  .pdf-controls .page-nav .plbl{font-size:10px}
+
+  .text-toolbar{
+    gap:5px;
+    padding:3px 8px;
+    top:30px;
+  }
+  .text-toolbar .tbtn{
+    font-size:10px;
+    padding:2px 8px;
+    border-radius:4px;
+  }
+  .text-toolbar .tlbl{font-size:9px}
+
+  .tl{
+    font-size:12px;
+    line-height:1.58;
+    padding:0 10px 0 0;
+  }
+  .ln{
+    min-width:40px;
+    font-size:10px;
+    padding:0 8px 0 6px;
+    margin-right:8px;
+  }
+
+  .dev-strip{
+    padding:4px 10px;
+    font-size:11px;
+    gap:6px;
+  }
+  .dev-pill{font-size:10px;padding:1px 7px}
 }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
@@ -1964,12 +2046,12 @@ function wrapTag(type){
       // BEFORE the first marker or AFTER the last marker?
       var firstMk = insideMarkers[0];
       var lastMk  = insideMarkers[insideMarkers.length - 1];
-      var extendsBefore =
-          (startEP.li < firstMk.li) ||
-          (startEP.li === firstMk.li && startEP.off < firstMk.off);
-      var extendsAfter =
-          (endEP.li > lastMk.li) ||
-          (endEP.li === lastMk.li && endEP.off > lastMk.off + 3);
+      // Only counts as "extends" when the overshoot contains real text —
+      // a selection that merely overshoots the marker by whitespace
+      // (easy to do with an imprecise mouse drag) still means the user
+      // wants to toggle the tag OFF, not grow it.
+      var extendsBefore = _hasNonBlankBetween(startEP.li, startEP.off, firstMk.li, firstMk.off);
+      var extendsAfter  = _hasNonBlankBetween(lastMk.li, lastMk.off + 3, endEP.li, endEP.off);
 
       if(extendsBefore || extendsAfter){
         // ── EXPAND ──────────────────────────────────────────────────
@@ -2203,6 +2285,21 @@ function _splitOppositeWrap(newType, startLi, startOff, endLi, endOff){
 // selection.  Used to detect "user re-selected a wrapped region and
 // included the markers in the new selection" — in that case the inside
 // markers are balanced and we can strip them all to toggle the wrap off.
+// Helper: does the text strictly between two (line,offset) positions
+// contain any non-whitespace character?  Used to tell a genuine
+// "selection extends past the tag" (real text outside the markers,
+// EXPAND intent) apart from a mouse-drag that merely overshot the tag
+// boundary by some whitespace (still a toggle-OFF/STRIP intent).
+function _hasNonBlankBetween(li1, off1, li2, off2){
+  if(li1 > li2 || (li1 === li2 && off1 >= off2)) return false;
+  for(var li = li1; li <= li2; li++){
+    var text = originalLines[li] || '';
+    var from = (li === li1) ? off1 : 0;
+    var to = (li === li2) ? off2 : text.length;
+    if(/\S/.test(text.substring(from, to))) return true;
+  }
+  return false;
+}
 function _scanMarkersInRange(type, startLi, startOff, endLi, endOff){
   var openMark = (type==='a') ? '[A>' : '[D>';
   var closeMark = (type==='a') ? '<A]' : '<D]';
@@ -2394,7 +2491,8 @@ function _wrapTagSingleLine(type, li, startOff, endOff){
       var _lastA1=selected.lastIndexOf('[A>'), _lastA2=selected.lastIndexOf('<A]');
       var _lastMk=Math.max(_lastA1,_lastA2);
       var _stripped=stripA(selected);
-      var _extends=(_firstMk>0)||(_lastMk+3<selected.length);
+      // Whitespace-only overshoot (imprecise drag) still means toggle OFF.
+      var _extends=/\S/.test(selected.substring(0,_firstMk))||/\S/.test(selected.substring(_lastMk+3));
       if(_extends && _stripped.length>0){
         // EXPAND: strip inner markers + wrap whole selection
         result=before+'[A>'+_stripped+'<A]'+after;
@@ -2432,7 +2530,8 @@ function _wrapTagSingleLine(type, li, startOff, endOff){
       var _lastD1=selected.lastIndexOf('[D>'), _lastD2=selected.lastIndexOf('<D]');
       var _lastMk=Math.max(_lastD1,_lastD2);
       var _stripped=stripD(selected);
-      var _extends=(_firstMk>0)||(_lastMk+3<selected.length);
+      // Whitespace-only overshoot (imprecise drag) still means toggle OFF.
+      var _extends=/\S/.test(selected.substring(0,_firstMk))||/\S/.test(selected.substring(_lastMk+3));
       if(_extends && _stripped.length>0){
         // EXPAND: strip inner markers + wrap whole selection
         result=before+'[D>'+_stripped+'<D]'+after;

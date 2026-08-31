@@ -1,6 +1,6 @@
 [server]
-# Limit per-file upload size to 2MB (matches our total batch limit)
-maxUploadSize = 2
+# Limit per-file upload size to 50MB
+maxUploadSize = 50
 
 # Increase max message size for large file transfers
 maxMessageSize = 1000

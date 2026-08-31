@@ -9,6 +9,7 @@ import time
 import logging
 import threading
 import copy
+import re
 
 # Streamlit re-executes this script on every rerun; sys.stdout/stderr can be
 # replaced or closed between reruns, so avoid any stream-backed handler here.
@@ -468,6 +469,8 @@ try:
         st.session_state.content_accuracy_report = None
     if 'content_accuracy_detail' not in st.session_state:
         st.session_state.content_accuracy_detail = None
+    if 'layout_accuracy_report' not in st.session_state:
+        st.session_state.layout_accuracy_report = None
     if 'gpt_audit_failed' not in st.session_state:
         st.session_state.gpt_audit_failed = False
     if 'last_uploaded_file_id' not in st.session_state:
@@ -668,6 +671,14 @@ def process_single_pdf_simple(pdf_path, state_code, session_id, progress_placeho
                 for step in range(5):
                     st.session_state.step_status[step] = "❌"
                 return None
+
+            # Apply the AR page-1 layout normalizer after chunk stitching so
+            # the first-page title block stays vertical instead of flattening
+            # into the body text.
+            if state_code and state_code.upper() == "AR":
+                from pymupdf_extractor import _normalize_ar_page1_header
+
+                corrected_text = _normalize_ar_page1_header(corrected_text)
             
             # Mark all steps as complete
             for step in range(5):
@@ -1914,6 +1925,7 @@ def _run_content_accuracy_check(
     save_to: str | None = None,
     pdf_metadata: dict | None = None,
     pdf_path: str | None = None,
+    state_code: str | None = None,
 ):
     """Run word-level content accuracy check (precleaned vs final output).
 
@@ -1978,6 +1990,102 @@ def _run_content_accuracy_check(
 
     try:
         report = check_content_accuracy(precleaned_text, output_text, metadata=pdf_metadata, detected_artifacts=_detected_artifacts)
+
+        # Attach extraction-anomaly watchdog findings to the same report so
+        # validation artifacts include sentence-break/layout regressions.
+        _anomalies_serialized = []
+        _anomaly_kind_counts = {}
+        _sentence_break_count = 0
+        try:
+            from extraction_validator import validate_extraction as _validate_extraction
+            _pdf_basename = Path(pdf_path).name if pdf_path else None
+            _anomalies = _validate_extraction(
+                output_text,
+                state_code=state_code,
+                pdf_basename=_pdf_basename,
+                max_per_kind=2000,
+            )
+            for _a in _anomalies:
+                _line_no = int(output_text.count("\n", 0, _a.char_offset)) + 1
+                _line_start = output_text.rfind("\n", 0, _a.char_offset)
+                _line_start = 0 if _line_start < 0 else (_line_start + 1)
+                _line_end = output_text.find("\n", _a.char_offset)
+                if _line_end < 0:
+                    _line_end = len(output_text)
+                _line_text = output_text[_line_start:_line_end].strip()
+                _anomaly_kind_counts[_a.kind] = _anomaly_kind_counts.get(_a.kind, 0) + 1
+                if _a.kind == "mid_sentence_line_break":
+                    _sentence_break_count += 1
+                _anomalies_serialized.append(
+                    {
+                        "kind": _a.kind,
+                        "severity": _a.severity,
+                        "description": _a.description,
+                        "snippet": _a.snippet,
+                        "char_offset": _a.char_offset,
+                        "line_number": _line_no,
+                        "line_text": _line_text,
+                        "page_number": _a.page_number,
+                    }
+                )
+        except Exception as _anom_err:
+            logging.warning(f"Extraction anomaly scan failed (non-critical): {_anom_err}")
+
+        report["extraction_anomaly_count"] = len(_anomalies_serialized)
+        report["extraction_anomaly_kinds"] = _anomaly_kind_counts
+        report["extraction_anomalies"] = _anomalies_serialized
+        report["sentence_break_issue_count"] = _sentence_break_count
+
+        # Save a dedicated artifact with ONLY sentence-break issues so QA can
+        # review each hit quickly without scanning the full accuracy report.
+        _sentence_break_issues = [
+            a for a in _anomalies_serialized
+            if a.get("kind") == "mid_sentence_line_break"
+        ]
+        report["sentence_break_issues"] = _sentence_break_issues
+
+        if save_to:
+            try:
+                _issues_json = save_to.replace(
+                    "_content_accuracy.json", "_sentence_break_issues.json"
+                )
+                _issues_txt = save_to.replace(
+                    "_content_accuracy.json", "_sentence_break_issues.txt"
+                )
+
+                with open(_issues_json, "w", encoding="utf-8") as _ijf:
+                    _json.dump(
+                        {
+                            "issue_kind": "mid_sentence_line_break",
+                            "issue_count": len(_sentence_break_issues),
+                            "issues": _sentence_break_issues,
+                        },
+                        _ijf,
+                        indent=2,
+                        ensure_ascii=False,
+                    )
+
+                with open(_issues_txt, "w", encoding="utf-8") as _itf:
+                    _itf.write(
+                        f"Sentence-break issues: {len(_sentence_break_issues)}\\n"
+                        f"Kind: mid_sentence_line_break\\n\\n"
+                    )
+                    for _idx, _issue in enumerate(_sentence_break_issues, 1):
+                        _page = _issue.get("page_number")
+                        _offset = _issue.get("char_offset")
+                        _line_no = _issue.get("line_number")
+                        _snippet = (_issue.get("snippet") or "").replace("\\n", " ")
+                        _line_text = (_issue.get("line_text") or "").replace("\\n", " ")
+                        _itf.write(
+                            f"{_idx}. page={_page if _page is not None else '?'} "
+                            f"line={_line_no if _line_no is not None else '?'} "
+                            f"offset={_offset}\\n"
+                            f"   snippet: {_snippet}\\n"
+                            f"   line_text: {_line_text}\\n\\n"
+                        )
+            except Exception as _sbf_err:
+                logging.warning(f"Failed to save sentence-break issues file: {_sbf_err}")
+
         st.session_state.content_accuracy_detail = report
 
         _acc = report["accuracy_pct"]
@@ -2015,6 +2123,17 @@ def _run_content_accuracy_check(
             if _issues > 5:
                 add_log(f"  ... and {_issues - 5} more issue(s)")
 
+        if _sentence_break_count > 0:
+            add_log(
+                f"⚠️ Sentence-break issue(s): {_sentence_break_count} "
+                f"(kind=mid_sentence_line_break)"
+            )
+            if save_to:
+                add_log(
+                    "📋 Sentence-break details saved: "
+                    f"{Path(save_to).name.replace('_content_accuracy.json', '_sentence_break_issues.json')}"
+                )
+
         # Save JSON report
         if save_to:
             import json as _json
@@ -2028,6 +2147,93 @@ def _run_content_accuracy_check(
     except Exception as e:
         add_log(f"⚠️ Content accuracy check failed: {e}", "warning")
         logging.error(f"Content accuracy error: {e}", exc_info=True)
+        return None
+
+
+def _run_layout_accuracy_check(
+    output_text: str | None,
+    add_log,
+    *,
+    pdf_path: str | None = None,
+    state_code: str | None = None,
+    save_to: str | None = None,
+    precomputed_report: dict | None = None,
+):
+    """Run layout/paragraph-boundary accuracy check and persist report.
+
+    Detects two structural issue classes against PDF-derived boundaries:
+    - split-needed: output merged two paragraphs that should be separate
+    - merge-needed: output over-split a paragraph across lines
+    """
+    if not output_text or not pdf_path:
+        return None
+    if not Path(pdf_path).exists():
+        return None
+
+    try:
+        from paragraph_accuracy_checker import check_paragraph_accuracy
+    except ImportError:
+        logging.warning("paragraph_accuracy_checker not available")
+        return None
+
+    try:
+        report = precomputed_report if precomputed_report is not None else check_paragraph_accuracy(pdf_path, output_text, state_code=state_code)
+        st.session_state.layout_accuracy_report = report
+
+        _acc = report.get("accuracy_pct", 100.0)
+        _total = report.get("total_boundaries", 0)
+        _splits = len(report.get("splits_needed", []))
+        _merges = len(report.get("merges_needed", []))
+        _icon = "✅" if _acc >= 98 and _splits == 0 and _merges == 0 else "⚠️"
+
+        add_log(
+            f"{_icon} Layout accuracy: {_acc:.1f}% "
+            f"({_total} boundaries — {_splits} split-needed, {_merges} merge-needed)"
+        )
+
+        if save_to:
+            try:
+                import json as _json
+                _layout_json = save_to.replace("_content_accuracy.json", "_layout_accuracy.json")
+                _layout_txt = save_to.replace("_content_accuracy.json", "_layout_accuracy.txt")
+
+                with open(_layout_json, "w", encoding="utf-8") as _lf:
+                    _json.dump(report, _lf, indent=2, ensure_ascii=False, default=str)
+
+                with open(_layout_txt, "w", encoding="utf-8") as _tf:
+                    _tf.write(
+                        f"Layout accuracy: {_acc:.1f}%\n"
+                        f"Total boundaries: {_total}\n"
+                        f"Boundaries checked: {report.get('boundaries_checked', 0)}\n"
+                        f"Merge checkpoints: {report.get('merge_checkpoints', 0)}\n"
+                        f"Split-needed: {_splits}\n"
+                        f"Merge-needed: {_merges}\n\n"
+                    )
+                    if _splits:
+                        _tf.write("SPLIT-NEEDED ISSUES\n")
+                        for i, s in enumerate(report.get("splits_needed", [])[:500], 1):
+                            _tf.write(
+                                f"{i}. line={s.get('line')} pos={s.get('char_position')} "
+                                f"signal={s.get('signal')} pdf_page={s.get('pdf_page')}\n"
+                                f"   before_split: {s.get('text_before_split', '')}\n"
+                                f"   after_split : {s.get('text_after_split', '')}\n\n"
+                            )
+                    if _merges:
+                        _tf.write("MERGE-NEEDED ISSUES\n")
+                        for i, m in enumerate(report.get("merges_needed", [])[:500], 1):
+                            _tf.write(
+                                f"{i}. line={m.get('line')} with_line={m.get('merge_with_line')}\n"
+                                f"   desc: {m.get('description', '')}\n\n"
+                            )
+
+                add_log(f"📋 Layout accuracy report saved: {Path(_layout_json).name}")
+            except Exception as _save_err:
+                logging.warning(f"Failed to save layout accuracy report: {_save_err}")
+
+        return report
+    except Exception as e:
+        add_log(f"⚠️ Layout accuracy check failed: {e}", "warning")
+        logging.error(f"Layout accuracy error: {e}", exc_info=True)
         return None
 
 
@@ -2204,7 +2410,7 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
         # Live-update the log placeholder with styled activity feed
         if log_placeholder is not None:
             with log_placeholder.container():
-                st.markdown(_build_activity_feed_html(st.session_state.processing_logs), unsafe_allow_html=True)
+                st.markdown(_build_activity_feed_html(st.session_state.processing_logs, scrollable=True), unsafe_allow_html=True)
 
     def update_progress():
         if progress_placeholder:
@@ -2334,6 +2540,49 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
             if converted_text != _before_strip:
                 add_log(f"🛡️ Stripped tags from protected clauses for {detected_state}")
 
+        # Rejoin residual single-line soft wraps in final output text.
+        try:
+            from pymupdf_extractor import rejoin_mid_sentence_line_breaks as _rejoin_soft_wraps
+            _before_rejoin = converted_text
+            if detected_state and detected_state.upper() in {"AR", "IA"}:
+                # Preserve AR/IA page-1 header-preamble layout: do not run the
+                # generic soft-wrap joiner above the enacting clause. Resolutions
+                # (HR/SR/HCR/SCR) use "BE IT RESOLVED BY ..." instead of "BE IT
+                # ENACTED", and the longer chamber/assembly phrasing often wraps
+                # across two PDF lines, so tolerate both.
+                _enacting_patterns = {
+                    "AR": r"\n\s*BE IT (?:ENACTED|RESOLVED)\b[\s\S]{0,160}?STATE OF ARKANSAS\b[^\n]*:\s*\n",
+                    "IA": r"\n\s*BE IT (?:ENACTED|RESOLVED)\b[\s\S]{0,160}?STATE OF IOWA\b[^\n]*:\s*\n",
+                }
+                _enacting = re.search(
+                    _enacting_patterns[detected_state.upper()],
+                    converted_text,
+                    flags=re.IGNORECASE,
+                )
+                if _enacting:
+                    _prefix = converted_text[:_enacting.start()]
+                    _suffix = converted_text[_enacting.start():]
+                    _suffix = _rejoin_soft_wraps(_suffix)
+                    converted_text = _prefix + _suffix
+                else:
+                    converted_text = _rejoin_soft_wraps(converted_text)
+            else:
+                converted_text = _rejoin_soft_wraps(converted_text)
+            if converted_text != _before_rejoin:
+                add_log("🔗 Rejoined mid-sentence soft line wraps")
+
+            # Defensive AR/IA pass: re-canonicalize page-1 header after any
+            # downstream text rewrites.
+            if detected_state and detected_state.upper() in {"AR", "IA"}:
+                if detected_state.upper() == "AR":
+                    from pymupdf_extractor import _normalize_ar_page1_header as _norm_page1_header
+                else:
+                    from pymupdf_extractor import _normalize_ia_page1_header as _norm_page1_header
+
+                converted_text = _norm_page1_header(converted_text)
+        except Exception:
+            pass
+
         # ── Step 4d: Merge paragraphs split at page breaks ──────────────────────
         # Claude's visual conversion sometimes splits a paragraph into two
         # when text wraps across a page boundary (e.g. a sentence that starts
@@ -2348,6 +2597,53 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
         )
         if converted_text != _before_merge:
             add_log("🔗 Merged paragraphs split at page breaks")
+
+        # Rejoin residual single-line soft wraps in final output text.
+        try:
+            from pymupdf_extractor import rejoin_mid_sentence_line_breaks as _rejoin_soft_wraps
+            _before_rejoin = converted_text
+            if detected_state and detected_state.upper() == "IA":
+                _enacting = re.search(
+                    r"\n\s*BE IT ENACTED BY THE GENERAL ASSEMBLY OF THE STATE OF IOWA:\s*\n",
+                    converted_text,
+                    flags=re.IGNORECASE,
+                )
+                if _enacting:
+                    _prefix = converted_text[:_enacting.start()]
+                    _suffix = converted_text[_enacting.start():]
+                    _suffix = _rejoin_soft_wraps(_suffix)
+                    converted_text = _prefix + _suffix
+                else:
+                    converted_text = _rejoin_soft_wraps(converted_text)
+            else:
+                converted_text = _rejoin_soft_wraps(converted_text)
+            if converted_text != _before_rejoin:
+                add_log("🔗 Rejoined mid-sentence soft line wraps")
+
+            if detected_state and detected_state.upper() == "IA":
+                from pymupdf_extractor import _normalize_ia_page1_header as _norm_ia_header
+
+                converted_text = _norm_ia_header(converted_text)
+        except Exception:
+            pass
+
+        # Balance malformed A/D delimiters before save.  The other visual and
+        # hybrid paths already gate converted_text; this one only gated the
+        # PyMuPDF reference, so unclosed openers reached the saved output.
+        try:
+            from pymupdf_extractor import enforce_tag_integrity_gate
+            _before_gate = converted_text
+            converted_text = enforce_tag_integrity_gate(
+                converted_text, state_code=detected_state
+            )
+            _gate_report = getattr(enforce_tag_integrity_gate, "_last_report", None)
+            if converted_text != _before_gate:
+                add_log(
+                    f"🛠️ Tag integrity gate repaired output: {(_gate_report or {}).get('issues', [])}",
+                    "warning",
+                )
+        except Exception as _gate_err:
+            logging.warning(f"Tag integrity gate failed (non-critical): {_gate_err}")
 
         # ── Step 5: Save output ──────────────────────────────────────────────────
         st.session_state.current_step = 4
@@ -2446,7 +2742,9 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
                     highlight_pdf_formatting,
                     clean_extracted_text,
                     consolidate_adjacent_tags,
+                    enforce_tag_integrity_gate,
                     merge_cross_page_break_tags,
+                    split_ar_subsection_welds,
                 )
 
                 # Determine state-specific marking flags
@@ -2519,12 +2817,15 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
                     anthropic_client=client,
                     mark_brackets=_mark_flags.get("mark_brackets", False),
                 )
-                pymupdf_clean_text = consolidate_adjacent_tags(pymupdf_clean_text)
+                pymupdf_clean_text = consolidate_adjacent_tags(
+                    pymupdf_clean_text, state_code=detected_state
+                )
                 pymupdf_clean_text = opus.remove_nested_tags(pymupdf_clean_text)
                 pymupdf_clean_text = opus.merge_split_tags(pymupdf_clean_text)
+                if detected_state and detected_state.upper() == "AR":
+                    pymupdf_clean_text = split_ar_subsection_welds(pymupdf_clean_text)
                 # Merge same-paragraph tags split across a page break.
                 pymupdf_clean_text = merge_cross_page_break_tags(pymupdf_clean_text)
-                pymupdf_clean_text = opus.split_tagged_subsections(pymupdf_clean_text)
 
                 # ── Post-process: strip tags from state-specific protected clauses ──
                 if strip_protected_tags and detected_state:
@@ -2532,6 +2833,16 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
                     pymupdf_clean_text = strip_protected_tags(pymupdf_clean_text, detected_state)
                     if pymupdf_clean_text != _before_strip:
                         add_log(f"🛡️ Stripped tags from protected clauses for state {detected_state}")
+
+                pymupdf_clean_text = enforce_tag_integrity_gate(
+                    pymupdf_clean_text, state_code=detected_state
+                )
+                _gate_report = getattr(enforce_tag_integrity_gate, "_last_report", None)
+                if _gate_report and _gate_report.get("changed"):
+                    add_log(
+                        "🧯 Tag integrity gate repaired output: "
+                        + "; ".join((_gate_report.get("issues") or [])[:4])
+                    )
 
                 pymupdf_clean_path = output_path.replace(".txt", "_pymupdf_clean.txt") if isinstance(output_path, str) else str(output_path).replace(".txt", "_pymupdf_clean.txt")
                 with open(pymupdf_clean_path, "w", encoding="utf-8") as cf:
@@ -2545,6 +2856,20 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
                     with open(diff_path, "w", encoding="utf-8") as df:
                         df.write(_diff_report)
                     add_log(f"📋 LLM diff report saved: {diff_path}")
+
+                _preclean_guard = getattr(clean_extracted_text, '_last_preclean_guard', None)
+                if _preclean_guard:
+                    guard_path = pymupdf_clean_path.replace("_pymupdf_clean.txt", "_preclean_guard.txt")
+                    with open(guard_path, "w", encoding="utf-8") as gf:
+                        gf.write(_json.dumps(_preclean_guard, indent=2, ensure_ascii=False))
+                    if _preclean_guard.get("ok"):
+                        add_log("✅ Pre-clean guard passed (only line-number artifacts removed)")
+                    else:
+                        add_log(
+                            f"⚠️ Pre-clean guard failed: {_preclean_guard.get('unexpected_removed_count', 0)} unexpected removals",
+                            "warning",
+                        )
+                    add_log(f"📋 Pre-clean guard report saved: {guard_path}")
 
                 # Rebuild report context using cleaned text for better anchor matching
                 if pymupdf_report:
@@ -2561,10 +2886,51 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
 
                 st.session_state.step_status[6] = "✅"
 
+                # CO: drop markup the LLM inferred from the all-caps title /
+                # digest.  CO markup may only begin at the first body line
+                # numbered "1"; the title block is numbered 101, 102, … so
+                # anything above the body is preamble and must be untagged.
+                # Uses the RAW PyMuPDF text (line numbers intact) as reference.
+                if detected_state and detected_state.upper() == "CO" and pymupdf_text:
+                    from pymupdf_extractor import (
+                        _split_co_deadline_rows,
+                        find_dropped_content,
+                        flatten_markdown_tables,
+                        strip_co_preamble_tags,
+                    )
+                    _before_co = converted_text
+                    converted_text = strip_co_preamble_tags(converted_text, pymupdf_text)
+                    if converted_text != _before_co:
+                        add_log("🏷️ Removed spurious CO preamble tags (markup starts at line 1)")
+                    _before_rows = converted_text
+                    converted_text = _split_co_deadline_rows(converted_text)
+                    if converted_text != _before_rows:
+                        add_log("📐 Restored CO deadline-table row breaks")
+                    _before_md = converted_text
+                    converted_text = flatten_markdown_tables(converted_text)
+                    if converted_text != _before_md:
+                        add_log("📋 Flattened markdown pipe table to plain text rows")
+                    if converted_text != _before_co:
+                        with open(output_path, "w", encoding="utf-8") as f:
+                            f.write(converted_text)
+
+                    _dropped = find_dropped_content(pymupdf_clean_text, converted_text)
+                    if _dropped["missing_count"]:
+                        add_log(
+                            f"🚨 {_dropped['missing_count']} word(s) of source text missing "
+                            f"from the output — " + " | ".join(_dropped["samples"][:2]),
+                            "warning",
+                        )
+
                 # Restore special symbols dropped by Claude vision
                 converted_before = converted_text
                 converted_text = opus.restore_special_symbols(converted_text, pymupdf_clean_text)
                 if converted_text != converted_before:
+                    try:
+                        from pymupdf_extractor import rejoin_mid_sentence_line_breaks as _rejoin_soft_wraps
+                        converted_text = _rejoin_soft_wraps(converted_text)
+                    except Exception:
+                        pass
                     add_log("🔧 Restored special symbols (§ etc.) from PyMuPDF reference")
                     with open(output_path, "w", encoding="utf-8") as f:
                         f.write(converted_text)
@@ -2600,6 +2966,7 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
             add_log=add_log,
             save_to=_content_acc_json,
             pdf_path=st.session_state.get('temp_pdf_path'),
+            state_code=detected_state,
         )
 
         # Paragraph accuracy (if future was submitted earlier)
@@ -2625,6 +2992,15 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
                 import json as _json
                 with open(_para_json, "w", encoding="utf-8") as _pf:
                     _json.dump(_para_report, _pf, indent=2, default=str)
+
+        _run_layout_accuracy_check(
+            output_text=converted_text,
+            add_log=add_log,
+            pdf_path=st.session_state.get('temp_pdf_path'),
+            state_code=detected_state,
+            save_to=_content_acc_json,
+            precomputed_report=_para_report if _para_report else None,
+        )
 
         # ── Step 8: Tag Validation Audit (pymupdf_compare) ─────────────────────
         if pymupdf_clean_text and pymupdf_report and highlight_dir and Path(highlight_dir).exists():
@@ -2768,7 +3144,7 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
         logging.info(message)
         if log_placeholder is not None:
             with log_placeholder.container():
-                st.markdown(_build_activity_feed_html(st.session_state.processing_logs), unsafe_allow_html=True)
+                st.markdown(_build_activity_feed_html(st.session_state.processing_logs, scrollable=True), unsafe_allow_html=True)
 
     def update_progress():
         if progress_placeholder:
@@ -2864,8 +3240,11 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
             extract_pdf_json_report,
             extract_pdf_with_pymupdf,
             clean_extracted_text,
+            build_tag_integrity_report,
             consolidate_adjacent_tags,
+            enforce_tag_integrity_gate,
             merge_cross_page_break_tags,
+            split_ar_subsection_welds,
         )
 
         # Determine state-specific marking flags
@@ -2938,12 +3317,15 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
                     self.output_tokens = d.get('output_tokens', 0)
             opus._track_usage("LLM Clean", _UsageObj(_clean_usage), _clean_usage.get('model', 'claude-opus-4-6'))
 
-        pymupdf_clean_text = consolidate_adjacent_tags(pymupdf_clean_text)
+        pymupdf_clean_text = consolidate_adjacent_tags(
+            pymupdf_clean_text, state_code=detected_state
+        )
         pymupdf_clean_text = opus.remove_nested_tags(pymupdf_clean_text)
         pymupdf_clean_text = opus.merge_split_tags(pymupdf_clean_text)
+        if detected_state and detected_state.upper() == "AR":
+            pymupdf_clean_text = split_ar_subsection_welds(pymupdf_clean_text)
         # Merge same-paragraph tags split across a page break.
         pymupdf_clean_text = merge_cross_page_break_tags(pymupdf_clean_text)
-        pymupdf_clean_text = opus.split_tagged_subsections(pymupdf_clean_text)
 
         # Strip tags from protected clauses
         if strip_protected_tags and detected_state:
@@ -2951,6 +3333,30 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
             pymupdf_clean_text = strip_protected_tags(pymupdf_clean_text, detected_state)
             if pymupdf_clean_text != _before:
                 add_log(f"🛡️ Stripped tags from protected clauses for {detected_state}")
+
+        # Final conversion gate: no-op for valid files, conservative repair
+        # only when malformed tag structure is detected.
+        _before_gate = pymupdf_clean_text
+        pymupdf_clean_text = enforce_tag_integrity_gate(
+            pymupdf_clean_text, state_code=detected_state
+        )
+        _gate_report = getattr(enforce_tag_integrity_gate, "_last_report", None)
+        if _gate_report and _gate_report.get("changed"):
+            add_log(
+                "🧯 Tag integrity gate repaired output: "
+                + "; ".join(_gate_report.get("issues", [])[:4]),
+                "warning",
+            )
+
+        # A dropped placeholder means the LLM deleted a verified tag span.
+        _lock_report = getattr(clean_extracted_text, "_last_tag_lock", None)
+        if _lock_report and _lock_report.get("missing_count"):
+            add_log(
+                f"🔓 Tag-boundary lock: LLM dropped "
+                f"{_lock_report['missing_count']}/{_lock_report['total']} tag span(s) — "
+                + " | ".join(_lock_report.get("missing_samples", [])[:3]),
+                "warning",
+            )
 
         st.session_state.step_status[3] = "✅"
         update_progress()
@@ -2981,6 +3387,20 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
                 df.write(_diff_report)
             add_log(f"📋 LLM diff report saved")
 
+        _preclean_guard = getattr(clean_extracted_text, '_last_preclean_guard', None)
+        if _preclean_guard:
+            guard_path = output_path.replace(".txt", "_preclean_guard.txt")
+            with open(guard_path, "w", encoding="utf-8") as gf:
+                gf.write(_json.dumps(_preclean_guard, indent=2, ensure_ascii=False))
+            if _preclean_guard.get("ok"):
+                add_log("✅ Pre-clean guard passed (only line-number artifacts removed)")
+            else:
+                add_log(
+                    f"⚠️ Pre-clean guard failed: {_preclean_guard.get('unexpected_removed_count', 0)} unexpected removals",
+                    "warning",
+                )
+            add_log(f"📋 Pre-clean guard report saved")
+
         # Rebuild report context using cleaned text for better anchor matching
         if pymupdf_report:
             try:
@@ -2998,20 +3418,77 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
         st.session_state.step_status[4] = "🔄"
         update_progress()
 
+        # Preserve LLM clean layout exactly in Extract+Clean output.
+        # `clean_extracted_text` already applies guarded rejoin logic; running a
+        # second global pass here can flatten structured headers/table-like lines.
+        add_log("🧾 Preserving clean layout (skip extra post-clean rejoin)")
+
+        # Defensive AR/IA pass at final write point.
+        # Keeps page-1 title/header elements on separate lines even if any
+        # upstream transform accidentally compacted them.
+        if detected_state and detected_state.upper() in {"AR", "IA"}:
+            try:
+                if detected_state.upper() == "AR":
+                    from pymupdf_extractor import _normalize_ar_page1_header as _norm_page1_header
+                else:
+                    from pymupdf_extractor import _normalize_ia_page1_header as _norm_page1_header
+                _before_page1_norm = pymupdf_clean_text
+                pymupdf_clean_text = _norm_page1_header(pymupdf_clean_text)
+                if pymupdf_clean_text != _before_page1_norm:
+                    add_log(f"🧩 Re-normalized {detected_state.upper()} page-1 header before save")
+            except Exception:
+                pass
+
         with open(output_path, "w", encoding="utf-8") as cf:
             cf.write(pymupdf_clean_text)
         add_log(f"💾 Output saved: {output_path}")
+
+        # Deterministic fallback validation: always run, even if vision audit
+        # later under-reports issues.
+        _integrity = build_tag_integrity_report(
+            pymupdf_clean_text,
+            state_code=detected_state,
+            reference_text=_pre_cleaned,
+        )
+        _integrity["tag_lock"] = getattr(clean_extracted_text, "_last_tag_lock", None)
+        _integrity_path = output_path.replace(".txt", "_integrity_validation.json")
+        with open(_integrity_path, "w", encoding="utf-8") as _if:
+            _if.write(_json.dumps(_integrity, indent=2, ensure_ascii=False))
+        if _integrity.get("issues"):
+            add_log(
+                "⚠️ Deterministic integrity validation flagged issues: "
+                + "; ".join(_integrity.get("issues", [])[:6]),
+                "warning",
+            )
+            for _nest in (_integrity.get("nested_opposite_tags") or [])[:5]:
+                add_log(
+                    f"❌ Nested [{_nest['inner_type']}>…<{_nest['inner_type']}] inside "
+                    f"[{_nest['outer_type']}>…<{_nest['outer_type']}]: "
+                    f"'{_nest['inner_text']}'",
+                    "warning",
+                )
+            for _drift in ((_integrity.get("boundary_drift") or {}).get("findings") or [])[:8]:
+                add_log(
+                    f"❌ {_drift['kind']} ({_drift['words']} word(s), "
+                    f"{_drift['reference_label']}→{_drift['output_label']}): "
+                    f"'{_drift['text'][:120]}'",
+                    "warning",
+                )
+        else:
+            add_log("✅ Deterministic integrity validation passed")
 
         st.session_state.step_status[4] = "✅"
         update_progress()
 
         # ── Content Accuracy Check ─────────────────────────────────────
-        # Use pre-cleaned text as ground truth and pass LLM-removed lines
-        # so any content the LLM intentionally removed is not penalized.
+        # Use a dedicated accuracy reference text (artifact-stripped),
+        # while keeping saved _pre_cleaned as strict line-number-only
+        # cleanup + LLM input reference.
         st.session_state.content_accuracy_report = None
         _removals_json = output_path.replace(".txt", "_removals.json")
         _accuracy_json = output_path.replace(".txt", "_accuracy.json")
-        _accuracy_raw = _pre_cleaned if _pre_cleaned else pymupdf_text
+        _pre_cleaned_accuracy = getattr(clean_extracted_text, '_last_pre_cleaned_accuracy', None)
+        _accuracy_raw = _pre_cleaned_accuracy if _pre_cleaned_accuracy else (_pre_cleaned if _pre_cleaned else pymupdf_text)
         # Extract lines removed by LLM (in pre-cleaned but not in final output)
         _llm_removed = None
         if _pre_cleaned:
@@ -3028,6 +3505,15 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
             add_log=add_log,
             save_to=_content_acc_json,
             pdf_path=st.session_state.get('temp_pdf_path'),
+            state_code=detected_state,
+        )
+
+        _run_layout_accuracy_check(
+            output_text=pymupdf_clean_text,
+            add_log=add_log,
+            pdf_path=st.session_state.get('temp_pdf_path'),
+            state_code=detected_state,
+            save_to=_content_acc_json,
         )
 
         # ── Step 6: Tag Validation (PyMuPDF report → clean text) ────────────
@@ -3112,6 +3598,7 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
                 state_code=detected_state or "XX",
                 state_rules=state_rules_str,
                 output_xlsx=audit_xlsx,
+                anthropic_client=client,
             )
 
             st.session_state.audit_excel_path = audit_xlsx
@@ -3199,7 +3686,7 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
         logging.info(message)
         if log_placeholder is not None:
             with log_placeholder.container():
-                st.markdown(_build_activity_feed_html(st.session_state.processing_logs), unsafe_allow_html=True)
+                st.markdown(_build_activity_feed_html(st.session_state.processing_logs, scrollable=True), unsafe_allow_html=True)
 
     def update_progress():
         if progress_placeholder:
@@ -3398,6 +3885,7 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
         converted_text = opus.deterministic_cleanup(
             converted_text, state_config=state_config, state_code=detected_state,
             reference_text=_precleaned_text,
+            apply_structural_passes=False,
         )
         add_log("🔧 Deterministic cleanup applied")
 
@@ -3409,6 +3897,111 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
             converted_text = strip_protected_tags(converted_text, detected_state)
             if converted_text != _before_strip:
                 add_log(f"🛡️ Stripped tags from protected clauses for {detected_state}")
+
+        # Rejoin residual single-line soft wraps in final output text.
+        try:
+            from pymupdf_extractor import (
+                rejoin_mid_sentence_line_breaks as _rejoin_soft_wraps,
+                build_tag_integrity_report,
+                enforce_tag_integrity_gate,
+            )
+            _before_rejoin = converted_text
+            if detected_state and detected_state.upper() in {"AR", "IA"}:
+                # Preserve AR/IA page-1 header-preamble layout: do not run the
+                # generic soft-wrap joiner above the enacting clause. Resolutions
+                # (HR/SR/HCR/SCR) use "BE IT RESOLVED BY ..." instead of "BE IT
+                # ENACTED", and the longer chamber/assembly phrasing often wraps
+                # across two PDF lines, so tolerate both.
+                _enacting_patterns = {
+                    "AR": r"\n\s*BE IT (?:ENACTED|RESOLVED)\b[\s\S]{0,160}?STATE OF ARKANSAS\b[^\n]*:\s*\n",
+                    "IA": r"\n\s*BE IT (?:ENACTED|RESOLVED)\b[\s\S]{0,160}?STATE OF IOWA\b[^\n]*:\s*\n",
+                }
+                _enacting = re.search(
+                    _enacting_patterns[detected_state.upper()],
+                    converted_text,
+                    flags=re.IGNORECASE,
+                )
+                if _enacting:
+                    _prefix = converted_text[:_enacting.start()]
+                    _suffix = converted_text[_enacting.start():]
+                    _suffix = _rejoin_soft_wraps(_suffix)
+                    converted_text = _prefix + _suffix
+                else:
+                    converted_text = _rejoin_soft_wraps(converted_text)
+            else:
+                converted_text = _rejoin_soft_wraps(converted_text)
+            if converted_text != _before_rejoin:
+                add_log("🔗 Rejoined mid-sentence soft line wraps")
+
+            # Defensive AR/IA pass: re-canonicalize page-1 header after any
+            # downstream text rewrites.
+            if detected_state and detected_state.upper() in {"AR", "IA"}:
+                if detected_state.upper() == "AR":
+                    from pymupdf_extractor import _normalize_ar_page1_header as _norm_page1_header
+                else:
+                    from pymupdf_extractor import _normalize_ia_page1_header as _norm_page1_header
+
+                converted_text = _norm_page1_header(converted_text)
+
+            # Final conversion gate: preserve valid output unchanged;
+            # repair malformed delimiters / CT literal bracket deletions.
+            _before_gate = converted_text
+            converted_text = enforce_tag_integrity_gate(
+                converted_text, state_code=detected_state
+            )
+            _gate_report = getattr(enforce_tag_integrity_gate, "_last_report", None)
+            if _gate_report and _gate_report.get("changed"):
+                add_log(
+                    "🧯 Tag integrity gate repaired output: "
+                    + "; ".join(_gate_report.get("issues", [])[:4]),
+                    "warning",
+                )
+
+            _integrity = build_tag_integrity_report(
+                converted_text,
+                state_code=detected_state,
+                reference_text=_precleaned_text,
+            )
+            _integrity["tag_lock"] = getattr(opus.convert_pdf_hybrid_text, "_last_tag_lock", None)
+            _lock_report = _integrity["tag_lock"]
+            if _lock_report and _lock_report.get("missing_count"):
+                add_log(
+                    f"🔓 Tag-boundary lock: LLM dropped "
+                    f"{_lock_report['missing_count']}/{_lock_report['total']} tag span(s) — "
+                    + " | ".join(_lock_report.get("missing_samples", [])[:3]),
+                    "warning",
+                )
+            import json as _json_local
+            _integrity_path = os.path.join(
+                session_folders['output_folder'],
+                Path(pdf_path).stem + "_integrity_validation.json",
+            )
+            with open(_integrity_path, "w", encoding="utf-8") as _if:
+                _if.write(_json_local.dumps(_integrity, indent=2, ensure_ascii=False))
+            if _integrity.get("issues"):
+                add_log(
+                    "⚠️ Deterministic integrity validation flagged issues: "
+                    + "; ".join(_integrity.get("issues", [])[:6]),
+                    "warning",
+                )
+                for _nest in (_integrity.get("nested_opposite_tags") or [])[:5]:
+                    add_log(
+                        f"❌ Nested [{_nest['inner_type']}>…<{_nest['inner_type']}] inside "
+                        f"[{_nest['outer_type']}>…<{_nest['outer_type']}]: "
+                        f"'{_nest['inner_text']}'",
+                        "warning",
+                    )
+                for _drift in ((_integrity.get("boundary_drift") or {}).get("findings") or [])[:8]:
+                    add_log(
+                        f"❌ {_drift['kind']} ({_drift['words']} word(s), "
+                        f"{_drift['reference_label']}→{_drift['output_label']}): "
+                        f"'{_drift['text'][:120]}'",
+                        "warning",
+                    )
+            else:
+                add_log("✅ Deterministic integrity validation passed")
+        except Exception:
+            pass
 
         st.session_state.step_status[3] = "✅"
         update_progress()
@@ -3488,6 +4081,15 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
             add_log=add_log,
             save_to=_content_acc_json,
             pdf_path=st.session_state.get('temp_pdf_path'),
+            state_code=detected_state,
+        )
+
+        _run_layout_accuracy_check(
+            output_text=converted_text,
+            add_log=add_log,
+            pdf_path=st.session_state.get('temp_pdf_path'),
+            state_code=detected_state,
+            save_to=_content_acc_json,
         )
 
         # ── Step 6: Claude Opus 4.7 Audit (Validation Report) ─────────────
@@ -3659,7 +4261,8 @@ def show_simple_ui():
     # + file card) is just chrome — collapse padding so the PDF↔Text
     # comparator below gets nearly the full viewport height.  Keep enough
     # padding-top to clear the Streamlit toolbar (Deploy / menu) above.
-    _pad_top = '0.9rem' if _has_results else '2rem'
+    _is_processing = bool(st.session_state.get('processing'))
+    _pad_top = '0.08rem' if _is_processing else ('0.9rem' if _has_results else '2rem')
     _pad_bot = '0.3rem' if _has_results else '2rem'
 
     # Dynamic container width (must be f-string for variable)
@@ -3808,7 +4411,7 @@ def show_simple_ui():
             div[data-testid="stHorizontalBlock"] {
                 gap: 8px !important;
                 margin-top: 0 !important;
-                margin-bottom: 6px !important;
+                margin-bottom: 0 !important;
                 align-items: center !important;
                 flex-shrink: 0 !important;
                 min-height: 38px !important;
@@ -3816,7 +4419,7 @@ def show_simple_ui():
 
             /* ── Tabs: list at top, panel fills remaining space ──────── */
             .stTabs {
-                margin-top: -8px !important;
+                margin-top: -12px !important;
                 margin-bottom: 0 !important;
                 display: flex !important;
                 flex-direction: column !important;
@@ -3840,7 +4443,8 @@ def show_simple_ui():
                 flex-direction: column !important;
                 flex: 1 1 auto !important;
                 min-height: 0 !important;
-                overflow: hidden !important;
+                overflow-y: auto !important;
+                overflow-x: hidden !important;
                 padding: 0 !important;
                 margin: 0 !important;
                 /* Pull tab content up flush against the tab-list */
@@ -4163,9 +4767,199 @@ def show_simple_ui():
             '</div>',
             unsafe_allow_html=True,
         )
-    else:
+    elif not st.session_state.get('processing'):
         st.markdown('<h1 style="text-align: center;">📄 Pending Legislative Processor</h1>', unsafe_allow_html=True)
         st.markdown('<p class="subtitle" style="text-align: center;">AI-powered text extraction and verification for legislative documents</p>', unsafe_allow_html=True)
+
+    # Landing screen should be compact, centered, and responsive.
+    # Keep this scoped to pre-processing mode so results view remains unchanged.
+    if (not _has_results) and (not st.session_state.get('processing')):
+        st.markdown("""
+        <style>
+            /* Dynamic centered container: intentionally compact but still readable.
+               Apply on multiple selectors because Streamlit DOM can vary by version. */
+            .block-container,
+            .main .block-container,
+            section.main .block-container,
+            [data-testid="stAppViewContainer"] .block-container {
+                max-width: clamp(760px, 78vw, 980px) !important;
+                width: min(90vw, 980px) !important;
+                margin-left: auto !important;
+                margin-right: auto !important;
+                padding-top: 0 !important;
+                padding-bottom: 0.55rem !important;
+            }
+
+            /* Remove extra whitespace before the first heading/title block. */
+            .main .block-container > div:first-child,
+            .main .block-container > div:first-child [data-testid="stVerticalBlock"] {
+                margin-top: 0 !important;
+                padding-top: 0 !important;
+            }
+
+            /* Tighten landing-title spacing and scale smoothly by viewport. */
+            h1 {
+                font-size: clamp(2rem, 2.2vw, 2.8rem) !important;
+                margin-top: 0 !important;
+                margin-bottom: 0.12rem !important;
+            }
+            .subtitle {
+                margin-top: 0 !important;
+                margin-bottom: 0.42rem !important;
+                font-size: clamp(0.88rem, 0.92vw, 1.02rem) !important;
+            }
+
+            /* Make mode selector and uploader less bulky on landing page. */
+            div[data-testid="stRadio"] {
+                margin-top: 0 !important;
+                margin-bottom: 0.2rem !important;
+            }
+            div[role="radiogroup"] {
+                padding: 0.08rem 0.35rem !important;
+                border-radius: 8px !important;
+            }
+            div[role="radiogroup"] label {
+                font-size: 0.86rem !important;
+                padding-top: 0.15rem !important;
+                padding-bottom: 0.15rem !important;
+            }
+            div[data-testid="stFileUploader"] {
+                padding: 0.65rem !important;
+                margin-top: 0.1rem !important;
+                margin-bottom: 0.2rem !important;
+            }
+            div[data-testid="stFileUploader"] section {
+                padding-top: 0.2rem !important;
+                padding-bottom: 0.2rem !important;
+            }
+            h2 {
+                margin-top: 0.25rem !important;
+                margin-bottom: 0.22rem !important;
+                font-size: clamp(1.08rem, 1.05vw, 1.32rem) !important;
+            }
+
+            /* Global landing compaction for text/caption/alerts spacing. */
+            .main .block-container [data-testid="stVerticalBlock"] {
+                gap: 0.3rem !important;
+            }
+            .main .block-container [data-testid="stMarkdownContainer"] p {
+                margin-top: 0.12rem !important;
+                margin-bottom: 0.22rem !important;
+            }
+            .main .block-container [data-testid="stCaptionContainer"] {
+                margin-top: 0 !important;
+            }
+            .main .block-container [data-testid="stAlert"] {
+                margin-top: 0.2rem !important;
+                margin-bottom: 0.2rem !important;
+                padding-top: 0.65rem !important;
+                padding-bottom: 0.65rem !important;
+            }
+
+            /* Small laptop sizing: reduce fonts and boxes together. */
+            @media (max-width: 1366px) {
+                .block-container,
+                .main .block-container,
+                section.main .block-container,
+                [data-testid="stAppViewContainer"] .block-container {
+                    max-width: clamp(700px, 74vw, 900px) !important;
+                    width: min(88vw, 900px) !important;
+                }
+
+                h1 {
+                    font-size: clamp(1.75rem, 1.95vw, 2.25rem) !important;
+                }
+                .subtitle {
+                    font-size: clamp(0.8rem, 0.84vw, 0.92rem) !important;
+                }
+                h2 {
+                    font-size: clamp(0.98rem, 0.98vw, 1.15rem) !important;
+                }
+
+                div[role="radiogroup"] {
+                    padding: 0.05rem 0.3rem !important;
+                }
+                div[role="radiogroup"] label {
+                    font-size: 0.8rem !important;
+                    padding-top: 0.1rem !important;
+                    padding-bottom: 0.1rem !important;
+                }
+
+                div[data-testid="stFileUploader"] {
+                    padding: 0.5rem !important;
+                }
+                div[data-testid="stFileUploader"] section {
+                    padding-top: 0.12rem !important;
+                    padding-bottom: 0.12rem !important;
+                }
+
+                .main .block-container [data-testid="stMarkdownContainer"] p {
+                    font-size: 0.88rem !important;
+                }
+                .main .block-container [data-testid="stAlert"] {
+                    padding-top: 0.5rem !important;
+                    padding-bottom: 0.5rem !important;
+                }
+            }
+
+            /* Mobile/tablet: keep same centered compact feel as desktop. */
+            @media (max-width: 980px) {
+                .block-container,
+                .main .block-container,
+                section.main .block-container,
+                [data-testid="stAppViewContainer"] .block-container {
+                    width: min(92vw, 760px) !important;
+                    max-width: clamp(460px, 84vw, 760px) !important;
+                    margin-left: auto !important;
+                    margin-right: auto !important;
+                    padding-left: 0.5rem !important;
+                    padding-right: 0.5rem !important;
+                    padding-bottom: 0.45rem !important;
+                }
+
+                h1 {
+                    font-size: clamp(1.6rem, 4.2vw, 2rem) !important;
+                }
+                .subtitle {
+                    font-size: clamp(0.8rem, 2.1vw, 0.9rem) !important;
+                }
+                h2 {
+                    font-size: clamp(1rem, 2.6vw, 1.12rem) !important;
+                }
+
+                div[role="radiogroup"] label {
+                    font-size: 0.82rem !important;
+                }
+                div[data-testid="stFileUploader"] {
+                    padding: 0.5rem !important;
+                }
+                .main .block-container [data-testid="stAlert"] {
+                    padding-top: 0.5rem !important;
+                    padding-bottom: 0.5rem !important;
+                }
+            }
+
+            /* Very small phones: prevent edge-to-edge growth and keep compact balance. */
+            @media (max-width: 560px) {
+                .block-container,
+                .main .block-container,
+                section.main .block-container,
+                [data-testid="stAppViewContainer"] .block-container {
+                    width: 94vw !important;
+                    max-width: 94vw !important;
+                    padding-left: 0.35rem !important;
+                    padding-right: 0.35rem !important;
+                }
+
+                h1 {
+                    font-size: clamp(1.45rem, 6.1vw, 1.8rem) !important;
+                }
+                .subtitle {
+                    margin-bottom: 0.3rem !important;
+                }
+            }
+        </style>
+        """, unsafe_allow_html=True)
     
     # ── Sidebar ────────────────────────────────────────────────────────
     # Session info (Session ID, Status, Created, System Stats) is a
@@ -4299,6 +5093,32 @@ def show_simple_ui():
     )
 
     if _has_results and (_is_single_done or _is_batch_done):
+        st.markdown("""
+        <style>
+            /* Top action buttons: compact and aligned with file-info row height. */
+            div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"]:nth-child(2) .stButton > button,
+            div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"]:nth-child(3) .stButton > button {
+                min-height: 36px !important;
+                height: 36px !important;
+                padding: 4px 12px !important;
+                font-size: 0.82rem !important;
+                line-height: 1.05 !important;
+                border-radius: 10px !important;
+                font-weight: 600 !important;
+                white-space: nowrap !important;
+            }
+
+            /* Keep issue accordions compact and readable. */
+            div[data-testid="stExpander"] summary,
+            div[data-testid="stExpander"] summary p,
+            div[data-testid="stExpander"] details summary {
+                font-size: 0.82rem !important;
+                line-height: 1.2 !important;
+                font-weight: 600 !important;
+            }
+        </style>
+        """, unsafe_allow_html=True)
+
         # ── Clean results header — hide upload clutter ────────────────────
         _col_info, _col_submit_btn, _col_btn = st.columns([5, 1, 1])
         with _col_info:
@@ -4445,7 +5265,7 @@ def show_simple_ui():
         if _input_mode == "📁 Upload PDF Files":
             # Full upload section — before processing
             st.header("📁 Upload PDF Files")
-            st.caption("Upload one file for single processing, or multiple files (up to 20, max 5 MB total) for serial batch processing.")
+            st.caption("Upload one file for single processing, or multiple files (up to 20, max 50 MB total) for serial batch processing.")
             _uploader_key = f"pdf_uploader_{st.session_state.uploader_key_counter}"
             uploaded_files = st.file_uploader(
                 "Choose PDF file(s) to process",
@@ -4641,6 +5461,19 @@ def show_simple_ui():
                                     except Exception:
                                         pass
 
+                                # Load layout accuracy report into session state if available
+                                try:
+                                    import json as _json
+                                    _layout_json = _chosen_file.parent / f"{_chosen_file.stem}_layout_accuracy.json"
+                                    if _layout_json.exists():
+                                        st.session_state.layout_accuracy_report = _json.loads(
+                                            _layout_json.read_text(encoding="utf-8")
+                                        )
+                                    else:
+                                        st.session_state.layout_accuracy_report = None
+                                except Exception:
+                                    st.session_state.layout_accuracy_report = None
+
                                 st.success(f"Loaded: {_chosen_file.name}")
                                 st.rerun()
                         with _col_submit_one:
@@ -4700,7 +5533,15 @@ def show_simple_ui():
 
     if uploaded_files:
         # ── Validate all files ────────────────────────────────────────────
-        MAX_TOTAL_SIZE = 5 * 1024 * 1024   # 5 MB total for all files combined
+        # Batch-total cap is app-level (separate from Streamlit's per-file
+        # server.maxUploadSize). Default is 50 MB; override with env var
+        # BATCH_MAX_TOTAL_SIZE_MB if needed.
+        try:
+            _max_total_size_mb = int(os.environ.get("BATCH_MAX_TOTAL_SIZE_MB", "50"))
+        except Exception:
+            _max_total_size_mb = 50
+        _max_total_size_mb = max(1, _max_total_size_mb)
+        MAX_TOTAL_SIZE = _max_total_size_mb * 1024 * 1024
         MAX_BATCH = 20
         MAX_PAGES = 15              # Default page limit for PyMuPDF/Hybrid modes
         MAX_PAGES_VISION = 50       # Higher limit for Vision mode (scanned PDFs, CO state)
@@ -4744,7 +5585,7 @@ def show_simple_ui():
             except Exception:
                 pass  # if we can't check, let it through — batch upload will catch it
 
-            # Check if adding this file would exceed the 5 MB total limit
+            # Check if adding this file would exceed the batch total limit
             if _running_size + uf.size > MAX_TOTAL_SIZE:
                 skipped_size_names.append(f"{uf.name} ({format_file_size(uf.size)})")
                 continue
@@ -5116,7 +5957,7 @@ def show_simple_ui():
 #  UI Helper: Styled Activity Feed & Pipeline Tracker
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _build_activity_feed_html(logs: list[dict]) -> str:
+def _build_activity_feed_html(logs: list[dict], scrollable: bool = False) -> str:
     """Build a modern styled activity-feed HTML for processing logs.
 
     Each log entry is rendered as a timeline row with a colored dot,
@@ -5127,21 +5968,23 @@ def _build_activity_feed_html(logs: list[dict]) -> str:
 
     _css = """
     <style>
-    .af-wrap{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
-             padding:4px 0;}
-    .af-row{display:flex;align-items:flex-start;gap:10px;padding:5px 0 5px 4px;
+        .af-wrap{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+                 padding:2px 0;}
+        .af-scroll{max-height:clamp(320px,72vh,760px);overflow-y:auto;overflow-x:hidden;
+                   padding-right:4px;scrollbar-gutter:stable;}
+        .af-row{display:flex;align-items:flex-start;gap:8px;padding:4px 0 4px 4px;
             border-left:2px solid #e2e8f0;margin-left:6px;position:relative;}
     .af-row:last-child{border-left-color:transparent;}
-    .af-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0;margin-top:5px;
+        .af-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0;margin-top:4px;
             position:relative;left:-10px;margin-right:-10px;}
     .af-dot-info{background:#3b82f6;}
     .af-dot-ok{background:#22c55e;}
     .af-dot-warn{background:#f59e0b;}
     .af-dot-err{background:#ef4444;}
     .af-time{font-family:'SF Mono',SFMono-Regular,Consolas,'Liberation Mono',Menlo,monospace;
-             font-size:0.72rem;background:#f1f5f9;color:#64748b;padding:2px 7px;
+             font-size:0.66rem;background:#f1f5f9;color:#64748b;padding:1px 6px;
              border-radius:4px;white-space:nowrap;flex-shrink:0;}
-    .af-msg{font-size:0.82rem;color:#334155;line-height:1.4;word-break:break-word;}
+    .af-msg{font-size:0.76rem;color:#334155;line-height:1.28;word-break:break-word;}
     .af-msg-warn{color:#92400e;}
     .af-msg-err{color:#991b1b;font-weight:600;}
     </style>"""
@@ -5170,6 +6013,8 @@ def _build_activity_feed_html(logs: list[dict]) -> str:
             f'</div>'
         )
 
+    if scrollable:
+        return _css + '<div class="af-scroll"><div class="af-wrap">' + "\n".join(rows) + '</div></div>'
     return _css + '<div class="af-wrap">' + "\n".join(rows) + '</div>'
 
 
@@ -5369,6 +6214,15 @@ def show_results_section():
     """Show results in a clean tabbed layout: Summary, Validation Review, Activity Log"""
     file_name = Path(st.session_state.processed_file_path).name
 
+    # Pre-initialise the "Show full layout issue table" toggle key BEFORE
+    # st.tabs() is built below — same reason as the vri_* pre-init block:
+    # a widget key that only springs into existence once the Layout Issues
+    # data becomes available (after processing) makes st.tabs() lose track
+    # of the active tab and bounce back to the first tab on that click.
+    _layout_toggle_key = f"layout_full_table_{file_name}"
+    if _layout_toggle_key not in st.session_state:
+        st.session_state[_layout_toggle_key] = False
+
     # File size (prefer cached bytes for multi-pod safety)
     cached_data = st.session_state.get('processed_file_data')
     if cached_data is not None:
@@ -5521,30 +6375,33 @@ def show_results_section():
 
         # Build state pill
         _state_pill = (
-            f'<span style="background:#e0e7ff; color:#3730a3; padding:3px 12px; '
-            f'border-radius:16px; font-size:0.82rem; font-weight:600;">'
-            f'🏛️ {_state_label}</span>'
+            f'<span class="sv2-state-pill">🏛️ {_state_label}</span>'
         ) if _state_label else ""
 
-        # Build time chips
-        _chip = (
-            'display:inline-flex; align-items:center; gap:6px; '
-            'padding:8px 16px; border-radius:10px; font-size:0.85rem; font-weight:600;'
+        def _mk_metric_card(icon: str, label: str, value: str, detail: str = "", *, bg: str, fg: str, border: str) -> str:
+            _detail_html = f'<div class="sv2-card-detail">{detail}</div>' if detail else ""
+            return (
+                f'<div class="sv2-card" style="--sv2-bg:{bg}; --sv2-fg:{fg}; --sv2-bd:{border};">'
+                f'<span class="sv2-card-icon">{icon}</span>'
+                f'<div class="sv2-card-body">'
+                f'<div class="sv2-card-label">{label}</div>'
+                f'<div class="sv2-card-value">{value}</div>'
+                f'{_detail_html}'
+                f'</div></div>'
+            )
+
+        # Build top metric cards
+        _conv_chip = _mk_metric_card(
+            "📝", "Conversion", _conv_time,
+            bg="#f0fdf4", fg="#166534", border="#bbf7d0"
         )
-        _conv_chip = (
-            f'<div style="{_chip} background:#f0fdf4; color:#166534; border:1px solid #bbf7d0;">'
-            f'<span style="font-size:1rem;">📝</span> Conversion '
-            f'<span style="font-weight:800;">{_conv_time}</span></div>'
-        )
-        _val_chip = (
-            f'<div style="{_chip} background:#eff6ff; color:#1e40af; border:1px solid #bfdbfe;">'
-            f'<span style="font-size:1rem;">🔍</span> Validation '
-            f'<span style="font-weight:800;">{_val_time}</span></div>'
+        _val_chip = _mk_metric_card(
+            "🔍", "Validation", _val_time,
+            bg="#eff6ff", fg="#1e40af", border="#bfdbfe"
         ) if _has_audit else ""
-        _size_chip = (
-            f'<div style="{_chip} background:#f5f3ff; color:#5b21b6; border:1px solid #ddd6fe;">'
-            f'<span style="font-size:1rem;">📄</span> Output '
-            f'<span style="font-weight:800;">{_size_label}</span></div>'
+        _size_chip = _mk_metric_card(
+            "📄", "Output", _size_label,
+            bg="#f5f3ff", fg="#5b21b6", border="#ddd6fe"
         )
 
         # Content accuracy chip (precleaned vs final output — word-level)
@@ -5561,15 +6418,9 @@ def show_results_section():
                 _ca_bg, _ca_fg, _ca_bdr = '#fefce8', '#854d0e', '#fde68a'
             else:
                 _ca_bg, _ca_fg, _ca_bdr = '#fef2f2', '#991b1b', '#fecaca'
-            _ca_detail = f" ({_content_words:,}/{_content_max:,} words"
-            if _content_issues:
-                _ca_detail += f", {_content_issues} issue{'s' if _content_issues != 1 else ''}"
-            _ca_detail += ")"
-            _content_acc_chip = (
-                f'<div style="{_chip} background:{_ca_bg}; color:{_ca_fg}; border:1px solid {_ca_bdr};">'
-                f'<span style="font-size:1rem;">📊</span> Content Accuracy '
-                f'<span style="font-weight:800;">{_content_val:.2f}%</span>'
-                f'<span style="font-size:0.75rem; font-weight:400; margin-left:4px;">{_ca_detail}</span></div>'
+            _content_acc_chip = _mk_metric_card(
+                "📊", "Content Accuracy", f"{_content_val:.2f}%", "",
+                bg=_ca_bg, fg=_ca_fg, border=_ca_bdr
             )
 
         # Tag accuracy chip (from audit counts)
@@ -5584,7 +6435,6 @@ def show_results_section():
                 # No formatted spans detected — nothing to tag
                 _ta_pct = 100.0
                 _ta_bg, _ta_fg, _ta_bdr = '#f0fdf4', '#166534', '#bbf7d0'
-                _ta_detail = " (No formatting modifications detected — no tagging required)"
             else:
                 _ta_pct = (_ta_pass / _ta_total * 100.0)
                 if _ta_pct >= 99:
@@ -5593,40 +6443,279 @@ def show_results_section():
                     _ta_bg, _ta_fg, _ta_bdr = '#fefce8', '#854d0e', '#fde68a'
                 else:
                     _ta_bg, _ta_fg, _ta_bdr = '#fef2f2', '#991b1b', '#fecaca'
-                _ta_detail = f" ({_ta_pass}/{_ta_total}"
-                if _ta_err:
-                    _ta_detail += f", {_ta_err} error{'s' if _ta_err != 1 else ''}"
-                if _ta_warn:
-                    _ta_detail += f", {_ta_warn} warning{'s' if _ta_warn != 1 else ''}"
-                _ta_detail += ")"
-            _tag_acc_chip = (
-                f'<div style="{_chip} background:{_ta_bg}; color:{_ta_fg}; border:1px solid {_ta_bdr};">'
-                f'<span style="font-size:1rem;">🏷️</span> Tag Accuracy '
-                f'<span style="font-weight:800;">{_ta_pct:.1f}%</span>'
-                f'<span style="font-size:0.75rem; font-weight:400; margin-left:4px;">{_ta_detail}</span></div>'
+            _tag_acc_chip = _mk_metric_card(
+                "🏷️", "Tag Accuracy", f"{_ta_pct:.1f}%", "",
+                bg=_ta_bg, fg=_ta_fg, border=_ta_bdr
             )
 
+        # Layout accuracy chip (paragraph boundary fidelity)
+        _layout_acc_chip = ""
+        _layout_rpt = st.session_state.get('layout_accuracy_report')
+        if isinstance(_layout_rpt, dict):
+            _la_acc = float(_layout_rpt.get('accuracy_pct', 100.0) or 100.0)
+            _la_total = int(_layout_rpt.get('total_boundaries', 0) or 0)
+            _la_splits = len(_layout_rpt.get('splits_needed', []) or [])
+            _la_merges = len(_layout_rpt.get('merges_needed', []) or [])
+            _la_issues = _la_splits + _la_merges
+            if _la_total == 0 or _la_issues == 0:
+                _la_bg, _la_fg, _la_bdr = '#f0fdf4', '#166534', '#bbf7d0'
+            elif _la_acc >= 95:
+                _la_bg, _la_fg, _la_bdr = '#fefce8', '#854d0e', '#fde68a'
+            else:
+                _la_bg, _la_fg, _la_bdr = '#fef2f2', '#991b1b', '#fecaca'
+            if _la_issues >= 0:
+                _layout_acc_chip = _mk_metric_card(
+                    "📐", "Layout Accuracy", f"{_la_acc:.1f}%", "",
+                    bg=_la_bg, fg=_la_fg, border=_la_bdr
+                )
+
+        st.markdown("""
+        <style>
+            .summary-v2 {
+                border: 1px solid #e2e8f0;
+                border-radius: 12px;
+                background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+                box-shadow: 0 2px 10px rgba(15, 23, 42, 0.05);
+                padding: 12px 14px;
+                margin: 4px 0 10px;
+                font-size: 13px;
+                color: #1f2937;
+            }
+            .summary-v2-header {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 8px;
+                margin-bottom: 10px;
+                flex-wrap: wrap;
+            }
+            .summary-v2-title {
+                display: inline-flex;
+                align-items: center;
+                gap: 8px;
+                font-size: 12px;
+                font-weight: 600;
+                color: #166534;
+                letter-spacing: 0.02em;
+                text-transform: uppercase;
+            }
+            .summary-v2-title strong {
+                font-size: 1.6em;
+                line-height: 1;
+            }
+            .sv2-state-pill {
+                background: #e0e7ff;
+                color: #3730a3;
+                border: 1px solid #c7d2fe;
+                border-radius: 999px;
+                padding: 2px 9px;
+                font-size: 12px;
+                font-weight: 600;
+                line-height: 1.2;
+                white-space: nowrap;
+            }
+            .summary-v2-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+                gap: 8px;
+                margin-bottom: 10px;
+            }
+            .sv2-card {
+                background: var(--sv2-bg);
+                color: var(--sv2-fg);
+                border: 1px solid var(--sv2-bd);
+                border-radius: 10px;
+                padding: 7px 9px;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                min-height: 54px;
+            }
+            .sv2-card-icon {
+                font-size: 14px;
+                line-height: 1;
+                opacity: 0.95;
+                margin-top: 1px;
+            }
+            .sv2-card-body {
+                min-width: 0;
+                display: grid;
+                row-gap: 1px;
+            }
+            .sv2-card-label {
+                font-size: 11px;
+                font-weight: 600;
+                text-transform: uppercase;
+                letter-spacing: 0.03em;
+                opacity: 0.9;
+            }
+            .sv2-card-value {
+                font-size: 16px;
+                font-weight: 700;
+                line-height: 1.15;
+                white-space: nowrap;
+            }
+            .sv2-card-detail {
+                font-size: 11px;
+                line-height: 1.25;
+                opacity: 0.92;
+                word-break: break-word;
+            }
+            .summary-v2-time {
+                border: 1px solid #e2e8f0;
+                background: #f8fafc;
+                border-radius: 9px;
+                padding: 7px 10px;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 10px;
+            }
+            .summary-v2-time-label {
+                font-size: 12px;
+                color: #475569;
+                font-weight: 500;
+            }
+            .summary-v2-time-value {
+                font-size: 20px;
+                font-weight: 700;
+                color: #0f172a;
+                letter-spacing: 0.01em;
+                white-space: nowrap;
+            }
+            .summary-v2-note {
+                margin-top: 8px;
+                font-size: 11px;
+                color: #64748b;
+                line-height: 1.3;
+            }
+
+            /* Guarantee visual separation from issue accordions below. */
+            .summary-v2 {
+                margin-bottom: 14px;
+            }
+
+            div[data-testid="stExpander"] {
+                margin-top: 8px !important;
+            }
+
+            @media (max-width: 1366px) {
+                .summary-v2 {
+                    font-size: 12px;
+                    padding: 10px 12px;
+                    border-radius: 10px;
+                }
+                .summary-v2-header {
+                    margin-bottom: 8px;
+                    gap: 6px;
+                }
+                .summary-v2-title {
+                    font-size: 11px;
+                }
+                .sv2-state-pill {
+                    font-size: 11px;
+                    padding: 2px 8px;
+                }
+                .summary-v2-grid {
+                    grid-template-columns: repeat(auto-fit, minmax(165px, 1fr));
+                    gap: 7px;
+                    margin-bottom: 8px;
+                }
+                .sv2-card {
+                    min-height: 48px;
+                    padding: 6px 8px;
+                    border-radius: 9px;
+                    gap: 6px;
+                }
+                .sv2-card-icon {
+                    font-size: 13px;
+                }
+                .sv2-card-label {
+                    font-size: 10px;
+                }
+                .sv2-card-value {
+                    font-size: 13px;
+                }
+                .sv2-card-detail {
+                    font-size: 10px;
+                }
+                .summary-v2-time {
+                    padding: 6px 9px;
+                    border-radius: 8px;
+                }
+                .summary-v2-time-label {
+                    font-size: 11px;
+                }
+                .summary-v2-time-value {
+                    font-size: 16px;
+                }
+                .summary-v2-note {
+                    margin-top: 7px;
+                    font-size: 10px;
+                }
+            }
+
+            @media (max-width: 1200px) {
+                .summary-v2 {
+                    font-size: 12px;
+                    padding: 10px 12px;
+                }
+                .summary-v2-grid {
+                    grid-template-columns: repeat(auto-fit, minmax(175px, 1fr));
+                }
+                .sv2-card {
+                    min-height: 56px;
+                    padding: 7px 9px;
+                }
+                .sv2-card-value {
+                    font-size: 15px;
+                }
+                .summary-v2-time-value {
+                    font-size: 18px;
+                }
+            }
+
+            @media (max-width: 900px) {
+                .summary-v2-grid {
+                    grid-template-columns: 1fr;
+                }
+                .summary-v2-time-value {
+                    font-size: 16px;
+                }
+            }
+
+            /* Keep Summary tab controls neat and compact. */
+            .stExpander summary {
+                font-size: 0.9rem !important;
+            }
+            .stExpander summary p {
+                font-size: 0.9rem !important;
+            }
+            .stDownloadButton button,
+            .stButton button {
+                font-size: 0.9rem !important;
+            }
+        </style>
+        """, unsafe_allow_html=True)
+
         _summary_html = (
-            '<div style="background:#ffffff; border-radius:14px; padding:24px 28px; margin:8px 0 20px;'
-            ' border:1px solid #e2e8f0; box-shadow:0 2px 12px rgba(0,0,0,.05);">'
-            '<div style="display:flex; align-items:center; gap:12px; margin-bottom:16px; flex-wrap:wrap;">'
-            '<span style="font-size:1.5rem;">✅</span>'
-            '<span style="font-size:1.2rem; font-weight:700; color:#15803d;">Processing Complete</span>'
+            '<div class="summary-v2">'
+            '<div class="summary-v2-header">'
+            '<div class="summary-v2-title"><strong>✅</strong> Processing Complete</div>'
             f'{_state_pill}'
             '</div>'
-            '<div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px;">'
-            f'{_conv_chip}{_val_chip}{_size_chip}{_content_acc_chip}{_tag_acc_chip}'
+            '<div class="summary-v2-grid">'
+            f'{_conv_chip}{_val_chip}{_size_chip}{_content_acc_chip}{_layout_acc_chip}{_tag_acc_chip}'
             '</div>'
-            '<div style="background:#f8fafc; border-radius:8px; padding:8px 16px;'
-            ' display:flex; align-items:center; justify-content:space-between;'
-            ' border:1px solid #e2e8f0;">'
-            '<span style="font-size:0.84rem; color:#475569;">⏱️ Total processing time</span>'
-            f'<span style="font-size:1rem; font-weight:800; color:#0f172a;">{_total_time}</span>'
+            '<div class="summary-v2-time">'
+            '<span class="summary-v2-time-label">⏱️ Total processing time</span>'
+            f'<span class="summary-v2-time-value">{_total_time}</span>'
             '</div>'
-            '<p style="margin:12px 0 0; font-size:0.82rem; color:#64748b;">'
+            '<div class="summary-v2-note">'
             'Your PDF has been converted to tagged legislative text with Claude Opus 4.6. '
-            'Review the chips above for accuracy metrics.'
-            '</p></div>'
+            'Review the metrics above for validation confidence.'
+            '</div>'
+            '</div>'
         )
         st.markdown(_summary_html, unsafe_allow_html=True)
 
@@ -5686,7 +6775,7 @@ def show_results_section():
                                 ]
                                 if _issue_items:
                                     _tbl_rows = []
-                                    for _it in _issue_items[:30]:  # cap at 30
+                                    for _it in _issue_items:
                                         _verdict = str(_it.get("Verdict", ""))
                                         _status = "❌ Error" if _verdict.startswith("❌") else "⚠️ Warning"
                                         _page = str(_it.get("Page", "") or "")
@@ -5707,13 +6796,91 @@ def show_results_section():
                                         _pd.DataFrame(_tbl_rows),
                                         use_container_width=True,
                                         hide_index=True,
+                                        height=220,
+                                        row_height=28,
                                     )
-                                    if len(_issue_items) > 30:
-                                        st.caption(f"Showing first 30 of {len(_issue_items)} issues. Download the audit Excel for the full list.")
+
                         except Exception as _tag_ex:
                             st.caption(f"Could not load tag issues: {_tag_ex}")
                     else:
                         st.caption("Audit Excel not available — re-run processing to generate.")
+
+        # ── Layout Issues (split-needed / merge-needed) ───────────────────
+        _layout_rpt = st.session_state.get('layout_accuracy_report')
+        if isinstance(_layout_rpt, dict):
+            _splits = _layout_rpt.get('splits_needed', []) or []
+            _merges = _layout_rpt.get('merges_needed', []) or []
+            _layout_issue_count = len(_splits) + len(_merges)
+            if _layout_issue_count > 0:
+                with st.expander(f"📐 Layout Issues ({_layout_issue_count})", expanded=False):
+                    _rows = []
+                    for _s in _splits[:200]:
+                        _rows.append({
+                            "Type": "SPLIT-NEEDED",
+                            "Line": _s.get("line", ""),
+                            "Related Line": "",
+                            "Signal": _s.get("signal", ""),
+                            "PDF Page": _s.get("pdf_page", ""),
+                            "Context": _s.get("text_after_split", ""),
+                            "Description": _s.get("description", ""),
+                        })
+                    for _m in _merges[:200]:
+                        _rows.append({
+                            "Type": "MERGE-NEEDED",
+                            "Line": _m.get("line", ""),
+                            "Related Line": _m.get("merge_with_line", ""),
+                            "Signal": "",
+                            "PDF Page": "",
+                            "Context": _m.get("next_line_text", ""),
+                            "Description": _m.get("description", ""),
+                        })
+
+                    if _rows:
+                        import pandas as _pd
+                        _split_cnt = len(_splits)
+                        _merge_cnt = len(_merges)
+                        st.markdown(
+                            (
+                                '<div style="display:flex; gap:8px; flex-wrap:wrap; margin:2px 0 8px;">'
+                                f'<span style="background:#eef2ff; color:#3730a3; border:1px solid #c7d2fe; '
+                                'padding:3px 10px; border-radius:999px; font-size:0.78rem; font-weight:600;">'
+                                f'Total {_layout_issue_count}</span>'
+                                f'<span style="background:#fff7ed; color:#9a3412; border:1px solid #fed7aa; '
+                                'padding:3px 10px; border-radius:999px; font-size:0.78rem; font-weight:600;">'
+                                f'Split-needed {_split_cnt}</span>'
+                                f'<span style="background:#fef2f2; color:#991b1b; border:1px solid #fecaca; '
+                                'padding:3px 10px; border-radius:999px; font-size:0.78rem; font-weight:600;">'
+                                f'Merge-needed {_merge_cnt}</span>'
+                                '</div>'
+                            ),
+                            unsafe_allow_html=True,
+                        )
+
+                        _preview_rows = _rows[:6]
+                        st.dataframe(
+                            _pd.DataFrame(_preview_rows),
+                            use_container_width=True,
+                            hide_index=True,
+                            height=140,
+                            row_height=28,
+                        )
+
+                        if _layout_issue_count > len(_preview_rows):
+                            _show_full = st.toggle(
+                                "Show full layout issue table",
+                                value=False,
+                                key=f"layout_full_table_{file_name}",
+                            )
+                            if _show_full:
+                                st.dataframe(
+                                    _pd.DataFrame(_rows),
+                                    use_container_width=True,
+                                    hide_index=True,
+                                    height=320,
+                                    row_height=28,
+                                )
+                    if _layout_issue_count > 200:
+                        st.caption(f"Showing first 200 of {_layout_issue_count} layout issues. See _layout_accuracy.json for full details.")
 
         # ── Content Issues (compact, only when content accuracy has issues) ─
         # Check both report sources: content_accuracy_detail (from _run_content_accuracy_check)
@@ -5744,7 +6911,7 @@ def show_results_section():
                                 _w_idx += 1
 
                     _ci_rows = []
-                    for _ci in _ci_list[:30]:
+                    for _ci in _ci_list:
                         _ci_type = str(_ci.get("type", "")).capitalize()
                         # Support both field naming conventions
                         _ci_pre = str(_ci.get("precleaned") or _ci.get("pymupdf_text") or _ci.get("missing_text") or "—")[:80]
@@ -5762,13 +6929,16 @@ def show_results_section():
                             "Category": _ci_cat,
                         })
                     import pandas as _pd
+                    _ci_rows_n = len(_ci_rows)
+                    _ci_height = min(260, max(78, 44 + (_ci_rows_n * 28)))
                     st.dataframe(
                         _pd.DataFrame(_ci_rows),
                         use_container_width=True,
                         hide_index=True,
+                        height=_ci_height,
+                        row_height=28,
                     )
-                    if _ci_count > 30:
-                        st.caption(f"Showing first 30 of {_ci_count} issues. Download the accuracy JSON for the full list.")
+
 
         # ── Submit to Keyed (SFTP Upload) ─────────────────────────────────────
         st.markdown("---")
@@ -5812,7 +6982,14 @@ def show_results_section():
     # ══════════════════════════════════════════════════════════════════════════
     if st.session_state.get('processing_logs'):
         with tabs[_tab_idx]:
-            st.markdown(_build_activity_feed_html(st.session_state.processing_logs), unsafe_allow_html=True)
+            st.markdown("""
+            <style>
+                .stTabs [data-baseweb="tab-panel"]:not([hidden]):has(.af-scroll) {
+                    overflow-y: hidden !important;
+                }
+            </style>
+            """, unsafe_allow_html=True)
+            st.markdown(_build_activity_feed_html(st.session_state.processing_logs, scrollable=True), unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -6080,16 +7257,103 @@ class BatchWorker:
                 add_log("🔧 Post-processing: stripped tags from protected clauses (if any)")
             except Exception:
                 pass
-            # Second: strip protected clauses from protected_clauses.py (hardcoded list)
-            try:
-                from protected_clauses import strip_protected_tags as _strip
-                if _strip and detected_state:
-                    _before_strip = converted_text
-                    converted_text = _strip(converted_text, detected_state)
-                    if converted_text != _before_strip:
-                        add_log(f"🛡️ Stripped tags from protected clauses for {detected_state}")
-            except Exception:
-                pass
+
+        # Second: strip protected clauses from protected_clauses.py (hardcoded list)
+        try:
+            from protected_clauses import strip_protected_tags as _strip
+            if _strip and detected_state:
+                _before_strip = converted_text
+                converted_text = _strip(converted_text, detected_state)
+                if converted_text != _before_strip:
+                    add_log(f"🛡️ Stripped tags from protected clauses for {detected_state}")
+        except Exception:
+            pass
+
+        # Rejoin residual single-line soft wraps in final output text.
+        try:
+            from pymupdf_extractor import (
+                rejoin_mid_sentence_line_breaks as _rejoin_soft_wraps,
+                build_tag_integrity_report,
+                enforce_tag_integrity_gate,
+            )
+            _before_rejoin = converted_text
+            if detected_state and detected_state.upper() in {"AR", "IA"}:
+                # Preserve AR/IA page-1 header-preamble layout: do not run the
+                # generic soft-wrap joiner above the enacting clause. Resolutions
+                # (HR/SR/HCR/SCR) use "BE IT RESOLVED BY ..." instead of "BE IT
+                # ENACTED", and the longer chamber/assembly phrasing often wraps
+                # across two PDF lines, so tolerate both.
+                _enacting_patterns = {
+                    "AR": r"\n\s*BE IT (?:ENACTED|RESOLVED)\b[\s\S]{0,160}?STATE OF ARKANSAS\b[^\n]*:\s*\n",
+                    "IA": r"\n\s*BE IT (?:ENACTED|RESOLVED)\b[\s\S]{0,160}?STATE OF IOWA\b[^\n]*:\s*\n",
+                }
+                _enacting = re.search(
+                    _enacting_patterns[detected_state.upper()],
+                    converted_text,
+                    flags=re.IGNORECASE,
+                )
+                if _enacting:
+                    _prefix = converted_text[:_enacting.start()]
+                    _suffix = converted_text[_enacting.start():]
+                    _suffix = _rejoin_soft_wraps(_suffix)
+                    converted_text = _prefix + _suffix
+                else:
+                    converted_text = _rejoin_soft_wraps(converted_text)
+            else:
+                converted_text = _rejoin_soft_wraps(converted_text)
+            if converted_text != _before_rejoin:
+                add_log("🔗 Rejoined mid-sentence soft line wraps")
+
+            # Defensive AR/IA pass: re-canonicalize page-1 header after any
+            # downstream text rewrites.
+            if detected_state and detected_state.upper() in {"AR", "IA"}:
+                if detected_state.upper() == "AR":
+                    from pymupdf_extractor import _normalize_ar_page1_header as _norm_page1_header
+                else:
+                    from pymupdf_extractor import _normalize_ia_page1_header as _norm_page1_header
+
+                converted_text = _norm_page1_header(converted_text)
+
+            converted_text = enforce_tag_integrity_gate(
+                converted_text, state_code=detected_state
+            )
+            _gate_report = getattr(enforce_tag_integrity_gate, "_last_report", None)
+            if _gate_report and _gate_report.get("changed"):
+                add_log(
+                    "🧯 Tag integrity gate repaired output: "
+                    + "; ".join((_gate_report.get("issues") or [])[:4]),
+                    "warning",
+                )
+
+            _integrity = build_tag_integrity_report(
+                converted_text,
+                state_code=detected_state,
+                reference_text=None,
+            )
+            import json as _json_local
+            _integrity_path = os.path.join(
+                session_folders['output_folder'],
+                Path(pdf_path).stem + "_integrity_validation.json",
+            )
+            with open(_integrity_path, "w", encoding="utf-8") as _if:
+                _if.write(_json_local.dumps(_integrity, indent=2, ensure_ascii=False))
+            if _integrity.get("issues"):
+                add_log(
+                    "⚠️ Deterministic integrity validation flagged issues: "
+                    + "; ".join((_integrity.get("issues") or [])[:6]),
+                    "warning",
+                )
+                for _nest in (_integrity.get("nested_opposite_tags") or [])[:5]:
+                    add_log(
+                        f"❌ Nested [{_nest['inner_type']}>…<{_nest['inner_type']}] inside "
+                        f"[{_nest['outer_type']}>…<{_nest['outer_type']}]: "
+                        f"'{_nest['inner_text']}'",
+                        "warning",
+                    )
+            else:
+                add_log("✅ Deterministic integrity validation passed")
+        except Exception:
+            pass
 
         # Step 5: Save output
         conversion_elapsed = time.time() - start_time
@@ -6123,7 +7387,9 @@ class BatchWorker:
                 highlight_pdf_formatting,
                 clean_extracted_text,
                 consolidate_adjacent_tags,
+                enforce_tag_integrity_gate,
                 merge_cross_page_break_tags,
+                split_ar_subsection_welds,
             )
 
             # Determine state-specific marking flags
@@ -6187,12 +7453,15 @@ class BatchWorker:
                     anthropic_client=client,
                     mark_brackets=_mark_flags.get("mark_brackets", False),
                 )
-                pymupdf_clean_text = consolidate_adjacent_tags(pymupdf_clean_text)
+                pymupdf_clean_text = consolidate_adjacent_tags(
+                    pymupdf_clean_text, state_code=detected_state
+                )
                 pymupdf_clean_text = opus.remove_nested_tags(pymupdf_clean_text)
                 pymupdf_clean_text = opus.merge_split_tags(pymupdf_clean_text)
+                if detected_state and detected_state.upper() == "AR":
+                    pymupdf_clean_text = split_ar_subsection_welds(pymupdf_clean_text)
                 # Merge same-paragraph tags split across a page break.
                 pymupdf_clean_text = merge_cross_page_break_tags(pymupdf_clean_text)
-                pymupdf_clean_text = opus.split_tagged_subsections(pymupdf_clean_text)
 
                 # Strip tags from protected clauses
                 try:
@@ -6201,6 +7470,16 @@ class BatchWorker:
                         pymupdf_clean_text = _strip_prot(pymupdf_clean_text, detected_state)
                 except Exception:
                     pass
+
+                pymupdf_clean_text = enforce_tag_integrity_gate(
+                    pymupdf_clean_text, state_code=detected_state
+                )
+                _gate_report = getattr(enforce_tag_integrity_gate, "_last_report", None)
+                if _gate_report and _gate_report.get("changed"):
+                    add_log(
+                        "🧯 Tag integrity gate repaired output: "
+                        + "; ".join((_gate_report.get("issues") or [])[:4])
+                    )
 
                 pymupdf_clean_path = output_path.replace(".txt", "_pymupdf_clean.txt")
                 with open(pymupdf_clean_path, "w", encoding="utf-8") as cf:
@@ -6215,6 +7494,20 @@ class BatchWorker:
                         df.write(_diff_report)
                     add_log(f"📋 LLM diff report saved")
 
+                _preclean_guard = getattr(clean_extracted_text, '_last_preclean_guard', None)
+                if _preclean_guard:
+                    guard_path = pymupdf_clean_path.replace("_pymupdf_clean.txt", "_preclean_guard.txt")
+                    with open(guard_path, "w", encoding="utf-8") as gf:
+                        gf.write(_json.dumps(_preclean_guard, indent=2, ensure_ascii=False))
+                    if _preclean_guard.get("ok"):
+                        add_log("✅ Pre-clean guard passed (only line-number artifacts removed)")
+                    else:
+                        add_log(
+                            f"⚠️ Pre-clean guard failed: {_preclean_guard.get('unexpected_removed_count', 0)} unexpected removals",
+                            "warning",
+                        )
+                    add_log(f"📋 Pre-clean guard report saved")
+
                 # Rebuild report context using cleaned text for better anchor matching
                 if pymupdf_report:
                     try:
@@ -6227,10 +7520,49 @@ class BatchWorker:
                     except Exception as _ctx_err:
                         logging.warning(f"Context rebuild failed (non-critical): {_ctx_err}")
 
+                # CO: drop markup the LLM inferred from the all-caps title /
+                # digest.  Markup may only begin at the first body line
+                # numbered "1"; the title block is numbered 101, 102, ….
+                if detected_state and detected_state.upper() == "CO" and pymupdf_text:
+                    from pymupdf_extractor import (
+                        _split_co_deadline_rows,
+                        find_dropped_content,
+                        flatten_markdown_tables,
+                        strip_co_preamble_tags,
+                    )
+                    _before_co = converted_text
+                    converted_text = strip_co_preamble_tags(converted_text, pymupdf_text)
+                    if converted_text != _before_co:
+                        add_log("🏷️ Removed spurious CO preamble tags (markup starts at line 1)")
+                    _before_rows = converted_text
+                    converted_text = _split_co_deadline_rows(converted_text)
+                    if converted_text != _before_rows:
+                        add_log("📐 Restored CO deadline-table row breaks")
+                    _before_md = converted_text
+                    converted_text = flatten_markdown_tables(converted_text)
+                    if converted_text != _before_md:
+                        add_log("📋 Flattened markdown pipe table to plain text rows")
+                    if converted_text != _before_co:
+                        with open(output_path, "w", encoding="utf-8") as f:
+                            f.write(converted_text)
+
+                    _dropped = find_dropped_content(pymupdf_clean_text, converted_text)
+                    if _dropped["missing_count"]:
+                        add_log(
+                            f"🚨 {_dropped['missing_count']} word(s) of source text missing "
+                            f"from the output — " + " | ".join(_dropped["samples"][:2]),
+                            "warning",
+                        )
+
                 # Restore special symbols dropped by Claude vision
                 converted_before = converted_text
                 converted_text = opus.restore_special_symbols(converted_text, pymupdf_clean_text)
                 if converted_text != converted_before:
+                    try:
+                        from pymupdf_extractor import rejoin_mid_sentence_line_breaks as _rejoin_soft_wraps
+                        converted_text = _rejoin_soft_wraps(converted_text)
+                    except Exception:
+                        pass
                     add_log("🔧 Restored special symbols (§ etc.) from PyMuPDF reference")
                     with open(output_path, "w", encoding="utf-8") as f:
                         f.write(converted_text)
@@ -6586,7 +7918,7 @@ def _batch_live_log_fragment():
     _cur_logs = _progress.get('current_logs', [])
     if _cur_logs:
         with st.expander(f"📋 Live Log — {_cur_file}", expanded=True):
-            st.markdown(_build_activity_feed_html(_cur_logs), unsafe_allow_html=True)
+            st.markdown(_build_activity_feed_html(_cur_logs, scrollable=True), unsafe_allow_html=True)
     else:
         st.caption("⏳ Waiting for log output…")
 
@@ -7042,6 +8374,58 @@ def show_single_file_processing():
     
     # Processing progress
     if st.session_state.processing:
+        st.markdown("""
+        <style>
+            /* Processing view: remove excess top whitespace and slim status area. */
+            .main .block-container,
+            .block-container {
+                padding-top: 0.08rem !important;
+            }
+
+            /* Remove default first-row top offset and compress row gaps. */
+            .block-container > div:first-child,
+            .block-container > div:first-child [data-testid="stVerticalBlock"] {
+                margin-top: 0 !important;
+                padding-top: 0 !important;
+            }
+            .block-container [data-testid="stVerticalBlock"] {
+                gap: 0.26rem !important;
+            }
+            .block-container [data-testid="element-container"] {
+                margin-top: 0 !important;
+                margin-bottom: 0.22rem !important;
+                padding-top: 0 !important;
+                padding-bottom: 0 !important;
+            }
+
+            div[data-testid="stAlert"] {
+                border-radius: 8px !important;
+                padding: 0 !important;
+                margin: 0.08rem 0 0.24rem 0 !important;
+            }
+            div[data-testid="stAlert"] > div {
+                padding: 0.34rem 0.58rem !important;
+            }
+            div[data-testid="stAlert"] p,
+            div[data-testid="stAlert"] div,
+            div[data-testid="stAlert"] span {
+                font-size: 0.82rem !important;
+                line-height: 1.16 !important;
+                margin: 0 !important;
+            }
+
+            div[data-testid="stExpander"] summary,
+            div[data-testid="stExpander"] summary p,
+            div[data-testid="stExpander"] details summary {
+                font-size: 0.86rem !important;
+                line-height: 1.2 !important;
+            }
+            div[data-testid="stExpander"] {
+                margin-top: 0.12rem !important;
+            }
+        </style>
+        """, unsafe_allow_html=True)
+
         # No step-icon row / "Step N/M" progress bar at the top — the
         # Activity Log expander below already shows live, timestamped
         # progress with the same information.  Keep only the inline
@@ -7053,7 +8437,7 @@ def show_single_file_processing():
         # Display any logs already collected (e.g. from a previous partial run)
         with log_placeholder.container():
             if st.session_state.processing_logs:
-                st.markdown(_build_activity_feed_html(st.session_state.processing_logs), unsafe_allow_html=True)
+                st.markdown(_build_activity_feed_html(st.session_state.processing_logs, scrollable=True), unsafe_allow_html=True)
         
         # Choose processing method
         _state = st.session_state.get('detected_state', 'AUTO')

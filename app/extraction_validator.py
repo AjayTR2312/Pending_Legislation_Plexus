@@ -106,6 +106,28 @@ def _looks_like_url_or_money_word(text: str, m: "re.Match[str]") -> bool:
     return False
 
 
+def _is_expected_lowercase_line_start(text: str, m: "re.Match[str]") -> bool:
+    """Suppress intentional lower-case line starts that are likely not wraps.
+
+    The mid-sentence wrap detector is intentionally broad so it can catch
+    extraction regressions in many states. This hook allows future precision
+    tuning without touching the regex catalogue. For now, keep it strict and
+    only suppress obvious non-prose contexts.
+    """
+    start = m.start()
+    line_start = text.rfind("\n", 0, start) + 1
+    line_end = text.find("\n", start)
+    if line_end < 0:
+        line_end = len(text)
+
+    line = text[line_start:line_end].strip()
+    # Suppress standalone short headings like "i" or "v" where a lowercase
+    # roman numeral may legitimately start a line.
+    if re.fullmatch(r"[ivx]{1,4}", line):
+        return True
+    return False
+
+
 # --- the catalogue ---------------------------------------------------------
 #
 # IMPORTANT: when adding a new pattern, prefer a regex that is *unlikely*
@@ -228,6 +250,30 @@ _ANTI_PATTERNS: List[_AntiPattern] = [
             "Phase 0 of consolidate_adjacent_tags should have rejoined them."
         ),
         pattern=re.compile(r"\bSec\s*\.\s*\n\s*\d"),
+    ),
+
+    # ── 7b. Mid-sentence hard line break (false paragraph split) ─────
+    # Example:
+    #   "... the express purpose of agency work or\noperations."
+    # In cleaned legislative output, this should be one flowing sentence.
+    # We only look for lowercase/number/comma/close-paren before the break
+    # and lowercase after the break to avoid flagging section/item starts.
+    _AntiPattern(
+        kind="mid_sentence_line_break",
+        severity="warning",
+        description=(
+            "Mid-sentence hard line break detected (sentence/citation "
+            "continues after newline). Indicates paragraph reflow missed "
+            "a wrapped line and split a sentence into two lines."
+        ),
+        pattern=re.compile(
+            r"[a-z0-9,\)][ \t]*\n[ \t]*(?:\[[AD]>[ \t]*)?"
+            r"(?:[a-z]"
+            r"|Section\b|Sections\b|Chapter\b|Part\b|Division\b|Article\b|Subdivision\b"
+            r"|January\b|February\b|March\b|April\b|May\b|June\b|July\b|August\b"
+            r"|September\b|October\b|November\b|December\b)"
+        ),
+        is_false_positive=_is_expected_lowercase_line_start,
     ),
 
     # ── 8. Orphaned tag delimiters ───────────────────────────────────
@@ -456,6 +502,69 @@ def _check_in_italic_section_tags(
     return anomalies
 
 
+def _check_in_italic_tags_outside_printing_code(
+    text: str,
+    state_code: Optional[str],
+    pdf_basename: Optional[str],
+    *,
+    max_hits: int = 50,
+) -> List[ExtractionAnomaly]:
+    """For IN: flag [A>...<A] tags that appear outside PRINTING CODE.
+
+    Indiana policy scopes italic/addition tagging to the PRINTING CODE
+    section only. Any surviving addition tag outside that section should be
+    surfaced in validation as a tag-accuracy error.
+    """
+    if not state_code or state_code.upper() != "IN":
+        return []
+    if not text:
+        return []
+
+    m = _RE_PRINTING_CODE_SECTION.search(text)
+    if m:
+        scope_start, scope_end = m.span(0)
+    else:
+        scope_start, scope_end = -1, -1
+
+    anomalies: List[ExtractionAnomaly] = []
+    for tag_m in re.finditer(r"\[A>(.*?)<A\]", text, flags=re.DOTALL):
+        s = tag_m.start()
+        in_scope = (
+            scope_start >= 0
+            and scope_end >= 0
+            and scope_start <= s < scope_end
+        )
+        if in_scope:
+            continue
+        inner = (tag_m.group(1) or "").strip()
+        if not inner:
+            continue
+
+        start_ctx = max(0, s - _CONTEXT_CHARS)
+        end_ctx = min(len(text), tag_m.end() + _CONTEXT_CHARS)
+        snippet = text[start_ctx:end_ctx].replace("\n", "\\n")
+        anomalies.append(
+            ExtractionAnomaly(
+                kind="in_italic_tag_outside_printing_code",
+                severity="error",
+                description=(
+                    "IN policy violation: [A>...<A] tag appears outside the "
+                    "PRINTING CODE section. Italic/addition tagging must be "
+                    "scoped to PRINTING CODE only."
+                ),
+                snippet=snippet,
+                char_offset=s,
+                page_number=_approximate_page_number(text, s),
+                state_code=state_code,
+                pdf_basename=pdf_basename,
+            )
+        )
+        if len(anomalies) >= max_hits:
+            break
+
+    return anomalies
+
+
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
@@ -539,7 +648,22 @@ def validate_extraction(
                 )
                 break
 
-    out.sort(key=lambda a: a.char_offset)
+    # IN policy checks: both sides of italic_section_only enforcement.
+    # 1) Required tags inside PRINTING CODE.
+    # 2) Forbidden [A>...<A] tags outside PRINTING CODE.
+    out.extend(
+        _check_in_italic_section_tags(
+            text, state_code=state_code, pdf_basename=pdf_basename,
+        )
+    )
+    out.extend(
+        _check_in_italic_tags_outside_printing_code(
+            text,
+            state_code=state_code,
+            pdf_basename=pdf_basename,
+            max_hits=max_per_kind,
+        )
+    )
 
     out.sort(key=lambda a: a.char_offset)
     return out

@@ -30,6 +30,7 @@ Usage:
 import re
 import json
 import logging
+import time
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import List, Optional, Dict
@@ -64,9 +65,46 @@ def _get_anthropic_client():
     import anthropic
 
     payload = {"workspace_id": _TR_WORKSPACE_ID}
-    resp = _requests.post(_TR_ANTHROPIC_TOKEN_URL, json=payload, timeout=30, verify=False)
-    resp.raise_for_status()
-    creds = resp.json()
+    retry_delays = [5, 15, 30]
+    last_err = None
+
+    for attempt, delay in enumerate(retry_delays, start=1):
+        try:
+            resp = _requests.post(
+                _TR_ANTHROPIC_TOKEN_URL,
+                json=payload,
+                timeout=60,
+                verify=False,
+            )
+            resp.raise_for_status()
+            creds = resp.json()
+            break
+        except Exception as exc:
+            last_err = exc
+            err_str = str(exc).lower()
+            retryable = any(k in err_str for k in (
+                "timed out",
+                "timeout",
+                "readtimeout",
+                "connection",
+                "disconnected",
+                "handshake",
+                "500",
+                "502",
+                "503",
+                "504",
+                "529",
+            ))
+            if retryable and attempt < len(retry_delays):
+                log.warning(
+                    "Token gateway request failed (attempt %d/%d): %s. Retrying in %ss...",
+                    attempt, len(retry_delays), str(exc)[:160], delay,
+                )
+                time.sleep(delay)
+                continue
+            raise
+    else:  # pragma: no cover
+        raise last_err if last_err else RuntimeError("Failed to obtain Anthropic token")
 
     if "anthropic_api_key" in creds:
         return anthropic.Anthropic(api_key=creds["anthropic_api_key"])

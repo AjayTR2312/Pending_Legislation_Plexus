@@ -84,7 +84,9 @@ try:
         extract_pdf_json_report, extract_pdf_with_pymupdf,
         highlight_pdf_formatting, clean_extracted_text,
         consolidate_adjacent_tags, _load_state_clean_prompt,
+        enforce_tag_integrity_gate,
         _tag_brackets, _generate_clean_diff_report,
+        _lock_tag_boundaries, _unlock_tag_boundaries, TAG_LOCK_PROMPT,
         _strip_ct_header_tags, _strip_ct_compact_designator,
         _strip_ct_false_underline_headings, _fix_midword_page_break_tags,
         _strip_false_footer_line_underline, _strip_ct_analysis_section_tags,
@@ -99,12 +101,14 @@ try:
         _strip_fl_repeated_headers,
         pre_merge_paragraph_tags, _clean_tagged_text,
         remove_nested_tags, merge_split_tags, split_tagged_subsections,
+        split_ar_subsection_welds,
         split_renumber_paragraph_breaks, split_numbered_item_paragraph_welds,
         rejoin_amendment_intro_breaks,
         rejoin_inline_renumber_list_breaks,
         _split_merged_grant_tag_rows,
         _split_tabular_tag_at_dollar,
         _split_tabular_header_from_data,
+        _normalize_ar_page1_header,
     )
     _HAS_PYMUPDF = True
 except ImportError:
@@ -934,7 +938,10 @@ def pdf_pages_to_images(pdf_path, dpi=400, trim_borders=True, border_percent=5, 
 def convert_pdf_to_text(client, pdf_path, prompt, batch_size=None, dpi=400):
     """
     Convert PDF to text using Claude API with visual interpretation.
-    Processes all pages in a single API call for maximum consistency.
+
+    Pages are processed in chunks (default 15 pages per request) to avoid
+    Anthropic payload-size failures (HTTP 413). If a chunk still exceeds the
+    request size, the chunk is automatically retried with a smaller size.
  
     Args:
         client: Anthropic client instance
@@ -958,71 +965,135 @@ def convert_pdf_to_text(client, pdf_path, prompt, batch_size=None, dpi=400):
  
         total_pages = len(page_images)
        
-        # Build content array with ALL pages
-        content = []
-        for img_b64 in page_images:
-            content.append({
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": "image/png",
-                    "data": img_b64,
-                },
-            })
- 
-        # Add prompt
-        content.append({
-            "type": "text",
-            "text": prompt
-        })
-
         # Log full prompt for debugging
         logging.info(f"📝 FULL CONVERSION PROMPT ({len(prompt)} chars):\n{prompt}")
- 
-        messages = [{"role": "user", "content": content}]
- 
-        # Call Claude API with streaming - ALL PAGES AT ONCE
-        logging.info(f"🤖 Processing all {total_pages} pages in single API call...")
- 
-        # Retry loop for transient overload / server errors
-        max_retries = 5
-        retry_delays = [10, 30, 60, 120, 180]  # seconds between retries
-        converted_text = ""
-        for attempt in range(max_retries):
-            try:
-                converted_text = ""
-                with client.messages.stream(
-                    model="claude-opus-4-6",
-                    max_tokens=128000,
-                    temperature=0,
-                    messages=messages
-                ) as stream:
-                    for text in stream.text_stream:
-                        converted_text += text
-                    final_msg = stream.get_final_message()
-                    _track_usage("Visual Conversion", final_msg.usage)
-                break  # success — exit retry loop
-            except Exception as e:
-                err_str = str(e).lower()
-                is_retryable = (
-                    "overloaded" in err_str
-                    or "timed out" in err_str
-                    or "timeout" in err_str
-                    or "connection" in err_str
-                    or "disconnected" in err_str
-                    or "529" in err_str
-                    or "500" in err_str
-                    or "502" in err_str
-                    or "503" in err_str
-                    or "504" in err_str
+
+        # Start at 15 pages/chunk by default (can override with env var).
+        # If a chunk hits HTTP 413/request_too_large, we automatically shrink.
+        try:
+            initial_chunk_pages = int(os.environ.get("VISUAL_CHUNK_PAGES", "15"))
+        except Exception:
+            initial_chunk_pages = 15
+        initial_chunk_pages = max(1, initial_chunk_pages)
+
+        def _is_413_payload_error(exc: Exception) -> bool:
+            s = str(exc).lower()
+            return (
+                "413" in s
+                or "request_too_large" in s
+                or "payload too large" in s
+                or "request exceeds the maximum size" in s
+            )
+
+        def _run_chunk(page_start_idx: int, page_end_idx_exclusive: int, chunk_no: int, total_chunks_est: int) -> str:
+            chunk_images = page_images[page_start_idx:page_end_idx_exclusive]
+            page_start_1 = page_start_idx + 1
+            page_end_1 = page_end_idx_exclusive
+
+            chunk_prompt = (
+                f"[Chunk {chunk_no}/{total_chunks_est}: pages {page_start_1}-{page_end_1} of {total_pages}. "
+                f"Convert only these pages in order. Preserve exact text and formatting tags.]\n\n"
+                f"{prompt}"
+            )
+
+            content = []
+            for img_b64 in chunk_images:
+                content.append({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": img_b64,
+                    },
+                })
+            content.append({"type": "text", "text": chunk_prompt})
+            messages = [{"role": "user", "content": content}]
+
+            # Retry loop for transient overload / server errors
+            max_retries = 5
+            retry_delays = [10, 30, 60, 120, 180]
+            chunk_text = ""
+            for attempt in range(max_retries):
+                try:
+                    chunk_text = ""
+                    with client.messages.stream(
+                        model="claude-opus-4-6",
+                        max_tokens=128000,
+                        temperature=0,
+                        messages=messages
+                    ) as stream:
+                        for text in stream.text_stream:
+                            chunk_text += text
+                        final_msg = stream.get_final_message()
+                        _track_usage(f"Visual Conversion Chunk {chunk_no}", final_msg.usage)
+                    return chunk_text
+                except Exception as e:
+                    err_str = str(e).lower()
+                    is_retryable = (
+                        "overloaded" in err_str
+                        or "timed out" in err_str
+                        or "timeout" in err_str
+                        or "connection" in err_str
+                        or "disconnected" in err_str
+                        or "529" in err_str
+                        or "500" in err_str
+                        or "502" in err_str
+                        or "503" in err_str
+                        or "504" in err_str
+                    )
+                    if is_retryable and attempt < max_retries - 1:
+                        delay = retry_delays[attempt]
+                        logging.warning(
+                            f"  ⚠️  API error (chunk {chunk_no}, attempt {attempt+1}/{max_retries}): "
+                            f"{err_str[:120]}. Retrying in {delay}s..."
+                        )
+                        print(
+                            f"  ⚠️  API error — retrying in {delay}s "
+                            f"(chunk {chunk_no}, attempt {attempt+1}/{max_retries})..."
+                        )
+                        time.sleep(delay)
+                    else:
+                        raise
+
+        logging.info(
+            f"🤖 Processing {total_pages} pages in chunked visual mode "
+            f"(start chunk size={initial_chunk_pages})..."
+        )
+
+        converted_parts = []
+        page_idx = 0
+        chunk_no = 0
+        est_total_chunks = max(1, (total_pages + initial_chunk_pages - 1) // initial_chunk_pages)
+
+        while page_idx < total_pages:
+            remaining = total_pages - page_idx
+            chunk_size = min(initial_chunk_pages, remaining)
+
+            while True:
+                chunk_no += 1
+                end_idx = page_idx + chunk_size
+                logging.info(
+                    f"📦 Visual chunk {chunk_no}: pages {page_idx + 1}-{end_idx} "
+                    f"(size={chunk_size})"
                 )
-                if is_retryable and attempt < max_retries - 1:
-                    delay = retry_delays[attempt]
-                    logging.warning(f"  ⚠️  API error (attempt {attempt+1}/{max_retries}): {err_str[:120]}. Retrying in {delay}s...")
-                    print(f"  ⚠️  API error — retrying in {delay}s (attempt {attempt+1}/{max_retries})...")
-                    time.sleep(delay)
-                else:
-                    raise  # non-retryable or out of retries
+                try:
+                    part = _run_chunk(page_idx, end_idx, chunk_no, est_total_chunks)
+                    converted_parts.append(part.strip())
+                    page_idx = end_idx
+                    break
+                except Exception as e:
+                    if _is_413_payload_error(e) and chunk_size > 1:
+                        new_chunk_size = max(1, chunk_size // 2)
+                        logging.warning(
+                            f"⚠️ Chunk {chunk_no} exceeded request size (413). "
+                            f"Reducing chunk size {chunk_size} -> {new_chunk_size} and retrying."
+                        )
+                        chunk_no -= 1  # retry same logical chunk number
+                        chunk_size = new_chunk_size
+                        continue
+                    raise
+
+        converted_text = "\n\n".join(p for p in converted_parts if p)
 
         # Log total runtime
         total_time = time.time() - start_time
@@ -1317,7 +1388,11 @@ def _strip_repeating_page_artifacts(text: str) -> str:
     return '\n'.join(out_lines)
 
 
-def _split_text_into_chunks(text, max_chars=40000, overlap_chars=2000):
+# Tag-lock placeholders must never be split across a chunk boundary.
+_RE_LOCK_TOKEN_ATOMIC = re.compile(r"@@T\d+@@")
+
+
+def _split_text_into_chunks(text, max_chars=40000, overlap_chars=2000, atomic_re=None):
     """
     Split extracted text into chunks at section/paragraph boundaries.
     
@@ -1333,12 +1408,29 @@ def _split_text_into_chunks(text, max_chars=40000, overlap_chars=2000):
         text (str): Full extracted text
         max_chars (int): Target max characters per chunk (~10K tokens)
         overlap_chars (int): Characters of overlap between chunks
+        atomic_re (re.Pattern): Optional pattern whose matches must never be
+            split across a chunk boundary (used for ``@@Tn@@`` tag-lock
+            placeholders — the overlap start is an arbitrary character
+            offset and would otherwise land mid-token).
 
     Returns:
         list[str]: Text chunks with overlap
     """
     if len(text) <= max_chars:
         return [text]
+
+    atomic_spans = (
+        [(m.start(), m.end()) for m in atomic_re.finditer(text)] if atomic_re else []
+    )
+
+    def _off_atomic(idx):
+        """Move *idx* back to the start of any atomic span it falls inside."""
+        for s, e in atomic_spans:
+            if s >= idx:
+                break
+            if s < idx < e:
+                return s
+        return idx
 
     # Regex for section-level split points
     section_re = re.compile(
@@ -1373,10 +1465,13 @@ def _split_text_into_chunks(text, max_chars=40000, overlap_chars=2000):
         # Last resort: hard cut
         if split_at is None or split_at <= pos:
             split_at = end
+        split_at = _off_atomic(split_at)
+        if split_at <= pos:
+            split_at = end
 
         chunks.append(text[pos:split_at])
         # Next chunk starts `overlap_chars` before the split point
-        pos = max(split_at - overlap_chars, pos + 1)
+        pos = max(_off_atomic(max(split_at - overlap_chars, 0)), pos + 1)
 
     logging.info(f"📐 Split text ({len(text):,} chars) into {len(chunks)} chunks "
                  f"(max {max_chars:,}, overlap {overlap_chars:,})")
@@ -1446,6 +1541,14 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         # are handled post-LLM by _strip_false_footer_line_underline instead.
         # if state_code and state_code.upper() == "CT":
         #     raw_text = _strip_ct_raw_footer_line_tags(raw_text)
+        if flags.get("mark_brackets") and state_code and state_code.upper() == "CT":
+            _before_ct_bracket_tag = len(raw_text)
+            raw_text = _tag_brackets(raw_text)
+            if len(raw_text) != _before_ct_bracket_tag:
+                logging.info(
+                    f"   🏷️  CT bracket deletions tagged pre-LLM: "
+                    f"{_before_ct_bracket_tag:,} → {len(raw_text):,} chars"
+                )
 
         # ── Pre-merge per-line tags into paragraph-level tags (FL only) ─
         # Uses the PDF’s own \n vs \n\n signals as ground truth:
@@ -1535,14 +1638,32 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         except Exception as _meta_err:
             logging.warning(f"   ⚠️ Metadata generation failed: {_meta_err}")
 
-        # ── Step 2: Split into chunks ────────────────────────────────
-        # _llm_text already has TABLE markers stripped
-        chunks = _split_text_into_chunks(_llm_text, max_chars=40000, overlap_chars=2000)
-        total_chunks = len(chunks)
-        logging.info(f"   📐 Split into {total_chunks} chunk(s)")
-
         # ── Step 3: Clean each chunk with LLM ────────────────────────
         system_prompt = _load_state_clean_prompt(state_code)
+
+        # ── Tag-boundary lock (CT) ───────────────────────────────────
+        # One shared token map across ALL chunks so the same span always
+        # carries the same placeholder inside the overlap region — that keeps
+        # `_merge_cleaned_chunks` stitching on identical text.  CT brackets
+        # were already wrapped in [D>…<D] above, so `lock_brackets` is not
+        # needed here (unlike the Extract+Clean path).
+        _lock_tokens = []
+        if state_code and state_code.upper() == "CT":
+            _llm_text, _lock_tokens = _lock_tag_boundaries(_llm_text)
+            if _lock_tokens:
+                system_prompt = system_prompt + TAG_LOCK_PROMPT
+                logging.info(
+                    f"   🔒 Tag-boundary lock: {len(_lock_tokens)} span(s) hidden from the LLM"
+                )
+
+        # ── Step 2: Split into chunks ────────────────────────────────
+        # _llm_text already has TABLE markers stripped
+        chunks = _split_text_into_chunks(
+            _llm_text, max_chars=40000, overlap_chars=2000,
+            atomic_re=_RE_LOCK_TOKEN_ATOMIC if _lock_tokens else None,
+        )
+        total_chunks = len(chunks)
+        logging.info(f"   📐 Split into {total_chunks} chunk(s)")
 
         cleaned_chunks = []
         max_retries = 5
@@ -1676,6 +1797,24 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         else:
             merged = _merge_cleaned_chunks(cleaned_chunks)
 
+        # ── Restore locked tag spans (must precede all tag post-processing) ─
+        convert_pdf_hybrid_text._last_tag_lock = None
+        if _lock_tokens:
+            merged, _lock_report = _unlock_tag_boundaries(merged, _lock_tokens)
+            convert_pdf_hybrid_text._last_tag_lock = _lock_report
+            if _lock_report["missing_count"] or _lock_report["duplicated_count"]:
+                logging.warning(
+                    f"   🔓 Tag-boundary lock: {_lock_report['restored']}/{_lock_report['total']} "
+                    f"placeholder(s) restored, {_lock_report['missing_count']} dropped by the LLM, "
+                    f"{_lock_report['duplicated_count']} duplicated by chunk stitching"
+                )
+                for _sample in _lock_report["missing_samples"][:10]:
+                    logging.warning(f"      dropped_tag_span: {_sample}")
+            else:
+                logging.info(
+                    f"   🔓 Tag-boundary lock: all {_lock_report['total']} span(s) restored intact"
+                )
+
         # ── Step 5: Post-processing (same as visual mode) ────────────
         # Generate diff report: what did the LLM change?
         diff_report = _generate_clean_diff_report(raw_text, merged, stage="Hybrid LLM Clean")
@@ -1714,10 +1853,10 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
             ])
         convert_pdf_hybrid_text._last_chunks_report = "\n".join(_chunks_report_lines)
 
-        # Bracket tagging runs AFTER LLM and AFTER CT-specific fixes to avoid
-        # confusing the LLM with nested [D>[…]<D] structures, and to ensure
-        # CT analysis-section tag-stripping doesn't remove bracket [D> tags.
-        if flags.get("mark_brackets"):
+        # Bracket tagging remains post-LLM for non-CT states.
+        # CT bracket tagging now runs pre-LLM (above) to keep boundaries
+        # stable and avoid misplaced tag reconstruction.
+        if flags.get("mark_brackets") and not (state_code and state_code.upper() == "CT"):
             merged = _tag_brackets(merged)
 
         # CT-specific deterministic fixes
@@ -1730,9 +1869,8 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
             merged = _strip_ct_analysis_section_tags(merged)
             merged = _strip_false_subsection_d_tags(merged)
             merged = _restructure_ct_header(merged)
-            # Re-run bracket tagging after analysis-section stripping
-            # removed [D> tags from legitimate bracket deletions
-            merged = _tag_brackets(merged)
+            # CT bracket-tagging is intentionally not re-run post-LLM.
+            # Tags are injected pre-LLM so cleanup preserves boundaries.
 
         # IN-specific: strip false headers, footers, barcodes, year lines
         if state_code and state_code.upper() == "IN":
@@ -1792,6 +1930,8 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         merged = consolidate_adjacent_tags(merged, state_code=state_code)
         merged = remove_nested_tags(merged)
         merged = merge_split_tags(merged)
+        if state_code and state_code.upper() == "AR":
+            merged = split_ar_subsection_welds(merged)
         if state_code and state_code.upper() == "IA":
             merged = _split_tagged_subsections_safe(merged)
         # Restore paragraph breaks at renumber-only [D>(N)<D] [A>(M)<A] /
@@ -1859,6 +1999,16 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         # heading lines (e.g. "ECONOMIC DEVELOPMENT PROGRAMS\n
         # CONFORMING CHANGES") with only \n instead of \n\n.
         merged = _split_consecutive_caps_heading_lines(merged)
+
+        # Final integrity gate: no-op for already-valid text; deterministic
+        # repair only when malformed delimiters or CT literal brackets exist.
+        merged = enforce_tag_integrity_gate(merged, state_code=state_code)
+        _gate_report = getattr(enforce_tag_integrity_gate, "_last_report", None)
+        if _gate_report and _gate_report.get("changed"):
+            logging.warning(
+                "Hybrid integrity gate repaired output: %s",
+                "; ".join((_gate_report.get("issues") or [])[:4]),
+            )
 
         total_time = time.time() - start_time
         minutes = int(total_time // 60)
@@ -2158,6 +2308,13 @@ def _merge_page_break_paragraph_splits(text, state_code=None):
     """
     _is_fl = state_code and state_code.upper() == "FL"
     _is_ct = state_code and state_code.upper() == "CT"
+    # CO tags added text in ALL CAPS, so a page-break continuation almost
+    # always starts with an uppercase letter (e.g. "...INCLUDE<A]" /
+    # "[A>PRINCIPAL AND INTEREST...").  The default branch below requires
+    # B to start lowercase, which never matches CO's uppercase convention
+    # and leaves every such split unmerged.  Route CO through the same
+    # uppercase-tolerant merge logic used for FL.
+    _is_upper_continuation_state = _is_fl or (state_code and state_code.upper() == "CO")
 
     _BARE_SUBSEC = re.compile(r'^[a-z]\.\s')
     _TAG_STRIP   = re.compile(r'\[([AD])>|<([AD])\]')
@@ -2227,14 +2384,27 @@ def _merge_page_break_paragraph_splits(text, state_code=None):
                             re.search(r'\b(?:in|under|of|per|to|see)\s*$', text_before, re.IGNORECASE)
                             and re.match(r'[sS]\.\s+\d', inner)
                         )
+                    # CO-specific: text_before ends with "SUBSECTION" /
+                    # "SECTION" / "ARTICLE" (a dangling statute-reference
+                    # keyword) and inner opens with the reference number
+                    # itself, e.g. "…PURSUANT TO SUBSECTION" | "(11)(a)
+                    # OF THIS SECTION, THE STATE BOARD…".  That "(11)"
+                    # is the object of the reference, not a new
+                    # subsection heading, so it must not block the merge.
+                    elif (state_code and state_code.upper() == "CO"
+                            and _SUBSEC_OR_SECTION.match(inner)):
+                        _skip_subsec_guard = bool(
+                            re.search(r'\b(?:SUBSECTION|SECTION|ARTICLE)$', text_before)
+                        )
                     if _SUBSEC_OR_SECTION.match(inner) and not _skip_subsec_guard:
                         continue
                     # Guard: section-header delimiter (em/en dash)
                     if text_before[-1] in '\u2014\u2013':
                         continue
                     has_terminal = text_before[-1] in '.!?:;'
-                    if _is_fl:
-                        # ── FL-specific enhanced merging ──────────────
+                    if _is_upper_continuation_state:
+                        # ── FL/CO enhanced merging (tolerates uppercase
+                        # continuations) ───────────────────────────────
                         if not has_terminal:
                             # Guard: list-item conclusion pattern.
                             # When the paragraph starts with a letter
@@ -2248,8 +2418,14 @@ def _merge_page_break_paragraph_splits(text, state_code=None):
                             #    (c) …; or (d) …false information,
                             #
                             #    commits a felony …"
-                            # Do NOT merge.
-                            if (not _p1a_active
+                            # Do NOT merge.  FL-only: CO's all-caps
+                            # subsection items (e.g. "(h) ENTER INTO
+                            # CONTRACTS …OWNERSHIP,") legitimately wrap
+                            # a comma mid-clause across a page break and
+                            # must still merge — CO has no lowercase
+                            # "list conclusion" prose to guard against.
+                            if (_is_fl
+                                    and not _p1a_active
                                     and text_before.rstrip()[-1:] == ','
                                     and re.match(
                                         r'\([a-z]\)\s',
@@ -2273,6 +2449,24 @@ def _merge_page_break_paragraph_splits(text, state_code=None):
                         # complete unit and the next tag is genuinely
                         # separate (SB 1028 / SB 1332 regression guard).
                         if _p1a_active:
+                            curr = text_before + ' ' + nxt_s[len(open_tag):]
+                            i += 1
+                            merge_count += 1
+                            did_merge = True
+                            break
+                        # CO-only: a ";" is a clause separator, not a
+                        # sentence end, when the continuation opens
+                        # with a subordinating/qualifying conjunction
+                        # ("EXCEPT THAT the board may extend...").
+                        # Vision-mode CO output isn't LLM-assembled
+                        # into complete paragraph units the way FL's
+                        # hybrid text is, so the SB 1028/1332 guard
+                        # above doesn't apply here.
+                        if (state_code and state_code.upper() == "CO"
+                                and text_before[-1] == ';'
+                                and re.match(
+                                    r'(?:EXCEPT|PROVIDED|UNLESS|SUBJECT\s+TO)\b',
+                                    inner, re.IGNORECASE)):
                             curr = text_before + ' ' + nxt_s[len(open_tag):]
                             i += 1
                             merge_count += 1
@@ -2308,7 +2502,9 @@ def _merge_page_break_paragraph_splits(text, state_code=None):
                         and not nxt_s.startswith('[A>')
                         and not nxt_s.startswith('[D>')):
                     inner = nxt_s.lstrip()
-                    if not inner or not inner[0].islower():
+                    if not inner:
+                        continue
+                    if not inner[0].islower() and not _is_upper_continuation_state:
                         continue
                     if _BARE_SUBSEC.match(inner):
                         continue
@@ -2318,8 +2514,17 @@ def _merge_page_break_paragraph_splits(text, state_code=None):
                     # A's tag-stripped content must be substantial
                     if len(_TAG_STRIP.sub('', text_before).strip()) < 40:
                         continue
-                    # Merge: strip close tag from A, keep B as-is
-                    curr = text_before + ' ' + nxt_s
+                    if _is_upper_continuation_state and inner[0].isupper():
+                        # CO/FL: the vision/LLM pass dropped the tag
+                        # wrapper around a short trailing continuation
+                        # (e.g. a lone "AND" closing a list item) even
+                        # though it's genuinely part of the same added
+                        # span — pull it back inside the tag instead of
+                        # leaving it as untagged plain text.
+                        curr = text_before + ' ' + inner + close_tag
+                    else:
+                        # Merge: strip close tag from A, keep B as-is
+                        curr = text_before + ' ' + nxt_s
                     i += 1
                     merge_count += 1
                     did_merge = True
@@ -3533,7 +3738,13 @@ def _restore_merged_lines(text, reference_text):
     return '\n'.join(result)
 
 
-def deterministic_cleanup(text, state_config=None, state_code=None, reference_text=None):
+def deterministic_cleanup(
+    text,
+    state_config=None,
+    state_code=None,
+    reference_text=None,
+    apply_structural_passes=True,
+):
     """
     Apply deterministic fixes for common Claude output inconsistencies.
     These are formatting errors that Claude makes intermittently regardless
@@ -3962,11 +4173,15 @@ def deterministic_cleanup(text, state_config=None, state_code=None, reference_te
                 fix_log.append(f"ALL-CAPS enforcement: split mixed tags into {n_now - n_orig + n_orig} CAPS-only segments")
             logging.info(f"🔧 ALL-CAPS tag enforcement: {n_orig} → {n_now} [A>] tags")
 
-    # ── Final: Fix cross-type overlaps, remove nested tags, merge mid-sentence splits, then split at subsection boundaries ──
-    text = fix_overlapping_cross_tags(text)
-    text = remove_nested_tags(text)
-    text = merge_split_tags(text)
-    text = split_tagged_subsections(text)
+    # ── Final structural passes (optional) ─────────────────────────────
+    # Hybrid conversion already runs a full structural chain inside
+    # convert_pdf_hybrid_text. Re-running the same operations here can
+    # over-shape tags, so callers may disable this pass.
+    if apply_structural_passes:
+        text = fix_overlapping_cross_tags(text)
+        text = remove_nested_tags(text)
+        text = merge_split_tags(text)
+        text = split_tagged_subsections(text)
 
     # ── Absolute last step: split tabular tags at column boundaries ──
     # DE-specific: re-split multi-row merged tags, then split single
@@ -3976,7 +4191,7 @@ def deterministic_cleanup(text, state_config=None, state_code=None, reference_te
     # _split_tabular_tag_at_dollar then handles remaining single-dollar
     # "Label $ Amount" tags (e.g. [A>TOTAL - Secretary $ 3,880,543<A]).
     # Scoped to DE + IN so prose tags in other states are never split.
-    if _HAS_PYMUPDF and state_code and state_code.upper() in ("DE", "IN"):
+    if apply_structural_passes and _HAS_PYMUPDF and state_code and state_code.upper() in ("DE", "IN"):
         text = _split_merged_grant_tag_rows(text)
         text = _split_tabular_header_from_data(text)
         text = _split_tabular_tag_at_dollar(text)
@@ -3988,11 +4203,22 @@ def deterministic_cleanup(text, state_config=None, state_code=None, reference_te
     if reference_text:
         text = _restore_merged_lines(text, reference_text)
 
-    # ── Final: collapse double/triple spaces between words ────────
-    # Preserves 4+ space gaps (intentional table/column alignment)
-    text = re.sub(r'(?<=\S) {2,3}(?=\S)', ' ', text)
-    # Rejoin line-break hyphenations: "export- limiting" → "export-limiting"
-    text = re.sub(r'(\w)- (\w)', r'\1-\2', text)
+    # ── AR page-1 layout normalization ─────────────────────────────
+    # Hybrid stitching can flatten the title/header block on Arkansas bills
+    # even when the extractor produced the correct line breaks. Reapply the
+    # canonical page-1 layout here so the final stitched output keeps the
+    # header as separate lines instead of collapsing it into the body text.
+    if state_code and state_code.upper() == 'AR':
+        text = _normalize_ar_page1_header(text)
+
+    # ── Final spacing normalization (visual/legacy only) ───────────
+    # In hybrid mode (apply_structural_passes=False), preserve the exact
+    # cleaned-chunk layout, including table spacing, in the final output.
+    if apply_structural_passes:
+        # Preserves 4+ space gaps (intentional table/column alignment)
+        text = re.sub(r'(?<=\S) {2,3}(?=\S)', ' ', text)
+        # Rejoin line-break hyphenations: "export- limiting" → "export-limiting"
+        text = re.sub(r'(\w)- (\w)', r'\1-\2', text)
 
     return text
 
@@ -4379,6 +4605,7 @@ def main():
     converted_text = deterministic_cleanup(
         converted_text, state_config=state_config, state_code=state_code,
         reference_text=_reference_text,
+        apply_structural_passes=not hybrid_mode,
     )
 
     # Post-process: fix Iowa signature block layout

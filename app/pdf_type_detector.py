@@ -20,6 +20,33 @@ logging.basicConfig(
 )
 
 
+def _iter_image_xobjects(xobject_dict, depth=0, max_depth=4):
+    """Yield every /Image XObject in xobject_dict, recursing into /Form XObjects.
+
+    Scanned pages sometimes wrap the page image inside a /Form XObject
+    (e.g. a single form named /Xi0) instead of exposing the /Image
+    directly on the page's own /Resources/XObject. A shallow dict scan
+    misses these entirely, so this walks nested Form resources too.
+    """
+    if depth > max_depth:
+        return
+    for obj_name in xobject_dict:
+        try:
+            obj = xobject_dict[obj_name].get_object()
+            subtype = obj.get('/Subtype')
+            if subtype == '/Image':
+                yield obj
+            elif subtype == '/Form':
+                form_res = obj.get('/Resources')
+                if form_res is not None:
+                    form_res = form_res.get_object()
+                    if '/XObject' in form_res:
+                        nested = form_res['/XObject'].get_object()
+                        yield from _iter_image_xobjects(nested, depth + 1, max_depth)
+        except Exception:
+            continue
+
+
 def detect_pdf_type(pdf_path, min_text_threshold=50):
     """
     Detect if a PDF is scanned (image-based) or digital (text-based).
@@ -84,80 +111,86 @@ def detect_pdf_type(pdf_path, min_text_threshold=50):
             if '/Resources' in page and '/XObject' in page['/Resources']:
                 try:
                     xobjects = page['/Resources']['/XObject'].get_object()
-                    for obj_name in xobjects:
+                    # Scanned pages are sometimes wrapped in a /Form XObject
+                    # (e.g. an OCR layer's page image nested under a single
+                    # form like /Xi0) rather than exposed directly as an
+                    # /Image on the page's own /Resources. A shallow scan
+                    # then sees Subtype=='/Form' and misses the image
+                    # entirely, misclassifying a scanned page as digital
+                    # text (the OCR text layer still extracts real chars).
+                    # Recurse into /Form XObjects to find nested images.
+                    for obj in _iter_image_xobjects(xobjects):
                         try:
-                            obj = xobjects[obj_name]
-                            if obj['/Subtype'] == '/Image':
-                                has_images = True
-                                has_embedded_images = True
-                                image_count += 1
+                            has_images = True
+                            has_embedded_images = True
+                            image_count += 1
+
+                            # Try to get image dimensions and DPI to classify type
+                            try:
+                                width = obj.get('/Width', 0)
+                                height = obj.get('/Height', 0)
                                 
-                                # Try to get image dimensions and DPI to classify type
+                                # Calculate DPI if possible
+                                # DPI = pixels / inches
+                                # PDF uses points (1/72 inch), so we need page dimensions
+                                dpi = None
+                                coverage_ratio = 0  # How much of the page does this image cover?
                                 try:
-                                    width = obj.get('/Width', 0)
-                                    height = obj.get('/Height', 0)
+                                    # Get page dimensions in points
+                                    page_box = page.mediabox
+                                    page_width_pts = float(page_box.width)
+                                    page_height_pts = float(page_box.height)
                                     
-                                    # Calculate DPI if possible
-                                    # DPI = pixels / inches
-                                    # PDF uses points (1/72 inch), so we need page dimensions
-                                    dpi = None
-                                    coverage_ratio = 0  # How much of the page does this image cover?
-                                    try:
-                                        # Get page dimensions in points
-                                        page_box = page.mediabox
-                                        page_width_pts = float(page_box.width)
-                                        page_height_pts = float(page_box.height)
-                                        
-                                        # Convert to inches (1 point = 1/72 inch)
-                                        page_width_inches = page_width_pts / 72.0
-                                        page_height_inches = page_height_pts / 72.0
-                                        
-                                        # Calculate DPI (assuming image covers most of page)
-                                        if page_width_inches > 0 and page_height_inches > 0:
-                                            dpi_x = width / page_width_inches
-                                            dpi_y = height / page_height_inches
-                                            dpi = (dpi_x + dpi_y) / 2  # Average DPI
-                                            
-                                            # Calculate coverage ratio (what % of page is this image?)
-                                            # If image has similar dimensions to page, it's likely a full-page scan
-                                            coverage_ratio = min(dpi_x / 72.0, dpi_y / 72.0)
-                                            
-                                            # Log DPI for analysis
-                                            logging.debug(f"  Image {image_count}: {width}x{height}px, DPI={dpi:.1f}, coverage={coverage_ratio:.2f}")
-                                            
-                                            # High DPI (>150) suggests scanned document
-                                            if dpi > 150:
-                                                high_dpi_images += 1
-                                                logging.info(f"  HIGH DPI IMAGE detected: {width}x{height}px, DPI={dpi:.1f}")
-                                            
-                                            # Medium-high DPI (100-150) with high coverage also suggests scan
-                                            elif dpi > 100 and coverage_ratio > 0.8:
-                                                high_dpi_images += 1
-                                                logging.info(f"  MEDIUM-HIGH DPI IMAGE with full coverage: {width}x{height}px, DPI={dpi:.1f}, coverage={coverage_ratio:.2f}")
-                                    except:
-                                        pass
+                                    # Convert to inches (1 point = 1/72 inch)
+                                    page_width_inches = page_width_pts / 72.0
+                                    page_height_inches = page_height_pts / 72.0
                                     
-                                    # Large images (likely scanned pages): Multiple thresholds
-                                    # Threshold 1: Traditional large image (> 500px in both dimensions)
-                                    if width > 500 and height > 500:
-                                        large_images += 1
-                                    # Threshold 2: Medium image with high aspect ratio similar to page (portrait/landscape scan)
-                                    elif width > 400 and height > 400:
-                                        aspect_ratio = width / height if height > 0 else 0
-                                        # Check if aspect ratio is page-like (portrait: 0.7-0.85, landscape: 1.2-1.5)
-                                        if (0.65 < aspect_ratio < 0.9) or (1.1 < aspect_ratio < 1.6):
-                                            large_images += 1
-                                            logging.info(f"  MEDIUM IMAGE with page-like aspect: {width}x{height}px, ratio={aspect_ratio:.2f}")
-                                    # Small images (likely signatures, logos, diagrams): < 400px or non-page-like
-                                    elif width > 0 and height > 0:
-                                        small_images += 1
+                                    # Calculate DPI (assuming image covers most of page)
+                                    if page_width_inches > 0 and page_height_inches > 0:
+                                        dpi_x = width / page_width_inches
+                                        dpi_y = height / page_height_inches
+                                        dpi = (dpi_x + dpi_y) / 2  # Average DPI
                                         
-                                        # Likely signature if small and horizontal
-                                        if width > height and width < 800 and height < 200:
-                                            has_signatures = True
-                                            
+                                        # Calculate coverage ratio (what % of page is this image?)
+                                        # If image has similar dimensions to page, it's likely a full-page scan
+                                        coverage_ratio = min(dpi_x / 72.0, dpi_y / 72.0)
+                                        
+                                        # Log DPI for analysis
+                                        logging.debug(f"  Image {image_count}: {width}x{height}px, DPI={dpi:.1f}, coverage={coverage_ratio:.2f}")
+                                        
+                                        # High DPI (>150) suggests scanned document
+                                        if dpi > 150:
+                                            high_dpi_images += 1
+                                            logging.info(f"  HIGH DPI IMAGE detected: {width}x{height}px, DPI={dpi:.1f}")
+                                        
+                                        # Medium-high DPI (100-150) with high coverage also suggests scan
+                                        elif dpi > 100 and coverage_ratio > 0.8:
+                                            high_dpi_images += 1
+                                            logging.info(f"  MEDIUM-HIGH DPI IMAGE with full coverage: {width}x{height}px, DPI={dpi:.1f}, coverage={coverage_ratio:.2f}")
                                 except:
                                     pass
+                                
+                                # Large images (likely scanned pages): Multiple thresholds
+                                # Threshold 1: Traditional large image (> 500px in both dimensions)
+                                if width > 500 and height > 500:
+                                    large_images += 1
+                                # Threshold 2: Medium image with high aspect ratio similar to page (portrait/landscape scan)
+                                elif width > 400 and height > 400:
+                                    aspect_ratio = width / height if height > 0 else 0
+                                    # Check if aspect ratio is page-like (portrait: 0.7-0.85, landscape: 1.2-1.5)
+                                    if (0.65 < aspect_ratio < 0.9) or (1.1 < aspect_ratio < 1.6):
+                                        large_images += 1
+                                        logging.info(f"  MEDIUM IMAGE with page-like aspect: {width}x{height}px, ratio={aspect_ratio:.2f}")
+                                # Small images (likely signatures, logos, diagrams): < 400px or non-page-like
+                                elif width > 0 and height > 0:
+                                    small_images += 1
+                                    
+                                    # Likely signature if small and horizontal
+                                    if width > height and width < 800 and height < 200:
+                                        has_signatures = True
+                                        
+                            except:
+                                pass
                         except:
                             continue
                 except:

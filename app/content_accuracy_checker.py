@@ -116,6 +116,9 @@ _RE_SPACED_HEADER = re.compile(
     re.IGNORECASE,
 )
 _RE_HYPHEN_REJOIN = re.compile(r"^(\S+)-$")  # word ending with hyphen
+_RE_LINE_MARKER_STD = re.compile(r"^\s*line\s+\d{1,3}\s*$", re.IGNORECASE)
+_RE_LINE_MARKER_REV = re.compile(r"^\s*\d{1,3}\s+line\s*$", re.IGNORECASE)
+_RE_BARE_PAGE_NUM_LINE = re.compile(r"^\s*\d{1,4}\s*$")
 _RE_HEADER_WORDS = re.compile(
     r"(?:State\s+of|HOUSE\s+BILL|SENATE\s+BILL|General\s+Assembly|"
     r"Regular\s+Session|A\s+Bill|AN\s+ACT|Subtitle)",
@@ -129,6 +132,33 @@ def _strip_artifacts(text: str) -> str:
     for pattern in _ARTIFACT_PATTERNS:
         text = pattern.sub("", text)
     return text
+
+
+def _strip_repeated_bare_number_lines(text: str) -> str:
+    """Strip repeated standalone number lines (typical page footers).
+
+    We only remove a bare-number line when the same number appears 2+ times
+    in the same document, which is the common page-footer pattern (e.g. "95"
+    at the bottom of every page). Single-occurrence numeric lines are kept.
+    """
+    lines = text.split("\n")
+    counts: Dict[str, int] = {}
+    for ln in lines:
+        s = ln.strip()
+        if _RE_BARE_PAGE_NUM_LINE.match(s):
+            counts[s] = counts.get(s, 0) + 1
+
+    repeated = {n for n, c in counts.items() if c >= 2}
+    if not repeated:
+        return text
+
+    out_lines = []
+    for ln in lines:
+        s = ln.strip()
+        if s in repeated and _RE_BARE_PAGE_NUM_LINE.match(s):
+            continue
+        out_lines.append(ln)
+    return "\n".join(out_lines)
 
 
 def _strip_tags(text: str) -> str:
@@ -285,6 +315,25 @@ def _classify_difference(
             "content_type": "page_artifact",
         }
 
+    # ── CA/legacy line markers: "line 22" or "22 line" ──────────
+    if diff_type == "delete" and (_RE_LINE_MARKER_STD.match(pre) or _RE_LINE_MARKER_REV.match(pre)):
+        return {
+            "category": "artifact_removed",
+            "severity": "info",
+            "explanation": f"Line marker correctly stripped: \"{pre.strip()}\"",
+            "is_expected": True,
+            "content_type": "line_number_marker",
+        }
+
+    if diff_type == "insert" and (_RE_LINE_MARKER_STD.match(out) or _RE_LINE_MARKER_REV.match(out)):
+        return {
+            "category": "artifact_removed",
+            "severity": "info",
+            "explanation": f"Line marker insertion treated as artifact: \"{out.strip()}\"",
+            "is_expected": True,
+            "content_type": "line_number_marker",
+        }
+
     # ── Page number patterns (e.g. "Page 1 of 2") ────────────────
     if diff_type == "delete" and re.match(
         r"^(?:Page\s+\d+\s+of\s+\d+|\d+\s+of\s+\d+)$", pre.strip(), re.IGNORECASE
@@ -373,6 +422,30 @@ def _classify_difference(
 
     # ── Replace — could be content change or formatting fix ───────
     if diff_type == "replace":
+        # Alignment artifact: one side is a standalone page/line-number marker.
+        # SequenceMatcher can align these against nearby legal text and report
+        # a false content change. Treat as expected artifact drift.
+        _pre_s = pre.strip()
+        _out_s = out.strip()
+        _pre_art = (
+            bool(_RE_BARE_PAGE_NUM_LINE.match(_pre_s))
+            or bool(_RE_LINE_MARKER_STD.match(_pre_s))
+            or bool(_RE_LINE_MARKER_REV.match(_pre_s))
+        )
+        _out_art = (
+            bool(_RE_BARE_PAGE_NUM_LINE.match(_out_s))
+            or bool(_RE_LINE_MARKER_STD.match(_out_s))
+            or bool(_RE_LINE_MARKER_REV.match(_out_s))
+        )
+        if _pre_art or _out_art:
+            return {
+                "category": "artifact_removed",
+                "severity": "info",
+                "explanation": f"Artifact alignment shift: \"{_pre_s[:60]}\" → \"{_out_s[:60]}\"",
+                "is_expected": True,
+                "content_type": "page_artifact",
+            }
+
         # Smart/curly quote normalization — PDFs use \u201c \u201d \u2018 \u2019
         # but the LLM may output straight quotes.  If that is the ONLY
         # difference, treat it as an expected formatting fix.
@@ -468,6 +541,8 @@ def check_content_accuracy(
 
     if strip_artifacts:
         pre = _strip_artifacts(pre)
+        pre = _strip_repeated_bare_number_lines(pre)
+        out = _strip_repeated_bare_number_lines(out)
 
     if strip_tags:
         pre = _strip_tags(pre)
