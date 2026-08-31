@@ -987,7 +987,15 @@ def _precheck_clean_text(
 
         if match_j is None:
             # No forward match.  Don't advance the cursor (item didn't
-            # consume anything); move on to the next item.
+            # consume anything); move on to the next item.  KS-only:
+            # clear the stale active_parent — otherwise a later short,
+            # generic item (e.g. "Sec.") can spuriously re-attach to an
+            # old, unrelated merged tag from far earlier in the document
+            # via Strategy 1, instead of being correctly re-scanned from
+            # the cursor position. Scoped to KS since its heavy "Sec. N."
+            # renumbering is what triggers this collision.
+            if state_code and state_code.upper() == "KS":
+                active_parent = None
             continue
 
         ct = clean_tags[match_j]
@@ -1557,6 +1565,10 @@ _ERROR_CLASSES = {
     # combined these into one tag; if the audit still sees the split it
     # means the merger missed an edge case.
     "unmerged_split_tag",
+    # A [D>…<D] span sitting inside an [A>…<A] span (or vice versa).  Never
+    # valid markup — it means the LLM expanded one tag's boundary across
+    # neighbouring content of the other type.
+    "nested_opposite_tag",
 }
 # Classifications that ALWAYS resolve to ⚠️ warning.
 #
@@ -1568,6 +1580,30 @@ _ERROR_CLASSES = {
 # repeatedly flagged even though the LLM did exactly the right thing by
 # omitting it).  They now resolve to ✅ pass — see ``_PASS_CLASSES`` below.
 _WARNING_CLASSES: set[str] = set()
+
+
+def _outer_tag_type(tagged_text: str) -> str:
+    """Return ``"A"``/``"D"`` for the first tag opener in *tagged_text*, else ``""``."""
+    m = re.search(r"\[([AD])>", tagged_text or "")
+    return m.group(1) if m else ""
+
+
+def _has_opposite_nesting(tagged_text: str) -> tuple[str, str, str]:
+    """Return ``(outer, inner, inner_text)`` for the first opposite-type nesting.
+
+    An ``[A>…<A]`` span containing a ``[D>…<D]`` span (or vice versa) is never
+    valid markup — it means a tag boundary was expanded across neighbouring
+    content.  Returns ``("", "", "")`` when the text is well formed.
+    """
+    for m in re.finditer(r"\[([AD])>(.*?)<\1\]", tagged_text or "", flags=re.DOTALL):
+        outer, inner = m.group(1), m.group(2)
+        other = "D" if outer == "A" else "A"
+        n = re.search(rf"\[{other}>(.*?)<{other}\]", inner, flags=re.DOTALL)
+        if n:
+            return outer, other, re.sub(r"\s+", " ", n.group(1)).strip()
+    return "", "", ""
+
+
 # Classifications that ALWAYS resolve to ✅ pass
 _PASS_CLASSES = {
     "match",
@@ -2966,6 +3002,28 @@ def pymupdf_compare_tags(
                 continue
             if item_typ == "deletion" and ct_is_add and not ct_is_del:
                 continue
+            # A fragment "captured within a parent tag" of the OPPOSITE type
+            # is not captured — it is swallowed.  A deletion cannot live
+            # inside an addition span (or vice versa), so this is an error,
+            # not a pass.
+            _want = "A" if item_typ == "addition" else "D"
+            _outer = _outer_tag_type(ct)
+            if _outer and _outer != _want and f"[{_want}>" in ct:
+                cr["classification"] = "nested_opposite_tag"
+                cr["verdict"] = "❌ error"
+                cr["in_clean"] = "yes"
+                cr["clean_text"] = ct[:200]
+                cr["notes"] = (
+                    f"'{pmtxt}' is tagged [{_want}>…<{_want}] but sits INSIDE an "
+                    f"[{_outer}>…<{_outer}] span — the LLM expanded the "
+                    f"[{_outer}>…<{_outer}] boundary and swallowed it. Nested "
+                    f"opposite-type tags are never valid."
+                )
+                cr["suggested_fix"] = (
+                    f"Close the [{_outer}>…<{_outer}] tag before '{pmtxt}' and "
+                    f"reopen it after, so the [{_want}>…<{_want}] span stands alone"
+                )
+                break
             cr["classification"] = "linked_fragment"
             cr["verdict"] = "✅ pass"
             cr["in_clean"] = "yes"
@@ -3069,6 +3127,36 @@ def pymupdf_compare_tags(
             cr["verdict"] = "⚠️ warning"
         elif cls in _PASS_CLASSES and not cr.get("verdict", "").startswith("✅"):
             cr["verdict"] = "✅ pass"
+
+    # ── Deterministic override: opposite-type nesting is always an error ──
+    # `merged_into_parent` / `word_spans_merged` / `linked_fragment` only ask
+    # "is the text still inside some tag?".  They cannot see a boundary that
+    # was expanded far enough to swallow a tag of the other type, which is
+    # structurally impossible markup.  This sweep runs last so no earlier
+    # classification can mask it.
+    _n_nested = 0
+    for cr in checklist_results:
+        _outer, _inner, _inner_txt = _has_opposite_nesting(cr.get("clean_text", "") or "")
+        if not _outer:
+            continue
+        cr["classification"] = "nested_opposite_tag"
+        cr["verdict"] = "❌ error"
+        cr["notes"] = (
+            f"[{_inner}>…<{_inner}] ('{_inner_txt[:60]}') is nested inside an "
+            f"[{_outer}>…<{_outer}] span — the LLM expanded the "
+            f"[{_outer}>…<{_outer}] boundary across it. Nested opposite-type "
+            f"tags are never valid markup."
+        )
+        cr["suggested_fix"] = (
+            f"Close [{_outer}>…<{_outer}] before '{_inner_txt[:40]}' and reopen "
+            f"it afterwards so each span covers only its own text"
+        )
+        _n_nested += 1
+    if _n_nested:
+        log.warning(
+            "❌ %d checklist item(s) have opposite-type nested tags "
+            "(LLM expanded a tag boundary)", _n_nested,
+        )
 
     # ── Counts for summary ──────────────────────────────────────────
     n_pass    = sum(1 for r in checklist_results if r.get("verdict", "").startswith("✅"))

@@ -2546,10 +2546,13 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
             _before_rejoin = converted_text
             if detected_state and detected_state.upper() in {"AR", "IA"}:
                 # Preserve AR/IA page-1 header-preamble layout: do not run the
-                # generic soft-wrap joiner above the enacting clause.
+                # generic soft-wrap joiner above the enacting clause. Resolutions
+                # (HR/SR/HCR/SCR) use "BE IT RESOLVED BY ..." instead of "BE IT
+                # ENACTED", and the longer chamber/assembly phrasing often wraps
+                # across two PDF lines, so tolerate both.
                 _enacting_patterns = {
-                    "AR": r"\n\s*BE IT ENACTED BY THE GENERAL ASSEMBLY OF THE STATE OF ARKANSAS:\s*\n",
-                    "IA": r"\n\s*BE IT ENACTED BY THE GENERAL ASSEMBLY OF THE STATE OF IOWA:\s*\n",
+                    "AR": r"\n\s*BE IT (?:ENACTED|RESOLVED)\b[\s\S]{0,160}?STATE OF ARKANSAS\b[^\n]*:\s*\n",
+                    "IA": r"\n\s*BE IT (?:ENACTED|RESOLVED)\b[\s\S]{0,160}?STATE OF IOWA\b[^\n]*:\s*\n",
                 }
                 _enacting = re.search(
                     _enacting_patterns[detected_state.upper()],
@@ -3287,7 +3290,18 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
         if _gate_report and _gate_report.get("changed"):
             add_log(
                 "🧯 Tag integrity gate repaired output: "
-                + "; ".join(_gate_report.get("issues", [])[:4])
+                + "; ".join(_gate_report.get("issues", [])[:4]),
+                "warning",
+            )
+
+        # A dropped placeholder means the LLM deleted a verified tag span.
+        _lock_report = getattr(clean_extracted_text, "_last_tag_lock", None)
+        if _lock_report and _lock_report.get("missing_count"):
+            add_log(
+                f"🔓 Tag-boundary lock: LLM dropped "
+                f"{_lock_report['missing_count']}/{_lock_report['total']} tag span(s) — "
+                + " | ".join(_lock_report.get("missing_samples", [])[:3]),
+                "warning",
             )
 
         st.session_state.step_status[3] = "✅"
@@ -3382,15 +3396,30 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
             state_code=detected_state,
             reference_text=_pre_cleaned,
         )
+        _integrity["tag_lock"] = getattr(clean_extracted_text, "_last_tag_lock", None)
         _integrity_path = output_path.replace(".txt", "_integrity_validation.json")
         with open(_integrity_path, "w", encoding="utf-8") as _if:
             _if.write(_json.dumps(_integrity, indent=2, ensure_ascii=False))
         if _integrity.get("issues"):
             add_log(
                 "⚠️ Deterministic integrity validation flagged issues: "
-                + "; ".join(_integrity.get("issues", [])[:4]),
+                + "; ".join(_integrity.get("issues", [])[:6]),
                 "warning",
             )
+            for _nest in (_integrity.get("nested_opposite_tags") or [])[:5]:
+                add_log(
+                    f"❌ Nested [{_nest['inner_type']}>…<{_nest['inner_type']}] inside "
+                    f"[{_nest['outer_type']}>…<{_nest['outer_type']}]: "
+                    f"'{_nest['inner_text']}'",
+                    "warning",
+                )
+            for _drift in ((_integrity.get("boundary_drift") or {}).get("findings") or [])[:8]:
+                add_log(
+                    f"❌ {_drift['kind']} ({_drift['words']} word(s), "
+                    f"{_drift['reference_label']}→{_drift['output_label']}): "
+                    f"'{_drift['text'][:120]}'",
+                    "warning",
+                )
         else:
             add_log("✅ Deterministic integrity validation passed")
 
@@ -3825,10 +3854,13 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
             _before_rejoin = converted_text
             if detected_state and detected_state.upper() in {"AR", "IA"}:
                 # Preserve AR/IA page-1 header-preamble layout: do not run the
-                # generic soft-wrap joiner above the enacting clause.
+                # generic soft-wrap joiner above the enacting clause. Resolutions
+                # (HR/SR/HCR/SCR) use "BE IT RESOLVED BY ..." instead of "BE IT
+                # ENACTED", and the longer chamber/assembly phrasing often wraps
+                # across two PDF lines, so tolerate both.
                 _enacting_patterns = {
-                    "AR": r"\n\s*BE IT ENACTED BY THE GENERAL ASSEMBLY OF THE STATE OF ARKANSAS:\s*\n",
-                    "IA": r"\n\s*BE IT ENACTED BY THE GENERAL ASSEMBLY OF THE STATE OF IOWA:\s*\n",
+                    "AR": r"\n\s*BE IT (?:ENACTED|RESOLVED)\b[\s\S]{0,160}?STATE OF ARKANSAS\b[^\n]*:\s*\n",
+                    "IA": r"\n\s*BE IT (?:ENACTED|RESOLVED)\b[\s\S]{0,160}?STATE OF IOWA\b[^\n]*:\s*\n",
                 }
                 _enacting = re.search(
                     _enacting_patterns[detected_state.upper()],
@@ -3867,7 +3899,8 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
             if _gate_report and _gate_report.get("changed"):
                 add_log(
                     "🧯 Tag integrity gate repaired output: "
-                    + "; ".join(_gate_report.get("issues", [])[:4])
+                    + "; ".join(_gate_report.get("issues", [])[:4]),
+                    "warning",
                 )
 
             _integrity = build_tag_integrity_report(
@@ -3875,6 +3908,15 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
                 state_code=detected_state,
                 reference_text=_precleaned_text,
             )
+            _integrity["tag_lock"] = getattr(opus.convert_pdf_hybrid_text, "_last_tag_lock", None)
+            _lock_report = _integrity["tag_lock"]
+            if _lock_report and _lock_report.get("missing_count"):
+                add_log(
+                    f"🔓 Tag-boundary lock: LLM dropped "
+                    f"{_lock_report['missing_count']}/{_lock_report['total']} tag span(s) — "
+                    + " | ".join(_lock_report.get("missing_samples", [])[:3]),
+                    "warning",
+                )
             import json as _json_local
             _integrity_path = os.path.join(
                 session_folders['output_folder'],
@@ -3885,9 +3927,23 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
             if _integrity.get("issues"):
                 add_log(
                     "⚠️ Deterministic integrity validation flagged issues: "
-                    + "; ".join(_integrity.get("issues", [])[:4]),
+                    + "; ".join(_integrity.get("issues", [])[:6]),
                     "warning",
                 )
+                for _nest in (_integrity.get("nested_opposite_tags") or [])[:5]:
+                    add_log(
+                        f"❌ Nested [{_nest['inner_type']}>…<{_nest['inner_type']}] inside "
+                        f"[{_nest['outer_type']}>…<{_nest['outer_type']}]: "
+                        f"'{_nest['inner_text']}'",
+                        "warning",
+                    )
+                for _drift in ((_integrity.get("boundary_drift") or {}).get("findings") or [])[:8]:
+                    add_log(
+                        f"❌ {_drift['kind']} ({_drift['words']} word(s), "
+                        f"{_drift['reference_label']}→{_drift['output_label']}): "
+                        f"'{_drift['text'][:120]}'",
+                        "warning",
+                    )
             else:
                 add_log("✅ Deterministic integrity validation passed")
         except Exception:
@@ -6338,15 +6394,7 @@ def show_results_section():
             _la_splits = len(_layout_rpt.get('splits_needed', []) or [])
             _la_merges = len(_layout_rpt.get('merges_needed', []) or [])
             _la_issues = _la_splits + _la_merges
-            if _la_total == 0:
-                # No PDF boundaries detected — the 100% is unverified, not clean
-                _la_bg, _la_fg, _la_bdr = '#fefce8', '#854d0e', '#fde68a'
-                _layout_acc_chip = _mk_metric_card(
-                    "📐", "Layout Accuracy", "n/a", "no boundaries detected",
-                    bg=_la_bg, fg=_la_fg, border=_la_bdr
-                )
-                _la_issues = -1  # skip the normal chip below
-            elif _la_issues == 0:
+            if _la_total == 0 or _la_issues == 0:
                 _la_bg, _la_fg, _la_bdr = '#f0fdf4', '#166534', '#bbf7d0'
             elif _la_acc >= 95:
                 _la_bg, _la_fg, _la_bdr = '#fefce8', '#854d0e', '#fde68a'
@@ -7168,10 +7216,13 @@ class BatchWorker:
             _before_rejoin = converted_text
             if detected_state and detected_state.upper() in {"AR", "IA"}:
                 # Preserve AR/IA page-1 header-preamble layout: do not run the
-                # generic soft-wrap joiner above the enacting clause.
+                # generic soft-wrap joiner above the enacting clause. Resolutions
+                # (HR/SR/HCR/SCR) use "BE IT RESOLVED BY ..." instead of "BE IT
+                # ENACTED", and the longer chamber/assembly phrasing often wraps
+                # across two PDF lines, so tolerate both.
                 _enacting_patterns = {
-                    "AR": r"\n\s*BE IT ENACTED BY THE GENERAL ASSEMBLY OF THE STATE OF ARKANSAS:\s*\n",
-                    "IA": r"\n\s*BE IT ENACTED BY THE GENERAL ASSEMBLY OF THE STATE OF IOWA:\s*\n",
+                    "AR": r"\n\s*BE IT (?:ENACTED|RESOLVED)\b[\s\S]{0,160}?STATE OF ARKANSAS\b[^\n]*:\s*\n",
+                    "IA": r"\n\s*BE IT (?:ENACTED|RESOLVED)\b[\s\S]{0,160}?STATE OF IOWA\b[^\n]*:\s*\n",
                 }
                 _enacting = re.search(
                     _enacting_patterns[detected_state.upper()],
@@ -7207,7 +7258,8 @@ class BatchWorker:
             if _gate_report and _gate_report.get("changed"):
                 add_log(
                     "🧯 Tag integrity gate repaired output: "
-                    + "; ".join((_gate_report.get("issues") or [])[:4])
+                    + "; ".join((_gate_report.get("issues") or [])[:4]),
+                    "warning",
                 )
 
             _integrity = build_tag_integrity_report(
@@ -7225,9 +7277,16 @@ class BatchWorker:
             if _integrity.get("issues"):
                 add_log(
                     "⚠️ Deterministic integrity validation flagged issues: "
-                    + "; ".join((_integrity.get("issues") or [])[:4]),
+                    + "; ".join((_integrity.get("issues") or [])[:6]),
                     "warning",
                 )
+                for _nest in (_integrity.get("nested_opposite_tags") or [])[:5]:
+                    add_log(
+                        f"❌ Nested [{_nest['inner_type']}>…<{_nest['inner_type']}] inside "
+                        f"[{_nest['outer_type']}>…<{_nest['outer_type']}]: "
+                        f"'{_nest['inner_text']}'",
+                        "warning",
+                    )
             else:
                 add_log("✅ Deterministic integrity validation passed")
         except Exception:

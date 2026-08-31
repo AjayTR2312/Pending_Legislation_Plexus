@@ -86,6 +86,7 @@ try:
         consolidate_adjacent_tags, _load_state_clean_prompt,
         enforce_tag_integrity_gate,
         _tag_brackets, _generate_clean_diff_report,
+        _lock_tag_boundaries, _unlock_tag_boundaries, TAG_LOCK_PROMPT,
         _strip_ct_header_tags, _strip_ct_compact_designator,
         _strip_ct_false_underline_headings, _fix_midword_page_break_tags,
         _strip_false_footer_line_underline, _strip_ct_analysis_section_tags,
@@ -1387,7 +1388,11 @@ def _strip_repeating_page_artifacts(text: str) -> str:
     return '\n'.join(out_lines)
 
 
-def _split_text_into_chunks(text, max_chars=40000, overlap_chars=2000):
+# Tag-lock placeholders must never be split across a chunk boundary.
+_RE_LOCK_TOKEN_ATOMIC = re.compile(r"@@T\d+@@")
+
+
+def _split_text_into_chunks(text, max_chars=40000, overlap_chars=2000, atomic_re=None):
     """
     Split extracted text into chunks at section/paragraph boundaries.
     
@@ -1403,12 +1408,29 @@ def _split_text_into_chunks(text, max_chars=40000, overlap_chars=2000):
         text (str): Full extracted text
         max_chars (int): Target max characters per chunk (~10K tokens)
         overlap_chars (int): Characters of overlap between chunks
+        atomic_re (re.Pattern): Optional pattern whose matches must never be
+            split across a chunk boundary (used for ``@@Tn@@`` tag-lock
+            placeholders — the overlap start is an arbitrary character
+            offset and would otherwise land mid-token).
 
     Returns:
         list[str]: Text chunks with overlap
     """
     if len(text) <= max_chars:
         return [text]
+
+    atomic_spans = (
+        [(m.start(), m.end()) for m in atomic_re.finditer(text)] if atomic_re else []
+    )
+
+    def _off_atomic(idx):
+        """Move *idx* back to the start of any atomic span it falls inside."""
+        for s, e in atomic_spans:
+            if s >= idx:
+                break
+            if s < idx < e:
+                return s
+        return idx
 
     # Regex for section-level split points
     section_re = re.compile(
@@ -1443,10 +1465,13 @@ def _split_text_into_chunks(text, max_chars=40000, overlap_chars=2000):
         # Last resort: hard cut
         if split_at is None or split_at <= pos:
             split_at = end
+        split_at = _off_atomic(split_at)
+        if split_at <= pos:
+            split_at = end
 
         chunks.append(text[pos:split_at])
         # Next chunk starts `overlap_chars` before the split point
-        pos = max(split_at - overlap_chars, pos + 1)
+        pos = max(_off_atomic(max(split_at - overlap_chars, 0)), pos + 1)
 
     logging.info(f"📐 Split text ({len(text):,} chars) into {len(chunks)} chunks "
                  f"(max {max_chars:,}, overlap {overlap_chars:,})")
@@ -1613,14 +1638,32 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
         except Exception as _meta_err:
             logging.warning(f"   ⚠️ Metadata generation failed: {_meta_err}")
 
-        # ── Step 2: Split into chunks ────────────────────────────────
-        # _llm_text already has TABLE markers stripped
-        chunks = _split_text_into_chunks(_llm_text, max_chars=40000, overlap_chars=2000)
-        total_chunks = len(chunks)
-        logging.info(f"   📐 Split into {total_chunks} chunk(s)")
-
         # ── Step 3: Clean each chunk with LLM ────────────────────────
         system_prompt = _load_state_clean_prompt(state_code)
+
+        # ── Tag-boundary lock (CT) ───────────────────────────────────
+        # One shared token map across ALL chunks so the same span always
+        # carries the same placeholder inside the overlap region — that keeps
+        # `_merge_cleaned_chunks` stitching on identical text.  CT brackets
+        # were already wrapped in [D>…<D] above, so `lock_brackets` is not
+        # needed here (unlike the Extract+Clean path).
+        _lock_tokens = []
+        if state_code and state_code.upper() == "CT":
+            _llm_text, _lock_tokens = _lock_tag_boundaries(_llm_text)
+            if _lock_tokens:
+                system_prompt = system_prompt + TAG_LOCK_PROMPT
+                logging.info(
+                    f"   🔒 Tag-boundary lock: {len(_lock_tokens)} span(s) hidden from the LLM"
+                )
+
+        # ── Step 2: Split into chunks ────────────────────────────────
+        # _llm_text already has TABLE markers stripped
+        chunks = _split_text_into_chunks(
+            _llm_text, max_chars=40000, overlap_chars=2000,
+            atomic_re=_RE_LOCK_TOKEN_ATOMIC if _lock_tokens else None,
+        )
+        total_chunks = len(chunks)
+        logging.info(f"   📐 Split into {total_chunks} chunk(s)")
 
         cleaned_chunks = []
         max_retries = 5
@@ -1753,6 +1796,24 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
             merged = cleaned_chunks[0]
         else:
             merged = _merge_cleaned_chunks(cleaned_chunks)
+
+        # ── Restore locked tag spans (must precede all tag post-processing) ─
+        convert_pdf_hybrid_text._last_tag_lock = None
+        if _lock_tokens:
+            merged, _lock_report = _unlock_tag_boundaries(merged, _lock_tokens)
+            convert_pdf_hybrid_text._last_tag_lock = _lock_report
+            if _lock_report["missing_count"] or _lock_report["duplicated_count"]:
+                logging.warning(
+                    f"   🔓 Tag-boundary lock: {_lock_report['restored']}/{_lock_report['total']} "
+                    f"placeholder(s) restored, {_lock_report['missing_count']} dropped by the LLM, "
+                    f"{_lock_report['duplicated_count']} duplicated by chunk stitching"
+                )
+                for _sample in _lock_report["missing_samples"][:10]:
+                    logging.warning(f"      dropped_tag_span: {_sample}")
+            else:
+                logging.info(
+                    f"   🔓 Tag-boundary lock: all {_lock_report['total']} span(s) restored intact"
+                )
 
         # ── Step 5: Post-processing (same as visual mode) ────────────
         # Generate diff report: what did the LLM change?

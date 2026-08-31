@@ -64,6 +64,14 @@ _LIST_MARKER_START_RE = re.compile(
     r'^(?:[0-9]{1,7}[A-Za-z]?\.|\([0-9A-Za-z]{1,4}\)|[A-Za-z]{1,4}\.)+\s'
 )
 
+# Legal-citation abbreviations whose trailing period is not a sentence end
+# (e.g. "...pursuant to 10 U.S.C." or "...pursuant to K.S.A." wraps
+# mid-citation onto the next line).
+_ABBREV_TRAILING_RE = re.compile(
+    r'\b(?:U\.S\.C\.|C\.F\.R\.|K\.S\.A\.|Stat\.|Rev\.|Ann\.|Secs?\.|Nos?\.|Art\.|Ch\.|Vol\.|pp?\.|St\.)$',
+    re.IGNORECASE,
+)
+
 
 def _page_content_rows(page) -> List[Dict[str, Any]]:
     """Flatten a PDF page into y-ordered content rows, minus margin numbering.
@@ -759,11 +767,32 @@ def _detect_over_splits(
 
     for i in range(len(output_lines) - 1):
         line = output_lines[i].strip()
-        next_line = output_lines[i + 1].strip()
-
-        # Skip blank lines (they're intentional separators)
-        if not line or not next_line:
+        if not line:
             continue
+
+        next_idx = i + 1
+        next_line = output_lines[next_idx].strip()
+
+        if not next_line:
+            # Bridge exactly one blank separator line, but ONLY when the
+            # current line ends in a legal-citation abbreviation. Some
+            # pipelines emit a blank line after every output line regardless
+            # of whether it's a true paragraph break, which hides a real
+            # over-split like "(B) ... K.S.A." <blank> "21-5801 and
+            # 39-720...". Restricting the bridge to this one narrow signal
+            # avoids false positives elsewhere (e.g. a page-1 masthead like
+            # "HOUSE BILL No. 2027" <blank> "By Committee on ...", which fits
+            # the generic short-line/no-punctuation shape just as well).
+            if not bool(_ABBREV_TRAILING_RE.search(_normalize_for_matching(line).rstrip())):
+                continue
+            bridged_idx = i + 2
+            bridged_line = (
+                output_lines[bridged_idx].strip() if bridged_idx < len(output_lines) else ""
+            )
+            if not bridged_line:
+                continue
+            next_idx = bridged_idx
+            next_line = bridged_line
 
         # Normalize for checking
         line_norm = _normalize_for_matching(line)
@@ -826,28 +855,68 @@ def _detect_over_splits(
             return ch.islower() or ch.isdigit() or ch.isupper()
 
         # Heuristic: line ends without sentence-ending punctuation AND
-        # next line starts like a continuation → likely an over-split
-        ends_mid_sentence = not line_norm.rstrip().endswith(('.', ':', ';', '"', ')', ']'))
+        # next line starts like a continuation → likely an over-split.
+        # A trailing period after a legal abbreviation (e.g. "10 U.S.C.",
+        # "42 C.F.R.") is NOT a real sentence end, so don't let it excuse
+        # the break.
+        _stripped_line = line_norm.rstrip()
+        _ends_with_abbrev = bool(_ABBREV_TRAILING_RE.search(_stripped_line))
+        ends_mid_sentence = (
+            not _stripped_line.endswith(('.', ':', ';', '"', ')', ']'))
+            or (_stripped_line.endswith('.') and _ends_with_abbrev)
+        )
         next_is_continuation = _is_continuation_start(next_norm)
+
+        # Defined-term pattern common in interstate compacts:
+        #   (s) "Term" or "alias"
+        #   means the definition ...
+        # The quote at the end of the term line otherwise reads as a
+        # closed sentence, hiding this over-split.
+        _quote_then_means = _stripped_line.endswith('"') and bool(
+            re.match(r'^means\b', next_norm, re.IGNORECASE)
+        )
+
+        # Same-subsection multi-sentence continuation: the current line
+        # opens a lettered/numbered subsection and ends a complete
+        # sentence, but the next line is a second sentence of that SAME
+        # subsection (not a new list item, not a recognized PDF boundary)
+        # — these should stay one paragraph even though both sentences
+        # are individually grammatical. Strip a leading quote before the
+        # case check — a repeated defined term like `"Vendor" does not
+        # include...` starts with `"`, which is neither upper nor lower,
+        # so checking next_norm[:1] directly would miss it.
+        _next_first_alpha = next_norm.lstrip('"\'\u201c\u2018').strip()[:1]
+        _same_subsection_continuation = (
+            _is_list_marker_start(line_norm)
+            and not _is_list_marker_start(next_norm)
+            and _next_first_alpha.isupper()
+        )
 
         _next_raw = (next_line or "").strip()
         _strong_continuation = bool(
             re.match(r'^\((?:commencing|including|pursuant|under|as|with)\b', _next_raw, re.IGNORECASE)
             or re.match(r'^\[[AD]>', _next_raw)
+            or _ends_with_abbrev
         )
 
-        if ends_mid_sentence and next_is_continuation:
+        if (
+            (ends_mid_sentence and next_is_continuation)
+            or _quote_then_means
+            or _same_subsection_continuation
+        ):
             # Additional check: skip if line is reasonably long (>100 chars)
-            # Short broken lines are more suspicious
-            if len(line_norm) < 80 or _strong_continuation:
+            # Short broken lines are more suspicious. The two definitional/
+            # subsection signals bypass this — those first sentences are
+            # routinely long in compact-style legal text.
+            if len(line_norm) < 80 or _strong_continuation or _quote_then_means or _same_subsection_continuation:
                 merges_needed.append({
                     "line": i + 1,  # 1-based (first line)
-                    "merge_with_line": i + 2,  # 1-based (second line)
+                    "merge_with_line": next_idx + 1,  # 1-based (second line, may be bridged over a blank)
                     "action": "MERGE",
                     "line_text": line_norm[-50:],
                     "next_line_text": next_norm[:50],
                     "description": (
-                        f"Merge lines {i + 1} and {i + 2}: "
+                        f"Merge lines {i + 1} and {next_idx + 1}: "
                         f"line ends mid-sentence, next looks like continuation"
                     ),
                 })

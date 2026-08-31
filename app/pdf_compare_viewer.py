@@ -392,7 +392,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,san
   border-left:3px solid transparent;
   white-space:pre-wrap;word-wrap:break-word;display:flex;
   transition:background .08s;cursor:text;
-  content-visibility:auto;contain-intrinsic-size:auto 29px;
+  /* NOTE: previously used content-visibility:auto + contain-intrinsic-size
+     as a render-perf optimization, but the editor fully rebuilds ALL .tl
+     nodes on every edit (Enter/tag-wrap/auto-apply). Fresh nodes have no
+     "remembered" size, so they briefly render at the 29px placeholder
+     before snapping to their real (often taller, wrapped) height — this
+     is what caused the visible jump around the cursor after every edit. */
 }
 .tl:hover{background:var(--hover)}
 .tl.active{background:var(--hl)!important;border-left-color:var(--hl-border)}

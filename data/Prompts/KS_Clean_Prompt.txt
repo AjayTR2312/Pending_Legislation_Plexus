@@ -205,6 +205,45 @@ appears.  Genuine [A>...<A] tags on actual legislative additions (e.g.,
 the substantive amendment text inside the resolution) MUST be preserved.
 
 ===================================================================
+CEREMONIAL / HONORARY RESOLUTION BODY TEXT — TAGS MUST BE PRESERVED
+===================================================================
+
+Ceremonial Senate/House Resolutions (e.g. congratulating or commending an
+individual or group) have NO "Sec. 1." structure — the ENTIRE body is the
+"WHEREAS ..." recitals plus the "Be it (further) resolved ..." clauses.
+The PDF commonly renders this ENTIRE body in bold as the printing
+convention for the operative resolution text itself — this is NOT the
+same as the "decorative header" or "enacting/resolving clause boilerplate"
+exceptions above, and it MUST NOT be stripped.
+
+ONLY strip [A>...<A] from THREE things in a ceremonial resolution:
+  1. The page-1 header block (resolution number, session line, etc.)
+  2. The exact enacting/resolving CLAUSE PREFIX itself
+     ("Be it resolved by the Senate of the State of Kansas:",
+      "Be it further resolved:") — nothing more.
+  3. The signature/certification block at the end.
+
+Every "WHEREAS, ..." recital, and every word AFTER a resolving-clause
+prefix (e.g. "That we congratulate and commend ..."), the sponsor line,
+and the "I hereby certify ..." adoption line are ALL substantive content
+and MUST keep their [A>...<A] tags exactly as in the input.
+
+  WRONG: WHEREAS, Seven of Kansas' best teachers have been selected as
+         Kansas Master Teachers for 2025; and
+  RIGHT: [A>WHEREAS, Seven of Kansas' best teachers have been selected as
+         Kansas Master Teachers for 2025; and<A]
+
+  WRONG: Be it resolved by the Senate of the State of Kansas: That we
+         congratulate and commend the 2025 Kansas Master Teachers ...
+  RIGHT: Be it resolved by the Senate of the State of Kansas: [A>That we
+         congratulate and commend the 2025 Kansas Master Teachers ...<A]
+
+Do NOT treat bold "WHEREAS" recitals as decorative just because the
+document has no numbered sections — a ceremonial resolution's entire
+substantive text IS the recitals, and stripping them loses 100% of the
+document's content markup.
+
+===================================================================
 SIGNATURE / CERTIFICATION BLOCK TAG STRIPPING (Kansas-specific)
 ===================================================================
 

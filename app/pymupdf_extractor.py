@@ -30,6 +30,7 @@ CLI:
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import logging
 import os
@@ -2394,21 +2395,12 @@ _RE_LINE_NUMBER_BETWEEN_TAGS = re.compile(
 _RE_CURRENCY_PADDING = re.compile(r"(\$)[ \t]{2,}(\d)")
 
 
-def _strip_repeating_page_artifacts(text: str, *, min_repeats: int = 3) -> str:
-    """Remove short lines that repeat across multiple pages.
-
-    Splits text on ``--- Page N ---`` markers, collects short lines
-    (≤10 words) from the first/last few lines of each page, and removes
-    any that appear on enough pages to be confidently non-legislative
-    artifacts.  By default this requires ≥3 pages to avoid stripping
-    legitimate text that appears twice in amendment/duplicate sections.
-    This catches repeating headers like
-    "ENROLLED ORIGINAL", footer stamps, bill numbers, etc.
-    """
+def _detect_repeating_page_artifacts(text: str, *, min_repeats: int = 3) -> set:
+    """Return the set of short lines that repeat across enough pages to be artifacts."""
     _PAGE_SEP = re.compile(r"^---\s*Page\s+\d+\s*---$", re.MULTILINE)
     pages = _PAGE_SEP.split(text)
     if len(pages) < 2:
-        return text
+        return set()
 
     from collections import Counter
     _candidate_counts: Counter = Counter()
@@ -2431,9 +2423,23 @@ def _strip_repeating_page_artifacts(text: str, *, min_repeats: int = 3) -> str:
     # Also exclude lines >60 chars — long lines like
     # "repair, expansion, construction, equipping, renovation, purchase, improvement"
     # are real bill text that happens to repeat across sections, not artifacts.
-    artifacts = {line for line, count in _candidate_counts.items()
-                 if count >= max(2, min_repeats) and len(line) >= 3 and len(line.split()) >= 2
-                 and len(line) <= 60}
+    return {line for line, count in _candidate_counts.items()
+            if count >= max(2, min_repeats) and len(line) >= 3 and len(line.split()) >= 2
+            and len(line) <= 60}
+
+
+def _strip_repeating_page_artifacts(text: str, *, min_repeats: int = 3) -> str:
+    """Remove short lines that repeat across multiple pages.
+
+    Splits text on ``--- Page N ---`` markers, collects short lines
+    (≤10 words) from the first/last few lines of each page, and removes
+    any that appear on enough pages to be confidently non-legislative
+    artifacts.  By default this requires ≥3 pages to avoid stripping
+    legitimate text that appears twice in amendment/duplicate sections.
+    This catches repeating headers like
+    "ENROLLED ORIGINAL", footer stamps, bill numbers, etc.
+    """
+    artifacts = _detect_repeating_page_artifacts(text, min_repeats=min_repeats)
     if not artifacts:
         return text
 
@@ -2486,8 +2492,27 @@ def _clean_tagged_text(text: str, strip_line_numbers: bool = False) -> str:
 # ---------------------------------------------------------------------------
 # CT bill headers often have decorative horizontal lines that the underline
 # detector misreads.  These regexes match the header patterns and strip tags.
+# Header-tag strippers must never match ACROSS a tag boundary.  Their input
+# used to be one tag per physical PDF line, so a plain ``.*?`` was safe; once
+# the LLM reflows a whole section onto a single long line, a pattern like
+# ``\[A>.*?KEYWORD.*?<A\]`` spans from one tag's opener to a LATER tag's closer
+# and deletes both delimiters, orphaning everything in between.  This
+# sub-pattern cannot cross a delimiter, so a match stays inside one tag.
+_TAG_INNER_NO_CROSS = r"(?:(?!\[A>|<A\]|\[D>|<D\]).)*?"
+# A bill header line is short; a reflowed body paragraph is thousands of
+# characters.  Tags no longer imply line structure, so length is what
+# separates "header area" from body prose.
+MAX_HEADER_LINE_CHARS = 200
+
+
+def _is_header_candidate_line(line: str) -> bool:
+    """True when *line* is short enough to be a bill header rather than body prose."""
+    bare = re.sub(r"\[[AD]>|<[AD]\]", "", line).strip()
+    return 0 < len(bare) <= MAX_HEADER_LINE_CHARS
+
+
 _RE_CT_HEADER_PATTERNS = re.compile(
-    r"\[A>(.*?(?:"
+    r"\[A>(" + _TAG_INNER_NO_CROSS + r"(?:"
     r"General\s+Assembly"
     r"|(?:Raised|Substitute|File|House|Senate)\s+Bill\s+No\.\s*\d+"
     r"|File\s+No\.\s*\d+"
@@ -2497,7 +2522,7 @@ _RE_CT_HEADER_PATTERNS = re.compile(
     r"|Referred\s+to\s+Committee"
     r"|Introduced\s+by"
     r"|AN\s+ACT\s+CONCERNING"
-    r").*?)<A\]",
+    r")" + _TAG_INNER_NO_CROSS + r")<A\]",
     re.IGNORECASE,
 )
 
@@ -2517,6 +2542,8 @@ def _strip_ct_header_tags(text: str) -> str:
     header_end = min(15, len(lines))
     changed = False
     for i in range(header_end):
+        if not _is_header_candidate_line(lines[i]):
+            continue
         new_line = _RE_CT_HEADER_PATTERNS.sub(r"\1", lines[i])
         if new_line != lines[i]:
             lines[i] = new_line
@@ -2991,39 +3018,58 @@ def _strip_false_footer_line_underline(text: str) -> str:
 # legislative text, so tags are always false.
 _CT_ANALYSIS_SECTION_MARKERS = (
     "This act shall take effect as follows",
-    "Statement of Legislative Commissioners",
     "OFA Fiscal Note",
     "OLR Bill Analysis",
 )
+# The Statement of Legislative Commissioners is NOT tag-free boilerplate: it
+# quotes the language the commissioners changed, and that quoted language is
+# genuinely underlined in the PDF.  Its tags are real markup, so the block is
+# carved out of the strip below.
+_CT_LCO_STATEMENT_MARKER = "Statement of Legislative Commissioners"
+_CT_LCO_END_MARKERS = ("OFA Fiscal Note", "OLR Bill Analysis")
+
+
+def _strip_all_ad_tags(segment: str) -> str:
+    segment = re.sub(r'\[A>(.*?)<A\]', r'\1', segment)
+    return re.sub(r'\[D>(.*?)<D\]', r'\1', segment)
 
 
 def _strip_ct_analysis_section_tags(text: str) -> str:
     """Remove all ``[A>…<A]`` and ``[D>…<D]`` tags from CT analysis sections.
 
-    CT bills end with explanatory sections (fiscal note, bill analysis,
-    committee action) that never have legislative markup.  Any tags in
-    these sections are artifacts of page-break underline detection.
+    CT bills end with an effective-date table and explanatory sections (fiscal
+    note, bill analysis) that never carry legislative markup — any tags there
+    are artifacts of page-break underline detection.  The Statement of
+    Legislative Commissioners is excluded: its tags are genuine.
     """
-    # Find the earliest analysis-section marker
-    earliest_pos = -1
-    for marker in _CT_ANALYSIS_SECTION_MARKERS:
-        pos = text.find(marker)
-        if pos >= 0 and (earliest_pos < 0 or pos < earliest_pos):
-            earliest_pos = pos
-
-    if earliest_pos < 0:
+    starts = [p for p in (text.find(m) for m in _CT_ANALYSIS_SECTION_MARKERS) if p >= 0]
+    lco_pos = text.find(_CT_LCO_STATEMENT_MARKER)
+    if lco_pos >= 0:
+        starts.append(lco_pos)
+    if not starts:
         return text  # No analysis section found
 
-    # Split text at the marker boundary
-    legislation = text[:earliest_pos]
-    analysis = text[earliest_pos:]
+    analysis_start = min(starts)
+    legislation = text[:analysis_start]
+    analysis = text[analysis_start:]
 
-    # Strip all tags from the analysis section
-    cleaned_analysis = re.sub(r'\[A>(.*?)<A\]', r'\1', analysis)
-    cleaned_analysis = re.sub(r'\[D>(.*?)<D\]', r'\1', cleaned_analysis)
+    if lco_pos >= 0:
+        rel = lco_pos - analysis_start
+        ends = [e for e in (analysis.find(m, rel) for m in _CT_LCO_END_MARKERS) if e >= 0]
+        lco_end = min(ends) if ends else len(analysis)
+        cleaned_analysis = (
+            _strip_all_ad_tags(analysis[:rel])
+            + analysis[rel:lco_end]
+            + _strip_all_ad_tags(analysis[lco_end:])
+        )
+    else:
+        cleaned_analysis = _strip_all_ad_tags(analysis)
 
     if cleaned_analysis != analysis:
-        tag_count = analysis.count('[A>') + analysis.count('[D>')
+        tag_count = (
+            analysis.count('[A>') + analysis.count('[D>')
+            - cleaned_analysis.count('[A>') - cleaned_analysis.count('[D>')
+        )
         logger.debug(
             f"Stripped {tag_count} tag(s) from CT analysis/fiscal section"
         )
@@ -3653,7 +3699,7 @@ def _splice_dc_mayor_signoff(text: str, name: str, title: str) -> str:
 #                              "Requested by Senator …" / "Requested by Governor …"
 #   Act title ................ "AN ACT concerning records; relating to..."
 _RE_KS_HEADER_PATTERNS = re.compile(
-    r"\[A>(.*?(?:"
+    r"\[A>(" + _TAG_INNER_NO_CROSS + r"(?:"
     # Session line: "Session of 2025"
     r"Session\s+of\s+\d{4}"
     # Amendment status line on page 1
@@ -3676,7 +3722,7 @@ _RE_KS_HEADER_PATTERNS = re.compile(
     r"|Requested\s+by\s+(?:Representative|Senator|Governor)"
     # Act title
     r"|AN\s+ACT\s+concerning"
-    r").*?)<A\]",
+    r")" + _TAG_INNER_NO_CROSS + r")<A\]",
     re.IGNORECASE,
 )
 
@@ -3702,6 +3748,8 @@ def _strip_ks_header_tags(text: str) -> str:
     header_end = min(15, len(lines))
     changed = False
     for i in range(header_end):
+        if not _is_header_candidate_line(lines[i]):
+            continue
         new_line = _RE_KS_HEADER_PATTERNS.sub(r"\1", lines[i])
         if new_line != lines[i]:
             lines[i] = new_line
@@ -3985,7 +4033,7 @@ _RE_IN_FOOTER = re.compile(
 # Indiana bill PDFs have a decorative horizontal line near the top that the
 # underline detector misreads, producing false [A> tags on the bill title.
 _RE_IN_HEADER_PATTERNS = re.compile(
-    r"\[A>(.*?(?:"
+    r"\[A>(" + _TAG_INNER_NO_CROSS + r"(?:"
     r"(?:ENGROSSED|ENROLLED|INTRODUCED|REPRINTED)\s+"
     r"(?:HOUSE|SENATE)\s+(?:BILL|RESOLUTION|CONCURRENT\s+RESOLUTION|JOINT\s+RESOLUTION)"
     r"\s+No\.\s*\d+"
@@ -3993,7 +4041,7 @@ _RE_IN_HEADER_PATTERNS = re.compile(
     r"|DIGEST\s+OF\s+(?:HB|SB|HR|SR)\s+\d+"
     r"|(?:First|Second|Third)\s+Regular\s+Session"
     r"|(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s*\d{4}"
-    r").*?)<A\]",
+    r")" + _TAG_INNER_NO_CROSS + r")<A\]",
     re.IGNORECASE,
 )
 
@@ -4023,6 +4071,8 @@ def _strip_in_header_tags(text: str) -> str:
     header_end = min(20, len(lines))
     changed = False
     for i in range(header_end):
+        if not _is_header_candidate_line(lines[i]):
+            continue
         new_line = _RE_IN_HEADER_PATTERNS.sub(r"\1", lines[i])
         if new_line != lines[i]:
             lines[i] = new_line
@@ -4789,7 +4839,11 @@ def _normalize_ar_page1_header(text: str) -> str:
 
 
 def _normalize_ia_page1_header(text: str) -> str:
-    """Restore Iowa page-1 title layout when ``AN ACT`` gets flattened."""
+    """Restore Iowa page-1 title layout when ``AN ACT`` gets flattened,
+    or rejoined with the wrong case when the opposite happens (a normal
+    sentence-case title like "An Act relating to ..." gets split onto its
+    own all-caps "AN ACT" line by the LLM).
+    """
     end_m = re.search(
         r"^\s*BE\s+IT\s+ENACTED\s+BY\s+THE\s+GENERAL\s+ASSEMBLY\s+OF\s+THE\s+STATE\s+OF\s+IOWA:?\s*$",
         text,
@@ -4808,10 +4862,31 @@ def _normalize_ia_page1_header(text: str) -> str:
         count=1,
     )
 
+    # Reverse case: a normal sentence-case title (e.g. "An Act relating
+    # to ...") got split onto its own all-caps "AN ACT" line with the
+    # (lowercase) title on the next line. Rejoin into one line and
+    # restore standard "An Act" casing. The "starts lowercase" check must
+    # happen in the callback (not a [a-z] class) because the (?i) flag
+    # above makes character classes case-insensitive too, so [a-z] would
+    # also match an all-caps title and wrongly undo the forward split.
+    def _rejoin_lowercase_title(m: re.Match) -> str:
+        title = m.group("title")
+        if not title[:1].islower():
+            return m.group(0)
+        return f"{m.group('indent')}An Act {title.strip()}"
+
+    normalized = re.sub(
+        r"(?im)^(?P<indent>[ \t]*)AN\s+ACT\s*\n[ \t]*(?P<title>[^\n]+)$",
+        _rejoin_lowercase_title,
+        normalized,
+        count=1,
+    )
+
     if normalized != header_block:
         logger.debug("Normalized IA page-1 header/title block")
         return normalized + remainder
     return text
+
 
 
 # ---------------------------------------------------------------------------
@@ -5108,6 +5183,13 @@ def build_tag_integrity_report(
     if malformed_close_d:
         issues.append(f"Malformed D close tags found: {malformed_close_d}")
 
+    # Opposite-type nesting is never valid markup: a deletion cannot live
+    # inside an addition (or vice versa).  It is the fingerprint of an LLM
+    # that swallowed neighbouring content when it merged two tags.
+    nested = find_nested_opposite_tags(text or "")
+    if nested:
+        issues.append(f"Opposite-type nested tags found: {len(nested)}")
+
     long_tags = []
     for m in re.finditer(r"\[([AD])>(.*?)<\1\]", text or "", flags=re.DOTALL):
         inner = re.sub(r"\s+", " ", m.group(2)).strip()
@@ -5117,6 +5199,7 @@ def build_tag_integrity_report(
         issues.append(f"Suspiciously long tags found: {len(long_tags)}")
 
     ref_delta = None
+    boundary = None
     if reference_text:
         from collections import Counter
 
@@ -5133,6 +5216,18 @@ def build_tag_integrity_report(
         if added:
             issues.append(f"New tag payloads not in pre-cleaned input: {len(added)}")
 
+        boundary = build_tag_boundary_report(
+            text or "", reference_text, state_code=state_code,
+        )
+        for kind, label in (
+            ("tag_dropped", "words that lost their tag"),
+            ("tag_added", "untagged words swallowed into a tag"),
+            ("tag_type_changed", "words whose tag type changed"),
+        ):
+            n_words = boundary["word_counts"].get(kind, 0)
+            if n_words:
+                issues.append(f"Tag boundary drift — {n_words} {label}")
+
     if issues:
         severity = "error"
 
@@ -5141,6 +5236,263 @@ def build_tag_integrity_report(
         "issues": issues,
         "counts": counts,
         "reference_delta": ref_delta,
+        "nested_opposite_tags": nested,
+        "boundary_drift": boundary,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Deterministic tag-boundary verification
+# ---------------------------------------------------------------------------
+# The vision audit classifies a tag whose boundary the LLM expanded as
+# ``merged_into_parent`` / ``word_spans_merged`` / ``linked_fragment`` and
+# passes it, because it only asks "does the tagged text still appear
+# somewhere inside a tag?".  That question cannot see the opposite error —
+# untagged prose (or a deletion) being pulled INTO an addition span.
+#
+# These helpers answer the exact question instead: for every word that
+# survives from the extractor's output into the final text, is it still
+# carrying the same markup?  Alignment is word-level via difflib, so
+# artefact removal (headers, footers, line numbers) and reflow do not
+# register — only a genuine change of markup on surviving words does.
+
+def find_nested_opposite_tags(text: str) -> List[dict]:
+    """Return every ``[D>…<D]`` inside an ``[A>…<A]`` span, and vice versa."""
+    found: List[dict] = []
+    for m in re.finditer(r"\[([AD])>(.*?)<\1\]", text or "", flags=re.DOTALL):
+        outer = m.group(1)
+        inner = m.group(2)
+        other = "D" if outer == "A" else "A"
+        for n in re.finditer(rf"\[{other}>(.*?)<{other}\]", inner, flags=re.DOTALL):
+            found.append({
+                "outer_type": outer,
+                "inner_type": other,
+                "inner_text": re.sub(r"\s+", " ", n.group(1)).strip()[:120],
+                "outer_text": re.sub(r"\s+", " ", inner).strip()[:200],
+            })
+    return found
+
+
+def _label_tokens(text: str) -> List[Tuple[str, str]]:
+    """Split *text* into words, each paired with a per-character tag label.
+
+    Labels are ``A`` (inside an addition), ``D`` (inside a deletion) or
+    ``-`` (untagged), one character per character of the word.
+    """
+    chars: List[str] = []
+    labels: List[str] = []
+    stack: List[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        tok = text[i:i + 3]
+        if tok in ("[A>", "[D>"):
+            stack.append(tok[1])
+            i += 3
+            continue
+        if tok in ("<A]", "<D]"):
+            if stack:
+                stack.pop()
+            i += 3
+            continue
+        chars.append(text[i])
+        labels.append(stack[-1] if stack else "-")
+        i += 1
+
+    tokens: List[Tuple[str, str]] = []
+    word: List[str] = []
+    lab: List[str] = []
+    for c, l in zip(chars, labels):
+        if c.isspace():
+            if word:
+                tokens.append(("".join(word), "".join(lab)))
+                word, lab = [], []
+        else:
+            word.append(c)
+            lab.append(l)
+    if word:
+        tokens.append(("".join(word), "".join(lab)))
+    return tokens
+
+
+def _dominant_label(label: str) -> str:
+    for ch in "AD":
+        if ch in label:
+            return ch
+    return "-"
+
+
+# States whose add/delete convention carries no detectable decoration, so the
+# PyMuPDF report is not the tagging ground truth (CO marks additions by
+# CAPITALISATION).  These are validated by their vision audit instead.
+_BOUNDARY_DRIFT_EXCLUDED_STATES = {"CO"}
+# Above this share of reference words being tagged, the "formatting" is a
+# document-wide style (e.g. KS ceremonial resolutions are set entirely in
+# italic) rather than legislative markup.
+_BOUNDARY_DRIFT_MAX_REF_COVERAGE = 0.60
+
+
+def _skipped_boundary_report(ref_tokens, out_tokens, reason: str) -> dict:
+    return {
+        "reference_words": len(ref_tokens),
+        "output_words": len(out_tokens),
+        "word_counts": {},
+        "findings": [],
+        "truncated": False,
+        "skipped": reason,
+    }
+
+
+def _normalize_reference_for_boundary(ref: str, state_code: Optional[str]) -> str:
+    """Apply the deterministic post-LLM transforms that legitimately retag the text.
+
+    ``build_tag_boundary_report`` compares markup on surviving words, so any
+    tag the pipeline is *supposed* to add or strip must be applied to the
+    reference too — otherwise correct behaviour (CT bracket tagging, KS
+    resolving-clause stripping, IN decorative-header stripping, protected
+    clauses, …) reads as drift.
+    """
+    st = (state_code or "").upper()
+    if st == "CT":
+        ref = _tag_brackets(ref)
+        ref = _strip_ct_header_tags(ref)
+        ref = _strip_ct_compact_designator(ref)
+        ref = _strip_false_subsection_d_tags(ref)
+    elif st == "KS":
+        ref = _strip_ks_header_tags(ref)
+        ref = _strip_ks_superscript_markers(ref)
+        ref = _strip_ks_resolving_clause_tags(ref)
+        ref = _strip_ks_signature_block_tags(ref)
+    elif st == "CA":
+        ref = _strip_ca_signature_block_tags(ref)
+    elif st == "IN":
+        ref = _strip_in_header_tags(ref)
+        ref = _strip_in_enacting_clause_tags(ref)
+        ref = _strip_in_artifacts(ref)
+    elif st == "AR":
+        ref = _strip_ar_artifacts(ref)
+    elif st == "DC":
+        ref = _strip_dc_letterhead_footer(ref)
+        ref = _strip_dc_link_underline_tags(ref)
+        ref = _strip_dc_title_header_tags(ref)
+
+    try:
+        from protected_clauses import strip_protected_tags
+        ref = strip_protected_tags(ref, state_code)
+    except Exception:
+        pass
+    return ref
+
+
+def build_tag_boundary_report(
+    text: str,
+    reference_text: str,
+    *,
+    state_code: Optional[str] = None,
+    max_samples: int = 40,
+) -> dict:
+    """Compare per-word markup between the extractor output and the final text.
+
+    *reference_text* is the pre-cleaned PyMuPDF text — the ground truth for
+    which words carry which markup.  The deterministic transforms that run
+    after the LLM are applied to the reference first (see
+    :func:`_normalize_reference_for_boundary`) so expected differences do
+    not register as drift.
+    """
+    ref = _normalize_reference_for_boundary(reference_text or "", state_code)
+
+    ref_tokens = _label_tokens(ref)
+    out_tokens = _label_tokens(text or "")
+
+    # Guard 1: states whose markup convention carries no detectable decoration.
+    # Colorado marks additions by CAPITALISATION, so PyMuPDF finds almost
+    # nothing and every correctly-tagged word would read as drift.  CO is
+    # validated by its vision audit instead.
+    if (state_code or "").upper() in _BOUNDARY_DRIFT_EXCLUDED_STATES:
+        return _skipped_boundary_report(
+            ref_tokens, out_tokens,
+            f"{state_code} markup is not decoration-based — PyMuPDF is not the tagging ground truth",
+        )
+
+    n_ref_tagged = sum(1 for _, lab in ref_tokens if lab.strip("-"))
+    # Guard 2: PyMuPDF found no formatting, so it cannot be the ground truth.
+    if not n_ref_tagged:
+        return _skipped_boundary_report(
+            ref_tokens, out_tokens,
+            "reference has no tags — not a usable markup ground truth",
+        )
+    # Guard 3: whole-document style false positive (e.g. KS ceremonial
+    # resolutions are printed entirely in italic, so PyMuPDF tags nearly every
+    # word and the LLM correctly strips them all).
+    if ref_tokens and n_ref_tagged / len(ref_tokens) > _BOUNDARY_DRIFT_MAX_REF_COVERAGE:
+        return _skipped_boundary_report(
+            ref_tokens, out_tokens,
+            f"reference tags {n_ref_tagged}/{len(ref_tokens)} words "
+            f"(>{_BOUNDARY_DRIFT_MAX_REF_COVERAGE:.0%}) — document-wide style, not markup",
+        )
+
+    matcher = difflib.SequenceMatcher(
+        a=[t[0] for t in ref_tokens],
+        b=[t[0] for t in out_tokens],
+        autojunk=False,
+    )
+
+    findings: List[dict] = []
+    word_counts: Dict[str, int] = {}
+    run: Optional[dict] = None
+
+    def _flush() -> None:
+        nonlocal run
+        if run is not None:
+            word_counts[run["kind"]] = word_counts.get(run["kind"], 0) + run["words"]
+            if len(findings) < max_samples:
+                findings.append(run)
+            run = None
+
+    for op, i1, i2, j1, j2 in matcher.get_opcodes():
+        if op != "equal":
+            _flush()
+            continue
+        for k in range(i2 - i1):
+            ref_word, ref_label = ref_tokens[i1 + k]
+            out_word, out_label = out_tokens[j1 + k]
+            if ref_label == out_label:
+                _flush()
+                continue
+            r_dom = _dominant_label(ref_label)
+            o_dom = _dominant_label(out_label)
+            if r_dom == o_dom:
+                # Same markup, different internal split (e.g. a tag that
+                # starts one character earlier inside the same word).
+                _flush()
+                continue
+            if o_dom == "-":
+                kind = "tag_dropped"
+            elif r_dom == "-":
+                kind = "tag_added"
+            else:
+                kind = "tag_type_changed"
+            if run is not None and run["kind"] == kind:
+                run["words"] += 1
+                run["text"] = (run["text"] + " " + out_word)[:300]
+            else:
+                _flush()
+                run = {
+                    "kind": kind,
+                    "reference_label": r_dom,
+                    "output_label": o_dom,
+                    "words": 1,
+                    "text": out_word[:300],
+                }
+        _flush()
+    _flush()
+
+    return {
+        "reference_words": len(ref_tokens),
+        "output_words": len(out_tokens),
+        "word_counts": word_counts,
+        "findings": findings,
+        "truncated": sum(word_counts.values()) > 0 and len(findings) >= max_samples,
     }
 
 
@@ -5842,6 +6194,154 @@ def _build_preclean_guard_report(raw_text: str, pre_cleaned_text: str) -> dict[s
     return report
 
 
+# ---------------------------------------------------------------------------
+# Tag-boundary lock — makes LLM tag drift structurally impossible
+# ---------------------------------------------------------------------------
+# Connecticut is the only state whose DELETIONS are literal ``[square
+# brackets]`` embedded in the prose rather than strikethrough decoration.
+# That produces interleaved input like::
+#
+#     ...General Assembly[A>,<A] [or] a state office[A>, a<A]
+#     [A>municipal office or the office of judge of probate<A], or (B) ...
+#
+# — a tagged comma, an UNTAGGED deletion, and a tagged addition inside eight
+# words, continuing across a line wrap.  When the LLM reflows that wrap it
+# reliably welds all three into a single ``[A>…<A]`` span, swallowing the
+# deletion and the unchanged prose between them.  No other state presents
+# this shape, which is why only CT drifts.
+#
+# The fix is to never show the model a tag at all: every tagged span (and,
+# for CT, every bare bracket deletion) is replaced by an opaque
+# ``@@Tn@@`` placeholder before the request and restored verbatim
+# afterwards.  Boundaries are then byte-identical to the extractor's, and a
+# placeholder the model dropped is detectable exactly rather than
+# statistically.
+
+_RE_TAG_SPAN = re.compile(r"\[([AD])>.*?<\1\]", re.DOTALL)
+_RE_LOCK_TOKEN = re.compile(r"@@\s*T(\d+)\s*@@")
+# Tolerates a model that mangles the closing delimiter (``@@T7@``, ``@@T7``).
+_RE_LOCK_TOKEN_LOOSE = re.compile(r"@@\s*T(\d+)\s*@{0,2}")
+
+TAG_LOCK_PROMPT = """
+
+═══════════════════════════════════════════════════════════════
+🔒 PROTECTED PLACEHOLDERS — @@T0@@, @@T1@@, @@T2@@ …
+═══════════════════════════════════════════════════════════════
+
+Some spans of this document have been replaced by placeholder tokens of
+the form @@T<number>@@ (for example @@T0@@, @@T17@@).  Each one stands for
+a legislative markup span that has already been verified and must not be
+re-derived by you.
+
+ABSOLUTE RULES:
+• Copy every @@T<number>@@ token through to your output EXACTLY as written
+  — same digits, same @@ delimiters, no spaces inserted inside the token.
+• NEVER delete a placeholder.  NEVER merge two placeholders into one.
+  NEVER invent a new placeholder number.
+• NEVER emit [A>, <A], [D> or <D] yourself.  If you think a span needs a
+  tag, leave the text alone — tagging is handled deterministically after
+  your response.
+• A placeholder may sit mid-sentence, alone on its own line, or adjacent to
+  another placeholder.  Reflow the surrounding text as normal and keep the
+  tokens in their original order and position relative to the words around
+  them.
+• The ONLY case where a placeholder may disappear is when you remove an
+  entire repeated header/footer line that consisted solely of that
+  placeholder.
+
+Everything else in this prompt still applies.
+"""
+
+
+def _lock_tag_boundaries(
+    text: str,
+    *,
+    lock_brackets: bool = False,
+) -> Tuple[str, List[str]]:
+    """Replace tagged spans with ``@@Tn@@`` placeholders.
+
+    Returns ``(locked_text, tokens)`` where ``tokens[n]`` is the original
+    text of placeholder ``@@Tn@@``.  When *lock_brackets* is true, bare
+    ``[…]`` bracket deletions (the Connecticut convention) are locked as
+    well so the model cannot wrap them in tags of its own.
+    """
+    tokens: List[str] = []
+    # A long CT bracket deletion can span a page break and therefore contain
+    # footer/header lines.  The LLM used to strip those; now that it never
+    # sees them, they must be removed here or they leak into the output.
+    artifacts = _detect_repeating_page_artifacts(text)
+
+    def _capture(m: re.Match) -> str:
+        tokens.append(_clean_locked_span(m.group(0), artifacts))
+        return f"@@T{len(tokens) - 1}@@"
+
+    locked = _RE_TAG_SPAN.sub(_capture, text)
+    if lock_brackets:
+        locked = _RE_BRACKET_DEL.sub(_capture, locked)
+    return locked, tokens
+
+
+_RE_PAGE_MARKER_LINE = re.compile(r"^---\s*Page\s+\d+\s*---$")
+_RE_PAGE_FOOTER_LINE = re.compile(
+    r"^(?:LCO\s*(?:No\.\s*\d+)?\s*)?\d+\s+of\s+\d+$|^LCO\s+No\.\s*\d+$|^-?\d+-?$",
+    re.IGNORECASE,
+)
+
+
+def _clean_locked_span(span: str, artifacts: set) -> str:
+    """Remove page artifacts from inside a locked span and rejoin its wraps."""
+    if "\n" not in span:
+        return span
+    kept = []
+    for line in span.split("\n"):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped in artifacts:
+            continue
+        if _RE_PAGE_MARKER_LINE.match(stripped) or _RE_PAGE_FOOTER_LINE.match(stripped):
+            continue
+        kept.append(stripped)
+    return " ".join(kept)
+
+
+def _unlock_tag_boundaries(
+    text: str,
+    tokens: List[str],
+) -> Tuple[str, dict]:
+    """Restore ``@@Tn@@`` placeholders to their original spans.
+
+    Missing placeholders are reported rather than re-injected — the model
+    is allowed to drop a placeholder only when it removes an entire
+    header/footer line, and blindly restoring one would corrupt the text.
+    """
+    seen: Dict[int, int] = {}
+
+    def _restore(m: re.Match) -> str:
+        idx = int(m.group(1))
+        if 0 <= idx < len(tokens):
+            seen[idx] = seen.get(idx, 0) + 1
+            return tokens[idx]
+        return ""
+
+    restored = _RE_LOCK_TOKEN.sub(_restore, text)
+    # Second pass for tokens whose delimiters the model mangled.
+    if "@@" in restored or _RE_LOCK_TOKEN_LOOSE.search(restored):
+        restored = _RE_LOCK_TOKEN_LOOSE.sub(_restore, restored)
+
+    missing = [i for i in range(len(tokens)) if i not in seen]
+    duplicated = [i for i, n in seen.items() if n > 1]
+    report = {
+        "total": len(tokens),
+        "restored": len(seen),
+        "missing_count": len(missing),
+        "missing_samples": [tokens[i][:160] for i in missing[:25]],
+        "duplicated_count": len(duplicated),
+        "duplicated_samples": [tokens[i][:160] for i in duplicated[:10]],
+    }
+    return restored, report
+
+
 def clean_extracted_text(
     raw_text: str,
     *,
@@ -5990,6 +6490,20 @@ def clean_extracted_text(
     _unwrapped_text = None
     _llm_pre_cleaned = pre_cleaned
 
+    # ── Tag-boundary lock (CT) ─────────────────────────────────────
+    # See `_lock_tag_boundaries` for why this is Connecticut-only.
+    _lock_tokens: List[str] = []
+    if state_code and state_code.upper() == "CT":
+        _llm_pre_cleaned, _lock_tokens = _lock_tag_boundaries(
+            _llm_pre_cleaned, lock_brackets=True,
+        )
+        if _lock_tokens:
+            system_prompt = system_prompt + TAG_LOCK_PROMPT
+            logger.info(
+                "🔒 Tag-boundary lock: %d span(s) hidden from the LLM",
+                len(_lock_tokens),
+            )
+
     # Build the user message: metadata (if any) + pre-cleaned text (markers stripped)
     user_content = metadata_prefix + _llm_pre_cleaned
 
@@ -6025,6 +6539,26 @@ def clean_extracted_text(
                 raise
 
     cleaned = response.content[0].text.strip()
+
+    # ── Restore locked tag spans before anything else inspects the text ──
+    clean_extracted_text._last_tag_lock = None
+    if _lock_tokens:
+        cleaned, _lock_report = _unlock_tag_boundaries(cleaned, _lock_tokens)
+        clean_extracted_text._last_tag_lock = _lock_report
+        if _lock_report["missing_count"] or _lock_report["duplicated_count"]:
+            logger.warning(
+                "🔓 Tag-boundary lock: %d/%d placeholder(s) restored, "
+                "%d dropped by the LLM, %d duplicated",
+                _lock_report["restored"], _lock_report["total"],
+                _lock_report["missing_count"], _lock_report["duplicated_count"],
+            )
+            for _sample in _lock_report["missing_samples"][:10]:
+                logger.warning("   dropped_tag_span: %s", _sample)
+        else:
+            logger.info(
+                "🔓 Tag-boundary lock: all %d span(s) restored intact",
+                _lock_report["total"],
+            )
 
     # Expose usage data for callers that want cost tracking
     _usage = getattr(response, 'usage', None)
@@ -6223,9 +6757,14 @@ def clean_extracted_text(
     #    AR/IA exception: protect page-1 preamble above the enacting
     #    clause from generic rejoin so title/header lines do not collapse.
     if state_code and state_code.upper() in {"AR", "IA"}:
+        # Resolutions (HR/SR/HCR/SCR) use "BE IT RESOLVED BY ..." instead of
+        # "BE IT ENACTED", and the longer "... OF THE NINETY-FIFTH GENERAL
+        # ASSEMBLY OF THE STATE OF ARKANSAS:" phrasing often wraps across two
+        # PDF lines, so the clause boundary must tolerate both the ENACTED/
+        # RESOLVED verb and an embedded line break.
         _enacting_patterns = {
-            "AR": r"\n\s*BE IT ENACTED BY THE GENERAL ASSEMBLY OF THE STATE OF ARKANSAS:\s*\n",
-            "IA": r"\n\s*BE IT ENACTED BY THE GENERAL ASSEMBLY OF THE STATE OF IOWA:\s*\n",
+            "AR": r"\n\s*BE IT (?:ENACTED|RESOLVED)\b[\s\S]{0,160}?STATE OF ARKANSAS\b[^\n]*:\s*\n",
+            "IA": r"\n\s*BE IT (?:ENACTED|RESOLVED)\b[\s\S]{0,160}?STATE OF IOWA\b[^\n]*:\s*\n",
         }
         _enacting = re.search(
             _enacting_patterns[state_code.upper()],
@@ -6247,6 +6786,7 @@ def clean_extracted_text(
             cleaned = _normalize_ia_page1_header(cleaned)
     else:
         cleaned = rejoin_mid_sentence_line_breaks(cleaned)
+
 
     # Store the pre-cleaned text and diff report for the caller to retrieve and save
     clean_extracted_text._last_pre_cleaned = pre_cleaned
