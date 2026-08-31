@@ -8690,11 +8690,14 @@ def rejoin_mid_sentence_line_breaks(text: str) -> str:
         #   "... consistent with\nSection 54226."
         # We intentionally scope uppercase joins to citation/month tokens only
         # to avoid collapsing headers/table rows/other structured lines.
+        # "Administration" covers agency names wrapped mid-phrase, e.g.
+        # "... pursuant to Federal Aviation\nAdministration Order 5190.6B".
         _continuation = (
             r"(?:"
             r"[a-z]"
             r"|\d"
             r"|Section\b|Sections\b|Chapter\b|Part\b|Division\b|Article\b|Subdivision\b"
+            r"|Administration\b"
             r"|January\b|February\b|March\b|April\b|May\b|June\b|July\b|August\b"
             r"|September\b|October\b|November\b|December\b"
             r")"

@@ -2046,12 +2046,12 @@ function wrapTag(type){
       // BEFORE the first marker or AFTER the last marker?
       var firstMk = insideMarkers[0];
       var lastMk  = insideMarkers[insideMarkers.length - 1];
-      var extendsBefore =
-          (startEP.li < firstMk.li) ||
-          (startEP.li === firstMk.li && startEP.off < firstMk.off);
-      var extendsAfter =
-          (endEP.li > lastMk.li) ||
-          (endEP.li === lastMk.li && endEP.off > lastMk.off + 3);
+      // Only counts as "extends" when the overshoot contains real text —
+      // a selection that merely overshoots the marker by whitespace
+      // (easy to do with an imprecise mouse drag) still means the user
+      // wants to toggle the tag OFF, not grow it.
+      var extendsBefore = _hasNonBlankBetween(startEP.li, startEP.off, firstMk.li, firstMk.off);
+      var extendsAfter  = _hasNonBlankBetween(lastMk.li, lastMk.off + 3, endEP.li, endEP.off);
 
       if(extendsBefore || extendsAfter){
         // ── EXPAND ──────────────────────────────────────────────────
@@ -2285,6 +2285,21 @@ function _splitOppositeWrap(newType, startLi, startOff, endLi, endOff){
 // selection.  Used to detect "user re-selected a wrapped region and
 // included the markers in the new selection" — in that case the inside
 // markers are balanced and we can strip them all to toggle the wrap off.
+// Helper: does the text strictly between two (line,offset) positions
+// contain any non-whitespace character?  Used to tell a genuine
+// "selection extends past the tag" (real text outside the markers,
+// EXPAND intent) apart from a mouse-drag that merely overshot the tag
+// boundary by some whitespace (still a toggle-OFF/STRIP intent).
+function _hasNonBlankBetween(li1, off1, li2, off2){
+  if(li1 > li2 || (li1 === li2 && off1 >= off2)) return false;
+  for(var li = li1; li <= li2; li++){
+    var text = originalLines[li] || '';
+    var from = (li === li1) ? off1 : 0;
+    var to = (li === li2) ? off2 : text.length;
+    if(/\S/.test(text.substring(from, to))) return true;
+  }
+  return false;
+}
 function _scanMarkersInRange(type, startLi, startOff, endLi, endOff){
   var openMark = (type==='a') ? '[A>' : '[D>';
   var closeMark = (type==='a') ? '<A]' : '<D]';
@@ -2476,7 +2491,8 @@ function _wrapTagSingleLine(type, li, startOff, endOff){
       var _lastA1=selected.lastIndexOf('[A>'), _lastA2=selected.lastIndexOf('<A]');
       var _lastMk=Math.max(_lastA1,_lastA2);
       var _stripped=stripA(selected);
-      var _extends=(_firstMk>0)||(_lastMk+3<selected.length);
+      // Whitespace-only overshoot (imprecise drag) still means toggle OFF.
+      var _extends=/\S/.test(selected.substring(0,_firstMk))||/\S/.test(selected.substring(_lastMk+3));
       if(_extends && _stripped.length>0){
         // EXPAND: strip inner markers + wrap whole selection
         result=before+'[A>'+_stripped+'<A]'+after;
@@ -2514,7 +2530,8 @@ function _wrapTagSingleLine(type, li, startOff, endOff){
       var _lastD1=selected.lastIndexOf('[D>'), _lastD2=selected.lastIndexOf('<D]');
       var _lastMk=Math.max(_lastD1,_lastD2);
       var _stripped=stripD(selected);
-      var _extends=(_firstMk>0)||(_lastMk+3<selected.length);
+      // Whitespace-only overshoot (imprecise drag) still means toggle OFF.
+      var _extends=/\S/.test(selected.substring(0,_firstMk))||/\S/.test(selected.substring(_lastMk+3));
       if(_extends && _stripped.length>0){
         // EXPAND: strip inner markers + wrap whole selection
         result=before+'[D>'+_stripped+'<D]'+after;

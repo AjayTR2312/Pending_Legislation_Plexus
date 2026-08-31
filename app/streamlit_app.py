@@ -6214,6 +6214,15 @@ def show_results_section():
     """Show results in a clean tabbed layout: Summary, Validation Review, Activity Log"""
     file_name = Path(st.session_state.processed_file_path).name
 
+    # Pre-initialise the "Show full layout issue table" toggle key BEFORE
+    # st.tabs() is built below — same reason as the vri_* pre-init block:
+    # a widget key that only springs into existence once the Layout Issues
+    # data becomes available (after processing) makes st.tabs() lose track
+    # of the active tab and bounce back to the first tab on that click.
+    _layout_toggle_key = f"layout_full_table_{file_name}"
+    if _layout_toggle_key not in st.session_state:
+        st.session_state[_layout_toggle_key] = False
+
     # File size (prefer cached bytes for multi-pod safety)
     cached_data = st.session_state.get('processed_file_data')
     if cached_data is not None:
