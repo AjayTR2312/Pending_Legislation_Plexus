@@ -2627,6 +2627,24 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
         except Exception:
             pass
 
+        # Balance malformed A/D delimiters before save.  The other visual and
+        # hybrid paths already gate converted_text; this one only gated the
+        # PyMuPDF reference, so unclosed openers reached the saved output.
+        try:
+            from pymupdf_extractor import enforce_tag_integrity_gate
+            _before_gate = converted_text
+            converted_text = enforce_tag_integrity_gate(
+                converted_text, state_code=detected_state
+            )
+            _gate_report = getattr(enforce_tag_integrity_gate, "_last_report", None)
+            if converted_text != _before_gate:
+                add_log(
+                    f"🛠️ Tag integrity gate repaired output: {(_gate_report or {}).get('issues', [])}",
+                    "warning",
+                )
+        except Exception as _gate_err:
+            logging.warning(f"Tag integrity gate failed (non-critical): {_gate_err}")
+
         # ── Step 5: Save output ──────────────────────────────────────────────────
         st.session_state.current_step = 4
         st.session_state.step_status[4] = "🔄"
@@ -2867,6 +2885,42 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
                         logging.warning(f"Context rebuild failed (non-critical): {_ctx_err}")
 
                 st.session_state.step_status[6] = "✅"
+
+                # CO: drop markup the LLM inferred from the all-caps title /
+                # digest.  CO markup may only begin at the first body line
+                # numbered "1"; the title block is numbered 101, 102, … so
+                # anything above the body is preamble and must be untagged.
+                # Uses the RAW PyMuPDF text (line numbers intact) as reference.
+                if detected_state and detected_state.upper() == "CO" and pymupdf_text:
+                    from pymupdf_extractor import (
+                        _split_co_deadline_rows,
+                        find_dropped_content,
+                        flatten_markdown_tables,
+                        strip_co_preamble_tags,
+                    )
+                    _before_co = converted_text
+                    converted_text = strip_co_preamble_tags(converted_text, pymupdf_text)
+                    if converted_text != _before_co:
+                        add_log("🏷️ Removed spurious CO preamble tags (markup starts at line 1)")
+                    _before_rows = converted_text
+                    converted_text = _split_co_deadline_rows(converted_text)
+                    if converted_text != _before_rows:
+                        add_log("📐 Restored CO deadline-table row breaks")
+                    _before_md = converted_text
+                    converted_text = flatten_markdown_tables(converted_text)
+                    if converted_text != _before_md:
+                        add_log("📋 Flattened markdown pipe table to plain text rows")
+                    if converted_text != _before_co:
+                        with open(output_path, "w", encoding="utf-8") as f:
+                            f.write(converted_text)
+
+                    _dropped = find_dropped_content(pymupdf_clean_text, converted_text)
+                    if _dropped["missing_count"]:
+                        add_log(
+                            f"🚨 {_dropped['missing_count']} word(s) of source text missing "
+                            f"from the output — " + " | ".join(_dropped["samples"][:2]),
+                            "warning",
+                        )
 
                 # Restore special symbols dropped by Claude vision
                 converted_before = converted_text
@@ -7456,6 +7510,40 @@ class BatchWorker:
                         audit_json_report = pymupdf_report
                     except Exception as _ctx_err:
                         logging.warning(f"Context rebuild failed (non-critical): {_ctx_err}")
+
+                # CO: drop markup the LLM inferred from the all-caps title /
+                # digest.  Markup may only begin at the first body line
+                # numbered "1"; the title block is numbered 101, 102, ….
+                if detected_state and detected_state.upper() == "CO" and pymupdf_text:
+                    from pymupdf_extractor import (
+                        _split_co_deadline_rows,
+                        find_dropped_content,
+                        flatten_markdown_tables,
+                        strip_co_preamble_tags,
+                    )
+                    _before_co = converted_text
+                    converted_text = strip_co_preamble_tags(converted_text, pymupdf_text)
+                    if converted_text != _before_co:
+                        add_log("🏷️ Removed spurious CO preamble tags (markup starts at line 1)")
+                    _before_rows = converted_text
+                    converted_text = _split_co_deadline_rows(converted_text)
+                    if converted_text != _before_rows:
+                        add_log("📐 Restored CO deadline-table row breaks")
+                    _before_md = converted_text
+                    converted_text = flatten_markdown_tables(converted_text)
+                    if converted_text != _before_md:
+                        add_log("📋 Flattened markdown pipe table to plain text rows")
+                    if converted_text != _before_co:
+                        with open(output_path, "w", encoding="utf-8") as f:
+                            f.write(converted_text)
+
+                    _dropped = find_dropped_content(pymupdf_clean_text, converted_text)
+                    if _dropped["missing_count"]:
+                        add_log(
+                            f"🚨 {_dropped['missing_count']} word(s) of source text missing "
+                            f"from the output — " + " | ".join(_dropped["samples"][:2]),
+                            "warning",
+                        )
 
                 # Restore special symbols dropped by Claude vision
                 converted_before = converted_text

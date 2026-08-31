@@ -3078,6 +3078,421 @@ def _strip_ct_analysis_section_tags(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Colorado (CO) preamble tag removal
+# ---------------------------------------------------------------------------
+# CO marks added language by CAPITALISATION rather than by underline, so the
+# LLM has to infer tag boundaries from letter case.  That heuristic misfires
+# on the front matter: the bill/resolution TITLE ("CONCERNING ...") is set in
+# all caps but is *not* new language, and neither is the LLS header, the
+# sponsorship block or the bill digest.
+#
+# The CO drafting rule is:
+#
+#     ALL CAPS w/in text (not "SECTION" at the beginning of a line)
+#     Begin mark up at line numbered lines starting with number 1
+#
+# In the PDF, the title block carries its own line numbers (101, 102, 103 …)
+# while the *body* restarts at 1.  So the first body-numbered line marks the
+# point at which markup may legitimately begin; everything above it is
+# preamble and must carry no tags.
+#
+# Example (PyMuPDF extraction of SR26-005):
+#
+#     SENATE RESOLUTION 26-005
+#
+#     101 CONCERNING THE RECOGNITION OF SINGLE PARENT DAY.
+#
+#     1         WHEREAS, The greatest need of every child is to be loved; and
+#
+# ``101 CONCERNING …`` is preamble (line number 101, not 1) so the
+# ``[A>CONCERNING THE RECOGNITION OF SINGLE PARENT DAY.<A]`` tag the LLM
+# produced is wrong and gets stripped.
+_RE_CO_NUMBERED_LINE = re.compile(r"^[ \t]*(\d{1,3})[ \t]+(\S.*)$")
+
+# Canonical first line of a CO body: the enacting clause for bills, the first
+# WHEREAS for resolutions/memorials, or SECTION 1 when the enacting clause is
+# absent.  Used to pick the right candidate when several lines are numbered 1.
+_RE_CO_BODY_START = re.compile(
+    r"^(?:be\s+it\s+(?:enacted|resolved)\b|whereas\b|section\s+1\b)",
+    re.IGNORECASE,
+)
+
+# Any add/delete delimiter — used to strip markup while KEEPING the text.
+_RE_AD_TAG_DELIM = re.compile(r"\[[AD]>|<[AD]\]")
+
+# Words in the reflowed output may be separated by whitespace and/or stray tag
+# delimiters, so the anchor matcher tolerates both between words.
+_CO_ANCHOR_GAP = r"(?:\s|\[[AD]>|<[AD]\])+"
+
+# How many leading words of the first body line to use as the anchor.  Long
+# enough to be unique, short enough to survive minor LLM rewording.
+_CO_ANCHOR_WORDS = 8
+
+# Successive body lines are tried as fallback anchors when the first one is
+# absent from the output (the vision model sometimes drops the page-1 recitals
+# entirely), capped so a stray late match can never strip half the document.
+_CO_ANCHOR_CANDIDATES = 12
+_CO_ANCHOR_MAX_POS_RATIO = 0.25
+_CO_ANCHOR_MAX_POS_FLOOR = 4000
+
+
+def _find_co_body_start_lines(reference_text: str) -> List[str]:
+    """Return the first CO *body* line (the line numbered ``1``) and the lines
+    that follow it, in document order, as anchor candidates.
+
+    ``reference_text`` must be the RAW PyMuPDF extraction — the pre-cleaned
+    text has already had the line numbers stripped.
+
+    Two things make a bare ``^1 `` match unreliable:
+
+    1. CO bill digests are prose that soft-wraps, so a summary sentence can
+       legitimately begin a line with "1" (e.g. ``... Specifically, section\\n
+       1 allows for school districts to:``).
+    2. The enacting clause sits on its own line 1 and the numbering then
+       *restarts* at 1 for the section text, so a genuine body start may be
+       followed by ``1, 2, 3`` rather than ``2, 3, 4``.
+
+    So we first collect every ``1`` that begins a real line-number run (either
+    ``2, 3, 4`` or ``1, 2, 3``), then prefer the earliest one whose text looks
+    like a CO body opener.  If none does, we fall back to the earliest
+    candidate that starts a plain ``2, 3, 4`` run.
+    """
+    if not reference_text:
+        return []
+
+    numbered: List[Tuple[int, str]] = []
+    for line in reference_text.splitlines():
+        m = _RE_CO_NUMBERED_LINE.match(line)
+        if m:
+            numbered.append((int(m.group(1)), m.group(2).strip()))
+
+    start: Optional[int] = None
+    fallback: Optional[int] = None
+    for i, (num, body) in enumerate(numbered):
+        if num != 1:
+            continue
+        follow = [n for n, _ in numbered[i + 1:i + 4]]
+        if follow not in ([2, 3, 4], [1, 2, 3]):
+            continue
+        if _RE_CO_BODY_START.match(body):
+            start = i
+            break
+        if fallback is None and follow == [2, 3, 4]:
+            fallback = i
+
+    if start is None:
+        start = fallback
+    if start is None:
+        return []
+    return [b for _, b in numbered[start:start + _CO_ANCHOR_CANDIDATES]]
+
+
+def _co_body_anchor_regex(body_line: str) -> Optional[re.Pattern]:
+    """Build a whitespace/tag-tolerant regex for the start of the CO body."""
+    words = body_line.split()[:_CO_ANCHOR_WORDS]
+    if len(words) < 3:
+        return None
+    return re.compile(_CO_ANCHOR_GAP.join(re.escape(w) for w in words))
+
+
+def strip_co_preamble_tags(text: str, reference_text: Optional[str] = None) -> str:
+    """Remove add/delete markup that precedes the CO body (line numbered 1).
+
+    Tag *delimiters* are removed but the wrapped text is preserved — the
+    preamble content itself is correct, only the markup is spurious.
+
+    Returns ``text`` unchanged whenever the body boundary cannot be located
+    with confidence (no reference, no line-number run, anchor not found in the
+    output), so a failure to detect can never damage a document.
+    """
+    if not text or not reference_text:
+        return text
+
+    limit = max(_CO_ANCHOR_MAX_POS_FLOOR, int(len(text) * _CO_ANCHOR_MAX_POS_RATIO))
+    for body_line in _find_co_body_start_lines(reference_text):
+        anchor = _co_body_anchor_regex(body_line)
+        if anchor is None:
+            continue
+        match = anchor.search(text)
+        if match is None or match.start() > limit:
+            continue
+        head, tail = text[:match.start()], text[match.start():]
+        if not _RE_AD_TAG_DELIM.search(head):
+            return text
+        return _RE_AD_TAG_DELIM.sub("", head) + tail
+
+    return text
+
+
+# CO joint-rule deadline schedules are two-column tables: a left-hand row label
+# ("78TH DAY (MONDAY 03/29/27)", "5 DAYS PRIOR TO 1ST DAY (WEDNESDAY
+# 01/06/27)*") and a right-hand deadline description.  Each belongs in its own
+# tag so the two columns stay distinguishable:
+#
+#     [A>47TH DAY (FRIDAY 02/26/27)<A]      [A>DEADLINE FOR HOUSE COMMITTEES…<A]
+#
+# Vision returns two broken shapes instead, sometimes both in one document:
+#   1. label and description fused in a single span
+#      [A>1ST DAY (MONDAY 01/11/27) DEADLINE FOR THE INTRODUCTION…<A]
+#   2. a row carrying a ** footnote marker loses its row break, so the next
+#      row's label is swallowed and every following row cascades into the
+#      same span
+#      [A>66TH DAY … SENATE.** …REPRESENTATIVES.** 78TH DAY (MONDAY 03/29/27) …<A]
+#
+# Splitting a span at every row label repairs both, and leaves already-correct
+# label-only spans untouched.
+_CO_DEADLINE_LABEL = (
+    r"(?:\d{1,3}[ \t]+DAYS?[ \t]+PRIOR[ \t]+TO[ \t]+)?"
+    r"\d{1,3}(?:ST|ND|RD|TH)[ \t]+DAY[ \t]+"
+    r"\((?:MON|TUES|WEDNES|THURS|FRI|SATUR|SUN)DAY[ \t]+\d{2}/\d{2}/\d{2}\)\*?"
+)
+_RE_CO_DEADLINE_LABEL = re.compile(_CO_DEADLINE_LABEL)
+
+# The span body must not cross a tag delimiter, or one match could run from
+# one tag's opener to a later tag's closer and weld unrelated rows together.
+_RE_A_SPAN_NO_CROSS = re.compile(
+    r"\[A>((?:(?!\[A>|<A\]|\[D>|<D\]).)*?)<A\]", re.DOTALL
+)
+
+# Column gap between the label and its description.
+_CO_ROW_GAP = "      "
+
+_CO_WEEKDAY = r"(?:MON|TUES|WEDNES|THURS|FRI|SATUR|SUN)DAY"
+
+# Vision also opens the tag in the MIDDLE of a row label, leaving the leading
+# ordinal outside it — "1ST [A>DAY (MONDAY 01/11/27) DEADLINE…<A]" — or the
+# leading count — "5 [A>DAYS PRIOR TO 1ST DAY (WEDNESDAY 01/06/27)*…".  The
+# whole label is added text, so pull the stray prefix back inside the tag.
+_RE_CO_ORDINAL_OUTSIDE_TAG = re.compile(
+    r"(?<![>\w])(\d{1,3}(?:ST|ND|RD|TH))[ \t]+\[A>(?=DAY[ \t]+\(" + _CO_WEEKDAY + r")"
+)
+_RE_CO_COUNT_OUTSIDE_TAG = re.compile(
+    r"(?<![>\w])(\d{1,3})[ \t]+\[A>(?=DAYS?[ \t]+PRIOR[ \t]+TO\b)"
+)
+
+
+def _repair_co_row_label_tags(text: str) -> str:
+    text = _RE_CO_ORDINAL_OUTSIDE_TAG.sub(r"[A>\1 ", text)
+    return _RE_CO_COUNT_OUTSIDE_TAG.sub(r"[A>\1 ", text)
+
+
+# On the rows carrying a **/**** footnote marker vision sometimes emits the
+# whole row with NO tag at all and only re-opens on the following row's label.
+# CO marks added text by capitalisation, so an all-caps run that opens with a
+# row label, inside a paragraph whose remaining rows are tagged, is added text
+# that lost its markup.
+_RE_CO_ROW_LABEL_START = re.compile(r"^[ \t]*(?:" + _CO_DEADLINE_LABEL + r")")
+
+# A label span that follows other text on the same line starts a new row.
+_RE_CO_ROW_RUN_ON = re.compile(
+    r"(?<=\S)[ \t]+(?=\[A>(?:" + _CO_DEADLINE_LABEL + r")<A\])"
+)
+
+
+def _tag_untagged_co_row_prefix(text: str) -> str:
+    out = []
+    for para in text.split("\n\n"):
+        head, sep, rest = para.partition("[A>")
+        stripped = head.strip()
+        if (
+            sep
+            and stripped
+            and _RE_CO_ROW_LABEL_START.match(stripped)
+            and not any(c.islower() for c in stripped)
+        ):
+            para = f"[A>{stripped}<A] {sep}{rest}"
+        out.append(para)
+    return "\n\n".join(out)
+
+
+def _split_co_row_span(inner: str) -> str:
+    labels = list(_RE_CO_DEADLINE_LABEL.finditer(inner))
+    if not labels:
+        return f"[A>{inner}<A]"
+
+    rows: List[str] = []
+    lead = inner[:labels[0].start()].strip()
+    if lead:
+        rows.append(f"[A>{lead}<A]")
+    for i, m in enumerate(labels):
+        stop = labels[i + 1].start() if i + 1 < len(labels) else len(inner)
+        desc = inner[m.end():stop].strip()
+        row = f"[A>{m.group(0).strip()}<A]"
+        if desc:
+            row += _CO_ROW_GAP + f"[A>{desc}<A]"
+        rows.append(row)
+    return "\n\n".join(rows)
+
+
+def _split_co_deadline_rows(text: str) -> str:
+    """Give each deadline-table row its own label span and description span."""
+    if not text:
+        return text
+    text = _repair_co_row_label_tags(text)
+    text = _tag_untagged_co_row_prefix(text)
+    text = _RE_A_SPAN_NO_CROSS.sub(lambda m: _split_co_row_span(m.group(1)), text)
+    # Two rows recovered from one paragraph end up side by side on one line.
+    return _RE_CO_ROW_RUN_ON.sub("\n\n", text)
+
+
+# A dropped block is a long contiguous run of reference words with no
+# counterpart in the output.  Compared against the PRE-CLEANED reference, not
+# the raw extraction, so line numbers / page footers / legend lines that are
+# removed on purpose don't register.
+_DROPPED_MIN_RUN_WORDS = 25
+
+# Letter-spaced mastheads ("F L O R I D A  H O U S E …") tokenize as a long run
+# of single characters and are removed on purpose, so a run must be mostly
+# real words to count as lost content.
+_DROPPED_MIN_WORDLIKE_RATIO = 0.6
+
+
+def _is_real_content_run(words: List[str]) -> bool:
+    wordlike = sum(1 for w in words if len(w) > 1)
+    return wordlike >= len(words) * _DROPPED_MIN_WORDLIKE_RATIO
+
+
+def find_dropped_content(
+    reference_text: str,
+    output_text: str,
+    *,
+    min_run_words: int = _DROPPED_MIN_RUN_WORDS,
+    max_samples: int = 5,
+) -> Dict[str, Any]:
+    """Report long contiguous stretches of reference text missing from output.
+
+    Catches the vision model skipping a whole region of a page — e.g. CO
+    HJR26-1031, where the entire page-1 recital ("WHEREAS, Section 2-2-303.5
+    (3)…" through "the Senate concurring herein:") was dropped because it sits
+    directly above the "Shading denotes…" legend the model was told to remove.
+
+    Word-level alignment (not line matching) so reflow, re-wrapping and the
+    column interleaving in CO's two-column tables don't produce false alarms.
+    """
+    report: Dict[str, Any] = {
+        "reference_words": 0, "missing_count": 0, "runs": [], "samples": [],
+    }
+    if not reference_text or not output_text:
+        return report
+
+    cleaned_ref = _RE_PAGE_FOOTER_LINE.sub(
+        "", _RE_PAGE_MARKER_LINE.sub("", _RE_AD_TAG_DELIM.sub("", reference_text))
+    )
+    ref_words = cleaned_ref.split()
+    out_words = _RE_AD_TAG_DELIM.sub("", output_text).split()
+    report["reference_words"] = len(ref_words)
+    if not ref_words or not out_words:
+        return report
+
+    matcher = difflib.SequenceMatcher(
+        None, [w.lower() for w in ref_words], [w.lower() for w in out_words],
+        autojunk=False,
+    )
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag not in ("delete", "replace"):
+            continue
+        # A "replace" is only a drop when almost nothing took its place.
+        dropped = i2 - i1
+        if dropped < min_run_words or (j2 - j1) * 4 > dropped:
+            continue
+        run_words = ref_words[i1:i2]
+        if not _is_real_content_run(run_words):
+            continue
+        report["runs"].append({"words": dropped, "text": " ".join(run_words)})
+
+    report["missing_count"] = sum(r["words"] for r in report["runs"])
+    report["samples"] = [
+        f"{r['words']} words: {r['text'][:120]}" for r in report["runs"][:max_samples]
+    ]
+    return report
+
+
+# The vision prompt forbids markdown *emphasis* (**, *, ~~) but says nothing
+# about markdown *tables*, so a genuine table (e.g. the CO "APPENDIX" of
+# amended C.R.S. sections) comes back as a pipe grid:
+#
+#     | C.R.S. Section | Section in bill | Reason for Amendment |
+#     |---|---|---|
+#     | 2-2-307 (3)(d) | 1 | Repeals this provision as obsolete because … |
+#
+# Every other state renders tabular content as plain whitespace-separated
+# rows, which is also how PyMuPDF reads the same table, so flatten it back.
+_RE_MD_TABLE_ROW = re.compile(r"^[ \t]*\|.*\|[ \t]*$")
+_RE_MD_TABLE_SEP = re.compile(r"^[ \t]*\|[\s:|-]+\|[ \t]*$")
+
+# Matches the column gap CO already uses for its two-column deadline tables.
+_MD_TABLE_CELL_GAP = "      "
+_MD_TABLE_MAX_COL_WIDTH = 24
+
+
+def _flatten_md_table_block(block: List[str]) -> List[str]:
+    rows: List[List[str]] = []
+    for line in block:
+        if _RE_MD_TABLE_SEP.match(line):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        cells = [c for c in cells if c]
+        if cells:
+            rows.append(cells)
+    if not rows:
+        return []
+
+    # Pad every column but the last so the columns line up; the last column is
+    # long prose and padding it would only add trailing space.  The cap stops a
+    # single outlier cell (one C.R.S. cite ran to 51 chars against a median of
+    # 16) from stretching the whole table — wider cells just overflow.
+    ncols = max(len(r) for r in rows)
+    widths = [
+        min(
+            max((len(r[i]) for r in rows if len(r) > i), default=0),
+            _MD_TABLE_MAX_COL_WIDTH,
+        )
+        for i in range(ncols - 1)
+    ]
+
+    out: List[str] = []
+    for i, cells in enumerate(rows):
+        if i:
+            out.append("")
+        padded = [
+            c.ljust(widths[j]) if j < len(widths) else c
+            for j, c in enumerate(cells)
+        ]
+        out.append(_MD_TABLE_CELL_GAP.join(padded).rstrip())
+    return out
+
+
+def flatten_markdown_tables(text: str) -> str:
+    """Rewrite markdown pipe tables as plain whitespace-separated rows."""
+    if not text or "|" not in text:
+        return text
+
+    lines = text.splitlines()
+    result: List[str] = []
+    block: List[str] = []
+
+    def flush() -> None:
+        if not block:
+            return
+        # A separator row is what makes it unambiguously a markdown table.
+        if len(block) >= 2 and any(_RE_MD_TABLE_SEP.match(b) for b in block):
+            result.extend(_flatten_md_table_block(block))
+        else:
+            result.extend(block)
+        block.clear()
+
+    for line in lines:
+        if _RE_MD_TABLE_ROW.match(line):
+            block.append(line)
+        else:
+            flush()
+            result.append(line)
+    flush()
+
+    return "\n".join(result)
+
+
+# ---------------------------------------------------------------------------
 # District of Columbia (DC) letterhead-footer removal
 # ---------------------------------------------------------------------------
 # DC State Board of Education bills are formatted as a transmittal letter

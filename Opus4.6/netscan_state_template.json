@@ -48,7 +48,7 @@
       "state_name": "Colorado",
       "abbreviation": "CO",
       "file_type": ".pdf-text",
-      "deletions": "Remove line numbers, bill page footer (shading denotes...), subsequent page footers (page #/bill#). KEEP all first page header information including session details (e.g., 'Second Regular Session', 'Seventy-fifth General Assembly'), state name, bill status (e.g., 'INTRODUCED'), and LLS numbers",
+      "deletions": "Remove line numbers, bill page footer (shading denotes...), subsequent page footers (page #/bill#). KEEP all first page header information including session details (e.g., 'Second Regular Session', 'Seventy-fifth General Assembly'), state name, bill status (e.g., 'INTRODUCED'), and LLS numbers. CRITICAL — the page-1 footer is ONLY the legend lines themselves ('Shading denotes ... amendment.', 'Capital letters or bold & italic numbers indicate new material ...', 'Dashes through the words or numbers indicate deletions ...'). Everything ABOVE that legend on page 1 is body text and MUST be transcribed, including the line-numbered WHEREAS recitals and the 'Be It Resolved' / 'Be it enacted' clause. NEVER jump from the title block straight to page 2",
       "add_markup": {
         "underline": false,
         "bold": false,
