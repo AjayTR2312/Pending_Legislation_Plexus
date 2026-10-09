@@ -1,0 +1,6 @@
+# Install these into the EXISTING project .venv (it already has anthropic,
+# pymupdf, pypdfium2, python-dotenv, etc. from the root requirements.txt).
+# This trial backend only needs the web-server layer on top of that.
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+python-multipart>=0.0.12
