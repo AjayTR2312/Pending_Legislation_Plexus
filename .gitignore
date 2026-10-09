@@ -1,5 +1,6 @@
 # Virtual environments
 venv/
+.venv/
 env/
 ENV/
 cloud-tool/
@@ -44,6 +45,9 @@ Thumbs.db
 # Environment variables
 .env
 .env.local
+
+# Credentials — never commit; use .env or a secret store
+config/pdfservices-api-credentials.json
 
 # Build and deployment documentation (internal)
 BUGFIX_403_UPLOAD_ERROR.md

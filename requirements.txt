@@ -10,8 +10,6 @@ anthropic>=0.73.0
 openai>=1.30.0
 pypdfium2>=4.30.0
 
-# PDF Processing - Adobe PDF Services
-pdfservices-sdk>=4.2.0
 pdfplumber>=0.11.0
 
 # Document Processing
