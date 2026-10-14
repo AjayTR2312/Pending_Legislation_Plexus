@@ -50,14 +50,42 @@ class DecisionRequest(BaseModel):
     approve: bool
 
 # WEBAPP_ROOT_PATH lets the app sit behind a path prefix (e.g. Plexus serves at
-# /<asset>/<prefix>). Only needed if the platform ingress does NOT strip the
-# prefix before forwarding; it keeps the OpenAPI docs working under the prefix.
+# /<asset>/<prefix>). The frontend is built with this as its base, so the browser
+# requests assets and /api calls under the prefix. If the platform ingress strips
+# the prefix before forwarding, requests arrive at "/" and everything just works.
+# If it does NOT strip, the middleware below removes the prefix so routes still
+# match. Setting it is safe either way.
 import os as _os
+
+_ROOT_PATH = _os.environ.get("WEBAPP_ROOT_PATH", "").strip().rstrip("/")
 
 app = FastAPI(
     title="Pending Legislation — Trial API v2",
-    root_path=(_os.environ.get("WEBAPP_ROOT_PATH", "").strip().rstrip("/")),
+    root_path=_ROOT_PATH,
 )
+
+
+class _StripRootPath:
+    """ASGI middleware: strip a leading path prefix if the ingress did not.
+
+    No-op when WEBAPP_ROOT_PATH is unset or the incoming path does not carry the
+    prefix (the normal case when the ingress strips it)."""
+
+    def __init__(self, app, prefix: str) -> None:
+        self.app = app
+        self.prefix = prefix
+
+    async def __call__(self, scope, receive, send):
+        if self.prefix and scope.get("type") in ("http", "websocket"):
+            path = scope.get("path", "")
+            if path == self.prefix or path.startswith(self.prefix + "/"):
+                scope = dict(scope)
+                scope["path"] = path[len(self.prefix):] or "/"
+        await self.app(scope, receive, send)
+
+
+if _ROOT_PATH:
+    app.add_middleware(_StripRootPath, prefix=_ROOT_PATH)
 
 app.add_middleware(
     CORSMiddleware,
@@ -117,9 +145,13 @@ async def health():
     return {"status": "ok", "queue": db.queue_depth()}
 
 
+# Plain health probes. Multiple common paths are accepted so the Plexus
+# liveness/readiness probe passes regardless of which convention is configured
+# (/health, /healthz, or Streamlit's /_stcore/health).
 @app.get("/health")
+@app.get("/healthz")
+@app.get("/_stcore/health")
 async def health_root():
-    """Plain health probe (matches the platform/load-balancer convention)."""
     return {"status": "ok"}
 
 

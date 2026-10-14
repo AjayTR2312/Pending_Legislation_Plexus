@@ -20,9 +20,13 @@ WORKDIR /build
 COPY webapp_trial/frontend/package.json webapp_trial/frontend/package-lock.json ./
 RUN npm ci
 COPY webapp_trial/frontend/ ./
-# BASE_PATH lets the UI be built for a sub-path if the Plexus ingress does NOT
-# strip the /<asset>/<prefix> prefix. Default "/" works when it does strip it.
-ARG BASE_PATH=/
+# Relative asset base ("./") so the compiled UI loads its JS/CSS from wherever
+# Plexus serves it, without hardcoding the host-path prefix. The app has no
+# client-side router (navigation is state-based), so the page URL stays at the
+# mount root and relative asset paths always resolve. API calls detect the
+# prefix at runtime (see src/api.ts). Override with --build-arg BASE_PATH=... if
+# a specific absolute base is ever required.
+ARG BASE_PATH=./
 RUN npm run build -- --base="${BASE_PATH}"
 
 # -----------------------------------------------------------------------------
@@ -67,10 +71,20 @@ RUN chmod +x webapp_trial/entrypoint.sh \
     && chown -R deployment:deploymentgroup /workspace
 
 USER deployment
+# Plexus runs the pod with a READ-ONLY root filesystem, so the app must keep its
+# scratch/working files under a writable path (/tmp). Durable data lives in S3 /
+# Postgres, so /tmp is only an ephemeral cache. These can still be overridden via
+# the Deployment Job environment tab.
 ENV PYTHONUNBUFFERED=1 \
     PATH="/home/deployment/.local/bin:$PATH" \
     PORT=8501 \
-    WORKER_CONCURRENCY=1
+    WORKER_CONCURRENCY=1 \
+    HOME=/tmp \
+    TRIAL_STORAGE_DIR=/tmp/webapp_storage \
+    TRIAL_DB_PATH=/tmp/webapp_storage/jobs.db \
+    APP_TMP_DIR=/tmp/app_tmp \
+    XDG_CACHE_HOME=/tmp/.cache \
+    MPLCONFIGDIR=/tmp/.mpl
 
 EXPOSE 8501
 

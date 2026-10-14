@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Job } from "../types";
+import { apiUrl } from "../api";
 
 /**
  * Live job list over server-sent events.
@@ -21,7 +22,7 @@ export function useJobStream(): { jobs: Job[] | null; live: boolean } {
       if (fallback) return;
       fallback = setInterval(async () => {
         try {
-          const res = await fetch("/api/jobs");
+          const res = await fetch(apiUrl("/api/jobs"));
           if (res.ok) setJobs(await res.json());
         } catch {
           /* ignore transient failures */
@@ -30,7 +31,7 @@ export function useJobStream(): { jobs: Job[] | null; live: boolean } {
     };
 
     try {
-      source = new EventSource("/api/stream/jobs");
+      source = new EventSource(apiUrl("/api/stream/jobs"));
       source.addEventListener("jobs", (e) => {
         if (closed) return;
         setLive(true);

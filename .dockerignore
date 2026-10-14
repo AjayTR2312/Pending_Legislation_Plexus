@@ -53,7 +53,6 @@ BUILD_DEPLOYMENT_COMMANDS.md
 webapp_trial/backend/storage/
 webapp_trial/backend/_pg_test_storage/
 webapp_trial/backend/_s3_test_storage/
-data/
 
 # Secrets — never bake these into an image
 .env

@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import type { ReactNode } from "react";
 import {
   applyFix,
+  apiUrl,
   approveReview,
   comparePageUrl,
   fetchText,
@@ -1182,7 +1183,7 @@ export default function ReviewWorkspace({
         </ul>
         <a
           className="btn-link"
-          href={`/api/validation/download?key=${encodeURIComponent(report.key)}`}
+          href={apiUrl(`/api/validation/download?key=${encodeURIComponent(report.key)}`)}
           download={report.name}
           title="Download the converted text with every edit applied"
         >
