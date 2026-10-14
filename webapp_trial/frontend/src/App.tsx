@@ -9,6 +9,7 @@ import DownloadsPanel from "./components/DownloadsPanel";
 import RulesPanel from "./components/RulesPanel";
 import RunningJobs from "./components/RunningJobs";
 import Icon from "./components/Icon";
+import { assetUrl } from "./api";
 import { useTheme } from "./hooks/useTheme";
 import type { Job, ReviewTarget } from "./types";
 import "./styles.css";
@@ -50,7 +51,7 @@ export default function App() {
   return (
     <div className="app-shell">
       <header className="app-header">
-        <img className="app-logo" src="/brand/thomson-reuters-primary-logo-reverse.svg" alt="Thomson Reuters" />
+        <img className="app-logo" src={assetUrl("/brand/thomson-reuters-primary-logo-reverse.svg")} alt="Thomson Reuters" />
         <h1>Pending <em>legislation</em></h1>
         <span className="muted">Conversion and review workspace</span>
         <button className="theme-toggle" onClick={toggleTheme}>

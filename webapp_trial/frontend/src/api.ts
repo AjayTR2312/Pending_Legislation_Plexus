@@ -40,6 +40,12 @@ export function apiUrl(path: string): string {
   return `${API_BASE}${path}`;
 }
 
+/** Base-aware URL for a static asset in the public/ folder (logo, images).
+ * Needed because absolute "/brand/..." paths ignore the Plexus host-path prefix. */
+export function assetUrl(path: string): string {
+  return `${API_BASE}${path}`;
+}
+
 /** fetch() that targets the prefixed API path. */
 function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   return fetch(apiUrl(path), init);
