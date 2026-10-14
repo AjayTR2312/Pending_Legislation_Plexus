@@ -145,6 +145,36 @@ async def health():
     return {"status": "ok", "queue": db.queue_depth()}
 
 
+@app.get("/api/whoami")
+async def whoami():
+    """Diagnostic: the AWS identity (IAM role ARN) this pod runs as.
+
+    Used to find the exact role a bucket/KMS owner must grant cross-account S3
+    access to. Safe to expose (no secrets); remove after the ARN is captured.
+    """
+    try:
+        import boto3
+
+        ident = boto3.client("sts").get_caller_identity()
+        assumed_arn = ident.get("Arn", "")
+        # Convert the assumed-role STS ARN into the underlying IAM role ARN that
+        # a KMS/S3 key policy should name.
+        role_arn = None
+        if ":assumed-role/" in assumed_arn:
+            account = ident.get("Account")
+            role_name = assumed_arn.split(":assumed-role/", 1)[1].split("/", 1)[0]
+            role_arn = f"arn:aws:iam::{account}:role/{role_name}"
+        return {
+            "account": ident.get("Account"),
+            "assumed_role_arn": assumed_arn,
+            "iam_role_arn_for_policies": role_arn,
+            "s3_bucket": deployconfig.s3_bucket(),
+            "s3_enabled": deployconfig.s3_enabled(),
+        }
+    except Exception as exc:  # noqa: BLE001 — diagnostic must report, not crash
+        return {"error": str(exc)}
+
+
 # Plain health probes. Multiple common paths are accepted so the Plexus
 # liveness/readiness probe passes regardless of which convention is configured
 # (/health, /healthz, or Streamlit's /_stcore/health).
