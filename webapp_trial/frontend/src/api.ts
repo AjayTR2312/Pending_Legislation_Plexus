@@ -51,6 +51,18 @@ function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   return fetch(apiUrl(path), init);
 }
 
+export interface DeploymentInfo {
+  sftp_features_enabled: boolean;
+  storage_backend: string;
+  db_backend: string;
+}
+
+/** Deployment feature flags (used to hide SFTP/host-only tabs on Plexus). */
+export async function getDeploymentInfo(): Promise<DeploymentInfo> {
+  const data = await asJson<{ deployment: DeploymentInfo }>(await apiFetch("/api/info"));
+  return data.deployment;
+}
+
 async function asJson<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const body = await res.text();

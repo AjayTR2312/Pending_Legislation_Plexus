@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import UploadPage from "./pages/UploadPage";
 import JobPage from "./pages/JobPage";
 import JobsDashboard from "./pages/JobsDashboard";
@@ -9,7 +9,7 @@ import DownloadsPanel from "./components/DownloadsPanel";
 import RulesPanel from "./components/RulesPanel";
 import RunningJobs from "./components/RunningJobs";
 import Icon from "./components/Icon";
-import { assetUrl } from "./api";
+import { assetUrl, getDeploymentInfo } from "./api";
 import { useTheme } from "./hooks/useTheme";
 import type { Job, ReviewTarget } from "./types";
 import "./styles.css";
@@ -22,6 +22,20 @@ export default function App() {
   const [batchId, setBatchId] = useState<string | null>(null);
   const [target, setTarget] = useState<ReviewTarget | null>(null);
   const [theme, toggleTheme] = useTheme();
+  // SFTP-dependent tabs (Downloaded files, Pipeline sessions) are hidden when
+  // the backend reports they are disabled (e.g. on Plexus). Default true so the
+  // tabs are not hidden before the flag loads in local/dev.
+  const [sftpEnabled, setSftpEnabled] = useState(true);
+
+  useEffect(() => {
+    getDeploymentInfo()
+      .then((info) => setSftpEnabled(info.sftp_features_enabled))
+      .catch(() => setSftpEnabled(true));
+  }, []);
+
+  const tabs: Tab[] = sftpEnabled
+    ? ["upload", "downloads", "jobs", "sessions", "rules"]
+    : ["upload", "jobs", "rules"];
 
   function clearAll() {
     setJob(null);
@@ -61,7 +75,7 @@ export default function App() {
 
       {showTabs && (
         <nav className="tab-bar">
-          {(["upload", "downloads", "jobs", "sessions", "rules"] as Tab[]).map((t) => (
+          {tabs.map((t) => (
             <button
               key={t}
               className={tab === t && !job && !target && !batchId ? "tab active" : "tab"}
