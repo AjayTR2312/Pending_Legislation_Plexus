@@ -98,11 +98,16 @@ log = logging.getLogger("pymupdf_compare")
 # Maximum number of checklist items to include in a single Claude API
 # call.  For large documents the checklist + images + clean text can
 # exceed context limits; we split into page-based chunks and merge.
-CHECKLIST_CHUNK_SIZE = 250  # items per chunk
-MAX_IMAGES_PER_CHUNK = 20   # max pages (images) per API call to avoid 413
+import sys as _sys, pathlib as _pl
+_APP = str(_pl.Path(__file__).resolve().parent.parent / "app")
+if _APP not in _sys.path:
+    _sys.path.insert(0, _APP)
+import settings as _S  # every tunable below: `python app/settings.py --show`
+CHECKLIST_CHUNK_SIZE = _S.AUDIT_CHECKLIST_CHUNK_SIZE  # items per chunk
+MAX_IMAGES_PER_CHUNK = _S.AUDIT_MAX_IMAGES_PER_CHUNK   # max pages (images) per API call to avoid 413
 # Both limits are enforced: a new chunk starts when either is exceeded.
 # Anthropic max image dimension for multi-image requests.
-_MAX_IMAGE_DIM = 2000
+_MAX_IMAGE_DIM = _S.AUDIT_MAX_IMAGE_DIM
 
 
 def _resize_image_b64(img_b64: str, max_dim: int = _MAX_IMAGE_DIM) -> str:
@@ -1689,6 +1694,16 @@ def _pages_for_chunk(chunk_items: List[Dict]) -> set:
     return {item.get("page") for item in chunk_items if item.get("page") is not None}
 
 
+try:  # model name comes from app/llm_models.py (LLM_MODEL env), with fallback handled by the client wrapper
+    import sys as _sys, pathlib as _pl
+    _APP = str(_pl.Path(__file__).resolve().parent.parent / "app")
+    if _APP not in _sys.path:
+        _sys.path.insert(0, _APP)
+    from llm_models import PRIMARY_MODEL as _DEFAULT_MODEL
+except Exception:  # noqa: BLE001 — model config must never break an import
+    _DEFAULT_MODEL = "claude-opus-4-8"
+
+
 def pymupdf_compare_tags(
     highlighted_images_b64: List[str],
     pymupdf_report: Dict,
@@ -1696,7 +1711,7 @@ def pymupdf_compare_tags(
     state_code: str,
     state_rules: str = "",
     output_xlsx: str = "pymupdf_clean_audit.xlsx",
-    model: str = "claude-opus-4-7",
+    model: str = _DEFAULT_MODEL,
     anthropic_client=None,
 ) -> Dict:
     """
@@ -1719,7 +1734,7 @@ def pymupdf_compare_tags(
     output_xlsx
         Path of the Excel report to write.
     model
-        Anthropic model id (default ``claude-opus-4-7``).
+        Anthropic model id (default ``claude-opus-4-8``).
     anthropic_client
         Optional pre-authenticated Anthropic client. When provided, the audit
         reuses it instead of requesting a fresh gateway token.
@@ -1861,7 +1876,7 @@ def pymupdf_compare_tags(
         raw_response = ""
         with client.messages.stream(
             model=model,
-            max_tokens=128000,
+            max_tokens=_S.LLM_MAX_TOKENS_STREAM,
             messages=[{"role": "user", "content": content_parts}],
         ) as stream:
             for text in stream.text_stream:
@@ -3267,7 +3282,7 @@ def _write_excel(
     ws1.merge_cells(start_row=1, start_column=1, end_row=1, end_column=NCOLS)
     title_cell = ws1.cell(
         row=1, column=1,
-        value=f"PyMuPDF Clean Audit — {state_code} (Claude Opus 4.7)",
+        value=f"PyMuPDF Clean Audit — {state_code} (Claude)",
     )
     title_cell.font = Font(name="Calibri", bold=True, size=14, color="2F5496")
     title_cell.alignment = Alignment(horizontal="center")
@@ -3508,6 +3523,6 @@ def _write_excel(
 # ─────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import sys
-    print("pymupdf_compare.py — PyMuPDF Clean-Text Audit via Claude Opus 4.7")
+    print("pymupdf_compare.py — PyMuPDF Clean-Text Audit via Claude")
     print("Use as module: from pymupdf_compare import pymupdf_compare_tags")
     sys.exit(0)

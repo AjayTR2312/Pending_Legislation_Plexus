@@ -13,7 +13,7 @@ test("wrapTag wraps a selection and keeps surrounding spaces outside the tag", (
 test("wrapTag refuses to nest or overlap an existing tag", () => {
   assert.match(wrapTag(["a [A>b c<A] d"], 0, 7, 8, "D").error, /already inside/);
   assert.match(wrapTag(["a [A>b<A] c d"], 0, 0, 12, "D").error, /existing tag/);
-  assert.match(wrapTag(["abc"], 1, 1, 1, "A").error, /Select the text/);
+  assert.match(wrapTag(["abc"], 1, 1, 1, "A").error, /converted text first/);
 });
 
 test("untag removes only the tag under the cursor and keeps its text", () => {

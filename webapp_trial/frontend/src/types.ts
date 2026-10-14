@@ -229,6 +229,8 @@ export interface ValidationIssue {
 
 export interface LayoutIssue {
   kind: string;
+  /** Two short lines kept apart that are probably meant to be separate lines. */
+  likely_ok?: boolean;
   line: number | null;
   related_line: number | null;
   description: string;
@@ -247,6 +249,11 @@ export interface TagAuditResult {
   page_images: number;
   /** What running this LLM audit cost. Absent for audits run before cost tracking. */
   usage?: TokenUsage;
+  /** Formatted spans found in the PDF, and why the checklist may have been empty. */
+  spans_in_pdf?: number;
+  note?: string;
+  /** False when the model never looked at the pages (empty checklist), so there is no real accuracy. */
+  verified?: boolean;
 }
 
 export interface ValidationReport {
@@ -258,6 +265,10 @@ export interface ValidationReport {
   edited: boolean;
   has_precleaned_baseline: boolean;
   content_accuracy_pct: number | null;
+  /** Plain text similarity from the checker, before page footers and reordered text are discounted. */
+  content_accuracy_raw_pct?: number | null;
+  /** The checker's own layout score, before short line-by-line blocks (addresses, signatures) are discounted. */
+  layout_accuracy_raw_pct?: number | null;
   layout_accuracy_pct: number | null;
   content_summary: {
     precleaned_words: number | null;
@@ -281,4 +292,52 @@ export interface ValidationReport {
   issues: ValidationIssue[];
   layout_issues: LayoutIssue[];
   history: { original: string; replacement: string }[];
+}
+
+export interface DownloadedZip {
+  name: string;
+  size_kb: number;
+  modified: string;
+  /** State read from the file name (NC_..._keying.zip); null when it cannot be read. */
+  state: string | null;
+  /** Already queued for conversion earlier. */
+  queued: boolean;
+}
+
+export interface DownloadsInfo {
+  folder: string;
+  sftp_configured: boolean;
+  files: DownloadedZip[];
+}
+
+export interface SubmitAllResult {
+  results: { name: string; status: "ready" | "submitted" | "skipped" | "failed"; reason: string }[];
+  ready: number;
+  submitted: number;
+  skipped: number;
+  failed: number;
+}
+
+export type ReviewStateName = "not_reviewed" | "not_approved" | "approved" | "edited" | "submitted" | "missing";
+
+export interface ReviewState {
+  state: ReviewStateName;
+  approved_at?: string | null;
+  submitted_at?: string | null;
+}
+
+export interface StateRules {
+  code: string;
+  spec: RuleCatalog["spec"];
+  /** The spec's own wording, in full (what the conversion model is told). */
+  instructions: { add: string[]; delete: string[] };
+  /** Checks that exist only for this state. */
+  rules: RuleCatalogEntry[];
+  /** Instructions nothing can check from text: a person verifies them against the PDF. */
+  manual: RuleCatalog["manual"];
+}
+
+export interface RulesOverview {
+  global: RuleCatalogEntry[];
+  states: StateRules[];
 }

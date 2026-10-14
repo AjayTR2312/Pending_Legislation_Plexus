@@ -1,0 +1,18 @@
+# Extra Python dependencies for the containerised Plexus deployment, on top of
+# the project-root requirements.txt (anthropic, pymupdf, pandas, paramiko, ...).
+#
+# Install in the image with:
+#   pip install -r requirements.txt -r webapp_trial/backend/requirements-plexus.txt
+
+# Web server layer (same as requirements-trial.txt)
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+python-multipart>=0.0.12
+
+# Stateless backends for Plexus (pods are ephemeral/replicated)
+boto3>=1.34.0            # S3 file storage
+psycopg[binary]>=3.2.0  # PostgreSQL job store
+psycopg-pool>=3.2.0     # connection pooling
+
+# Observability (DataDog log/trace integration; only patched when enabled)
+ddtrace>=2.8.0

@@ -25,9 +25,9 @@ import ActivityLog from "./ActivityLog";
 import JobMetrics from "./JobMetrics";
 import ScoreCard from "./ScoreCard";
 import Icon from "./Icon";
+import FindingCompare from "./FindingCompare";
 import type {
   ApprovalStatus,
-  TokenUsage,
   CompareBox,
   CompareData,
   Job,
@@ -54,21 +54,34 @@ type SourceFilter = "all" | "content" | "tags" | "paragraph" | "rules" | "layout
 const DELIM_SPLIT = /(\[A>|<A\]|\[D>|<D\])/;
 const SEV_RANK: Record<string, number> = { error: 0, warning: 1, info: 2 };
 const ECHO_MS = 80; // ignore the scroll event our own programmatic scroll causes
-const JUMP_MS = 750; // pause scroll-sync while a click-jump animates
+const JUMP_MS = 750; // pause scroll-sync while a click-jump animates...
+const SETTLE_MS = 180; // ...and keep pausing until the animation has been quiet this long (long jumps take > JUMP_MS)
 
 function sevOf(a: Marker, b: Marker | undefined): Marker {
   if (!b) return a;
   return (SEV_RANK[a.severity] ?? 3) < (SEV_RANK[b.severity] ?? 3) ? a : b;
 }
 
-const usd = (n: number | undefined) => `$${(n ?? 0).toFixed(4)}`;
-
-function usageDetail(u: TokenUsage): string {
-  const parts = [u.model, `${(u.input_tokens ?? 0).toLocaleString()} in / ${(u.output_tokens ?? 0).toLocaleString()} out`];
-  if ((u.cache_read_tokens ?? 0) > 0) parts.push(`${u.cache_read_tokens!.toLocaleString()} read from cache`);
-  else if ((u.cache_write_tokens ?? 0) > 0) parts.push(`${u.cache_write_tokens!.toLocaleString()} written to cache`);
-  return parts.filter(Boolean).join(" · ");
+function lsNum(key: string, fallback: number): number {
+  try {
+    const v = Number(localStorage.getItem(key));
+    return Number.isFinite(v) && v > 0 ? v : fallback;
+  } catch {
+    return fallback;
+  }
 }
+
+function lsSetNum(key: string, v: number) {
+  try {
+    localStorage.setItem(key, String(v));
+  } catch {
+    /* private window: the layout just is not remembered */
+  }
+}
+
+const DEFAULT_FINDINGS_PX = 340;
+const DEFAULT_PDF_FR = 1.3;
+const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
 
 function lsGet(key: string): string[] {
   try {
@@ -138,20 +151,33 @@ export default function ReviewWorkspace({
   const [selKeys, setSelKeys] = useState<Set<string>>(new Set());
   const [syncOn, setSyncOn] = useState(true);
   const [zoom, setZoom] = useState(100);
-  // How much of the width the PDF gets relative to the converted text: 0 = 1.6x, 1 = 2.4x, 2 = 4x
-  const [pdfWide, setPdfWide] = useState(0);
+  // Pane layout: drag the dividers; it is remembered between visits.
+  const [findingsPx, setFindingsPx] = useState(() => lsNum("pl.findingsPx", DEFAULT_FINDINGS_PX));
+  const [pdfFr, setPdfFr] = useState(() => lsNum("pl.pdfFr", DEFAULT_PDF_FR));
+  const [showLn, setShowLn] = useState(() => lsNum("pl.showLn", 1) === 1);
+  // Full page: hides the app header and navigation so the panes get the whole window.
+  const [fullPage, setFullPage] = useState(() => lsNum("pl.fullPage", 2) === 1);
+  useEffect(() => lsSetNum("pl.fullPage", fullPage ? 1 : 2), [fullPage]);
+  useEffect(() => {
+    document.body.classList.toggle("focus-review", fullPage);
+    return () => document.body.classList.remove("focus-review");
+  }, [fullPage]);
+  useEffect(() => lsSetNum("pl.findingsPx", findingsPx), [findingsPx]);
+  useEffect(() => lsSetNum("pl.pdfFr", pdfFr), [pdfFr]);
+  useEffect(() => lsSetNum("pl.showLn", showLn ? 1 : 2), [showLn]);
   const [panelOpen, setPanelOpen] = useState(true);
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
   const [sevFilter, setSevFilter] = useState<"all" | "error" | "warning">("all");
-  const [hideReviewed, setHideReviewed] = useState(false);
+  const [hideReviewed, setHideReviewed] = useState(true);
   const [reviewed, setReviewed] = useState<Set<string>>(new Set());
   const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set());
   const [draft, setDraft] = useState("");
-  const [editing, setEditing] = useState<{ line: number; value: string } | null>(null);
+  const [editing, setEditing] = useState<{ line: number; value: string; caret?: number } | null>(null);
   const [band, setBand] = useState<{ page: number; x0: number; y0: number; x1: number; y1: number } | null>(null);
 
   const pdfRef = useRef<HTMLDivElement | null>(null);
   const textRef = useRef<HTMLDivElement | null>(null);
+  const taRef = useRef<HTMLTextAreaElement | null>(null); // the open line editor, if any
   const pageRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const lineRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const wordRefs = useRef<Record<string, HTMLSpanElement | null>>({});
@@ -168,7 +194,7 @@ export default function ReviewWorkspace({
     setError(null);
     try {
       setLoadMsg("Running validation…");
-      const r = await getValidation(target.textPath, target.pdfPath, target.stateCode);
+      const r = await getValidation(target.textPath, target.pdfPath, target.stateCode, target.jobId);
       setReport(r);
       setApproval(await getApproval(r.key));
       setRaw(await fetchText(workingTextUrl(r.key)));
@@ -191,6 +217,13 @@ export default function ReviewWorkspace({
   useEffect(() => {
     load();
   }, [load]);
+
+  // Messages disappear by themselves.
+  useEffect(() => {
+    if (!error && !notice) return;
+    const id = setTimeout(() => { setError(null); setNotice(null); }, 7000);
+    return () => clearTimeout(id);
+  }, [error, notice]);
 
   useEffect(() => {
     if (reviewedKey) setReviewed(new Set(lsGet(reviewedKey)));
@@ -315,7 +348,7 @@ export default function ReviewWorkspace({
   const listed = useMemo(() => {
     return markers.filter((m) => {
       if (m.parent) return false;
-      if (sourceFilter !== "all" && m.source !== sourceFilter) return false;
+      if (sourceFilter === "all" ? m.source === "revisions" : m.source !== sourceFilter) return false;
       if (sevFilter !== "all" && m.severity !== sevFilter) return false;
       if (hideReviewed && reviewed.has(m.id)) return false;
       return true;
@@ -396,7 +429,11 @@ export default function ReviewWorkspace({
   const onTextScroll = useCallback(() => {
     if (!syncOn || !compare) return;
     const now = performance.now();
-    if (now < lockUntil.current || now < echoUntil.current.text) return;
+    if (now < lockUntil.current) {
+      lockUntil.current = now + SETTLE_MS; // still animating from a jump: do not let sync cancel it
+      return;
+    }
+    if (now < echoUntil.current.text) return;
     const text = textRef.current;
     const pdf = pdfRef.current;
     if (!text || !pdf) return;
@@ -413,7 +450,11 @@ export default function ReviewWorkspace({
   const onPdfScroll = useCallback(() => {
     if (!syncOn || !compare || pdfAnchors.length === 0) return;
     const now = performance.now();
-    if (now < lockUntil.current || now < echoUntil.current.pdf) return;
+    if (now < lockUntil.current) {
+      lockUntil.current = now + SETTLE_MS;
+      return;
+    }
+    if (now < echoUntil.current.pdf) return;
     const text = textRef.current;
     const pdf = pdfRef.current;
     if (!text || !pdf) return;
@@ -494,8 +535,12 @@ export default function ReviewWorkspace({
       if (reviewedKey) lsSet(reviewedKey, [...next]);
       return next;
     });
-    if (advance) step(1);
-  }, [reviewedKey, step]);
+    if (advance) {
+      const idx = listed.findIndex((x) => x.id === id);
+      if (idx >= 0 && idx < listed.length - 1) step(1);
+      else setActiveId(null);
+    }
+  }, [reviewedKey, step, listed]);
 
   // ── Edits ─────────────────────────────────────────────────────────────────
   const reloadAfterEdit = useCallback(async (msg: string) => {
@@ -569,8 +614,48 @@ export default function ReviewWorkspace({
   }
 
   /** Tag / untag / split / merge at the reviewer's selection, saved as one undo step. */
+  /** The line editor is open: the tag buttons work on what is selected (or where the cursor is) inside it. */
+  function runEditInEditor(kind: "A" | "D" | "untag" | "split" | "merge"): boolean {
+    const ta = taRef.current;
+    if (!editing || !ta) return false;
+    if (kind === "split" || kind === "merge") {
+      setNotice(null);
+      setError("Save or cancel the line edit first, then split or merge.");
+      return true;
+    }
+    const s = ta.selectionStart;
+    const e = ta.selectionEnd;
+    const one = [editing.value];
+    let out: EditOutcome;
+    if (kind === "untag") {
+      out = untag(one, 0, s);
+      if (isError(out) && e !== s) out = untag(one, 0, e);
+    } else {
+      out = wrapTag(one, 0, s, e, kind);
+    }
+    if (isError(out)) {
+      setNotice(null);
+      setError(out.error);
+      return true;
+    }
+    const value = out.lines[0];
+    setError(null);
+    setNotice(out.message);
+    setEditing({ line: editing.line, value });
+    requestAnimationFrame(() => {
+      const t = taRef.current;
+      if (!t) return;
+      let caret = out.caret ?? Math.min(s, value.length);
+      if (kind !== "untag" && out.caret === undefined) caret = value.indexOf(kind === "A" ? "<A]" : "<D]", s) + 3; // just after the new tag
+      t.focus();
+      t.setSelectionRange(caret, caret);
+    });
+    return true;
+  }
+
   async function runEdit(kind: "A" | "D" | "untag" | "split" | "merge") {
     if (!report) return;
+    if (runEditInEditor(kind)) return;
     const sel = selRef.current;
     const fallback = active ? active.line : null;
     let out: EditOutcome;
@@ -589,6 +674,14 @@ export default function ReviewWorkspace({
     if (isError(out)) {
       setNotice(null);
       setError(out.error);
+      return;
+    }
+    if (out.caret !== undefined) {
+      selRef.current = null;
+      setError(null);
+      setNotice(out.message);
+      setEditing({ line: out.focus, value: out.lines[out.focus], caret: out.caret });
+      requestAnimationFrame(() => scrollElIntoPane(textRef.current, lineRefs.current[out.focus] ?? null));
       return;
     }
     setBusy(true);
@@ -643,6 +736,11 @@ export default function ReviewWorkspace({
 
   async function handleAudit() {
     if (!target.pdfPath) return;
+    const pages = compare?.pages.length ?? job?.page_count;
+    if (!window.confirm(
+      `Run the tag audit?\n\nThis sends ${pages ? `${pages} highlighted page image${pages > 1 ? "s" : ""}` : "highlighted page images"} ` +
+      `to ${llmCfg?.primary ?? "the model"} and COSTS TOKENS. It can take a few minutes, and the cost is added to LLM cost afterwards.`
+    )) return;
     setAuditRunning(true);
     setError(null);
     try {
@@ -805,6 +903,15 @@ export default function ReviewWorkspace({
             <div className="line-edit">
               <textarea
                 autoFocus
+                ref={(el) => {
+                  taRef.current = el;
+                  // first render after "[A>" with no selection: put the cursor between the new tags
+                  if (el && editing.caret !== undefined && el.dataset.placed !== "1") {
+                    el.dataset.placed = "1";
+                    el.focus();
+                    el.setSelectionRange(editing.caret, editing.caret);
+                  }
+                }}
                 value={editing.value}
                 rows={Math.min(Math.max(Math.ceil(editing.value.length / 90), 2), 10)}
                 onChange={(e) => setEditing({ line: li, value: e.target.value })}
@@ -894,9 +1001,11 @@ export default function ReviewWorkspace({
     const done = reviewed.has(m.id);
     const kids = childrenOf.get(m.id) ?? [];
     const snippet = (m.output || m.expected || m.detail || "").replace(/\s+/g, " ").slice(0, 110);
+    // Replacing with the PDF wording only makes sense when the PDF has wording and the text differs in place.
+    const canApply = m.issue_id !== null && !m.insertion && !!m.expected && m.kind !== "content_reordered";
     return (
       <div key={m.id} data-mid={m.id} className={`iss${isActive ? " iss-active" : ""}${done ? " iss-done" : ""}${child ? " iss-child" : ""}`}>
-        <button className="iss-head" onClick={() => selectMarker(m)}>
+        <button className="iss-head" aria-expanded={isActive} onClick={() => (isActive ? setActiveId(null) : selectMarker(m))}>
           {m.source === "revisions" ? (
             <span className={`rev-chip ${m.kind === "revision_add" ? "rev-a" : "rev-d"}`}>
               {m.kind === "revision_add" ? "A" : "D"}
@@ -910,6 +1019,7 @@ export default function ReviewWorkspace({
             line {m.line + 1}{m.page !== null ? ` · p${m.page + 1}` : ""}
           </span>
           {done && <span className="iss-check"><Icon name="check" /></span>}
+          <span className="iss-chev"><Icon name={isActive ? "chevron-down" : "chevron-right"} /></span>
         </button>
         {!isActive && snippet && <div className="iss-snippet">{snippet}</div>}
         {kids.length > 0 && (
@@ -927,42 +1037,33 @@ export default function ReviewWorkspace({
         )}
         {isActive && (
           <div className="iss-body">
-            <p className="muted">{m.detail}</p>
-            {m.expected && (
-              <>
-                <span className="fix-label">Source — text extracted from the PDF</span>
-                <pre className="fix-box">{m.expected}</pre>
-              </>
+            {m.detail && <p className="iss-why">{m.detail}</p>}
+            {(m.expected || m.output) && (
+              <FindingCompare expected={m.expected} output={m.output}
+                              plain={m.kind === "content_reordered" || m.source !== "content"} notes={m.source === "content"} />
             )}
-            {m.output && (
-              <>
-                <span className="fix-label">Output — the converted text</span>
-                <pre className="fix-box">{m.output}</pre>
-              </>
-            )}
-            {m.issue_id !== null && (m.output || m.expected) && !m.insertion && (
-              <>
-                <span className="fix-label">Replacement</span>
-                <textarea value={draft} onChange={(e) => setDraft(e.target.value)} rows={3} />
-              </>
-            )}
-            <div className="approve-row wrap">
-              {m.issue_id !== null && !m.insertion && (m.output || m.expected) && (
-                <button onClick={handleApply} disabled={busy}>Apply fix</button>
+            <div className="iss-actions">
+              {canApply && (
+                <button onClick={handleApply} disabled={busy} title="Put the PDF's wording in the converted text">
+                  Replace with PDF wording
+                </button>
               )}
               {m.insertion && m.expected && m.source === "content" && (
                 <button onClick={() => openInsert(m)} disabled={busy}>Insert missing text…</button>
               )}
-              <button
-                className="secondary"
-                onClick={() => setEditing({ line: m.line, value: lines[m.line] ?? "" })}
-              >
+              <button className="secondary" onClick={() => setEditing({ line: m.line, value: lines[m.line] ?? "" })}>
                 Edit line {m.line + 1}
               </button>
               <button className="secondary" onClick={() => toggleReviewed(m.id, !done)}>
-                {done ? "Un-review" : "Mark reviewed (r)"}
+                {done ? "Undo reviewed" : "Mark reviewed"} <kbd>r</kbd>
               </button>
             </div>
+            {canApply && (
+              <details className="iss-replace">
+                <summary>Change the replacement wording first</summary>
+                <textarea value={draft} onChange={(e) => setDraft(e.target.value)} rows={4} />
+              </details>
+            )}
           </div>
         )}
         {expandedParents.has(m.id) && kids.map((c) => renderIssueItem(c, true))}
@@ -974,11 +1075,74 @@ export default function ReviewWorkspace({
   const visiblePanes = [panelOpen, showPdf && !!target.pdfPath, showText].filter(Boolean).length;
   const dataPanes = (showPdf && !!target.pdfPath ? 1 : 0) + (showText ? 1 : 0);
   const pdfPane = showPdf && !!target.pdfPath;
-  const pdfShare = [1.6, 2.4, 4][pdfWide];
-  const gridColumns = [panelOpen ? "300px" : null, pdfPane ? (showText ? `${pdfShare}fr` : "1fr") : null, showText ? "1fr" : null]
-    .filter(Boolean).join(" ") || "1fr";
+  const gridColumns = [
+    panelOpen ? `${findingsPx}px` : null,
+    panelOpen && dataPanes > 0 ? "16px" : null,
+    pdfPane ? (showText ? `minmax(0, ${pdfFr}fr)` : "minmax(0, 1fr)") : null,
+    pdfPane && showText ? "16px" : null,
+    showText ? "minmax(0, 1fr)" : null,
+  ].filter(Boolean).join(" ") || "1fr";
+
+  function resetLayout() {
+    setFindingsPx(DEFAULT_FINDINGS_PX);
+    setPdfFr(DEFAULT_PDF_FR);
+  }
+
+  function setLayout(kind: "balanced" | "pdf" | "text") {
+    setShowPdf(true);
+    setShowText(true);
+    if (kind === "balanced") resetLayout();
+    else if (kind === "pdf") {
+      setFindingsPx(300);
+      setPdfFr(3);
+    } else {
+      setFindingsPx(340);
+      setPdfFr(0.6);
+    }
+  }
+
+  /** Drag the divider between two panes. "findings" resizes the findings column; "data" moves the PDF/text split. */
+  function dragSplitter(e: React.PointerEvent<HTMLDivElement>, kind: "findings" | "data") {
+    e.preventDefault();
+    const bar = e.currentTarget;
+    const prev = bar.previousElementSibling as HTMLElement | null;
+    const next = bar.nextElementSibling as HTMLElement | null;
+    if (!prev || !next) return;
+    const startX = e.clientX;
+    const w0 = prev.getBoundingClientRect().width;
+    const w1 = next.getBoundingClientRect().width;
+    document.body.classList.add("dragging-split");
+    const move = (ev: PointerEvent) => {
+      const dx = ev.clientX - startX;
+      if (kind === "findings") setFindingsPx(clamp(w0 + dx, 240, 720));
+      else {
+        const total = w0 + w1;
+        const a = clamp(w0 + dx, 220, total - 220);
+        setPdfFr(a / (total - a));
+      }
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      document.body.classList.remove("dragging-split");
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  }
+
+  function nudgeSplitter(e: React.KeyboardEvent, kind: "findings" | "data") {
+    const dir = e.key === "ArrowLeft" ? -1 : e.key === "ArrowRight" ? 1 : 0;
+    if (!dir) return;
+    e.preventDefault();
+    if (kind === "findings") setFindingsPx((v) => clamp(v + dir * 24, 240, 720));
+    else setPdfFr((v) => clamp(v + dir * 0.1, 0.4, 4));
+  }
   // Findings alone fills the width instead of a 330px sliver.
   const columns = panelOpen && dataPanes === 0 ? "1fr" : gridColumns;
+
+  // An audit that never reached the model (empty checklist) did not verify anything: do not present it as 100%.
+  const auditUnverified = !!audit && audit.total > 0 &&
+    (audit.verified === false || (audit.verified === undefined && audit.usage?.api_calls === 0));
 
   return (
     <div className="rw">
@@ -990,6 +1154,11 @@ export default function ReviewWorkspace({
         {report.edited && <span className="pill pill-edit">edited</span>}
         {job && <span className={`status-badge status-${job.status}`}>{job.status}</span>}
         <span className="rw-spacer" />
+
+        <button className="secondary" onClick={() => setFullPage((v) => !v)}
+                title={fullPage ? "Show the header and menu again" : "Hide the header and menu so the panes fill the window"}>
+          <Icon name={fullPage ? "compress" : "expand"} /> {fullPage ? "Exit full page" : "Full page"}
+        </button>
 
         {/* Save → Approve → Submit: the same controls whether the file came from an upload or a pipeline session. */}
         {/* Status only — the buttons next to it are the actions, so nothing is shown twice. */}
@@ -1044,8 +1213,12 @@ export default function ReviewWorkspace({
         </button>
       </div>
 
-      {error && <p className="error">{error}</p>}
-      {notice && <p className="notice">{notice}</p>}
+      {(error || notice) && (
+        <div className={`rw-toast ${error ? "rw-toast-error" : "rw-toast-ok"}`} role={error ? "alert" : "status"}>
+          <span>{error ?? notice}</span>
+          <button className="link-button" aria-label="Dismiss" onClick={() => { setError(null); setNotice(null); }}>×</button>
+        </div>
+      )}
 
       <nav className="rw-tabs">
         {([
@@ -1083,19 +1256,19 @@ export default function ReviewWorkspace({
               ))}
             </div>
             <label className="chk"><input type="checkbox" checked={syncOn} onChange={(e) => setSyncOn(e.target.checked)} disabled={!(showPdf && showText)} /> Sync scroll</label>
+            <label className="chk" title="Line numbers are only a reference for the findings (&quot;line 1006&quot;); they are not in the downloaded file">
+              <input type="checkbox" checked={showLn} onChange={(e) => setShowLn(e.target.checked)} /> Line numbers
+            </label>
             <span className="rw-sep" />
             <button className="secondary" onClick={() => setZoom((z) => Math.max(z - 20, 50))}>−</button>
             <span className="muted">{zoom}%</span>
             <button className="secondary" onClick={() => setZoom((z) => Math.min(z + 20, 300))}>+</button>
             <button className="secondary" onClick={() => setZoom(100)} title="Fit the page to the width of the PDF pane">Fit</button>
-            <button
-              className="secondary"
-              disabled={!(pdfPane && showText)}
-              onClick={() => setPdfWide((w) => (w + 1) % 3)}
-              title="Give the PDF more of the width (click again for more, then back to normal)"
-            >
-              <Icon name="expand" /> PDF width{pdfWide ? ` ${"+".repeat(pdfWide)}` : ""}
-            </button>
+            <div className="seg" role="group" aria-label="Pane layout">
+              <button className="seg-btn" onClick={() => setLayout("balanced")} title="Findings, PDF and text side by side">Balanced</button>
+              <button className="seg-btn" onClick={() => setLayout("pdf")} title="Give most of the width to the PDF">PDF focus</button>
+              <button className="seg-btn" onClick={() => setLayout("text")} title="Give most of the width to the converted text">Text focus</button>
+            </div>
             <span className="rw-sep" />
             <button className="secondary" onClick={handleUndo} disabled={busy || report.history.length === 0}>
               Undo ({report.history.length})
@@ -1105,9 +1278,9 @@ export default function ReviewWorkspace({
             </button>
             <span className="rw-spacer" />
             {compare && (
-              <span className="muted">
-                {Math.round((compare.mapped_words / Math.max(compare.pdf_words, 1)) * 100)}% of PDF words linked ·
-                click a word, or drag a box on the PDF / select text, to locate it on the other side · double-click a line to edit
+              <span className="muted"
+                title={`${Math.round((compare.mapped_words / Math.max(compare.pdf_words, 1)) * 100)}% of the PDF's words are linked to the converted text`}>
+                Click a word or drag a box on the PDF to find it in the text · double-click a line to edit it
               </span>
             )}
           </div>
@@ -1126,28 +1299,38 @@ export default function ReviewWorkspace({
                   <span className="rw-spacer" />
                   <button className="secondary sm" onClick={() => step(-1)} title="Previous (k)">▲</button>
                   <button className="secondary sm" onClick={() => step(1)} title="Next (j)">▼</button>
+                  <button className="secondary sm" onClick={() => setPanelOpen(false)} title="Hide the findings panel"><Icon name="chevron-left" /></button>
                 </div>
                 <div className="rw-progress"><div style={{ width: `${counts.total ? (counts.done / counts.total) * 100 : 100}%` }} /></div>
                 <div className="filter-row">
-                  {([
-                    ["all", `All ${counts.total + counts.revisions}`],
-                    ["paragraph", `Paragraphs ${counts.paragraph}`],
-                    ["tags", `Tags ${counts.tags}`],
-                    ["content", `Content ${counts.content}`],
-                    ["rules", `${target.stateCode ?? "State"} rules ${counts.rules}`],
-                    ["layout", `Layout ${counts.layout}`],
-                    ["revisions", `Revisions ${counts.revisionsDone}/${counts.revisions}`],
-                  ] as [SourceFilter, string][]).map(([v, label]) => (
-                    <button key={v} className={sourceFilter === v ? "chip active" : "chip"} onClick={() => setSourceFilter(v)}>
-                      {label}
-                    </button>
-                  ))}
+                  {(() => {
+                    const n: Record<SourceFilter, number> = {
+                      all: counts.total, paragraph: counts.paragraph, tags: counts.tags, content: counts.content,
+                      rules: counts.rules, layout: counts.layout, revisions: counts.revisions,
+                    };
+                    const label: Record<SourceFilter, string> = {
+                      all: `All ${counts.total}`, paragraph: `Paragraphs ${counts.paragraph}`, tags: `Tags ${counts.tags}`,
+                      content: `Content ${counts.content}`, rules: `${target.stateCode ?? "State"} rules ${counts.rules}`,
+                      layout: `Layout ${counts.layout}`, revisions: `Revisions ${counts.revisionsDone}/${counts.revisions}`,
+                    };
+                    return (["all", "content", "paragraph", "tags", "rules", "layout", "revisions"] as SourceFilter[])
+                      .filter((v) => v === "all" || n[v] > 0 || v === sourceFilter)
+                      .map((v) => (
+                        <button key={v} className={sourceFilter === v ? "chip active" : "chip"} onClick={() => setSourceFilter(v)}>
+                          {label[v]}
+                        </button>
+                      ));
+                  })()}
                 </div>
                 <div className="filter-row">
-                  <button className={sevFilter === "all" ? "chip active" : "chip"} onClick={() => setSevFilter("all")}>Any severity</button>
-                  <button className={sevFilter === "error" ? "chip active" : "chip"} onClick={() => setSevFilter("error")}>Errors {counts.error}</button>
-                  <button className={sevFilter === "warning" ? "chip active" : "chip"} onClick={() => setSevFilter("warning")}>Warnings {counts.warning}</button>
-                  <label className="chk"><input type="checkbox" checked={hideReviewed} onChange={(e) => setHideReviewed(e.target.checked)} /> hide reviewed</label>
+                  {counts.error > 0 && counts.warning > 0 && (
+                    <>
+                      <button className={sevFilter === "all" ? "chip active" : "chip"} onClick={() => setSevFilter("all")}>Any severity</button>
+                      <button className={sevFilter === "error" ? "chip active" : "chip"} onClick={() => setSevFilter("error")}>Errors {counts.error}</button>
+                      <button className={sevFilter === "warning" ? "chip active" : "chip"} onClick={() => setSevFilter("warning")}>Warnings {counts.warning}</button>
+                    </>
+                  )}
+                  <label className="chk"><input type="checkbox" checked={hideReviewed} onChange={(e) => setHideReviewed(e.target.checked)} /> Hide reviewed</label>
                 </div>
                 {(report.hidden_artifacts?.length ?? 0) > 0 && (
                   <details className="hidden-art">
@@ -1168,21 +1351,31 @@ export default function ReviewWorkspace({
                     </ul>
                   </details>
                 )}
-                <p className="legend muted">
-                  <b>Error</b> breaks a rule · <b>Warning</b> check it against the PDF · <b>Info</b> FYI ·{" "}
-                  <b>A / D</b> a revision to verify
-                </p>
                 <div className="rw-issue-list">
                   {listed.length === 0 ? (
-                    <p className="muted pad">
-                      {markers.length === 0 ? "No findings — nothing was flagged." : "No findings match these filters."}
-                    </p>
+                    <div className="empty-state compact">
+                      <Icon name="check" />
+                      {markers.length === 0
+                        ? "Nothing was flagged."
+                        : hideReviewed && counts.done > 0 && counts.done >= counts.total
+                          ? `All ${counts.total} findings reviewed.`
+                          : "No findings match these filters."}
+                      {hideReviewed && counts.done > 0 && (
+                        <button className="link-button" onClick={() => setHideReviewed(false)}>Show reviewed</button>
+                      )}
+                    </div>
                   ) : (
                     listed.map((m) => renderIssueItem(m))
                   )}
                 </div>
                 <div className="rw-kbd muted">j/k next · prev &nbsp; r reviewed &nbsp; u undo &nbsp; Esc clear</div>
               </aside>
+            )}
+
+            {panelOpen && dataPanes > 0 && (
+              <div className="splitter" role="separator" aria-orientation="vertical" tabIndex={0}
+                   title="Drag to resize · double-click to reset" onPointerDown={(e) => dragSplitter(e, "findings")}
+                   onDoubleClick={resetLayout} onKeyDown={(e) => nudgeSplitter(e, "findings")} />
             )}
 
             {showPdf && !!target.pdfPath && (
@@ -1194,8 +1387,14 @@ export default function ReviewWorkspace({
               </section>
             )}
 
+            {pdfPane && showText && (
+              <div className="splitter" role="separator" aria-orientation="vertical" tabIndex={0}
+                   title="Drag to resize · double-click to reset" onPointerDown={(e) => dragSplitter(e, "data")}
+                   onDoubleClick={resetLayout} onKeyDown={(e) => nudgeSplitter(e, "data")} />
+            )}
+
             {showText && (
-            <section className="rw-pane">
+            <section className={showLn ? "rw-pane" : "rw-pane hide-ln"}>
               <div className="rw-pane-title">Converted text</div>
               <div className="edit-toolbar" onMouseDown={(e) => e.preventDefault()}>
                 <button className="tbtn tag-a" disabled={busy} onClick={() => runEdit("A")}
@@ -1235,58 +1434,68 @@ export default function ReviewWorkspace({
 
       {view === "summary" && (
         <div className="rw-summary">
-          {job?.status === "done" && <JobMetrics job={job} />}
+          {job?.status === "done" && <JobMetrics job={job} audit={audit} />}
           <div className="score-row">
-            <ScoreCard label="Content Accuracy" pct={report.content_accuracy_pct} />
-            <ScoreCard label="Layout Accuracy" pct={report.layout_accuracy_pct} />
-            <ScoreCard label="Tag Accuracy" pct={audit?.tag_accuracy_pct ?? null} />
+            <ScoreCard
+              label="Content Accuracy"
+              pct={report.content_accuracy_pct}
+              sub={
+                report.content_accuracy_raw_pct != null && report.content_accuracy_pct != null &&
+                report.content_accuracy_pct - report.content_accuracy_raw_pct >= 0.05
+                  ? `Raw text match ${report.content_accuracy_raw_pct.toFixed(2)}% — also counts page footers and moved text`
+                  : undefined
+              }
+            />
+            <ScoreCard
+              label="Layout Accuracy"
+              pct={report.layout_accuracy_pct}
+              sub={
+                report.layout_accuracy_raw_pct != null && report.layout_accuracy_pct != null &&
+                report.layout_accuracy_pct - report.layout_accuracy_raw_pct >= 0.05
+                  ? `Checker's raw score ${report.layout_accuracy_raw_pct.toFixed(1)}% — also counts short address/signature lines kept apart on purpose`
+                  : undefined
+              }
+            />
+            <ScoreCard
+              label="Tag Accuracy"
+              pct={auditUnverified ? null : audit?.tag_accuracy_pct ?? null}
+              sub={audit
+                ? (audit.total === 0 || auditUnverified
+                    ? (audit.note ?? (audit.total === 0
+                        ? "Nothing to audit: the checklist was empty, so the model was not called and nothing was charged."
+                        : `Not verified: the model was not called, so the ${audit.total} tag(s) were not checked.`))
+                    : `${audit.passes} pass · ${audit.warnings} warning · ${audit.errors} error · ${audit.total} checked`)
+                : target.pdfPath ? undefined : "Needs the source PDF."}
+              action={!audit && target.pdfPath ? (
+                <div className="tile-actions">
+                  <button className="tile-btn" onClick={handleAudit} disabled={auditRunning}>
+                    {auditRunning ? "Auditing… (can take minutes)" : "Run tag audit"}
+                  </button>
+                  <span className="tile-warn" title="The tag audit uses the model, so it costs tokens. You will be asked to confirm before anything is sent.">
+                    <Icon name="warn" /> Costs tokens
+                  </span>
+                </div>
+              ) : undefined}
+            />
             <div className={`score-card ${integrityIssues.length ? "score-bad" : "score-good"}`}>
               <span className="score-label">Tag Integrity</span>
               <span className="score-value">{integrityIssues.length ? `${integrityIssues.length} issue(s)` : "pass"}</span>
             </div>
             <div className="score-card score-info">
               <span className="score-label">Findings</span>
-              <span className="score-value">{counts.done}/{counts.total}</span>
-              <span className="score-sub">reviewed</span>
-            </div>
-          </div>
-
-          {(job?.metrics?.usage?.cost_usd !== undefined || audit) && (
-            <div className="card cost-card">
-              <strong>LLM cost</strong>
-              <table className="cost-table">
-                <tbody>
-                  {job?.metrics?.usage?.cost_usd !== undefined && (
-                    <tr>
-                      <td>Conversion</td>
-                      <td className="cost-amt">{usd(job.metrics.usage.cost_usd)}</td>
-                      <td className="muted">{usageDetail(job.metrics.usage)}</td>
-                    </tr>
-                  )}
-                  {audit && (
-                    <tr>
-                      <td>Validation <span className="muted">(LLM tag audit)</span></td>
-                      <td className="cost-amt">{audit.usage ? usd(audit.usage.cost_usd) : "—"}</td>
-                      <td className="muted">{audit.usage ? usageDetail(audit.usage) : "cost was not recorded for this earlier run"}</td>
-                    </tr>
-                  )}
-                  {job?.metrics?.usage?.cost_usd !== undefined && audit?.usage && (
-                    <tr className="cost-total">
-                      <td>Total</td>
-                      <td className="cost-amt">{usd((job.metrics.usage.cost_usd ?? 0) + (audit.usage.cost_usd ?? 0))}</td>
-                      <td />
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-              {!audit && (
-                <p className="muted">
-                  Validation checks (paragraphs, tags, state rules, content comparison) are free. The LLM tag
-                  audit below costs tokens, and its cost is added here only if you run it.
-                </p>
+              {loadMsg ? (
+                <>
+                  <span className="score-value">…</span>
+                  <span className="score-sub">{loadMsg}</span>
+                </>
+              ) : (
+                <>
+                  <span className="score-value">{counts.done}/{counts.total}</span>
+                  <span className="score-sub">reviewed</span>
+                </>
               )}
             </div>
-          )}
+          </div>
 
           {integrityIssues.length > 0 && (
             <div className="card">
@@ -1299,10 +1508,15 @@ export default function ReviewWorkspace({
           )}
 
           {catalog && (
-            <div className="card rules-card">
-              <strong>
-                Rules applied{catalog.spec ? ` — ${catalog.spec.name} (${catalog.state})` : ""}
-              </strong>
+            <details className="card rules-card">
+              <summary>
+                <strong>Rules applied{catalog.spec ? ` — ${catalog.spec.name} (${catalog.state})` : ""}</strong>{" "}
+                <span className="muted">
+                  {catalog.rules.length} checked · {catalog.rules.filter((r) => r.findings).length
+                    ? `${catalog.rules.filter((r) => r.findings).length} with findings`
+                    : "all passed"}
+                </span>
+              </summary>
               {catalog.spec && (
                 <p className="muted">
                   Additions: <b>{catalog.spec.add.join(" + ") || "—"}</b> · Deletions:{" "}
@@ -1345,31 +1559,9 @@ export default function ReviewWorkspace({
                   <p className="muted">{catalog.formatting_note}</p>
                 </details>
               )}
-            </div>
+            </details>
           )}
 
-          {!audit && target.pdfPath && (
-            <div className="card">
-              <strong>LLM tag audit</strong>
-              <p className="muted">
-                Sends highlighted page images to {llmCfg?.primary ?? "Claude"}
-                {llmCfg?.fallback ? ` (falls back to ${llmCfg.fallback})` : ""} to verify every detected tag.
-                This costs tokens, so it only runs when you ask.
-              </p>
-              <button onClick={handleAudit} disabled={auditRunning}>
-                {auditRunning ? "Auditing… (this can take minutes)" : "Run tag audit"}
-              </button>
-            </div>
-          )}
-          {audit && (
-            <div className="card">
-              <strong>Tag audit</strong>
-              <p className="muted">
-                {audit.passes} pass · {audit.warnings} warning · {audit.errors} error · {audit.total} checked
-                across {audit.page_images} page image(s){audit.usage ? ` · cost ${usd(audit.usage.cost_usd)}` : ""}
-              </p>
-            </div>
-          )}
           {extra}
         </div>
       )}

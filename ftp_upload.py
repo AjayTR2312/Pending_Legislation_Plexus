@@ -5,22 +5,22 @@ Uploads converted text files to the remote server via SFTP (paramiko).
 
 import os
 import stat
+import sys
 import getpass
 from pathlib import Path
-from dotenv import load_dotenv
 
 import paramiko
 
-load_dotenv()
+sys.path.insert(0, str(Path(__file__).resolve().parent / "app"))
+import settings  # every value below is configurable: see `python app/settings.py --show`
 
+SFTP_HOST = settings.SFTP_HOST
+SFTP_PORT = settings.SFTP_PORT
+SFTP_USER = settings.SFTP_USER
+REMOTE_DIR = settings.SFTP_UPLOAD_DIR
 
-SFTP_HOST = "10.17.38.130"
-SFTP_PORT = 22
-SFTP_USER = "mag2ftp"
-REMOTE_DIR = "/apps/Codes/MP2/LandingStrips/LCPR/ftp/keyed"
-
-# Local directory — sessions are stored under tmp/pending_processing/
-LOCAL_DIR = os.environ.get("UPLOAD_SOURCE_DIR", "/home/m6119788/Pending_Legislation/tmp/pending_processing")
+# Local directory the sessions are stored in (UPLOAD_SOURCE_DIR, default tmp/pending_processing/)
+LOCAL_DIR = str(settings.UPLOAD_SOURCE_DIR)
 
 
 def connect_sftp(username: str, password: str) -> tuple[paramiko.Transport, paramiko.SFTPClient]:
@@ -85,7 +85,7 @@ def upload_files(sftp: paramiko.SFTPClient, local_dir: str, remote_dir: str, ext
 
 
 def main():
-    password = os.environ.get("FTP_PASSWORD") or getpass.getpass(f"Password for {SFTP_USER}@{SFTP_HOST}: ")
+    password = settings.FTP_PASSWORD or getpass.getpass(f"Password for {SFTP_USER}@{SFTP_HOST}: ")
     password = password.strip()
 
     transport, sftp = connect_sftp(SFTP_USER, password)

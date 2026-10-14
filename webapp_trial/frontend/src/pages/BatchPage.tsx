@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { getBatch } from "../api";
 import type { BatchSummary, Job } from "../types";
+import SubmitAllButton from "../components/SubmitAllButton";
 
 interface Props {
   batchId: string;
@@ -41,6 +42,8 @@ export default function BatchPage({ batchId, onBack, onOpen }: Props) {
           ← Back
         </button>
         <h2>Batch {batch.batch_id}</h2>
+        <span className="rw-spacer" />
+        <SubmitAllButton keys={batch.jobs.map((j) => j.metrics?.validation_key).filter((k): k is string => !!k)} />
       </div>
 
       <div className="score-row">

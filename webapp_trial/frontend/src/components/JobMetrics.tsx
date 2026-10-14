@@ -1,4 +1,5 @@
-import type { Job } from "../types";
+import type { Job, TagAuditResult } from "../types";
+import InfoTip from "./InfoTip";
 
 function fmtSecs(s: number | null | undefined): string {
   if (s === null || s === undefined) return "—";
@@ -14,20 +15,18 @@ function fmtBytes(b: number | null | undefined): string {
   return `${(b / 1024 / 1024).toFixed(2)} MB`;
 }
 
-function accClass(pct: number | null | undefined): string {
-  if (pct === null || pct === undefined) return "score-unknown";
-  if (pct >= 99) return "score-good";
-  if (pct >= 95) return "score-warn";
-  return "score-bad";
-}
+const COST_INFO =
+  "Conversion is the cost of turning the PDF into text. The validation checks (paragraphs, tags, state rules, " +
+  "content comparison) are free. The tag audit is the only validation that uses the model: it costs tokens, and its " +
+  "cost is added to this total only if you run it.";
 
-export default function JobMetrics({ job }: { job: Job }) {
-  const m = job.metrics;
-  const acc = m?.content_accuracy_pct ?? null;
+/** Time, size and LLM cost of the run. Scores are in the tiles below, so nothing appears twice. */
+export default function JobMetrics({ job, audit }: { job: Job; audit?: TagAuditResult | null }) {
   const total = (job.conversion_secs ?? 0) + (job.validation_secs ?? 0);
-  // Absent metrics must not be rendered as a green "pass" — that would claim a
-  // validation result that was never produced.
-  const validated = m != null;
+  const u = job.metrics?.usage;
+  const conv = u?.cost_usd;
+  const val = audit?.usage?.cost_usd;
+  const sum = conv !== undefined ? conv + (val ?? 0) : undefined;
 
   return (
     <div className="score-row">
@@ -47,42 +46,33 @@ export default function JobMetrics({ job }: { job: Job }) {
         <span className="score-label">Output Size</span>
         <span className="score-value">{fmtBytes(job.output_bytes)}</span>
       </div>
-      <div className={`score-card ${accClass(acc)}`}>
-        <span className="score-label">Content Accuracy</span>
-        <span className="score-value">{acc === null ? "n/a" : `${acc.toFixed(2)}%`}</span>
-      </div>
-      <div
-        className={`score-card ${
-          !validated ? "score-unknown" : m.integrity_issues ? "score-bad" : "score-good"
-        }`}
-      >
-        <span className="score-label">Tag Integrity</span>
-        <span className="score-value">
-          {!validated ? "n/a" : m.integrity_issues ? `${m.integrity_issues} issue(s)` : "pass"}
-        </span>
-      </div>
-      {m?.usage?.cost_usd !== undefined && (
+      {u && sum !== undefined && (
         <div className="score-card score-info">
-          <span className="score-label">Conversion cost</span>
-          <span className="score-value">${m.usage.cost_usd.toFixed(4)}</span>
+          <span className="score-label">LLM cost<InfoTip text={COST_INFO} /></span>
+          <span className="score-value">${sum.toFixed(4)}</span>
           <span className="score-sub">
-            {(m.usage.input_tokens ?? 0).toLocaleString()} in ·{" "}
-            {(m.usage.output_tokens ?? 0).toLocaleString()} out
+            Conversion ${conv!.toFixed(4)} · {(u.input_tokens ?? 0).toLocaleString()} in / {(u.output_tokens ?? 0).toLocaleString()} out
           </span>
-          {((m.usage.cache_read_tokens ?? 0) > 0 || (m.usage.cache_write_tokens ?? 0) > 0) && (
+          {audit && (
+            <span className="score-sub">
+              Validation (tag audit) {val !== undefined ? `$${val.toFixed(4)}` : "cost not recorded for this earlier run"}
+              {audit.usage?.api_calls === 0 ? " · no model call" : ""}
+            </span>
+          )}
+          {((u.cache_read_tokens ?? 0) > 0 || (u.cache_write_tokens ?? 0) > 0) && (
             <span className="score-sub" title="Prompt caching: the state prompt is written to the cache once, then read at ~5% of the input price">
-              cache {(m.usage.cache_read_tokens ?? 0) > 0
-                ? `hit ${(m.usage.cache_read_tokens ?? 0).toLocaleString()} tok`
-                : `write ${(m.usage.cache_write_tokens ?? 0).toLocaleString()} tok`}
-              {m.usage.cache_saving_usd !== undefined
-                ? ` · ${m.usage.cache_saving_usd >= 0 ? "saved" : "cost"} $${Math.abs(m.usage.cache_saving_usd).toFixed(4)}`
+              cache {(u.cache_read_tokens ?? 0) > 0
+                ? `hit ${(u.cache_read_tokens ?? 0).toLocaleString()} tok`
+                : `write ${(u.cache_write_tokens ?? 0).toLocaleString()} tok`}
+              {u.cache_saving_usd !== undefined
+                ? ` · ${u.cache_saving_usd >= 0 ? "saved" : "cost"} $${Math.abs(u.cache_saving_usd).toFixed(4)}`
                 : ""}
             </span>
           )}
-          {m.usage.model && (
-            <span className={m.usage.fallback_used ? "score-sub model-fallback" : "score-sub"}
-              title={m.usage.fallback_used ? "The configured model could not serve the request, so the fallback answered" : undefined}>
-              {m.usage.fallback_used ? "↪ fallback: " : ""}{m.usage.model}
+          {u.model && (
+            <span className={u.fallback_used ? "score-sub model-fallback" : "score-sub"}
+              title={u.fallback_used ? "The configured model could not serve the request, so the fallback answered" : undefined}>
+              {u.fallback_used ? "↪ fallback: " : ""}{u.model}
             </span>
           )}
         </div>

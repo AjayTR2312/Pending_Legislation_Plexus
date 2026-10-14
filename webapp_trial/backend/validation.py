@@ -15,14 +15,17 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import shutil
 import sys
+from collections import Counter
 from pathlib import Path
 from typing import Any, Optional
 
 import db
 import rules
 import sessions
+import storage
 
 # Extractor messages that compare tag *fragments* against the raw PDF extraction.
 # Under the one-tag-per-paragraph rule these differences are expected, so they are
@@ -59,6 +62,9 @@ def resolve_readable(path_str: str) -> Path:
             candidate.relative_to(root)
         except ValueError:
             continue
+        # On Plexus the file may live only in S3 (written by another pod); pull
+        # it down before the existence check. No-op in local mode.
+        storage.ensure_local(candidate)
         if not candidate.is_file():
             raise FileNotFoundError(path_str)
         return candidate
@@ -81,6 +87,7 @@ def working_copy(original: Path) -> tuple[str, Path]:
     d = _edit_dir(key)
     copy_path = d / original.name
     if not copy_path.exists():
+        storage.ensure_local(original)
         shutil.copyfile(original, copy_path)
         (d / "meta.json").write_text(
             json.dumps({"original": str(original), "name": original.name}, indent=2),
@@ -195,7 +202,20 @@ def _layout_report(pdf_path: Optional[Path], output_text: str, state_code: Optio
         return None
 
 
-def _layout_rows(layout: Optional[dict[str, Any]]) -> list[dict[str, Any]]:
+def _short_lines_kept_apart(lines: list[str], line_no: int) -> bool:
+    """A "merge these two lines" suggestion for two short lines that each stand alone (an address or signature
+    block, a heading over a name) is almost always intentional: the document is line-oriented there."""
+    if not (1 <= line_no < len(lines)):
+        return False
+    a, b = lines[line_no - 1].strip(), lines[line_no].strip()
+    return bool(a) and bool(b) and len(a) <= 60 and not a.endswith((",", ";")) and (b[:1].isupper() or b[:1].isdigit())
+
+
+def _layout_rows(layout: Optional[dict[str, Any]], output_lines: Optional[list[str]] = None) -> list[dict[str, Any]]:
+    """Every paragraph-boundary problem the checker counted, so the list and the score agree.
+
+    The checker's score counts two kinds: paragraphs merged in the output that should be split
+    ("merge_errors"/"splits_needed") and paragraphs over-split that should be merged ("merges_needed")."""
     if not layout:
         return []
     rows = []
@@ -210,7 +230,31 @@ def _layout_rows(layout: Optional[dict[str, Any]]) -> list[dict[str, Any]]:
                     "context": item.get("context", ""),
                     "page": item.get("page"),
                 })
+    for item in layout.get("merges_needed") or []:
+        if isinstance(item, dict) and item.get("line") is not None:
+            rows.append({
+                "kind": "split",  # the output paragraph was split where the PDF has one paragraph
+                "line": item.get("line"),
+                "related_line": int(item["line"]) + 1,
+                "description": item.get("description") or "",
+                "context": "",
+                "page": item.get("page"),
+                "likely_ok": _short_lines_kept_apart(output_lines or [], int(item["line"])),
+            })
     return rows
+
+
+def adjusted_layout_accuracy(layout: Optional[dict[str, Any]], rows: list[dict[str, Any]]) -> Optional[float]:
+    """Layout accuracy without the "over-split" flags that are just short lines kept apart on purpose."""
+    if not layout:
+        return None
+    raw = layout.get("accuracy_pct")
+    checkpoints = (layout.get("boundaries_checked") or 0) + (layout.get("merge_checkpoints") or 0)
+    if raw is None or not checkpoints or layout.get("boundary_detection_failed"):
+        return raw
+    ignored = sum(1 for r in rows if r.get("likely_ok"))
+    counted = len(layout.get("splits_needed") or []) + len(layout.get("merges_needed") or []) - ignored
+    return max(round(max(0.0, (checkpoints - counted) / checkpoints * 100), 1), raw)
 
 
 _WHY = {
@@ -219,10 +263,65 @@ _WHY = {
     "content_added": "These words are in the converted text but were not in the text extracted from the "
                      "PDF — check the model did not invent them.",
 }
+_WHY["content_reordered"] = (
+    "The same words are in both the PDF extraction and the converted text, but in a different order. "
+    "This usually happens where struck-through or underlined text sits between wrapped lines. Check "
+    "that the converted order matches the PDF; if it does, mark it reviewed."
+)
 _WHY_CHANGED = (
     "The converted text reads differently from the text extracted from the PDF here. If the converted "
     "text is right when you check it against the PDF, mark it reviewed."
 )
+
+
+def _words(s: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", s.lower())
+
+
+def _merge_reordered(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Text that was "added" in one place and "missing" in another, with the same words, is one reordered block,
+    not an invention plus a loss. Merge the pair into a single finding that shows both."""
+    added = [r for r in rows if not r["expected"].strip() and r["output"].strip()]
+    dropped = [r for r in rows if r["expected"].strip() and not r["output"].strip()]
+    used: set[int] = set()
+    for a in added:
+        ta = Counter(_words(a["output"]))
+        na = sum(ta.values())
+        if na < 8:
+            continue
+        best: Optional[tuple[float, dict[str, Any]]] = None
+        for d in dropped:
+            if id(d) in used:
+                continue
+            td = Counter(_words(d["expected"]))
+            overlap = sum((ta & td).values()) / max(na, sum(td.values()))
+            if overlap >= 0.85 and (best is None or overlap > best[0]):
+                best = (overlap, d)
+        if best:
+            d = best[1]
+            used.add(id(d))
+            a.update(expected=d["expected"], category="content_reordered", type="reordered", severity="warning",
+                     words_affected=max(na, sum(Counter(_words(d["expected"])).values())),
+                     explanation="Same words, different order.", why=_WHY["content_reordered"])
+    return [r for r in rows if id(r) not in used]
+
+
+def adjusted_content_accuracy(content: Optional[dict[str, Any]], issue_rows: list[dict[str, Any]]) -> Optional[float]:
+    """Content accuracy that matches what the findings list shows.
+
+    The checker's own number is plain text similarity (matching words / the longer text), so it is also pulled
+    down by things that are not defects: page footers the conversion correctly drops, and a block of text that
+    only moved. Here only the words in the findings that are still listed count against the score (a reordered
+    block counts as moved, not lost). It is never lower than the checker's own number."""
+    if not content:
+        return None
+    raw = content.get("accuracy_pct")
+    base = content.get("precleaned_words") or 0
+    if raw is None or not base:
+        return raw
+    unexplained = sum(int(r.get("words_affected") or 0) for r in issue_rows if r.get("category") != "content_reordered")
+    adjusted = round(max(0.0, 100.0 * (1 - unexplained / base)), 2)
+    return max(adjusted, raw)
 
 
 def _issue_rows(content: Optional[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -257,7 +356,7 @@ def _issue_rows(content: Optional[dict[str, Any]]) -> tuple[list[dict[str, Any]]
             "explanation": diff.get("explanation", ""),
             "why": _WHY.get(category or "", _WHY_CHANGED),
         })
-    return rows, hidden
+    return _merge_reordered(rows), hidden
 
 
 def build_report(text_path: str, pdf_path: Optional[str], state_code: Optional[str]) -> dict[str, Any]:
@@ -298,6 +397,8 @@ def build_report(text_path: str, pdf_path: Optional[str], state_code: Optional[s
     hard_issues = [m for m in hard_issues if not m.startswith(_COVERED_BY_RULES)]
     all_hard = hard_issues + rule_issues
 
+    layout_rows = _layout_rows(layout, output_text.split("\n"))
+
     report = {
         "key": key,
         "state_code": state_code,
@@ -307,8 +408,10 @@ def build_report(text_path: str, pdf_path: Optional[str], state_code: Optional[s
         "pdf_path": str(pdf) if pdf else None,
         "edited": bool(history),
         "has_precleaned_baseline": precleaned is not None,
-        "content_accuracy_pct": content.get("accuracy_pct") if content else None,
-        "layout_accuracy_pct": layout.get("accuracy_pct") if layout else None,
+        "content_accuracy_pct": adjusted_content_accuracy(content, issue_rows),
+        "content_accuracy_raw_pct": content.get("accuracy_pct") if content else None,  # plain text similarity
+        "layout_accuracy_pct": adjusted_layout_accuracy(layout, layout_rows),
+        "layout_accuracy_raw_pct": layout.get("accuracy_pct") if layout else None,  # the checker's own number
         "content_summary": {
             "precleaned_words": content.get("precleaned_words") if content else None,
             "output_words": content.get("output_words") if content else None,
@@ -332,7 +435,7 @@ def build_report(text_path: str, pdf_path: Optional[str], state_code: Optional[s
         },
         "issues": issue_rows,
         "hidden_artifacts": hidden_artifacts,
-        "layout_issues": _layout_rows(layout),
+        "layout_issues": layout_rows,
         "history": history,
     }
     (edit_dir / "report.json").write_text(json.dumps(report), encoding="utf-8")
@@ -408,6 +511,9 @@ def approve(key: str, job_id: Optional[str] = None) -> dict[str, Any]:
     snap_dir.mkdir(parents=True, exist_ok=True)
     snapshot = snap_dir / work.name
     shutil.copyfile(work, snapshot)
+    # The approved snapshot is a durable output of review — keep it in S3 so it
+    # survives pod restarts and is visible to every replica.
+    storage.persist(snapshot)
 
     rec = _read_approval(key)
     rec.update({
@@ -429,7 +535,9 @@ def approved_snapshot(key: str) -> Path:
             "Approve the latest version first — the text changed since it was approved."
             if status["stale"] else "Approve this document before submitting it."
         )
-    return Path(_read_approval(key)["snapshot"])
+    snapshot = Path(_read_approval(key)["snapshot"])
+    storage.ensure_local(snapshot)
+    return snapshot
 
 
 def mark_submitted(key: str, target: str) -> dict[str, Any]:

@@ -5,13 +5,15 @@ import JobsDashboard from "./pages/JobsDashboard";
 import BatchPage from "./pages/BatchPage";
 import ReviewWorkspace from "./components/ReviewWorkspace";
 import SessionsPanel from "./components/SessionsPanel";
+import DownloadsPanel from "./components/DownloadsPanel";
+import RulesPanel from "./components/RulesPanel";
 import RunningJobs from "./components/RunningJobs";
 import Icon from "./components/Icon";
 import { useTheme } from "./hooks/useTheme";
 import type { Job, ReviewTarget } from "./types";
 import "./styles.css";
 
-type Tab = "upload" | "jobs" | "sessions";
+type Tab = "upload" | "downloads" | "jobs" | "sessions" | "rules";
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("upload");
@@ -34,8 +36,10 @@ export default function App() {
     if (batchId) {
       return <BatchPage batchId={batchId} onBack={() => setBatchId(null)} onOpen={setJob} />;
     }
+    if (tab === "downloads") return <DownloadsPanel onBatchCreated={setBatchId} />;
     if (tab === "jobs") return <JobsDashboard onOpen={setJob} />;
     if (tab === "sessions") return <SessionsPanel onOpen={setTarget} />;
+    if (tab === "rules") return <RulesPanel />;
     return <UploadPage onJobCreated={setJob} onBatchCreated={setBatchId} />;
   }
 
@@ -56,7 +60,7 @@ export default function App() {
 
       {showTabs && (
         <nav className="tab-bar">
-          {(["upload", "jobs", "sessions"] as Tab[]).map((t) => (
+          {(["upload", "downloads", "jobs", "sessions", "rules"] as Tab[]).map((t) => (
             <button
               key={t}
               className={tab === t && !job && !target && !batchId ? "tab active" : "tab"}
@@ -65,8 +69,8 @@ export default function App() {
                 setTab(t);
               }}
             >
-              <Icon name={t === "upload" ? "upload" : t === "jobs" ? "list" : "folder"} />
-              {t === "upload" ? "Upload" : t === "jobs" ? "Jobs" : "Pipeline sessions"}
+              <Icon name={t === "upload" ? "upload" : t === "downloads" ? "download" : t === "jobs" ? "list" : t === "rules" ? "book" : "folder"} />
+              {t === "upload" ? "Upload" : t === "downloads" ? "Downloaded files" : t === "jobs" ? "Jobs" : t === "rules" ? "Rules" : "Pipeline sessions"}
             </button>
           ))}
         </nav>

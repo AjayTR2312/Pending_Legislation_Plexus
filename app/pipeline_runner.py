@@ -49,21 +49,15 @@ except ImportError:
 # ── Paths ──────────────────────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).resolve().parent.parent  # app/ -> project root
 
+import settings  # app/settings.py — folders, limits and credentials come from here
+
+
 def _get_tmp_root() -> Path:
-    """Writable temp root: APP_TMP_DIR env > PROJECT_ROOT/tmp > /tmp/pending_legislation."""
-    if os.environ.get("APP_TMP_DIR"):
-        return Path(os.environ["APP_TMP_DIR"])
-    candidate = PROJECT_ROOT / "tmp"
-    try:
-        candidate.mkdir(parents=True, exist_ok=True)
-        return candidate
-    except OSError:
-        fallback = Path("/tmp/pending_legislation")
-        fallback.mkdir(parents=True, exist_ok=True)
-        return fallback
+    """Writable temp root: APP_TMP_DIR > PROJECT_ROOT/tmp > /tmp/pending_legislation."""
+    return settings.tmp_root()
 
 TMP_ROOT = _get_tmp_root()
-DOWNLOADS_DIR = Path(os.environ.get("DOWNLOAD_DEST_DIR", TMP_ROOT / "pending_downloads"))
+DOWNLOADS_DIR = settings.DOWNLOAD_DEST_DIR
 PROCESSING_DIR = TMP_ROOT / "pending_processing"
 PROCESSED_LOG = TMP_ROOT / "pending_processing" / ".processed_files.json"
 
@@ -124,7 +118,7 @@ def download_new_files() -> list[Path]:
     from ftp_download import connect_sftp, SFTP_USER, REMOTE_DIR
     import stat as stat_mod
 
-    password = os.environ.get("FTP_PASSWORD")
+    password = settings.FTP_PASSWORD
     if not password:
         log.error("FTP_PASSWORD not set in environment/.env")
         return []
@@ -406,7 +400,7 @@ def submit_to_keyed(file_paths: list[str]) -> bool:
     import paramiko
 
     # Upload via SFTP
-    password = os.environ.get("FTP_PASSWORD")
+    password = settings.FTP_PASSWORD
     if not password:
         log.error("FTP_PASSWORD not set — cannot upload")
         return False
@@ -526,7 +520,8 @@ def poll_loop(interval_minutes: int = 5, download: bool = True, convert: bool = 
 def main():
     parser = argparse.ArgumentParser(description="LCPR Pipeline Runner")
     parser.add_argument("--poll", action="store_true", help="Run as polling daemon")
-    parser.add_argument("--interval", type=int, default=5, help="Poll interval in minutes (default: 5)")
+    parser.add_argument("--interval", type=int, default=settings.PIPELINE_POLL_MINUTES,
+                        help=f"Poll interval in minutes (default: {settings.PIPELINE_POLL_MINUTES}, PIPELINE_POLL_MINUTES)")
     parser.add_argument("--download-only", action="store_true", help="Only download, skip conversion")
     parser.add_argument("--convert-only", action="store_true", help="Only convert already-downloaded files")
     parser.add_argument("--list-sessions", action="store_true", help="List pending sessions")

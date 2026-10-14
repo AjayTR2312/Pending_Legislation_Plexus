@@ -57,9 +57,10 @@ def extract_word_bboxes(pdf_bytes: bytes) -> List[dict]:
             os.environ.setdefault("TESSDATA_PREFIX", _tessdata)
     else:
         # Windows fallback
-        _tess_dir = r"C:\Users\C302602\AppData\Local\Programs\Tesseract-OCR"
-        _tessdata = os.path.join(_tess_dir, "tessdata")
-        if os.path.isdir(_tessdata):
+        import settings as _settings  # TESSERACT_DIR in .env
+        _tess_dir = _settings.tesseract_dir()
+        _tessdata = os.path.join(_tess_dir, "tessdata") if _tess_dir else ""
+        if _tessdata and os.path.isdir(_tessdata):
             os.environ.setdefault("TESSDATA_PREFIX", _tessdata)
 
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")

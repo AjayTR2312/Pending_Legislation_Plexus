@@ -106,6 +106,11 @@ def convert_pdf(
         opus.reset_token_tracker()
     import llm_models  # app/llm_models.py (on sys.path above)
 
+    # On Plexus a worker may run in a different pod/replica than the one that
+    # received the upload, so make sure the source PDF is present locally.
+    import storage
+    storage.ensure_local(pdf_path)
+
     llm_models.reset_usage()
     llm_models.ledger_reset()
 
@@ -147,6 +152,7 @@ def convert_pdf(
     output_path = output_dir / (Path(filename).stem + ".txt")
     if not opus.save_text_file(converted_text, str(output_path)):
         raise RuntimeError(f"Failed to write output to {output_path}")
+    storage.persist(output_path)
     report("save", "done", output_path.name)
 
     usage = {}

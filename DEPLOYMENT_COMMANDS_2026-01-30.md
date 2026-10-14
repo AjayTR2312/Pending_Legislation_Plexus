@@ -10,7 +10,7 @@ This document contains all the deployment commands executed on January 30, 2026,
 
 ### 1. Pull Latest Code from Repository
 ```bash
-cd /home/m6119788/Pending_Legislation
+cd /home/m6121007/Pending_Legislation
 git pull origin main
 ```
 **Explanation**: Ensures local repository is up-to-date with the main branch before starting deployment.
@@ -38,12 +38,12 @@ git commit -m "Add pdfplumber dependency to requirements.txt"
 
 ### 3. Login to AWS Using Cloud-Tool
 ```bash
-cd /home/m6119788/Pending_Legislation/cloud-tool/bin
+cd /home/m6121007/Pending_Legislation/cloud-tool/bin
 ./cloud-tool --region us-east-1 login
 ```
 
 **Credentials Used**:
-- Username: `MGMT\M6119788`
+- Username: `MGMT\M6121007`
 - Role Selected: `[3] tr-edl-adss-prod (664145726992): human-role/a209457-DataScientist`
 
 **Explanation**: Refreshes AWS credentials needed for ECR operations. Credentials are stored in `~/.aws/credentials` under the `tr-edl-adss-prod` profile and expire after a certain period.
@@ -54,14 +54,14 @@ cd /home/m6119788/Pending_Legislation/cloud-tool/bin
 
 ### 4. Set JFrog Environment Variables
 ```bash
-export TR_JFROG_USERNAME="6119788"
-export TR_JFROG_TOKEN="AKCpBwDGtLuRoXMZXQEEwVAdoyjB5LgeztnFPzT8caVa1avcueQTWJeJkUfaVTve1UegF3Xh4"
+export TR_JFROG_USERNAME="6121007"
+export TR_JFROG_TOKEN="<your-jfrog-token>"
 ```
 **Explanation**: JFrog credentials are required to access private package repositories during Docker build. These are passed as build arguments to the Dockerfile.
 
 ### 5. Build Docker Image
 ```bash
-cd /home/m6119788/Pending_Legislation
+cd /home/m6121007/Pending_Legislation
 
 docker build --no-cache \
   -t pending_legislation \
@@ -178,7 +178,7 @@ aws ecr get-login-password --region us-east-1 --profile tr-edl-adss-prod | \
 
 **Expected Output**:
 ```
-WARNING! Your credentials are stored unencrypted in '/home/m6119788/.docker/config.json'.
+WARNING! Your credentials are stored unencrypted in '/home/m6121007/.docker/config.json'.
 Configure a credential helper to remove this warning. See
 https://docs.docker.com/go/credential-store/
 
@@ -367,8 +367,8 @@ aws ecr describe-images \
 
 ```bash
 # 1. Set credentials
-export TR_JFROG_USERNAME="6119788"
-export TR_JFROG_TOKEN="AKCpBwDGtLuRoXMZXQEEwVAdoyjB5LgeztnFPzT8caVa1avcueQTWJeJkUfaVTve1UegF3Xh4"
+export TR_JFROG_USERNAME="6121007"
+export TR_JFROG_TOKEN="<your-jfrog-token>"
 
 # 2. Build
 docker build --no-cache -t pending_legislation --build-arg TR_JFROG_USERNAME="$TR_JFROG_USERNAME" --build-arg TR_JFROG_TOKEN="$TR_JFROG_TOKEN" --file Dockerfile .
@@ -386,6 +386,6 @@ docker push 127288631409.dkr.ecr.us-east-1.amazonaws.com/a207870-ml-model-regist
 ---
 
 **Deployment Date**: January 30, 2026  
-**Deployed By**: M6119788  
+**Deployed By**: M6121007  
 **Status**: ✅ Successfully Deployed  
 **Version**: 1.0.19

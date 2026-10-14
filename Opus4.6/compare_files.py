@@ -1201,9 +1201,10 @@ def compare_two_files(pymupdf_clean_path, converted_path):
 
 
 def main():
-    # ── Input files (hardcoded) ──
-    pymupdf_clean_path = r"C:\Users\C303365\Downloads\Pending_Legislation\Opus4.6\2025_2025_4_2_2_001300_0_8_1_20250410_0_converted_pymupdf_clean.txt"
-    converted_path = r"C:\Users\C303365\Downloads\Pending_Legislation\Opus4.6\2025_2025_4_2_2_001300_0_8_1_20250410_0_converted.txt"
+    if len(sys.argv) != 3:
+        print("usage: python compare_files.py <pymupdf_clean.txt> <converted.txt>")
+        sys.exit(2)
+    pymupdf_clean_path, converted_path = sys.argv[1], sys.argv[2]
 
     # Validate files exist
     if not os.path.exists(pymupdf_clean_path):

@@ -3,11 +3,15 @@ import type {
   Artifact,
   BatchSummary,
   CompareData,
+  DownloadsInfo,
   Job,
   LlmConfig,
   LocateResult,
   PipelineSession,
+  ReviewState,
+  RulesOverview,
   SessionFile,
+  SubmitAllResult,
   SubmitConfig,
   TagAuditResult,
   ValidationReport,
@@ -135,11 +139,13 @@ export async function fetchText(url: string): Promise<string> {
 export async function getValidation(
   textPath: string,
   pdfPath: string | null,
-  stateCode: string | null
+  stateCode: string | null,
+  jobId?: string
 ): Promise<ValidationReport> {
   const params = new URLSearchParams({ text_path: textPath });
   if (pdfPath) params.set("pdf_path", pdfPath);
   if (stateCode) params.set("state_code", stateCode);
+  if (jobId) params.set("job_id", jobId);
   return asJson<ValidationReport>(await fetch(`/api/validation?${params}`));
 }
 
@@ -245,4 +251,50 @@ export async function getLocations(
 
 export function comparePageUrl(key: string, page: number): string {
   return `/api/compare/page?key=${encodeURIComponent(key)}&page=${page}`;
+}
+
+export async function getDownloads(): Promise<DownloadsInfo> {
+  return asJson<DownloadsInfo>(await fetch("/api/downloads"));
+}
+
+/** Fetch new ZIPs from the SFTP server (read-only on the server). */
+export async function checkSftp(): Promise<{ downloaded: string[]; total: number }> {
+  return asJson(await fetch("/api/downloads/check", { method: "POST" }));
+}
+
+export async function queueZips(names: string[]): Promise<BatchSummary & { skipped: { zip: string; reason: string }[] }> {
+  const res = await fetch("/api/downloads/queue", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ names }),
+  });
+  const data = await asJson<{ batch_id: string; jobs: Job[]; skipped: { zip: string; reason: string }[] }>(res);
+  return { batch_id: data.batch_id, total: data.jobs.length, completed: 0, failed: 0, jobs: data.jobs, skipped: data.skipped };
+}
+
+/** Submit every approved file in the list to Keyed; anything not approved is skipped. dryRun only reports. */
+export async function submitAllApproved(
+  items: { keys?: string[]; textPaths?: string[] },
+  dryRun: boolean
+): Promise<SubmitAllResult> {
+  const res = await fetch("/api/submit-all", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ keys: items.keys ?? [], text_paths: items.textPaths ?? [], dry_run: dryRun }),
+  });
+  return asJson<SubmitAllResult>(res);
+}
+
+/** Where each file stands in Approve -> Submit (so the list can show what a tick would send). */
+export async function getApprovalStates(textPaths: string[]): Promise<Record<string, ReviewState>> {
+  const res = await fetch("/api/approval-states", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text_paths: textPaths }),
+  });
+  return (await asJson<{ states: Record<string, ReviewState> }>(res)).states;
+}
+
+export async function getRulesOverview(): Promise<RulesOverview> {
+  return asJson<RulesOverview>(await fetch("/api/rules"));
 }

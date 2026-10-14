@@ -18,6 +18,8 @@ export interface EditResult {
   /** Line to scroll to after the edit. */
   focus: number;
   message: string;
+  /** Set when only an empty tag pair was inserted: the offset in line `focus` between the tags, to type at. */
+  caret?: number;
 }
 
 export type EditOutcome = EditResult | { error: string };
@@ -46,12 +48,22 @@ const DELIM = /\[[AD]>|<[AD]\]/;
 
 /** Wrap text[start, end) of line `li` in a tag of the given type. */
 export function wrapTag(lines: string[], li: number, start: number, end: number, type: "A" | "D"): EditOutcome {
-  const text = lines[li] ?? "";
+  if (lines[li] === undefined) return { error: "Click or select text in the converted text first." };
+  const text = lines[li];
   if (start > end) [start, end] = [end, start];
+  const at = start;
   // Keep the delimiters tight around the words: leave surrounding spaces outside.
   while (start < end && /\s/.test(text[start])) start++;
   while (end > start && /\s/.test(text[end - 1])) end--;
-  if (start >= end) return { error: "Select the text to tag first." };
+  if (start >= end) {
+    // Nothing selected: put an empty open/close pair at the cursor, ready to type between.
+    const open = tagStateAt(text, at);
+    if (open) return { error: `The cursor is already inside a [${open}> tag — tags never nest. Click outside it first.` };
+    const pair = OPEN[type] + CLOSE[type];
+    const next = [...lines];
+    next[li] = text.slice(0, at) + pair + text.slice(at);
+    return { lines: next, focus: li, caret: at + OPEN[type].length, message: `Inserted ${pair} — type the text between the tags, then Save line.` };
+  }
 
   const sel = text.slice(start, end);
   if (DELIM.test(sel)) {

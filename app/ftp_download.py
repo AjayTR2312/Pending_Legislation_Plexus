@@ -7,36 +7,18 @@ import os
 import stat
 import getpass
 from pathlib import Path
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
 
 import paramiko
 
+import settings  # every value below is configurable: see `python app/settings.py --show`
 
-SFTP_HOST = "10.17.38.130"
-SFTP_PORT = 22
-SFTP_USER = "mag2ftp"
-REMOTE_DIR = "/apps/Codes/MP2/LandingStrips/LCPR/ftp/out"
+SFTP_HOST = settings.SFTP_HOST
+SFTP_PORT = settings.SFTP_PORT
+SFTP_USER = settings.SFTP_USER
+REMOTE_DIR = settings.SFTP_DOWNLOAD_DIR
 
-# Local directory to save downloaded files
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent  # app/ -> project root
-
-def _get_tmp_root() -> Path:
-    if os.environ.get("APP_TMP_DIR"):
-        return Path(os.environ["APP_TMP_DIR"])
-    candidate = _PROJECT_ROOT / "tmp"
-    try:
-        candidate.mkdir(parents=True, exist_ok=True)
-        return candidate
-    except OSError:
-        fallback = Path("/tmp/pending_legislation")
-        fallback.mkdir(parents=True, exist_ok=True)
-        return fallback
-
-LOCAL_DIR = os.environ.get("DOWNLOAD_DEST_DIR", str(_get_tmp_root() / "pending_downloads"))
+# Local directory to save downloaded files (DOWNLOAD_DEST_DIR, default tmp/pending_downloads/)
+LOCAL_DIR = str(settings.DOWNLOAD_DEST_DIR)
 
 
 def connect_sftp(username: str, password: str) -> tuple[paramiko.Transport, paramiko.SFTPClient]:
@@ -97,7 +79,7 @@ def download_files(sftp: paramiko.SFTPClient, remote_dir: str, local_dir: str):
 
 
 def main():
-    password = os.environ.get("FTP_PASSWORD") or getpass.getpass(f"Password for {SFTP_USER}@{SFTP_HOST}: ")
+    password = settings.FTP_PASSWORD or getpass.getpass(f"Password for {SFTP_USER}@{SFTP_HOST}: ")
     password = password.strip()
 
     transport, sftp = connect_sftp(SFTP_USER, password)

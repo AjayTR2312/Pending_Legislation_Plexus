@@ -33,7 +33,10 @@ from appconfig import settings
 import analysis
 import compare
 import db
+import deployconfig
+import downloads
 import sessions
+import storage
 import tag_audit
 import validation
 
@@ -46,7 +49,15 @@ FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 class DecisionRequest(BaseModel):
     approve: bool
 
-app = FastAPI(title="Pending Legislation — Trial API v2")
+# WEBAPP_ROOT_PATH lets the app sit behind a path prefix (e.g. Plexus serves at
+# /<asset>/<prefix>). Only needed if the platform ingress does NOT strip the
+# prefix before forwarding; it keeps the OpenAPI docs working under the prefix.
+import os as _os
+
+app = FastAPI(
+    title="Pending Legislation — Trial API v2",
+    root_path=(_os.environ.get("WEBAPP_ROOT_PATH", "").strip().rstrip("/")),
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -58,7 +69,19 @@ app.add_middleware(
 
 @app.on_event("startup")
 def _startup() -> None:
+    if deployconfig.datadog_logging_enabled():
+        try:
+            from ddtrace import patch
+
+            patch(fastapi=True, logging=True)
+        except Exception:  # noqa: BLE001 — logging integration must never block boot
+            pass
     db.init_db()
+
+
+@app.on_event("shutdown")
+def _shutdown() -> None:
+    db.close_pool()
 
 
 def _require_job(job_id: str) -> dict:
@@ -66,6 +89,15 @@ def _require_job(job_id: str) -> dict:
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
+
+
+def _require_sftp_features() -> None:
+    """Block SFTP/host-dependent endpoints when disabled (e.g. on Plexus)."""
+    if not deployconfig.sftp_features_enabled():
+        raise HTTPException(
+            status_code=503,
+            detail="This feature is not available in this environment.",
+        )
 
 
 @app.get("/api/info")
@@ -76,12 +108,19 @@ async def info():
         "ui": settings.UI_URL,
         "docs": "/docs",
         "queue": db.queue_depth(),
+        "deployment": deployconfig.describe(),
     }
 
 
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "queue": db.queue_depth()}
+
+
+@app.get("/health")
+async def health_root():
+    """Plain health probe (matches the platform/load-balancer convention)."""
+    return {"status": "ok"}
 
 
 @app.get("/api/stream/jobs")
@@ -122,6 +161,7 @@ async def create_job(file: UploadFile = File(...), state_code: str | None = Form
     job = db.create_job(file.filename, (state_code or "").strip().upper() or None)
     with Path(job["pdf_path"]).open("wb") as fh:
         shutil.copyfileobj(file.file, fh)
+    storage.persist(job["pdf_path"])
 
     db.log_step(job["id"], "upload", "done", f"Received {file.filename}")
     _analyse_and_route(job["id"], job["pdf_path"], job["state_code"])
@@ -176,6 +216,7 @@ async def create_batch(
         target = Path(job["pdf_path"])
         with target.open("wb") as fh:
             shutil.copyfileobj(upload.file, fh)
+        storage.persist(target)
 
         key = (upload.filename, target.stat().st_size)
         if key in seen:
@@ -225,9 +266,25 @@ async def job_decision(job_id: str, req: DecisionRequest):
     return {"approved": False}
 
 
+def _refresh_job_metrics(job_id: str, report: dict) -> None:
+    """Keep the scores on the Jobs list in step with the live report (the stored ones were made at conversion time)."""
+    try:
+        job = db.get_job(job_id)
+        if not job or job["status"] != "done" or not isinstance(job.get("metrics"), dict):
+            return
+        m = dict(job["metrics"])
+        m.update(content_accuracy_pct=report.get("content_accuracy_pct"), layout_accuracy_pct=report.get("layout_accuracy_pct"),
+                 integrity_issues=len(report.get("integrity", {}).get("issues", [])), flagged_issues=len(report.get("issues", [])))
+        if m != job["metrics"]:
+            db.set_metrics(job_id, metrics=m)
+    except Exception:  # noqa: BLE001 - a stale score must never break opening a document
+        import logging
+        logging.getLogger("api").warning("could not refresh stored metrics for %s", job_id, exc_info=True)
+
+
 def _output_present(job: dict) -> bool:
     path = job.get("output_path")
-    return bool(path) and Path(path).exists()
+    return bool(path) and storage.exists(path)
 
 
 @app.get("/api/jobs")
@@ -246,7 +303,7 @@ async def get_job(job_id: str):
 async def get_job_pdf(job_id: str):
     job = _require_job(job_id)
     pdf_path = Path(job["pdf_path"])
-    if not pdf_path.exists():
+    if not storage.ensure_local(pdf_path):
         raise HTTPException(status_code=404, detail="PDF not found")
     return FileResponse(pdf_path, media_type="application/pdf")
 
@@ -254,7 +311,7 @@ async def get_job_pdf(job_id: str):
 @app.get("/api/jobs/{job_id}/text", response_class=PlainTextResponse)
 async def get_job_text(job_id: str):
     job = _require_job(job_id)
-    if not job["output_path"] or not Path(job["output_path"]).exists():
+    if not job["output_path"] or not storage.ensure_local(job["output_path"]):
         raise HTTPException(status_code=404, detail="Output not ready yet")
     return Path(job["output_path"]).read_text(encoding="utf-8")
 
@@ -270,7 +327,7 @@ async def approve_job(job_id: str):
         raise HTTPException(status_code=400, detail="Job is not ready for approval")
 
     dest = db.APPROVED_DIR / f"{job_id}_{Path(job['filename']).stem}.txt"
-    shutil.copyfile(job["output_path"], dest)
+    storage.copy(job["output_path"], dest)
     db.mark_approved(job_id)
     return {"approved": True, "saved_to": str(dest)}
 
@@ -327,9 +384,13 @@ class SaveRequest(BaseModel):
 
 
 @app.get("/api/validation")
-async def get_validation(text_path: str, pdf_path: str | None = None, state_code: str | None = None):
+async def get_validation(text_path: str, pdf_path: str | None = None, state_code: str | None = None,
+                         job_id: str | None = None):
     try:
-        return validation.build_report(text_path, pdf_path, state_code)
+        report = validation.build_report(text_path, pdf_path, state_code)
+        if job_id:
+            _refresh_job_metrics(job_id, report)
+        return report
     except PermissionError:
         raise HTTPException(status_code=403, detail="Path outside permitted directories")
     except FileNotFoundError:
@@ -431,12 +492,15 @@ async def get_submit_config():
     """Where Submit to Keyed would send the file (never includes the password)."""
     import submit
 
-    return submit.config()
+    cfg = submit.config()
+    cfg["available"] = deployconfig.sftp_features_enabled()
+    return cfg
 
 
 @app.post("/api/validation/submit")
 async def post_submit(req: KeyRequest):
     """Upload the approved version to the Keyed SFTP folder. Blocked until approved."""
+    _require_sftp_features()
     import submit
 
     try:
@@ -451,6 +515,133 @@ async def post_submit(req: KeyRequest):
         raise HTTPException(status_code=502, detail=str(exc))
     status = validation.mark_submitted(req.key, f"{result['host']}:{result['remote_path']}")
     return {**status, **result}
+
+
+# ── SFTP downloads (the React counterpart of Streamlit's "Downloaded Files") ─────────────
+
+class QueueZipsRequest(BaseModel):
+    names: list[str]
+
+
+@app.get("/api/downloads")
+def get_downloads():
+    if not deployconfig.sftp_features_enabled():
+        return {"folder": None, "sftp_configured": False, "available": False, "files": []}
+    return {
+        "folder": str(downloads.downloads_dir()),
+        "sftp_configured": bool(settings.FTP_PASSWORD),
+        "available": True,
+        "files": downloads.list_zips(),
+    }
+
+
+@app.post("/api/downloads/check")
+def post_check_sftp():
+    """Fetch any ZIPs that are on the SFTP server and not yet downloaded. Read-only on the server."""
+    _require_sftp_features()
+    try:
+        return downloads.check_sftp()
+    except downloads.SftpError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@app.post("/api/downloads/queue")
+def post_queue_zips(req: QueueZipsRequest):
+    """Unpack the chosen ZIPs and queue every PDF as a job (converted by the workers, reviewed, then submitted)."""
+    _require_sftp_features()
+    if not req.names:
+        raise HTTPException(status_code=400, detail="Choose at least one ZIP")
+    try:
+        return downloads.queue_zips(req.names, _analyse_and_route, uuid.uuid4().hex[:12])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/rules")
+def get_rules():
+    """All jurisdictions' rules: the spec's instructions, the automatic checks, and the manual ones."""
+    import rules as rules_mod
+
+    return rules_mod.overview()
+
+
+# ── Where each file stands: not reviewed / not approved / approved / edited since / submitted ──
+
+class ApprovalStatesRequest(BaseModel):
+    text_paths: list[str]
+
+
+@app.post("/api/approval-states")
+def post_approval_states(req: ApprovalStatesRequest):
+    states: dict[str, dict] = {}
+    for tp in req.text_paths:
+        try:
+            original = validation.resolve_readable(tp)
+        except (FileNotFoundError, PermissionError):
+            states[tp] = {"state": "missing"}
+            continue
+        key = validation._key_for(original)
+        if not (validation.EDITS_DIR / key / "meta.json").exists():     # asking must not create folders
+            states[tp] = {"state": "not_reviewed"}
+            continue
+        s = validation.approval_status(key)
+        state = "submitted" if s["submitted"] else "approved" if s["approved"] else "edited" if s["stale"] else "not_approved"
+        states[tp] = {"state": state, "approved_at": s["approved_at"], "submitted_at": s["submitted_at"]}
+    return {"states": states}
+
+
+# ── Submit all approved ───────────────────────────────────────────────────────
+
+class SubmitAllRequest(BaseModel):
+    keys: list[str] = []
+    text_paths: list[str] = []
+    dry_run: bool = False
+
+
+@app.post("/api/submit-all")
+def post_submit_all(req: SubmitAllRequest):
+    """Submit every APPROVED file in the list to Keyed. Anything not approved (or edited since) is skipped, never sent.
+    `dry_run` only reports what would happen."""
+    if not req.dry_run:
+        _require_sftp_features()
+    import submit
+
+    targets: list[tuple[str | None, str]] = [(k, k) for k in req.keys]
+    for tp in req.text_paths:
+        try:
+            original = validation.resolve_readable(tp)
+        except (FileNotFoundError, PermissionError):
+            targets.append((None, Path(tp).name))
+            continue
+        targets.append((validation._key_for(original), original.name))
+
+    results: list[dict[str, str]] = []
+    for key, label in targets:
+        if key is None:
+            results.append({"name": label, "status": "skipped", "reason": "file not found"})
+            continue
+        if not (validation.EDITS_DIR / key / "meta.json").exists():   # check first: asking must not create folders
+            results.append({"name": label, "status": "skipped", "reason": "not reviewed yet"})
+            continue
+        status = validation.approval_status(key)
+        name = validation.original_name(key)
+        if status["submitted"]:
+            results.append({"name": name, "status": "skipped", "reason": "already submitted"})
+        elif not status["approved"]:
+            reason = "edited after it was approved: approve it again" if status["stale"] else "not approved yet"
+            results.append({"name": name, "status": "skipped", "reason": reason})
+        elif req.dry_run:
+            results.append({"name": name, "status": "ready", "reason": ""})
+        else:
+            try:
+                sent = submit.submit_file(validation.approved_snapshot(key), name)
+                validation.mark_submitted(key, f"{sent['host']}:{sent['remote_path']}")
+                results.append({"name": name, "status": "submitted", "reason": ""})
+            except (submit.SubmitError, PermissionError) as exc:
+                results.append({"name": name, "status": "failed", "reason": str(exc)})
+    count = lambda s: sum(1 for r in results if r["status"] == s)  # noqa: E731
+    return {"results": results, "ready": count("ready"), "submitted": count("submitted"),
+            "skipped": count("skipped"), "failed": count("failed")}
 
 
 # ── Tag audit (Claude — costs tokens, opt-in only) ──────────────────

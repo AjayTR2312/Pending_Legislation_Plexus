@@ -54,61 +54,22 @@ _THIN_BORDER = Border(
 )
 _WRAP = Alignment(wrap_text=True, vertical="top")
 
+import sys as _sys, pathlib as _pl
+_APP = str(_pl.Path(__file__).resolve().parent.parent / "app")
+if _APP not in _sys.path:
+    _sys.path.insert(0, _APP)
+import settings as _S  # every tunable below: `python app/settings.py --show`
+from ai_credentials import get_anthropic_api_key
+
+
 # ── TR Anthropic gateway ────────────────────────────────────────────
-_TR_WORKSPACE_ID       = "AgentTraininJaH4"
-_TR_ANTHROPIC_TOKEN_URL = "https://aiplatform.gcs.int.thomsonreuters.com/v1/anthropic/token"
-
-
+# CIAM M2M first, workspace-token fallback, retries and timeouts: app/ai_credentials.py + settings.
 def _get_anthropic_client():
-    """Obtain an Anthropic client via the TR AI Platform gateway."""
-    import requests as _requests
+    """Obtain an Anthropic client via the TR AI Platform gateway (with model fallback)."""
     import anthropic
+    from llm_models import wrap_client
 
-    payload = {"workspace_id": _TR_WORKSPACE_ID}
-    retry_delays = [5, 15, 30]
-    last_err = None
-
-    for attempt, delay in enumerate(retry_delays, start=1):
-        try:
-            resp = _requests.post(
-                _TR_ANTHROPIC_TOKEN_URL,
-                json=payload,
-                timeout=60,
-                verify=False,
-            )
-            resp.raise_for_status()
-            creds = resp.json()
-            break
-        except Exception as exc:
-            last_err = exc
-            err_str = str(exc).lower()
-            retryable = any(k in err_str for k in (
-                "timed out",
-                "timeout",
-                "readtimeout",
-                "connection",
-                "disconnected",
-                "handshake",
-                "500",
-                "502",
-                "503",
-                "504",
-                "529",
-            ))
-            if retryable and attempt < len(retry_delays):
-                log.warning(
-                    "Token gateway request failed (attempt %d/%d): %s. Retrying in %ss...",
-                    attempt, len(retry_delays), str(exc)[:160], delay,
-                )
-                time.sleep(delay)
-                continue
-            raise
-    else:  # pragma: no cover
-        raise last_err if last_err else RuntimeError("Failed to obtain Anthropic token")
-
-    if "anthropic_api_key" in creds:
-        return anthropic.Anthropic(api_key=creds["anthropic_api_key"])
-    raise RuntimeError("No anthropic_api_key in gateway response")
+    return wrap_client(anthropic.Anthropic(api_key=get_anthropic_api_key(verify_tls=False)))
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -1166,6 +1127,16 @@ Respond with ONLY valid JSON (no markdown fences, no commentary):
 # Main function
 # ════════════════════════════════════════════════════════════════════
 
+try:  # model name comes from app/llm_models.py (LLM_MODEL env), with fallback handled by the client wrapper
+    import sys as _sys, pathlib as _pl
+    _APP = str(_pl.Path(__file__).resolve().parent.parent / "app")
+    if _APP not in _sys.path:
+        _sys.path.insert(0, _APP)
+    from llm_models import PRIMARY_MODEL as _DEFAULT_MODEL
+except Exception:  # noqa: BLE001 — model config must never break an import
+    _DEFAULT_MODEL = "claude-opus-4-8"
+
+
 def gpt_compare_tags(
     highlighted_images_b64: List[str],
     pymupdf_clean_text: str,
@@ -1173,7 +1144,7 @@ def gpt_compare_tags(
     state_code: str,
     state_rules: str = "",
     output_xlsx: str = "gpt_tag_comparison.xlsx",
-    model: str = "claude-opus-4-7",
+    model: str = _DEFAULT_MODEL,
     pymupdf_report: Optional[Dict] = None,
     pymupdf_raw_text: Optional[str] = None,
 ) -> Dict:
@@ -1250,7 +1221,7 @@ def gpt_compare_tags(
     raw_response = ""
     with client.messages.stream(
         model=model,
-        max_tokens=128000,
+        max_tokens=_S.LLM_MAX_TOKENS_STREAM,
         messages=[{"role": "user", "content": content_parts}],
     ) as stream:
         for text in stream.text_stream:

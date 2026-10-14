@@ -459,6 +459,12 @@ def _artifacts(c: Ctx):
         out.append(F("fmt_artifacts", "rules", "error", "Conversational text at the start",
                      "The output must begin with the first line of the bill, not an explanation.",
                      s, s + 60))
+    # The model narrating what it dropped instead of dropping it, e.g. "SJ9609 removed as barcode text"
+    for m in re.finditer(r"(?im)^[^\n]*\b(?:removed|omitted|stripped|dropped|ignored|deleted)\s+(?:as|because|since)\b[^\n]*"
+                         r"(?:barcode|footer|header|page number|line number|artifact|watermark)[^\n]*$", c.text):
+        out.append(F("fmt_artifacts", "rules", "error", "The model's note about a removal is in the output",
+                     "A note such as \"removed as barcode text\" is commentary, not bill text. Delete the line: "
+                     "page furniture is dropped silently.", m.start(), m.end()))
     for m in re.finditer(r"\*\*[^*\n]+\*\*|~~[^~\n]+~~|(?<![\w_])__[A-Za-z][^_\n]*__(?![\w_])", c.text):
         out.append(F("fmt_artifacts", "rules", "error", "Markdown formatting in output",
                      "Use only [A>…<A] and [D>…<D]; markdown is forbidden.", m.start(), m.end()))
@@ -1034,6 +1040,28 @@ def check_all(text: str, state: Optional[str], reference: Optional[str] = None) 
             findings.append(f)
     findings.sort(key=lambda f: (f["start"], f["rule"]))
     return findings
+
+
+def overview() -> dict[str, Any]:
+    """Every state's rules in one place for the Rules tab: what the spec says, what is checked automatically,
+    and what only a person can check against the PDF. Global rules (every state) are listed once."""
+    states = []
+    for code in sorted(load_spec().get("states", {})):
+        cat = catalog(code, [])
+        spec = state_spec(code) or {}
+        states.append({
+            "code": code,
+            "spec": cat["spec"],
+            "instructions": {
+                "add": list((spec.get("add_markup") or {}).get("custom_rules") or []),
+                "delete": list((spec.get("delete_markup") or {}).get("custom_rules") or []),
+            },
+            "rules": [r for r in cat["rules"] if r["scope"] != "ALL"],   # the ones that exist only for this state
+            "manual": cat["manual"],
+        })
+    glob = [{"id": r["id"], "title": r["title"], "requirement": r["requirement"], "scope": "ALL", "source": r["source"]}
+            for r in RULES if r["states"] is None]
+    return {"global": glob, "states": states}
 
 
 def catalog(state: Optional[str], findings: list[dict[str, Any]]) -> dict[str, Any]:

@@ -11,6 +11,13 @@ import threading
 import copy
 import re
 
+try:  # the model named in logs/UI text is whatever LLM_MODEL is configured to (app/settings.py)
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import llm_models as _llm_models
+    _ML = _llm_models.model_label()
+except Exception:  # noqa: BLE001 - labels only; never block the app
+    _ML = "Claude"
+
 # Streamlit re-executes this script on every rerun; sys.stdout/stderr can be
 # replaced or closed between reruns, so avoid any stream-backed handler here.
 # setup_simple_logging() (called later in the script) installs real handlers.
@@ -133,26 +140,54 @@ def _submit_to_keyed_sftp(file_path: str, edited_text: str = None):
             f.write(edited_text)
         logging.info(f"[HITL] Updated {src.name} with validated edits")
 
-    # SFTP upload directly from source
-    _host = "10.17.38.130"
-    _port = 22
-    _user = "mag2ftp"
-    _remote_dir = "/apps/Codes/MP2/LandingStrips/LCPR/ftp/keyed"
-    _password = os.environ.get("FTP_PASSWORD", "")
+    # SFTP upload directly from source — the target comes from app/settings.py (SFTP_* in .env)
+    import settings as _settings
+    _host = _settings.SFTP_HOST
+    _port = _settings.SFTP_PORT
+    _user = _settings.SFTP_USER
+    _remote_dir = _settings.SFTP_UPLOAD_DIR
+    _password = _settings.FTP_PASSWORD
 
     if not _password:
         raise RuntimeError("FTP_PASSWORD not configured in environment")
+    if not src.exists():
+        raise RuntimeError(f"Local file not found: {src}")
 
     transport = paramiko.Transport((_host, _port))
     transport.connect(username=_user, password=_password)
     sftp = paramiko.SFTPClient.from_transport(transport)
     try:
-        sftp.put(str(src), f"{_remote_dir}/{src.name}")
-        logging.info(f"[SFTP] Uploaded {src.name} to {_remote_dir}")
+        # Make sure the target directory exists (same as ftp_upload.py)
+        _cur = ""
+        for _d in _remote_dir.strip("/").split("/"):
+            _cur += f"/{_d}"
+            try:
+                sftp.stat(_cur)
+            except IOError:
+                sftp.mkdir(_cur)
 
-        # Write upload log via session manager
-        session_mgr = st.session_state.get('session_manager') or get_session_manager()
-        session_mgr.write_upload_log(f"UPLOADED {src.name} → {_remote_dir}/{src.name}")
+        _remote_path = f"{_remote_dir}/{src.name}"
+        sftp.put(str(src), _remote_path)
+
+        # Verify the file actually landed with the expected size
+        try:
+            _remote_size = sftp.stat(_remote_path).st_size
+        except IOError as _e:
+            raise RuntimeError(f"Upload not found on server after put: {_remote_path} ({_e})")
+        _local_size = src.stat().st_size
+        if _remote_size != _local_size:
+            raise RuntimeError(
+                f"Size mismatch after upload: local={_local_size} bytes, "
+                f"remote={_remote_size} bytes ({_remote_path})"
+            )
+        logging.info(f"[SFTP] Uploaded & verified {src.name} ({_remote_size} bytes) at {_host}:{_remote_path}")
+
+        # Write upload log via session manager (never fail the submit because of logging)
+        try:
+            session_mgr = st.session_state.get('session_manager') or get_session_manager()
+            session_mgr.write_upload_log(f"UPLOADED {src.name} → {_host}:{_remote_path} ({_remote_size} bytes)")
+        except Exception as _log_err:
+            logging.warning(f"[SFTP] Upload log write failed: {_log_err}")
     finally:
         sftp.close()
         transport.close()
@@ -294,7 +329,7 @@ def _is_local_dev() -> bool:
        (``1``/``true``/``yes`` → local; ``0``/``false``/``no`` → prod).
     2. Kubernetes always sets ``KUBERNETES_SERVICE_HOST`` in pods → prod.
     3. Docker containers expose ``/.dockerenv`` → prod.
-    4. Default: assume local.
+    4. Default: production look (debug UI hidden) so local matches deployed.
     """
     _env = os.environ.get("STREAMLIT_LOCAL_DEV", "").strip().lower()
     if _env in ("1", "true", "yes"):
@@ -305,7 +340,9 @@ def _is_local_dev() -> bool:
         return False
     if os.path.exists("/.dockerenv"):
         return False
-    return True
+    # Default to the production look so local and deployed UIs match.
+    # Set STREAMLIT_LOCAL_DEV=1 to opt in to the debug sidebar.
+    return False
 
 
 IS_LOCAL_DEV = _is_local_dev()
@@ -2418,7 +2455,7 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
                 show_processing_steps()
 
     session_mgr.start_processing(session_id)
-    add_log("Starting Claude Opus 4.6 processing...")
+    add_log(f"Starting {_ML} processing...")
 
     try:
         # ── Load the Opus4.6 module via importlib (filename contains dots) ──────
@@ -2437,9 +2474,9 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
         st.session_state.current_step = 0
         st.session_state.step_status[0] = "🔄"
         update_progress()
-        add_log("🤖 Initializing Claude Opus 4.6 client...")
+        add_log(f"🤖 Initializing {_ML} client...")
         if status_placeholder:
-            status_placeholder.info("🤖 Initializing Claude Opus 4.6 client...")
+            status_placeholder.info(f"🤖 Initializing {_ML} client...")
 
         client = opus.get_anthropic_client()
         if not client:
@@ -2508,9 +2545,9 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
         st.session_state.current_step = 3
         st.session_state.step_status[3] = "🔄"
         update_progress()
-        add_log("👁️ Running Claude Opus 4.6 visual conversion (this may take a few minutes)...")
+        add_log(f"👁️ Running {_ML} visual conversion (this may take a few minutes)...")
         if status_placeholder:
-            status_placeholder.info("👁️ Running Claude Opus 4.6 visual conversion (this may take a few minutes)...")
+            status_placeholder.info(f"👁️ Running {_ML} visual conversion (this may take a few minutes)...")
 
         result_data = opus.convert_pdf_to_text(client, pdf_path, prompt)
         # Handle both tuple (text, images) and plain text return
@@ -3016,7 +3053,7 @@ def process_with_claude_opus(pdf_path, state_code, session_id, progress_placehol
                 st.session_state.current_step = 7
                 st.session_state.step_status[7] = "🔄"
                 update_progress()
-                add_log("🤖 Running Claude Opus 4.7 tag validation audit...")
+                add_log(f"🤖 Running {_ML} tag validation audit...")
                 if status_placeholder:
                     status_placeholder.info("🤖 Running tag validation audit (comparing PyMuPDF report vs converted text)...")
 
@@ -3583,9 +3620,9 @@ def process_pymupdf_clean_only(pdf_path, state_code, session_id, progress_placeh
             )
 
             # ── 6c: Run Claude Opus 4.7 vision audit ───────────────────
-            add_log("🤖 Running Claude Opus 4.7 audit on cleaned text...")
+            add_log(f"🤖 Running {_ML} audit on cleaned text...")
             if status_placeholder:
-                status_placeholder.info("🤖 Running Claude Opus 4.7 audit (comparing PyMuPDF report vs clean text)...")
+                status_placeholder.info(f"🤖 Running {_ML} audit (comparing PyMuPDF report vs clean text)...")
 
             audit_xlsx = output_path.replace(".txt", "_tag_validation.xlsx") \
                 if isinstance(output_path, str) \
@@ -3722,9 +3759,9 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
         st.session_state.current_step = 0
         st.session_state.step_status[0] = "🔄"
         update_progress()
-        add_log("🤖 Initializing Claude Opus 4.6 client...")
+        add_log(f"🤖 Initializing {_ML} client...")
         if status_placeholder:
-            status_placeholder.info("🤖 Initializing Claude Opus 4.6 client...")
+            status_placeholder.info(f"🤖 Initializing {_ML} client...")
 
         client = opus.get_anthropic_client()
         if not client:
@@ -4105,9 +4142,9 @@ def process_with_hybrid_mode(pdf_path, state_code, session_id, progress_placehol
             }
             st.session_state.step_status[5] = "✅"
         else:
-            add_log("🤖 Running Claude Opus 4.7 audit on hybrid-cleaned text...")
+            add_log(f"🤖 Running {_ML} audit on hybrid-cleaned text...")
             if status_placeholder:
-                status_placeholder.info("🤖 Running Claude Opus 4.7 audit...")
+                status_placeholder.info(f"🤖 Running {_ML} audit...")
 
             try:
                 from pymupdf_extractor import highlight_pdf_formatting
@@ -5005,7 +5042,7 @@ def show_simple_ui():
             value=_llm_verify_default,
             help=(
                 "When ON, any text-accuracy difference that survives the "
-                "regex allowlist is sent to Claude Opus 4.7 (with the "
+                f"regex allowlist is sent to {_ML} (with the "
                 "highlighted page images) for a second opinion.  The LLM "
                 "may auto-demote obvious page artifacts (header / footer / "
                 "decorative rule / page number, ≤15 words, high confidence) "
@@ -5535,16 +5572,17 @@ def show_simple_ui():
         # ── Validate all files ────────────────────────────────────────────
         # Batch-total cap is app-level (separate from Streamlit's per-file
         # server.maxUploadSize). Default is 50 MB; override with env var
-        # BATCH_MAX_TOTAL_SIZE_MB if needed.
+        # BATCH_MAX_TOTAL_SIZE_MB if needed. All limits live in app/settings.py.
+        import settings as _limits
         try:
-            _max_total_size_mb = int(os.environ.get("BATCH_MAX_TOTAL_SIZE_MB", "50"))
-        except Exception:
+            _max_total_size_mb = _limits.BATCH_MAX_TOTAL_SIZE_MB
+        except _limits.SettingsError:
             _max_total_size_mb = 50
         _max_total_size_mb = max(1, _max_total_size_mb)
         MAX_TOTAL_SIZE = _max_total_size_mb * 1024 * 1024
-        MAX_BATCH = 20
-        MAX_PAGES = 15              # Default page limit for PyMuPDF/Hybrid modes
-        MAX_PAGES_VISION = 50       # Higher limit for Vision mode (scanned PDFs, CO state)
+        MAX_BATCH = _limits.STREAMLIT_MAX_BATCH_FILES
+        MAX_PAGES = _limits.MAX_PAGES_PYMUPDF         # Default page limit for PyMuPDF/Hybrid modes
+        MAX_PAGES_VISION = _limits.MAX_PAGES_VISION   # Higher limit for Vision mode (scanned PDFs, CO state)
         valid_files = []
         skipped_names = []
         skipped_size_names = []
@@ -6712,7 +6750,7 @@ def show_results_section():
             f'<span class="summary-v2-time-value">{_total_time}</span>'
             '</div>'
             '<div class="summary-v2-note">'
-            'Your PDF has been converted to tagged legislative text with Claude Opus 4.6. '
+            f'Your PDF has been converted to tagged legislative text with {_ML}. '
             'Review the metrics above for validation confidence.'
             '</div>'
             '</div>'
@@ -7170,7 +7208,7 @@ class BatchWorker:
                 self._current_logs = list(logs)
             logging.info(message)
 
-        add_log(f"Starting Claude Opus 4.6 processing for {file_name}...")
+        add_log(f"Starting {_ML} processing for {file_name}...")
 
         # ── Load Opus module ─────────────────────────────────────────
         opus_module_path = os.path.normpath(
@@ -7184,7 +7222,7 @@ class BatchWorker:
         sys.stdout, sys.stderr = _orig_stdout, _orig_stderr
 
         # Step 1: Client
-        add_log("🤖 Initializing Claude Opus 4.6 client...")
+        add_log(f"🤖 Initializing {_ML} client...")
         client = opus.get_anthropic_client()
         if not client:
             raise RuntimeError("Failed to initialize Claude Opus client")
@@ -7211,7 +7249,7 @@ class BatchWorker:
         add_log(f"✅ Conversion prompt built ({len(prompt):,} chars)")
 
         # Step 4: Visual conversion
-        add_log("👁️ Running Claude Opus 4.6 visual conversion (this may take a few minutes)...")
+        add_log(f"👁️ Running {_ML} visual conversion (this may take a few minutes)...")
         add_log("⏳ Sending PDF pages to Claude, waiting for output response...")
 
         # Heartbeat: emit a log every 15s so the user knows it's still running
@@ -7743,7 +7781,7 @@ def show_batch_processing():
                 f"🚀 Process {n_files} Documents",
                 type="primary",
                 use_container_width=True,
-                help="Process all uploaded PDFs using Claude Opus 4.6. "
+                help=f"Process all uploaded PDFs using {_ML}. "
                      "You can review completed files while others are still processing.",
             ):
                 session_mgr = st.session_state.session_manager
@@ -8016,7 +8054,7 @@ def show_batch_results_section():
             f'<span style="font-size:1rem; font-weight:800; color:#0f172a;">{_total_time_str}</span>'
             f'</div>'
             f'<p style="margin:12px 0 0; font-size:0.82rem; color:#64748b;">'
-            f'{n_ok} PDF(s) converted to tagged legislative text with Claude Opus 4.6. '
+            f'{n_ok} PDF(s) converted to tagged legislative text with {_ML}. '
             f'{"Click the <b>Validation Review</b> tab to inspect each file." if any(r.get("audit_excel_path") for r in results) else ""}'
             f'</p></div>',
             unsafe_allow_html=True,

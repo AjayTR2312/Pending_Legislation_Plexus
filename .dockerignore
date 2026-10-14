@@ -43,3 +43,18 @@ pytest.ini
 # Build and deployment documentation (internal)
 BUGFIX_403_UPLOAD_ERROR.md
 BUILD_DEPLOYMENT_COMMANDS.md
+
+# Virtual environments (added for Plexus image builds)
+.venv/
+.venv-plexus/
+**/node_modules/
+
+# Local runtime state — belongs in S3/Postgres, must not ship in the image
+webapp_trial/backend/storage/
+webapp_trial/backend/_pg_test_storage/
+webapp_trial/backend/_s3_test_storage/
+data/
+
+# Secrets — never bake these into an image
+.env
+**/.env

@@ -114,6 +114,15 @@ try:
 except ImportError:
     _HAS_PYMUPDF = False
 
+# Model name, price sheet and primary->fallback client wrapper — app/llm_models.py
+# app/ is required (settings + llm_models); a failed import should be loud, not silently use stale copies of the values
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "app"))
+from llm_models import (
+    PRIMARY_MODEL, MODEL_PRICING as _SHARED_PRICING, calculate_cost as _shared_cost,
+    wrap_client as _wrap_client, last_model_used as _last_model_used,
+)
+import settings as _S  # every tunable below: `python app/settings.py --show`
+
 # (compare_tags and Validation.py removed — replaced by gpt_compare.py)
 
 # Disable SSL warnings
@@ -122,8 +131,8 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 ssl._create_default_https_context = ssl._create_unverified_context
  
 # Configuration
-WORKSPACE_ID = "AgentTraininJaH4"
-TOKEN_URL = "https://aiplatform.gcs.int.thomsonreuters.com/v1/anthropic/token"
+WORKSPACE_ID = _S.TR_WORKSPACE_ID  # kept for callers that read it; auth uses app/ai_credentials.py
+TOKEN_URL = _S.TR_ANTHROPIC_TOKEN_URL
 PROJECT_ROOT = Path(__file__).parent.absolute()
 PROMPTS_FILE = os.path.join(PROJECT_ROOT, "conversion_prompts.md")
  
@@ -139,45 +148,61 @@ AVAILABLE_STATES = {
 }
  
 # ── Token & Cost Tracking ─────────────────────────────────────────────
+# Per-1k view kept for code that reads this table; app/llm_models.py is the source of truth.
 MODEL_PRICING = {
-    "claude-opus-4-6": {"input_cost_per_1k": 0.005, "output_cost_per_1k": 0.025},
-    "claude-opus-4-7": {"input_cost_per_1k": 0.005, "output_cost_per_1k": 0.025},
+    m: {"input_cost_per_1k": p["input"] / 1000, "output_cost_per_1k": p["output"] / 1000}
+    for m, p in _SHARED_PRICING.items()
 }
 
 _TOKEN_TRACKER = {
     "calls": [],          # list of {step, input_tokens, output_tokens, cost}
     "total_input": 0,
     "total_output": 0,
+    "total_cache_write": 0,
+    "total_cache_read": 0,
     "total_cost": 0.0,
 }
 
-def _calculate_cost(input_tokens, output_tokens, model="claude-opus-4-6"):
-    pricing = MODEL_PRICING.get(model, MODEL_PRICING["claude-opus-4-6"])
+def _calculate_cost(input_tokens, output_tokens, model=None, cache_write_tokens=0, cache_read_tokens=0):
+    model = model or PRIMARY_MODEL
+    if _shared_cost is not None:
+        return _shared_cost(input_tokens, output_tokens, model, cache_write_tokens, cache_read_tokens)
+    pricing = MODEL_PRICING.get(model, max(MODEL_PRICING.values(), key=lambda p: p["output_cost_per_1k"]))
     input_cost = (input_tokens / 1000) * pricing["input_cost_per_1k"]
     output_cost = (output_tokens / 1000) * pricing["output_cost_per_1k"]
     return input_cost + output_cost
 
-def _track_usage(step_name, usage, model="claude-opus-4-6"):
-    """Record token usage from an API call."""
+def _track_usage(step_name, usage, model=None):
+    """Record token usage from an API call (priced at the model that actually answered)."""
+    model = model or _last_model_used() or PRIMARY_MODEL
     inp = getattr(usage, 'input_tokens', 0) if usage else 0
     out = getattr(usage, 'output_tokens', 0) if usage else 0
-    cost = _calculate_cost(inp, out, model)
+    cache_write = (getattr(usage, 'cache_creation_input_tokens', 0) or 0) if usage else 0
+    cache_read = (getattr(usage, 'cache_read_input_tokens', 0) or 0) if usage else 0
+    cost = _calculate_cost(inp, out, model, cache_write, cache_read)
     _TOKEN_TRACKER["calls"].append({
         "step": step_name,
         "input_tokens": inp,
         "output_tokens": out,
+        "cache_write_tokens": cache_write,
+        "cache_read_tokens": cache_read,
         "cost": cost,
     })
     _TOKEN_TRACKER["total_input"] += inp
     _TOKEN_TRACKER["total_output"] += out
+    _TOKEN_TRACKER["total_cache_write"] += cache_write
+    _TOKEN_TRACKER["total_cache_read"] += cache_read
     _TOKEN_TRACKER["total_cost"] += cost
-    logging.info(f"💰 [{step_name}] Tokens: {inp:,} in / {out:,} out | Cost: ${cost:.4f}")
+    cached = f" (+{cache_read:,} cached read, {cache_write:,} cached write)" if (cache_read or cache_write) else ""
+    logging.info(f"💰 [{step_name}] Tokens: {inp:,} in{cached} / {out:,} out | Cost: ${cost:.4f}")
 
 def reset_token_tracker():
     """Reset the token tracker for a fresh processing run."""
     _TOKEN_TRACKER["calls"].clear()
     _TOKEN_TRACKER["total_input"] = 0
     _TOKEN_TRACKER["total_output"] = 0
+    _TOKEN_TRACKER["total_cache_write"] = 0
+    _TOKEN_TRACKER["total_cache_read"] = 0
     _TOKEN_TRACKER["total_cost"] = 0.0
 
 def get_token_tracker():
@@ -309,19 +334,20 @@ def get_anthropic_client():
         anthropic.Anthropic: Client instance or None if failed
     """
     try:
-        payload = {"workspace_id": WORKSPACE_ID}
-        # Use verify=False since SSL verification is disabled globally
-        resp = requests.post(TOKEN_URL, headers=None, json=payload, verify=False)
-        credentials = json.loads(resp.content)
-       
-        if 'anthropic_api_key' in credentials:
-            logging.info("✅ Successfully obtained Anthropic API key")
+        # CIAM M2M first, TR_WORKSPACE_ID token exchange as the fallback (app/ai_credentials.py).
+        # verify=False on the token request because SSL verification is disabled globally.
+        from ai_credentials import get_anthropic_api_key
+        api_key = get_anthropic_api_key(verify_tls=False)
+        logging.info("✅ Successfully obtained Anthropic API key")
+        # Anthropic 1.4 uses the httpx2 transport; older SDK releases
+        # accepted the standard httpx client here.
+        try:
+            import httpx2
+            http_client = httpx2.Client(verify=False)
+        except ImportError:
             import httpx
             http_client = httpx.Client(verify=False)
-            return anthropic.Anthropic(api_key=credentials["anthropic_api_key"], http_client=http_client)
-        else:
-            logging.error(f"❌ No Anthropic API key found in response")
-            return None
+        return _wrap_client(anthropic.Anthropic(api_key=api_key, http_client=http_client))
     except Exception as e:
         logging.error(f"❌ Failed to initialize Anthropic client: {e}")
         return None
@@ -381,7 +407,7 @@ def load_state_template(state_code=None):
     Returns:
         dict: State config dict, or None if not found
     """
-    template_path = os.path.join(PROJECT_ROOT, "netscan_state_template.json")
+    template_path = str(_S.STATE_SPEC_FILE)
     if not os.path.exists(template_path):
         logging.warning(f"Template file not found: {template_path}")
         return None
@@ -414,7 +440,7 @@ def detect_state_from_filename(pdf_path):
     Returns:
         str: Detected state code, or None
     """
-    template_path = os.path.join(PROJECT_ROOT, "netscan_state_template.json")
+    template_path = str(_S.STATE_SPEC_FILE)
     if not os.path.exists(template_path):
         return None
  
@@ -464,7 +490,7 @@ def detect_state_from_content(client, pdf_path):
         pdf.close()
  
         # Ask Claude to identify the state
-        template_path = os.path.join(PROJECT_ROOT, "netscan_state_template.json")
+        template_path = str(_S.STATE_SPEC_FILE)
         with open(template_path, 'r', encoding='utf-8') as f:
             template = json.load(f)
        
@@ -489,8 +515,8 @@ State name may NOT appear explicitly in the header. You must judge based on the 
 Respond with ONLY the 2-letter state code (e.g., "KS", "FL", "CO"). If you cannot confidently determine the state, respond with "UNKNOWN"."""
  
         message = client.messages.create(
-            model="claude-opus-4-6",
-            max_tokens=100,
+            model=PRIMARY_MODEL,
+            max_tokens=_S.LLM_MAX_TOKENS_PING,
             temperature=0,
             messages=[{
                 "role": "user",
@@ -512,7 +538,7 @@ Respond with ONLY the 2-letter state code (e.g., "KS", "FL", "CO"). If you canno
         )
         _track_usage("State Detection", message.usage)
  
-        response = message.content[0].text.strip().upper()
+        response = "".join(getattr(b, "text", "") or "" for b in message.content if getattr(b, "type", "") == "text").strip().upper()
        
         # Validate response is a known state code
         if response in template.get("states", {}):
@@ -894,7 +920,7 @@ def pdf_pages_to_images(pdf_path, dpi=400, trim_borders=True, border_percent=5, 
     """
     # Adaptive thresholds
     MIN_WIDTH_PX = 2000    # If page renders narrower than this, bump DPI
-    MAX_DPI = 600          # Safety cap to avoid huge images
+    MAX_DPI = _S.VISUAL_MAX_DPI          # Safety cap to avoid huge images
     
     try:
         pdf = pdfium.PdfDocument(pdf_path)
@@ -1017,9 +1043,8 @@ def convert_pdf_to_text(client, pdf_path, prompt, batch_size=None, dpi=400):
                 try:
                     chunk_text = ""
                     with client.messages.stream(
-                        model="claude-opus-4-6",
-                        max_tokens=128000,
-                        temperature=0,
+                        model=PRIMARY_MODEL,
+                        max_tokens=_S.LLM_MAX_TOKENS_STREAM,
                         messages=messages
                     ) as stream:
                         for text in stream.text_stream:
@@ -1148,9 +1173,8 @@ def convert_pdf_document_mode(client, pdf_path, prompt):
  
         converted_text = ""
         with client.messages.stream(
-            model="claude-opus-4-6",
-            max_tokens=128000,
-            temperature=0,
+            model=PRIMARY_MODEL,
+            max_tokens=_S.LLM_MAX_TOKENS_STREAM,
             messages=messages
         ) as stream:
             for text in stream.text_stream:
@@ -1209,9 +1233,8 @@ def reconcile_outputs(client, visual_text, doc_text):
  
         reconciled = ""
         with client.messages.stream(
-            model="claude-opus-4-6",
-            max_tokens=128000,
-            temperature=0,
+            model=PRIMARY_MODEL,
+            max_tokens=_S.LLM_MAX_TOKENS_STREAM,
             messages=messages
         ) as stream:
             for text in stream.text_stream:
@@ -1314,9 +1337,8 @@ def self_correction_pass(client, converted_text, page_images, state_config=None)
 
         corrected = ""
         with client.messages.stream(
-            model="claude-opus-4-6",
-            max_tokens=128000,
-            temperature=0,
+            model=PRIMARY_MODEL,
+            max_tokens=_S.LLM_MAX_TOKENS_STREAM,
             messages=[{"role": "user", "content": content}]
         ) as stream:
             for text in stream.text_stream:
@@ -1692,9 +1714,9 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
                     cleaned = ""
                     final_msg = None
                     with client.messages.stream(
-                        model="claude-opus-4-6",
-                        max_tokens=64000,
-                        timeout=600.0,  # 10-minute timeout for large chunks
+                        model=PRIMARY_MODEL,
+                        max_tokens=_S.LLM_MAX_TOKENS_CHUNK,
+                        timeout=_S.LLM_CHUNK_TIMEOUT_S,  # 10-minute timeout for large chunks
                         system=system_prompt,
                         messages=[{"role": "user", "content": user_message}],
                     ) as stream:
@@ -1760,9 +1782,9 @@ def convert_pdf_hybrid_text(client, pdf_path, state_config=None, state_code=None
                         cleaned = ""
                         final_msg = None
                         with client.messages.stream(
-                            model="claude-opus-4-6",
-                            max_tokens=64000,
-                            timeout=600.0,
+                            model=PRIMARY_MODEL,
+                            max_tokens=_S.LLM_MAX_TOKENS_CHUNK,
+                            timeout=_S.LLM_CHUNK_TIMEOUT_S,
                             system=system_prompt,
                             messages=[{"role": "user", "content": user_message_retry}],
                         ) as stream:

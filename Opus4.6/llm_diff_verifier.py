@@ -113,22 +113,34 @@ CONFIDENCE_LEVELS = ("low", "medium", "high")
 # Hard word-count cap for auto-demote.  Any diff longer than this stays
 # in ``real_diffs`` regardless of LLM verdict — a 30-word "header" is
 # almost certainly real legislative text the LLM misread.
-MAX_AUTO_DEMOTE_WORDS = 15
+import sys as _sys, pathlib as _pl
+_APP = str(_pl.Path(__file__).resolve().parent.parent / "app")
+if _APP not in _sys.path:
+    _sys.path.insert(0, _APP)
+import settings as _S  # every tunable below: `python app/settings.py --show`
+MAX_AUTO_DEMOTE_WORDS = _S.VERIFY_MAX_AUTO_DEMOTE_WORDS
 
 # Anthropic model used for verification.  Same as the audit pipeline so
 # we can reuse the token-tracking infrastructure.
-DEFAULT_MODEL = "claude-opus-4-7"
+try:  # model name comes from app/llm_models.py (LLM_MODEL env), with fallback handled by the client wrapper
+    import sys as _sys, pathlib as _pl
+    _APP = str(_pl.Path(__file__).resolve().parent.parent / "app")
+    if _APP not in _sys.path:
+        _sys.path.insert(0, _APP)
+    from llm_models import PRIMARY_MODEL as DEFAULT_MODEL
+except Exception:  # noqa: BLE001 — model config must never break an import
+    DEFAULT_MODEL = "claude-opus-4-8"
 
 # Cap on the number of diffs sent in one LLM call.  Anything over this
 # is split into batches to keep prompt size sane and to avoid blowing
 # the model's response window.
-MAX_DIFFS_PER_BATCH = 40
+MAX_DIFFS_PER_BATCH = _S.VERIFY_MAX_DIFFS_PER_BATCH
 
 # Cap on page-image count per call.  When more pages exist than this,
 # we send a representative subset (first N + last 2 — page artifacts
 # usually live on the cover and final pages).  Tuned to keep total
 # image tokens under ~30k.
-MAX_IMAGES_PER_CALL = 12
+MAX_IMAGES_PER_CALL = _S.VERIFY_MAX_IMAGES_PER_CALL
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -479,7 +491,7 @@ def verify_real_diffs_with_llm(
             raw_response = ""
             with client.messages.stream(
                 model=model,
-                max_tokens=8000,
+                max_tokens=_S.LLM_MAX_TOKENS_VERIFY,
                 messages=messages,
             ) as stream:
                 for text in stream.text_stream:

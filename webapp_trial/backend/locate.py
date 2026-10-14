@@ -143,11 +143,12 @@ def _content_markers(report, doc, words, pdf_idx, anchor, cmap) -> list[dict[str
             "content_drop": "Missing text",
             "paragraph_drop": "Missing paragraph",
             "content_added": "Extra text",
+            "content_reordered": "Same words, different order",
         }.get(cat, "Text changed" if cat != "content" else "Content difference")
         m = _marker(
             id=f"c{issue['id']}", source="content", kind=cat, severity=sev,
             title=title, issue_id=issue["id"], expected=expected, output=output,
-            detail=(issue.get("why", "") + " " + _contrast(expected, output)).strip(),
+            detail=issue.get("why", ""),  # the source/output texts are shown side by side under it, not repeated here
         )
 
         found_text = False
@@ -226,9 +227,14 @@ def _layout_markers(report, doc, cmap) -> list[dict[str, Any]]:
             kind.split("_")[0], f"Layout: {kind}")
         desc = row.get("description") or row.get("context") or ""
         doubt = _layout_plausible(doc, li, desc) if kind.startswith(("merge", "split")) else None
+        likely_ok = bool(row.get("likely_ok"))
+        if likely_ok:
+            doubt = ("Both lines are short and each stands on its own, so this is probably an address, signature or "
+                     "heading block that is meant to be line by line. Check it against the PDF.")
         m = _marker(
             id=f"l{n}", source="layout", kind=kind, severity="info" if doubt else "warning",
-            title="Possible paragraph break — probably a wrapped line" if doubt else title,
+            title=("Short lines kept apart — probably intentional" if likely_ok
+                   else "Possible paragraph break — probably a wrapped line" if doubt else title),
             line=li, detail=(desc + (" " + doubt if doubt else "")).strip(),
         )
         # Anchor boxes to the first aligned word on that line.

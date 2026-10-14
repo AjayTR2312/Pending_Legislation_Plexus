@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import db
+import storage
 from appconfig import settings
 
 CACHE_DIR = db.STORAGE_DIR / "compare"
@@ -157,19 +158,20 @@ def build_compare(pdf_path: str, text_path: str, text: str) -> dict[str, Any]:
     meta_file = out_dir / "meta.json"
     fingerprint = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
-    if meta_file.exists():
+    if storage.ensure_local(meta_file):
         try:
             cached = json.loads(meta_file.read_text(encoding="utf-8"))
             if (
                 cached.get("fingerprint") == fingerprint
                 and cached.get("version") == CACHE_VERSION
-                and (out_dir / "words.json").exists()
+                and storage.ensure_local(out_dir / "words.json")
             ):
                 cached["lines"] = lines
                 return cached
         except json.JSONDecodeError:
             pass
 
+    storage.ensure_local(pdf_path)
     pages = _render_pages(Path(pdf_path), out_dir)
     words = _extract_words(Path(pdf_path))
     mapping = _build_map(lines, words)
@@ -194,6 +196,9 @@ def build_compare(pdf_path: str, text_path: str, text: str) -> dict[str, Any]:
         "pdf_words": len(words),
     }
     meta_file.write_text(json.dumps(result), encoding="utf-8")
+    # Mirror the rendered cache (page PNGs, words.json, meta.json) to shared
+    # storage so other replicas can serve it without re-rendering.
+    storage.persist_tree(out_dir)
     result["lines"] = lines
     return result
 
@@ -201,7 +206,7 @@ def build_compare(pdf_path: str, text_path: str, text: str) -> dict[str, Any]:
 def load_words(key: str) -> list[list[Any]]:
     """Filtered PDF words: [norm, page, x, y, w, h], index-aligned with map["i"]."""
     path = CACHE_DIR / key / "words.json"
-    if not path.is_file():
+    if not storage.ensure_local(path):
         return []
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -215,4 +220,4 @@ def page_image(key: str, page: int) -> Optional[Path]:
         candidate.relative_to(CACHE_DIR.resolve())
     except ValueError:
         return None
-    return candidate if candidate.is_file() else None
+    return candidate if storage.ensure_local(candidate) else None

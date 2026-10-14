@@ -3,14 +3,14 @@
 ## 1. AWS Login
 
 ```bash
-cd /home/m6119788/Pending_Legislation/cloud-tool/bin && ./cloud-tool --region us-east-1 login
+cd /home/m6121007/Pending_Legislation/cloud-tool/bin && ./cloud-tool --region us-east-1 login
 # Select role [3]: tr-edl-adss-prod (664145726992): human-role/a209457-DataScientist
 ```
 
 ## 2. Build Docker Image
 
 ```bash
-cd /home/m6119788/Pending_Legislation && docker build -t pending_legislation:<VERSION> .
+cd /home/m6121007/Pending_Legislation && docker build -t pending_legislation:<VERSION> .
 ```
 
 ## 3. Tag Docker Image

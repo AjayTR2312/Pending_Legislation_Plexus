@@ -3768,7 +3768,7 @@ def _strip_dc_title_header_tags(text: str) -> str:
 
 # Standard Tesseract install path on Windows used elsewhere in the app
 # (mirrors pdf_compare_viewer.extract_word_bboxes).
-_DC_TESSERACT_DIR = r"C:\Users\C302602\AppData\Local\Programs\Tesseract-OCR"
+_DC_TESSERACT_DIR = ""  # resolved on first use from TESSERACT_DIR / PATH (settings.tesseract_dir)
 _DC_OCR_TESSERACT_CONFIGURED = False
 
 # Anchor for splice — matches the "at the request of the State Board of
@@ -3797,10 +3797,11 @@ def _ensure_tesseract_path() -> bool:
     Returns ``True`` if a Tesseract install was located, ``False``
     otherwise (in which case OCR will not be attempted).
     """
-    global _DC_OCR_TESSERACT_CONFIGURED
+    global _DC_OCR_TESSERACT_CONFIGURED, _DC_TESSERACT_DIR
     if _DC_OCR_TESSERACT_CONFIGURED:
         return True
-    if os.path.isdir(_DC_TESSERACT_DIR):
+    _DC_TESSERACT_DIR = _DC_TESSERACT_DIR or _settings.tesseract_dir()
+    if _DC_TESSERACT_DIR and os.path.isdir(_DC_TESSERACT_DIR):
         os.environ.setdefault(
             "TESSDATA_PREFIX",
             os.path.join(_DC_TESSERACT_DIR, "tessdata"),
@@ -6280,7 +6281,8 @@ The text may begin with a metadata block delimited by
 """
 
 # Directory containing state-specific clean prompts
-_PROMPTS_DIR = Path(__file__).resolve().parent.parent / "data" / "Prompts"
+import settings as _settings  # app/settings.py — every tunable: `python app/settings.py --show`
+_PROMPTS_DIR = _settings.PROMPTS_DIR
 
 
 # ---------------------------------------------------------------------------
@@ -6410,19 +6412,11 @@ def _get_anthropic_client():
     Obtain an Anthropic client via the TR AI Platform gateway.
     Returns an ``anthropic.Anthropic`` instance.
     """
-    import requests as _requests
     import anthropic as _anthropic
+    import llm_models as _llm
+    from ai_credentials import get_anthropic_api_key  # CIAM M2M first, TR_WORKSPACE_ID fallback
 
-    workspace_id = "AgentTraininJaH4"
-    url = "https://aiplatform.gcs.int.thomsonreuters.com/v1/anthropic/token"
-    payload = {"workspace_id": workspace_id}
-    resp = _requests.post(url, json=payload, timeout=30)
-    resp.raise_for_status()
-    creds = resp.json()
-
-    if "anthropic_api_key" in creds:
-        return _anthropic.Anthropic(api_key=creds["anthropic_api_key"])
-    raise RuntimeError("No anthropic_api_key in gateway response")
+    return _llm.wrap_client(_anthropic.Anthropic(api_key=get_anthropic_api_key()))
 
 
 # ---------------------------------------------------------------------------
@@ -6763,11 +6757,12 @@ def clean_extracted_text(
     state_code: str | None = None,
     pdf_path: str | Path | None = None,
     anthropic_client=None,
-    model: str = "claude-opus-4-7",
+    model: str | None = None,
     mark_brackets: bool = False,
 ) -> str:
     """
-    Use Claude Opus 4.7 to remove PDF artefacts (headers, footers, line
+    Use the configured Claude model (``llm_models.PRIMARY_MODEL``, with automatic
+    fallback) to remove PDF artefacts (headers, footers, line
     numbers, page markers) from PyMuPDF-extracted text while preserving
     all legislative content and ``[A>…<A]`` / ``[D>…<D]`` tags.
 
@@ -6792,15 +6787,20 @@ def clean_extracted_text(
         An existing Anthropic client.  If *None*, one is created via
         the TR AI Platform gateway.
     model : str
-        Anthropic model name.  Default: ``claude-opus-4-7``.
+        Anthropic model name.  Default: ``llm_models.PRIMARY_MODEL`` (env ``LLM_MODEL``);
+        the client falls back to ``LLM_FALLBACK_MODEL`` if that model cannot serve the call.
 
     Returns
     -------
     str
         Cleaned text with artefacts removed.
     """
+    import llm_models as _llm
+
     if anthropic_client is None:
         anthropic_client = _get_anthropic_client()
+    anthropic_client = _llm.wrap_client(anthropic_client)  # idempotent
+    model = model or _llm.PRIMARY_MODEL
 
     # Load the appropriate prompt
     system_prompt = _load_state_clean_prompt(state_code)
@@ -6927,33 +6927,21 @@ def clean_extracted_text(
         model, state_code or "universal", len(metadata_prefix),
     )
 
-    import time as _time
-    max_retries = 5
-    for attempt in range(1, max_retries + 1):
-        try:
-            response = anthropic_client.messages.create(
-                model=model,
-                max_tokens=16384,
-                system=system_prompt,
-                messages=[
-                    {"role": "user", "content": user_content},
-                ],
-            )
-            break
-        except Exception as _api_err:
-            if "529" in str(_api_err) or "overloaded" in str(_api_err).lower():
-                wait = min(2 ** attempt, 30)
-                logger.warning(
-                    "⏳ Anthropic overloaded (attempt %d/%d), retrying in %ds…",
-                    attempt, max_retries, wait,
-                )
-                _time.sleep(wait)
-                if attempt == max_retries:
-                    raise
-            else:
-                raise
+    # Overload retries and the primary -> fallback model switch live in the wrapped client.
+    response = anthropic_client.messages.create(
+        model=model,
+        max_tokens=_settings.LLM_MAX_TOKENS_CLEAN,
+        system=system_prompt,
+        messages=[
+            {"role": "user", "content": user_content},
+        ],
+    )
+    model = _llm.last_model_used() or model  # the model that actually answered (may be the fallback)
+    if _llm.usage_summary()["fallback_used"]:
+        logger.warning("↪ LLM clean answered by fallback model %s", model)
 
-    cleaned = response.content[0].text.strip()
+    # newer models may lead with a thinking block, so content[0] is not always text
+    cleaned = "".join(getattr(b, "text", "") or "" for b in response.content if getattr(b, "type", "") == "text").strip()
 
     # ── Restore locked tag spans before anything else inspects the text ──
     clean_extracted_text._last_tag_lock = None
@@ -6980,7 +6968,7 @@ def clean_extracted_text(
     clean_extracted_text._last_usage = {
         "input_tokens": getattr(_usage, 'input_tokens', 0) if _usage else 0,
         "output_tokens": getattr(_usage, 'output_tokens', 0) if _usage else 0,
-        "model": model,
+        "model": model,  # the model that answered, so cost uses the right price
     }
 
     # ── Generate diff report BEFORE any post-processing ──────────────
@@ -9402,7 +9390,7 @@ def extract_pdf_json_report(
     if state_code:
         try:
             import json as _json
-            _template_path = Path(__file__).resolve().parent.parent / "Opus4.6" / "netscan_state_template.json"
+            _template_path = _settings.STATE_SPEC_FILE
             if _template_path.exists():
                 with open(_template_path, "r", encoding="utf-8") as _tf:
                     _all_states = _json.load(_tf)
@@ -9767,7 +9755,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--clean-model", default=None,
-        help="Override the LLM model used for --clean (default: claude-opus-4-6)"
+        help="Override the LLM model used for --clean (default: LLM_MODEL env, else claude-opus-5-5)"
     )
     parser.add_argument(
         "--state", default=None,
