@@ -63,7 +63,7 @@ def db_backend() -> str:
 # bucket exists. Having a default here does NOT turn S3 on by itself: S3 is only
 # used when explicitly enabled (WEBAPP_S3_ENABLED=true) or when WEBAPP_S3_BUCKET
 # is provided, so local development and the test-suite stay on local disk.
-DEFAULT_S3_BUCKET = "a209457-ml-workspace-xmlconversiof3jr-use1"
+DEFAULT_S3_BUCKET = "a209309-s3-pending-legislation-653514985368-us-east-1-an"
 DEFAULT_S3_REGION = "us-east-1"
 
 
